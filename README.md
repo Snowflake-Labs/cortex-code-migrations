@@ -31,4 +31,9 @@ plugin/
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+License
+Copyright (c) Snowflake Inc. All rights reserved.
+
+The skills in this project are licensed under the [Snowflake Skills License](./License-Skills).
+
+All other content is licensed under the Apache 2.0 license.
