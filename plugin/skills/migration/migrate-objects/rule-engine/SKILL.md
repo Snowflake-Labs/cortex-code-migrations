@@ -7,12 +7,26 @@ license: Proprietary. See License-Skills for complete terms
 
 # Rule Engine
 
-Search, apply, and manage reusable migration rules. All rules live in Snowflake — both built-in patterns from common source-to-Snowflake conversions and rules extracted from previous fix cycles.
+## On Entry
+
+Tell the user:
+> **Rule Engine** — I'll search for known migration fix patterns that apply to your code, and can apply them automatically (regex) or with your approval (AI-guided).
 
 ## Prerequisites
 
 - Snowflake connection active with direct SQL ability
-- Rule engine schema set up (if not, run Setup first)
+- Session `configure`d with a Snowflake connection and database (see [../../setup/configure-defaults/SKILL.md](../../setup/configure-defaults/SKILL.md)). The `configure` MCP tool sets up the `RULE_ENGINE` schema automatically on first call.
+
+## Setup (automatic)
+
+You do not run a separate setup step. On the first `configure` call that supplies both `snowflake_connection` and `snowflake_database`, the MCP server creates and seeds everything needed:
+
+- `RULE_ENGINE` schema
+- `RULES`, `RULE_EVENTS`, `CODE_UNITS_SQL` tables
+- Built-in seed rules (SQL Server → Snowflake patterns)
+- `RULE_SEARCH` and `CODE_SEARCH` Cortex Search services
+
+The setup handler is idempotent: calling `configure` again reruns pending migrations and re-seeds missing rules without disturbing existing data.
 
 ## Commands
 
@@ -52,12 +66,18 @@ ORDER BY priority;
 
 ## Tools
 
+All tools are provided by the Rust `snowflake-migration` MCP server (`crates/mcp-server/`).
+
 | Tool | Purpose |
 |------|---------|
-| MCP `rule_setup` module | DDL, seeding rules, and Cortex Search setup (in `snowflake_migration_mcp/rule_setup.py`) |
-| MCP `search_rules` | Find rules matching a SQL file (regex + Cortex semantic search + EWI scan) |
+| MCP `configure` | Session setup; creates the `RULE_ENGINE` schema, seeds rules, and provisions the Cortex Search services on first call |
+| MCP `search_rules` | Find rules matching a SQL file (regex + Cortex semantic search + EWI scan, combined) |
+| MCP `search_rules_regex` | Regex-only search against `RULE_ENGINE.RULES` using in-memory SQL content |
+| MCP `search_rules_cortex` | Cortex-only semantic search using in-memory SQL content |
 | MCP `find_similar_rules` | Search rules by text description |
 | MCP `reverse_search_rules` | Find code units affected by a rule |
-| MCP `sync_sql_files` | Bulk sync SQL files for rule search |
-| MCP `create_rule` | Insert a new rule into RULE_ENGINE.RULES |
-| MCP `list_rules` | List rules with optional filters |
+| MCP `sync_sql_files` | Bulk sync SQL files from a directory for rule search |
+| MCP `sync_sql_file` | Sync a single SQL file (in-memory content + metadata) into `RULE_ENGINE.CODE_UNITS_SQL` |
+| MCP `create_rule` | Insert a new rule into `RULE_ENGINE.RULES` |
+| MCP `list_rules` | List rules with optional filters; pass `detailed=true` for the full column set |
+| MCP `record_rule_application` | Record a rule application outcome (applied / success / failure) |

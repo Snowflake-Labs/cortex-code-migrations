@@ -1,6 +1,9 @@
 # Action: Migrate Tables
 
-Deploy tables to Snowflake, migrate data from source, and validate row counts.
+## On Entry
+
+Tell the user:
+> **Deploying tables** — I'll deploy all tables in this wave to Snowflake, migrate data from source, and validate row counts.
 
 > **Scope:** Tables only within the current wave.
 
@@ -46,12 +49,14 @@ On success, it returns a `job_id` immediately — the migration runs in the back
 
 Poll with `migrate_data_status()` until `status` is `"completed"` or `"failed"`. The response includes per-table progress in `progress`. Report any errors to the user.
 
-## Step 4: Report
+## Step 4: Validate Data
 
-Summarize:
-- Total tables deployed (succeeded / failed)
-- Total tables with data migrated (with row counts)
-- Any tables still failing (with error details)
-- Any AI-mode rules that were applied or skipped
+Load `../../validate-objects/SKILL.md` to validate migrated data against the source.
+
+## Step 5: Report
+
+Tell the user:
+> **Tables complete** — <deployed>/<total> tables deployed, <data_migrated> with data migrated (<row_counts>), <validated>/<total> validated. <failed_count> still failing: <list>.
+> Any AI-mode rules applied: <list or "none">.
 
 Return control to the parent skill (../SKILL.md).

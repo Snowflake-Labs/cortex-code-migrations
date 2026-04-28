@@ -59,7 +59,10 @@ BINARY_URL="${BLOB_BASE}/migration-mcp-server-v${VERSION}-${PLATFORM}"
 NEEDS_DOWNLOAD=true
 if [ -f "$BIN" ] && [ -f "$BIN_DIR/.version" ]; then
   INSTALLED_VERSION=$(cat "$BIN_DIR/.version" 2>/dev/null | tr -d '[:space:]')
-  if [ "$INSTALLED_VERSION" = "$VERSION" ]; then
+  if [ "$INSTALLED_VERSION" = "dev" ]; then
+    NEEDS_DOWNLOAD=false
+    log "MCP server binary is a local dev build — skipping download"
+  elif [ "$INSTALLED_VERSION" = "$VERSION" ]; then
     NEEDS_DOWNLOAD=false
     log "MCP server binary up to date (v$VERSION)"
   else

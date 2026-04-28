@@ -70,7 +70,7 @@ SKILL_DIR="<absolute path to tools/ai-migrator>"
 | `snowflake/` (`CONVERTED_DIR`) | **SnowConvert output directory.** This is the top-level directory produced by SnowConvert — it contains both the converted SQL files and the `Reports/SnowConvert/` folder with `TopLevelCodeUnits*.csv` (required for object discovery). **Do NOT use `ai-converted/.../fixed/`** — that directory lacks the Reports metadata and will fail with exit code 24. |
 | `.scai/jobs/unit-testing/<datetime>_<short_id>/` | Per-run working directory (`TARGET_DIR`). Each invocation creates a new timestamped directory (e.g. `20260317_143022_a1b2`). |
 | `artifacts/unit_tests/` | Persistent test artifact store. After generation, copy test YAML files here. Execution reads from here via `--reuse-tests`. |
-| `test-results/` | Baseline capture/validation output (test-runner mode). |
+| `test-results/` | Only created when `test-runner validate --output-dir test-results` is passed. By default, validate results are written to Snowflake (`<DATABASE>.VALIDATION.RESULTS`) and nothing lands on disk. |
 
 ---
 
@@ -84,27 +84,26 @@ Captures actual source database output as test baselines. No LLM needed — runs
 
 **Best for:** verifying that Snowflake produces identical output to the source.
 
+`test-runner capture` uploads baselines to `@<DATABASE>.VALIDATION.BASELINES` and keeps nothing on disk; `test-runner validate` reads them back from the same stage. `-c` is required — without a Snowflake connection (either `-c` or `target_connection.name` in `settings/test_config.yaml`) capture errors out because it has nowhere to upload to.
+
 ```bash
 cd <project_dir>
 test-runner capture \
     --project-root <project_dir> \
-    -c <SOURCE_CONNECTION_NAME> \
+    --source-connection <SOURCE_CONNECTION_NAME> \
+    -c <SNOWFLAKE_CONNECTION_NAME> \
     -d <DATABASE_NAME> \
     --objects <object_name> \
     --workers 16
 ```
 
-Output: baselines stored in `test-results/` directory.
+For all objects, drop `--objects`.
 
-For all objects:
+#### Opt-in: Keep Local Copies (`--keep-baselines`)
 
-```bash
-test-runner capture \
-    --project-root <project_dir> \
-    -c <SOURCE_CONNECTION_NAME> \
-    -d <DATABASE_NAME> \
-    --workers 16
-```
+`--keep-baselines` additionally writes JSON copies under `artifacts/**/baselines/<YYYYMMDD>/`. Only pass it when the user explicitly asks for local files — Snowflake-only is the default for customer data-residency, and opting out is their decision. **Confirm with the user before adding this flag:**
+
+> "`--keep-baselines` will leave baseline JSONs on your laptop under `artifacts/**/baselines/`. The default is Snowflake-only. Do you want a local copy?"
 
 ### LLM-Generated Tests (for diverse edge-case coverage)
 

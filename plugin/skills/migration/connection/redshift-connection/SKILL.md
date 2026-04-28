@@ -6,7 +6,10 @@ license: Proprietary. See License-Skills for complete terms
 
 # Redshift Connection Skill
 
-This skill guides you through connecting to a source Redshift database for migration to Snowflake using the `scai` CLI.
+## On Entry
+
+Tell the user:
+> **Setting up Redshift connection** — I'll configure and test a connection to your source Redshift cluster. I'll need some connection details from you shortly.
 
 ## Prerequisites
 
@@ -153,9 +156,12 @@ Confirm with user:
 - [ ] Connection appears in `scai connection list -l redshift`
 - [ ] Source connection saved to session config
 
-## Next Steps
+## On Completion
 
-- Go back to the main skill (migration)
+After the CHECKPOINT passes, tell the user:
+> **Connection configured** — Successfully connected to Redshift using connection `<connection_name>`.
+
+Then return to the calling skill.
 
 ## Security Rules
 

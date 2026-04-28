@@ -6,6 +6,8 @@ After creating the test YAML files (from query logs or AI swarm), capture baseli
 
 ## Step 1: Capture Baselines from Source Database
 
+Baselines upload to the Snowflake stage `@<DATABASE>.VALIDATION.BASELINES`; no copy is kept on the user's laptop (customer data residency).
+
 ```bash
 scai test capture \
   -s <SOURCE_CONNECTION_NAME> \
@@ -15,26 +17,24 @@ scai test capture \
 
 **Flags:**
 - `-s, --source-connection` — Name of the source connection (from `scai connection list`). Uses default if not specified.
-- `-c, --connection` — Snowflake connection name (enables auto-upload to stage). Uses project/default connection if not specified.
-- `--where` — Registry filter to select which objects to capture (e.g. `"source.canonicalName ILIKE '%dbo.MyProc%'"`)
+- `-c, --connection` — Snowflake connection (destination for baseline upload). Required unless `target_connection.name` is set in `settings/test_config.yaml`.
+- `--where` — Registry filter, SQL-like (same syntax as `scai code deploy --where`). The canonical form used across the plugin is `source.canonicalName ILIKE '%<name>%'`.
 
 ## Step 2: Verify
 
-Check that baselines were captured and uploaded:
+List the stage, filtering server-side to just this object's baselines:
 
 ```bash
-# Check local baseline files
-ls <project_dir>/.scai/baselines/*/<object_name>*/
-
-# Check Snowflake stage (if -c was provided)
-snow stage ls @<DATABASE>.VALIDATION.BASELINES -c <CONNECTION_NAME>
+snow stage list-files @<DATABASE>.VALIDATION.BASELINES \
+  --pattern ".*<schema>\.<object_name>.*" \
+  -c <SNOWFLAKE_CONNECTION_NAME>
 ```
 
 ## CHECKPOINT
 
 Confirm:
 - [ ] Baselines captured for `<object_name>` from source database
-- [ ] Baselines uploaded to Snowflake stage (automatic with `-c` flag)
+- [ ] Baselines visible on Snowflake stage `@<DATABASE>.VALIDATION.BASELINES`
 - [ ] At least 15-25 test cases for this object
 
 ## Next Steps

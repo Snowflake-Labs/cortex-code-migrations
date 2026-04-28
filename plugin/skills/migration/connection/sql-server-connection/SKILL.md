@@ -6,7 +6,10 @@ license: Proprietary. See License-Skills for complete terms
 
 # SQL Server Connection Skill
 
-This skill guides you through connecting to a source SQL Server database for migration to Snowflake using the `scai` CLI.
+## On Entry
+
+Tell the user:
+> **Setting up SQL Server connection** — I'll configure and test a connection to your source SQL Server database. I'll need some connection details from you shortly.
 
 ## Prerequisites
 
@@ -95,11 +98,12 @@ Confirm with user:
 - [ ] Connection appears in `scai connection list -l sqlserver`
 - [ ] Source connection saved to session config
 
-## Next Steps
+## On Completion
 
-Once connected:
+After the CHECKPOINT passes, tell the user:
+> **Connection configured** — Successfully connected to SQL Server using connection `<connection_name>`.
 
-Go back to executing the migration skill
+Then return to the calling skill.
 
 ## Security Rules
 

@@ -7,6 +7,17 @@ license: Proprietary. See License-Skills for complete terms
 
 # Migrate Objects
 
+## Prerequisite: Support Level Check
+
+Check `support` from the `configure()` response.
+
+If `support` is `basic`, load [BASIC_SUPPORT.md](BASIC_SUPPORT.md) and **STOP** — do not continue with the steps below.
+
+## On Entry **IMPORTANT DO NOT SKIP**
+
+Tell the user:
+> **Phase 2: Migrate Objects** — Setup is complete. Now we'll deploy your objects to Snowflake according to your wave plan (if you created one in assessments). Each object goes through a deploy-test-fix loop.
+
 ## Step 1: Configure Session
 
 Call `configure()` to retrieve the current configuration.
@@ -81,4 +92,10 @@ After each object completes, call `next_object()` again and repeat.
 
 ## Step 5: Report
 
-Call `migration_status()` and present the final summary. If the wave is complete, the next `configure()` call will auto-advance to the next wave.
+Call `migration_status()` and present a completion summary to the user:
+> **Wave <N> complete** — <deployed_count> objects deployed, <tested_count> tested and passing, <failed_count> still failing. <data_migrated_count> tables with data migrated.
+
+If all waves are done:
+> **Migration complete** — All objects have been deployed to Snowflake and validated.
+
+If the wave is complete, the next `configure()` call will auto-advance to the next wave.

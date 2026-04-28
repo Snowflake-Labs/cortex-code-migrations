@@ -1,5 +1,10 @@
 # Action: Migrate Functions and Procedures
 
+## On Entry
+
+Call `testing_progress()` and tell the user:
+> **Migrating functions and procedures** (Wave <N>) — <done_count>/<total> done so far, <ready_count> ready to work on, <blocked_count> blocked on dependencies.
+
 Deploy, test, and fix functions and procedures using two-sided testing (source output vs Snowflake output). Processes one object at a time in dependency order.
 
 The parent skill (`migrate-objects/SKILL.md`) passes `<testing_data_source>` — either `"source_database"` or `"synthetic"`.
@@ -20,16 +25,19 @@ Once you have an object name (e.g., `dbo.CalculateLineTotal`), prepare test data
 
 ### If `testing_data_source == "source_database"`
 
-Check if baselines exist:
+Check for the test YAML locally and the baselines on the Snowflake stage:
 
 ```bash
 ls <project_dir>/artifacts/**/test/*<object_name>*.yml 2>/dev/null
-ls <project_dir>/.scai/baselines/**/*<object_name>* 2>/dev/null
+
+snow stage list-files @<DATABASE>.VALIDATION.BASELINES \
+  --pattern ".*<object_name>.*" \
+  -c <SNOWFLAKE_CONNECTION_NAME> 2>/dev/null
 ```
 
 **No baselines exist?**
 
-Tell the user: *"No baselines found for `<object_name>`. We need to capture source baselines before we can validate."*
+Tell the user: *"No baselines found for `<object_name>` on stage `@<DATABASE>.VALIDATION.BASELINES`. We need to capture source baselines before we can validate."*
 
 → **Spawn a foreground subagent** (Task tool) to capture baselines:
 
@@ -109,14 +117,8 @@ When all functions/procedures in the wave have passed testing:
 testing_progress()
 ```
 
-Present the final summary:
-
-```
-Functions/Procedures in Wave <N>:
-  Passed:  <count>
-  Failed:  <count> (user skipped or max iterations reached)
-  Blocked: <count> (dependencies not met)
-```
+Tell the user:
+> **Wave <N> functions/procedures complete** — <passed> passed, <failed> failed, <blocked> blocked on dependencies.
 
 Return control to the parent skill. The parent will retry any views that were blocked on these functions.
 

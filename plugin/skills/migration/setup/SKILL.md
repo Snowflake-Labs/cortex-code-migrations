@@ -6,19 +6,14 @@ license: Proprietary. See License-Skills for complete terms
 
 # Migration Setup
 
-```
-⬚ 1. Connect                  - Connect to a source system
-⬚ 2. Init                     - Initialize scai project
-⬚ 3. Register                 - Register objects for conversion
-⬚ 4. Initial Conv             - Convert objects to assess errors
-⬚ 5. Assess                   - Run assessments to plan the migration
-```
+## On Entry
 
-This skill handles the setup phase of a migration. It is invoked by the parent `SKILL.md` router after detecting the project state via `migration_status`.
+Tell the user:
+> **Phase 1: Setup** — I'll walk you through connecting to your source database, initializing the project, registering your objects, converting them to Snowflake SQL, and generating an assessment report.
 
 ## Routing
 
-The parent passes the project state. Use `routing` from the status JSON to follow ONE path:
+Use `routing` from the migration_status tool output to follow ONE path:
 
 ---
 
@@ -26,55 +21,39 @@ The parent passes the project state. Use `routing` from the status JSON to follo
 
 **When:** `routing.project_exists` = false
 
-**Step A.1: Ask connection preference**
+**Step A.1: Ask about source connection**
 
 Ask the user:
-> "No migration project found. Would you like to:"
-> 1. **Use an existing connection** - Select from configured connections
-> 2. **Create a new connection** - Set up a new source database connection
+> "Will you need to connect to your source system? Some common reasons are extracting code for conversion, migrating data, and testing functional equivalence."
+> 1. **Yes** — set up a source connection
+> 2. **No** — skip for now (you can set one up later)
+
+If **No** → skip to Step A.3.
+
+**Step A.2: Set up source connection**
+
+Call `configure(needs_source_connection=true)` to list existing source connections for the configured dialect.
+
+If `existing_connections` listed connections, ask:
+> "Would you like to:"
+> 1. **Use an existing connection** — Select from the connections listed above
+> 2. **Create a new connection** — Set up a new source database connection
+
+If `existing_connections` was `none`, go directly to "Create new connection".
 
 **Step A.2a: If "Use existing connection"**
 
-```bash
-scai connection list -l sqlserver 2>/dev/null
-scai connection list -l redshift 2>/dev/null
-scai connection list -l oracle 2>/dev/null
-scai connection list -l teradata 2>/dev/null
-```
-
-Present results and ask user to pick. If no connections exist, redirect to "Create new connection".
+Present the connections returned by `configure` and ask user to pick.
 
 **Step A.2b: If "Create new connection"**
 
-Ask which source dialect, then load:
-- **SQL Server** → `../connection/sql-server-connection/SKILL.md`
-- **Redshift** → `../connection/redshift-connection/SKILL.md`
-- **Oracle** → `../connection/oracle-connection/SKILL.md`
-- **Teradata** → `../connection/teradata-connection/SKILL.md`
+Load the connection sub-skill for `<SOURCE_DIALECT>`:
+- `sqlserver` → `../connection/sql-server-connection/SKILL.md`
+- `redshift` → `../connection/redshift-connection/SKILL.md`
+- `oracle` → `../connection/oracle-connection/SKILL.md`
+- `teradata` → `../connection/teradata-connection/SKILL.md`
 
-**Step A.3: Initialize project**
-
-**IMPORTANT:** `scai init` requires an empty directory.
-
-Ask: "Where would you like to create the migration project?"
-- Suggest: `<database>-migration`
-
-```bash
-mkdir -p <PROJECT_PATH>
-cd <PROJECT_PATH>
-scai init -n <PROJECT_NAME> -l <sqlserver|redshift|oracle|teradata>
-```
-
-**Flag reference for `scai init`:**
-- `-n` — project name (defaults to folder name if omitted)
-- `-l` — **source language** (the database you are migrating **from**: `sqlserver`, `redshift`, `oracle`, or `teradata`)
-- `-c` — **Snowflake connection** name (the migration **target**, not the source). This is the TOML profile from `~/.snowflake/connections.toml`. Optional — can be set later via `scai project defaults set -c <NAME>`.
-
-**Do NOT pass the source connection name to `-c`.** The source connection is configured separately via `scai project defaults set -s <SOURCE_CONNECTION>` or through the `configure` MCP tool.
-
-**Stay in the project directory** for all subsequent commands.
-
-**Step A.4: Configure project defaults (shared vs local)**
+**Step A.3: Configure project defaults (shared vs local)**
 
 Load `./configure-defaults/SKILL.md`
 
@@ -84,19 +63,24 @@ This prompt must happen after project creation and connection registration so th
 2. **Local defaults** in `.scai/config/project.local.yml` (`--local`, workspace-specific, typically gitignored)
 3. **Skip for now**
 
-**Step A.5: Ask about data migration**
+**Step A.4: Ask about data migration and validation**
 
-**Skip this step for Oracle and Teradata** — data migration is not supported for these sources. Go directly to Step A.6.
+**Skip this step if `<SOURCE_DIALECT>` is `oracle` or `teradata`** — data migration is not supported for these sources. Go directly to Step A.5.
 
-For SQL Server and Redshift, ask the user:
+For `sqlserver` and `redshift`, ask the user:
 > "Will you also need to migrate data from the source database into Snowflake?"
 >
-> 1. **Yes** — Load `./data-migration/SKILL.md` to configure data migration (orchestrator, worker, workflow). After setup completes, return here and continue to Step A.6.
-> 2. **Not now / No** — Continue to Step A.6.
+> 1. **Yes — set up data migration and data validation** — First load `./data-infrastructure/SKILL.md` to configure shared infrastructure (compute pool, worker config, source database/schema). Then load `./data-migration/SKILL.md` for migration-specific setup (approach, workflow config, target database). Then load `./data-validation/SKILL.md` for validation-specific setup (scope, validation config, service verification). After all three complete, return here and continue to Step A.5.
+> 2. **Yes — set up data migration only** — First load `./data-infrastructure/SKILL.md` to configure shared infrastructure. Then load `./data-migration/SKILL.md` for migration-specific setup. After setup completes, return here and continue to Step A.5.
+> 3. **No** — Continue to Step A.5.
 
-**Step A.6: Register source code**
+**Step A.5: Register source code**
 
-Load `../register-code-units/SKILL.md`
+Go to Path B: Project Exists, No Source Code
+
+**Step A.6: Convert source code**
+
+Load `../convert/SKILL.md`
 
 ---
 
@@ -127,8 +111,9 @@ Offer options:
 1. **Run assessment** → Load `../assessment/SKILL.md`
 2. **Re-convert** → Load `../convert/SKILL.md`
 3. **Review converted** → Show contents of `snowflake/` and `artifacts/`
-4. **Skip to code conversion** → Load `../migrate-objects/SKILL.md`
-5. **Set up data migration** (SQL Server and Redshift only) → Load `./data-migration/SKILL.md`
+4. **Skip to migrate objects** → Load `../migrate-objects/SKILL.md`
+5. **Set up data migration** → Load `./data-infrastructure/SKILL.md` first, then `./data-migration/SKILL.md`
+6. **Set up data validation** → Load `./data-infrastructure/SKILL.md` first (no-op if already configured), then `./data-validation/SKILL.md`
 
 ---
 
@@ -141,12 +126,22 @@ Offer options:
 | 1 | oracle-connection | `../connection/oracle-connection/SKILL.md` |
 | 1 | teradata-connection | `../connection/teradata-connection/SKILL.md` |
 | 2 | configure-defaults | `./configure-defaults/SKILL.md` |
+| — | midway-entry (existing project with pre-converted code; SQL Server/Redshift only) | `./midway-entry/SKILL.md` |
 | 3 | register-code-units | `../register-code-units/SKILL.md` |
 | 4 | convert | `../convert/SKILL.md` |
 | 5 | snowconvert-assessment | `../assessment/SKILL.md` |
+| — | data-infrastructure-setup | `./data-infrastructure/SKILL.md` |
 | — | data-migration-setup | `./data-migration/SKILL.md` |
+| — | data-validation-setup | `./data-validation/SKILL.md` |
 
 ## Rules
 
 1. **Follow sub-skill instructions** — Complete each sub-skill fully before returning
 2. **Confirm transitions** — Ask user before moving to next stage
+
+## On Completion
+
+When all setup paths have been exhausted (the user has reached `routing.assessed = true` or chosen to skip to migrate-objects), tell the user:
+> **Setup complete** — Your migration project is configured: connected to <source_type>, <N> objects registered, code converted, and assessment generated. Ready to start migrating objects to Snowflake.
+
+Then return to the parent migration skill.

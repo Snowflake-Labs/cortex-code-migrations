@@ -13,27 +13,24 @@ This skill analyzes SQL object dependencies from SnowConvert migration outputs a
 
 **Use this skill when:**
 - Planning SQL database and/or ETL migration deployment sequences
-- Analyzing SnowConvert outputs:
-  - **Registry (preferred)**
-  - **CSV (fallback)** `ObjectReferences.*.csv` + `TopLevelCodeUnits.*.csv`
 - Creating deployment waves that respect object dependencies
 - Optimizing migration batch sizes for deployment
 
-## Input Files
+## Inputs (auto-detected by parent)
 
-### ObjectReferences CSV
-Contains dependency relationships between SQL objects.
+The parent `assessment` skill resolves all input paths from `project_dir`. Do **not** prompt the user for any of these — they are passed in from the parent.
 
-### TopLevelCodeUnits CSV
-Contains metadata about all SQL objects.
+| Input | Source under `project_dir` |
+|-------|----------------------------|
+| Registry directory (preferred) | `output/registry/` (or wherever the registry is found) |
+| `ObjectReferences.*.csv` (CSV fallback) | `reports/SnowConvert/` |
+| `TopLevelCodeUnits.*.csv` (CSV fallback) | `reports/SnowConvert/` |
+| `ETL.Elements.*.csv` (optional, SSIS) | `reports/SnowConvert/` |
 
-### ETL.Elements CSV (Optional)
-Contains SSIS package metadata.
-
-### Registry folder
-Contains json files with data per code unit.
-
-**Note**: The tool automatically searches for `ETL.Elements.NA.csv` or `ETL.Elements.<TIMESTAMP>.csv` in the same directory as ObjectReferences. Only Package entries with `.dtsx` extension are included as top-level ETL objects.
+**Mode selection:**
+- If a `registry/` directory with JSON entries is present, run `analyze_dependencies_registry.py`.
+- Otherwise, run `analyze_dependencies.py` with the CSV inputs.
+- The tool automatically searches for `ETL.Elements.NA.csv` or `ETL.Elements.<TIMESTAMP>.csv` in the reports directory. Only Package entries with `.dtsx` extension are included as top-level ETL objects.
 
 ## Required User Interactions
 

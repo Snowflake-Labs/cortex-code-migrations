@@ -43,6 +43,8 @@ Uses an embedded Python interpreter (via PyO3) for Snowflake connectivity throug
 | `query_source` | Run a SQL query against the source database via `scai query` |
 | `migrate_data` | Migrate data from source to Snowflake (async, background job). Uses SPCS orchestrator + worker when `configure(compute_pool=...)` is set and a workflow config exists. |
 | `migrate_data_status` | Check status of a data migration job. Includes per-table progress in `progress`. |
+| `validate_data` | Validate migrated data between source and Snowflake. Uses cloud validation (SPCS) when configured. |
+| `validate_data_status` | Check status of a data validation job. Includes per-table progress from the SPCS orchestrator. |
 
 ## Building
 

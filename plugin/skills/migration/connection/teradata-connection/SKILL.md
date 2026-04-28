@@ -5,7 +5,10 @@ description: Connect to a source Teradata database for migration to Snowflake us
 
 # Teradata Connection Skill
 
-This skill guides you through connecting to a source Teradata database for migration to Snowflake using the `scai` CLI.
+## On Entry
+
+Tell the user:
+> **Setting up Teradata connection** — I'll configure and test a connection to your source Teradata database. This requires a driver download on first use.
 
 ## Prerequisites
 
@@ -31,31 +34,18 @@ This skill guides you through connecting to a source Teradata database for migra
 
 ### Step 1: Provision the Teradata Driver
 
-**CRITICAL: The required driver is the `Teradata.Client.Provider` NuGet package. Never refer to it as a JDBC driver — it is not. When communicating with the user, simply call it "the Teradata driver" or "the Teradata NuGet package".**
+The required driver is the `Teradata.Client.Provider` NuGet package. Resolve it by following the canonical bootstrap flow:
 
-The user must download the NuGet package and provide its path once via `--driver-path`. SCAI caches the driver at `~/.snowflake/scai/drivers/teradata/` and reuses it machine-wide across all projects automatically.
+> **Driver bootstrap:** see [`../references/driver-bootstrap.md`](../references/driver-bootstrap.md) with parameters
+> `<dialect>=teradata`, `<package>=Teradata.Client.Provider`, `<driver_file>=Teradata.Client.Provider.nupkg`,
+> `<cache_dir>=~/.snowflake/scai/drivers/teradata/`,
+> `<nuget_url>=https://www.nuget.org/api/v2/package/Teradata.Client.Provider`.
 
-**First, check if the driver is already cached (look for actual driver files, not just the directory):**
+That doc walks through cache check → ask-on-miss → user-provided path or download → first SCAI invocation with `--driver-path` if needed. Follow it silently — don't narrate "the bootstrap flow" or step labels to the user.
 
-```bash
-ls ~/.snowflake/scai/drivers/teradata/*.nupkg ~/.snowflake/scai/drivers/teradata/*.dll 2>/dev/null
-```
+**Naming guard:** the driver is a `.NET` NuGet package, **not** a JDBC driver. Refer to it only as "the Teradata driver" or "the Teradata NuGet package" when talking to the user.
 
-If no `.nupkg` or `.dll` files are listed, the driver needs to be downloaded.
-
-**Download and cache the driver — run these commands for the user:**
-
-```bash
-# macOS / Linux
-curl -L -o Teradata.Client.Provider.nupkg \
-  https://www.nuget.org/api/v2/package/Teradata.Client.Provider
-
-# Windows PowerShell
-curl.exe -L -o Teradata.Client.Provider.nupkg `
-  https://www.nuget.org/api/v2/package/Teradata.Client.Provider
-```
-
-**IMPORTANT:** Always offer to run the `curl` command for the user. Do not just describe the download — execute it. After downloading, note the full path to the `.nupkg` file — it will be passed via `--driver-path` in Step 4.
+For this skill specifically, the first SCAI invocation called out by the bootstrap is the `connection test` command in **Step 4 below** — pass `--driver-path <PATH>` there if the driver wasn't already cached.
 
 ### Step 2: Ask How to Provide Credentials
 
@@ -104,23 +94,17 @@ Password will be prompted securely.
 
 ### Step 4: Test the Connection
 
-**Before testing, verify the driver is cached:**
+This is the "first SCAI invocation" called out as 1e in the bootstrap reference. Use the path resolved in Step 1:
 
 ```bash
-ls ~/.snowflake/scai/drivers/teradata/*.nupkg ~/.snowflake/scai/drivers/teradata/*.dll 2>/dev/null
-```
-
-If **no driver files** are found, you must include `--driver-path` (using the file downloaded in Step 1):
-
-```bash
+# Branch A or B in Step 1 (driver not yet cached) — pass --driver-path once
 scai connection test -l teradata -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG>
-```
 
-If driver files **are** found in the cache, `--driver-path` is not needed:
-
-```bash
+# Step 1 hit the cache — --driver-path not needed
 scai connection test -l teradata -s <CONNECTION_NAME>
 ```
+
+The first call with `--driver-path` copies the driver into `~/.snowflake/scai/drivers/teradata/`, so every subsequent `scai` command (in this project or any other) can omit the flag.
 
 **Expected:** "Connection successful" with Teradata version and database details.
 
@@ -146,7 +130,10 @@ Call the `configure` tool with `source_connection` set to the `<CONNECTION_NAME>
 ## CHECKPOINT
 
 Confirm with user:
-- [ ] Teradata driver downloaded and path provided (or already cached)
+- [ ] Teradata driver resolved via one of:
+  - [ ] Already cached in `~/.snowflake/scai/drivers/teradata/` (Step 1a)
+  - [ ] User-provided local path supplied via `--driver-path` (Step 1c)
+  - [ ] Downloaded by the agent and supplied via `--driver-path` (Step 1d)
 - [ ] Connection test passed
 - [ ] Connection appears in `scai connection list -l teradata`
 - [ ] Source connection saved to session config
@@ -157,9 +144,12 @@ Confirm with user:
 - **Data validation is not supported for Teradata.** The 2-sided testing framework (`scai test`) does not support Teradata as a source for baseline capture or result comparison.
 - **Supported Teradata operations:** code extraction (`scai code extract`), code conversion (`scai code convert`), and deployment to Snowflake (`scai code deploy`).
 
-## Next Steps
+## On Completion
 
-Go back to executing the migration skill.
+After the CHECKPOINT passes, tell the user:
+> **Connection configured** — Successfully connected to Teradata using connection `<connection_name>`.
+
+Then return to the calling skill.
 
 ## Security Rules
 
@@ -171,13 +161,14 @@ Go back to executing the migration skill.
 
 | Action | Command |
 |--------|---------|
+| Check driver cache | `ls ~/.snowflake/scai/drivers/teradata/*.nupkg ~/.snowflake/scai/drivers/teradata/*.dll 2>/dev/null` |
+| Use existing local driver | `scai project defaults set -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG>` |
 | Download driver (macOS/Linux) | `curl -L -o Teradata.Client.Provider.nupkg https://www.nuget.org/api/v2/package/Teradata.Client.Provider` |
-| Set driver globally | `scai project defaults set --driver-path <PATH_TO_NUPKG>` |
 | Add connection (interactive) | `scai connection add-teradata` |
 | Add connection (standard) | `scai connection add-teradata -s NAME --auth standard --host HOST --database DB --user USER` |
 | Add connection (LDAP) | `scai connection add-teradata -s NAME --auth ldap --host HOST --database DB --user USER` |
 | Test connection (first time) | `scai connection test -l teradata -s NAME --driver-path <PATH_TO_NUPKG>` |
-| Test connection (driver saved) | `scai connection test -l teradata -s NAME` |
+| Test connection (driver cached) | `scai connection test -l teradata -s NAME` |
 | List connections | `scai connection list -l teradata` |
 | Set default | `scai connection set-default -l teradata -s NAME` |
 | Extract code | `scai code extract -s NAME` |

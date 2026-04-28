@@ -1,6 +1,6 @@
 ---
 name: data-migration-setup
-description: One-time setup for data migration into Snowflake — choose approach, generate configs, register with MCP.
+description: One-time setup for data migration into Snowflake — choose approach, generate workflow config, create target database.
 parent_skill: migration
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -12,39 +12,9 @@ One-time configuration for migrating data from a source database into Snowflake 
 > **Supported sources**: SQL Server, Redshift
 > **Supported targets**: Native tables (default), Iceberg tables
 
-## Architecture
+## Prerequisite
 
-```
-┌──────────────────┐     ┌──────────────────────────────────────┐
-│  Customer Env     │     │         Snowflake Account             │
-│  ┌─────────────┐ │     │  ┌────────────────────────────────┐  │
-│  │  Worker(s)   │─┼─────┤  │  Orchestrator (SPCS)            │  │
-│  └──────┬──────┘ │     │  │  → manages tasks, COPY INTO     │  │
-│         │ reads   │     │  └────────────────────────────────┘  │
-│  ┌─────────────┐ │     │  ┌────────────────────────────────┐  │
-│  │Source System │ │     │  │  Target Tables                  │  │
-│  └─────────────┘ │     │  └────────────────────────────────┘  │
-└──────────────────┘     └──────────────────────────────────────┘
-```
-
-- **Orchestrator** runs on SPCS (requires a compute pool). Breaks workflows into tasks and runs `COPY INTO`.
-- **Worker** runs locally. Reads from source, uploads to Snowflake stage. Not needed for most Iceberg strategies.
-- Both can be stopped and resumed safely.
-
-**Prerequisites:**
-
-- SPCS enabled on the Snowflake account
-- Compute pool created and accessible to the executing role
-- Snowflake role has USAGE on the `SNOWCONVERT_AI` database and `DATA_MIGRATION` schema (or can create them)
-- If the `DATA_MIGRATION_SERVICE` already exists (created by another role), the executing role needs OPERATE and MONITOR privileges on the service. Grant with:
-  ```sql
-  GRANT OPERATE, MONITOR ON SERVICE SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE TO ROLE <your_role>;
-  GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA SNOWCONVERT_AI.DATA_MIGRATION TO ROLE <your_role>;
-  GRANT ALL PRIVILEGES ON ALL PROCEDURES IN SCHEMA SNOWCONVERT_AI.DATA_MIGRATION TO ROLE <your_role>;
-  GRANT ALL PRIVILEGES ON ALL STAGES IN SCHEMA SNOWCONVERT_AI.DATA_MIGRATION TO ROLE <your_role>;
-  ```
-- Source ODBC driver installed (Amazon Redshift or SQL Server)
-- Snowflake connection must have a `warehouse` configured in `~/.snowflake/config.toml`. Connections without a warehouse will fail silently during data migration.
+Load `../data-infrastructure/SKILL.md` first. It handles shared prerequisites, compute pool registration, and worker config (source host/port/credentials, source database, source schema). Return here after it completes.
 
 ---
 
@@ -85,46 +55,7 @@ Migration approach:
 
 ---
 
-## Step 2: Configure Compute Pool
-
-**2a. Verify compute pool is active:**
-
-```sql
-SHOW COMPUTE POOLS LIKE '<COMPUTE_POOL>';
-```
-
-If state is `SUSPENDED`, resume it and wait for `IDLE` or `ACTIVE`:
-
-```sql
-ALTER COMPUTE POOL <COMPUTE_POOL> RESUME;
-```
-
-**2b. Save compute pool to MCP config:**
-
-```
-configure(compute_pool="<COMPUTE_POOL>")
-```
-
-This persists the compute pool to `.scai/settings/cloud-migration.yaml` and auto-generates `.scai/settings/WorkerConfig.toml` with placeholders if the file does not already exist. The Snowflake connection name is pre-filled from the session config.
-
-> The orchestrator SPCS service starts automatically when `migrate_data()` is called — no manual setup or service verification is needed here.
-
----
-
-## Step 3: Edit Worker Configuration
-
-Edit the generated `.scai/settings/WorkerConfig.toml` to fill in source connection details.
-
-**Explicitly ask the user for:**
-1. **Source database name** — do NOT infer from the scai connection. This value goes into `[connections.source.*].database` AND must match `source.databaseName` in the workflow YAML (Step 4). A mismatch causes the orchestrator to report "table does not exist in the source database."
-2. **Source schema name** — needed for `source.schemaName` in the workflow YAML (Step 4). Do not assume `public` or `dbo`.
-3. **Source host, port, credentials** — fill in the remaining `<placeholder>` values.
-
-> **Skip** for Iceberg strategies without a Worker (`catalog_link`, `convert_to_managed`, `copy_files` with `sourceDataStage`). See `./references/worker-config-reference.md` for advanced options.
-
----
-
-## Step 4: Create Workflow Configuration
+## Step 2: Create Workflow Configuration
 
 ### Option A — Auto-generate
 
@@ -169,7 +100,7 @@ Save to `.scai/settings/workflow-config.yaml`.
 
 ---
 
-## Step 5: Create Target Database
+## Step 3: Create Target Database
 
 ```sql
 CREATE DATABASE IF NOT EXISTS <target_db>;
@@ -182,13 +113,10 @@ This completes the setup. During the migrate-objects phase, the `migrate_data()`
 
 ## Checklist
 
+Shared infrastructure checklist is owned by `../data-infrastructure/SKILL.md`. Migration-specific items:
+
 ```
-- [ ] Snowflake connection has warehouse configured
 - [ ] Migration approach selected
-- [ ] Compute pool active (not suspended)
-- [ ] Compute pool saved via configure(compute_pool=...)
-- [ ] Worker config edited with source connection details — unless pure Iceberg
-- [ ] Source database name explicitly confirmed with user
 - [ ] Workflow config created (.scai/settings/workflow-config.yaml)
 - [ ] Target database and schema exist
 - [ ] Iceberg prerequisites validated — if applicable
@@ -200,7 +128,6 @@ Return control to the parent skill.
 
 ## Reference
 
-- [Worker Config Reference](./references/worker-config-reference.md)
 - [Workflow Config Reference](./references/workflow-config-reference.md)
 - [Iceberg Setup Reference](./references/iceberg-setup-reference.md)
 - [Troubleshooting Reference](./references/troubleshooting-reference.md)

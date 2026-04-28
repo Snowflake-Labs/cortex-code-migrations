@@ -6,7 +6,10 @@ license: Proprietary. See License-Skills for complete terms
 
 # Register Source Code
 
-Get source code into the migration project. This skill routes to the appropriate method based on user preference.
+## On Entry
+
+Tell the user:
+> **Register Source Code** — We need to get your source database objects into the project so they can be converted. You can extract them directly from your database or import local SQL files.
 
 ## Step 1: Ask How to Register
 

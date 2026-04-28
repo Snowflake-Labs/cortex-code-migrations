@@ -104,15 +104,14 @@ snowconvert_reports
 │                                  ReportFinder
 │
 ├──► analyzing-sql-dynamic-patterns
-│    └── sql_dynamic_analyzer   → IssueRecord
-│                                  TopLevelCodeUnit
-│                                  load_issues
-│                                  load_code_units
+│    └── (no in-skill loaders)  → handled by `scai assessment sql-dynamic`,
+│                                   which reads the project (registry/CSV) and
+│                                   emits `sql_dynamic_analysis.json`
 │
 └──► object_exclusion_detection
-     └── analyze_naming_conv.   → ReportFinder
-                                   load_object_references
-                                   read_csv_rows
+     └── (no in-skill loaders)  → handled by `scai assessment object-exclusion`,
+                                   which reads the SnowConvert reports / registry
+                                   directly and emits `object_exclusion_analysis_*.json`
 ```
 
 ---
@@ -278,8 +277,8 @@ ETL doesn't subclass `Element`. It composes a richer domain model:
 | Effort calculation | `snowconvert_reports/services/issue_effort_service.py` | Unified EWI/non-EWI logic |
 | SSIS package analysis | `etl-assessment/` | Domain-specific (DTSX parsing, DAGs) |
 | Wave generation algo | `waves-generator/analyze_dependencies.py` | Domain-specific (topo sort, SCC, partitioning) |
-| Dynamic SQL detection | `analyzing-sql-dynamic-patterns/` | Domain-specific (pattern matching, tracking) |
-| Naming pattern rules | `object_exclusion_detection/` | Domain-specific (regex patterns, scoring) |
+| Dynamic SQL detection (occurrence extraction, tracking) | External — `scai assessment sql-dynamic` | Owned by SCAI; the sub-skill is a thin wrapper that drives the CLI and applies pattern classification |
+| Object exclusion (naming patterns, duplicates, version conflicts) | External — `scai assessment object-exclusion` | Owned by SCAI; the sub-skill is a thin wrapper that consumes the resulting JSON |
 | HTML report rendering | `scripts/generate_multi_report.py` | Presentation layer (Vue.js, Chart.js) |
 
 ---

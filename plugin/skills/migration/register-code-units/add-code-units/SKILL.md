@@ -7,7 +7,10 @@ license: Proprietary. See License-Skills for complete terms
 
 # Add Local Source Code
 
-Add existing SQL source files from a local directory to the migration project.
+## On Entry
+
+Tell the user:
+> **Importing local SQL files** — I'll add your existing SQL source files to the migration project so they can be converted to Snowflake syntax.
 
 ## Prerequisites
 
@@ -70,11 +73,9 @@ Confirm with user:
 - [ ] Expected number of files appear in `source/`
 - [ ] File structure looks correct
 
-## Next Steps
+## On Completion
 
-After successfully adding source code:
+After the CHECKPOINT passes, tell the user:
+> **Import complete** — <N> SQL files added to the project in `source/`. Next, we'll convert these to Snowflake SQL.
 
-```bash
-# Convert source code to Snowflake
-scai code convert
-```
+Then return to the calling skill.

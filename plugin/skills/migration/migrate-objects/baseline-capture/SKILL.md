@@ -13,6 +13,11 @@ Capture the expected output of a **single** source stored procedure or function 
 > You must already know `<object_name>` (passed from [../SKILL.md](../SKILL.md) Step 4).
 > All commands below must target only this object.
 
+## On Entry
+
+Tell the user:
+> **Capturing test baselines for `<object_name>`** — I'll record what this object returns from your source database so we can compare it against Snowflake after deployment.
+
 ## Prerequisites
 
 - Source database connection configured (SQL Server or Redshift) and Snowflake validation framework deployed (see [setup/SKILL.md](../setup/SKILL.md))

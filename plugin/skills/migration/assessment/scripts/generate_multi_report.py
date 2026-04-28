@@ -139,7 +139,11 @@ def generate_reason_filter_options(temp_staging: List, deprecated: List, testing
     for obj in temp_staging + deprecated + testing:
         matched_patterns = obj.get('matched_patterns', [])
         if matched_patterns:
-            all_reasons.add(matched_patterns[0])  # Primary pattern
+            # Use the friendly alias so the dropdown matches what's shown in
+            # the Reason column (e.g. ``old suffix`` instead of ``_old$``).
+            label = _friendly_pattern(matched_patterns[0])
+            if label:
+                all_reasons.add(label)
     
     # Add duplicate files as a reason
     all_reasons.add('duplicate files')
@@ -174,26 +178,35 @@ def generate_schema_filter_options(temp_staging: List, deprecated: List, testing
 def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing: List, version_analysis: Dict = None, duplicate_objects: List = None) -> str:
     """Generate table rows for exclusion objects"""
     
-    # Build version lookup from version_analysis
+    # Build version lookup from SCAI's version_groups. Each group has:
+    #   production_version: {full_name, source_file, ...}
+    #   all_versions:       [..., production_version, ...]   (includes production)
+    #   version_count:      int
     version_lookup = {}
     if version_analysis:
-        for group in version_analysis.get('objects_with_versions', []):
-            prod_name = group.get('production_full_name', '')
-            prod_file = group.get('production_file', '')
+        for group in version_analysis.get('version_groups', []):
+            prod = group.get('production_version') or {}
+            prod_name = prod.get('full_name', '')
+            prod_file = prod.get('source_file', '')
+            all_versions = group.get('all_versions', []) or []
+            total_versions = group.get('version_count', len(all_versions))
+            deprecated_versions = [
+                v for v in all_versions if isinstance(v, dict) and v.get('full_name') != prod_name
+            ]
+
             version_lookup[prod_name] = {
                 'is_production': True,
-                'total_versions': group.get('total_versions', 0),
+                'total_versions': total_versions,
                 'production_file': prod_file,
-                'deprecated_versions': group.get('deprecated_versions', [])
+                'deprecated_versions': deprecated_versions,
             }
-            for dep_obj in group.get('deprecated_versions', []):
-                dep_name = dep_obj.get('full_name', '')
-                version_lookup[dep_name] = {
+            for dep_obj in deprecated_versions:
+                version_lookup[dep_obj.get('full_name', '')] = {
                     'is_production': False,
                     'production_version': prod_name,
                     'production_file': prod_file,
-                    'total_versions': group.get('total_versions', 0)
-            }
+                    'total_versions': total_versions,
+                }
     
     # Deduplicate objects across categories and combine reasons
     objects_by_name = {}
@@ -206,7 +219,7 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
                 'full_name': full_name,
                 'schema': obj.get('schema', 'Unknown'),
                 'type': obj.get('type', 'Unknown'),
-                'file': obj.get('file', 'Unknown'),
+                'file': _exclusion_obj_file(obj),
                 'classifications': [],
                 'matched_patterns': [],
                 'raw': obj
@@ -222,7 +235,7 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
                 'full_name': full_name,
                 'schema': obj.get('schema', 'Unknown'),
                 'type': obj.get('type', 'Unknown'),
-                'file': obj.get('file', 'Unknown'),
+                'file': _exclusion_obj_file(obj),
                 'classifications': [],
                 'matched_patterns': [],
                 'raw': obj
@@ -241,7 +254,7 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
                 'full_name': full_name,
                 'schema': obj.get('schema', 'Unknown'),
                 'type': obj.get('type', 'Unknown'),
-                'file': obj.get('file', 'Unknown'),
+                'file': _exclusion_obj_file(obj),
                 'classifications': [],
                 'matched_patterns': [],
                 'raw': obj
@@ -282,45 +295,42 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
             'raw': data['raw']
         })
     
-    # Add duplicate objects - grouped by full_name (one row per unique object)
+    # Add duplicate objects — one row per unique object.
+    # SCAI shape: {full_name, primary: {<obj>}, duplicates: [<obj>, ...], total_files}.
+    # Each <obj> carries duplicate_info.{primary_file, all_files, is_primary}.
     if duplicate_objects:
-        # Group duplicates by full_name
-        duplicates_by_name = {}
-        for obj in duplicate_objects:
-            full_name = obj.get('full_name', 'Unknown')
-            if full_name not in duplicates_by_name:
-                duplicates_by_name[full_name] = []
-            duplicates_by_name[full_name].append(obj)
-        
-        # Create one combined entry per unique object
-        for full_name, dup_list in duplicates_by_name.items():
-            # Use the first duplicate as the base - it already has all the data we need:
-            # - all_files_for_object: list of all files
-            # - primary_file: recommended file
-            # - depended_by: dependency info (on each duplicate)
-            base_obj = dup_list[0]
-            all_files = base_obj.get('all_files_for_object', [])
-            
-            # Collect all dependents and dependencies from all duplicates
-            all_dependents = set()
+        for dup_entry in duplicate_objects:
+            full_name = dup_entry.get('full_name', 'Unknown')
+            primary = dup_entry.get('primary', {}) or {}
+            other_copies = dup_entry.get('duplicates', []) or []
+            all_copies = [primary] + other_copies
+
+            dup_info = primary.get('duplicate_info', {}) or {}
+            all_files = dup_info.get('all_files') or [c.get('source_file', '') for c in all_copies]
+            primary_file = dup_info.get('primary_file', primary.get('source_file', ''))
+
             all_dependencies = set()
-            for dup in dup_list:
-                all_dependents.update(dup.get('depended_by', []))
-                all_dependencies.update(dup.get('depends_on', []))
-            
-            # Create combined entry using existing data
-            combined_obj = base_obj.copy()
-            combined_obj['all_dependents'] = list(all_dependents)
+            all_dependents = set()
+            for copy in all_copies:
+                all_dependencies.update(_exclusion_obj_dependencies(copy))
+                all_dependents.update(_exclusion_obj_dependents(copy))
+
+            # `raw` is consumed downstream — it must expose the file lists and the
+            # combined dependency sets at the keys the renderer reads.
+            combined_obj = dict(primary)
+            combined_obj['all_files_for_object'] = all_files
+            combined_obj['primary_file'] = primary_file
             combined_obj['all_dependencies'] = list(all_dependencies)
-            
+            combined_obj['all_dependents'] = list(all_dependents)
+
             all_objects.append({
                 'full_name': full_name,
-                'schema': base_obj.get('schema', 'Unknown'),
-                'type': base_obj.get('type', 'Unknown'),
+                'schema': primary.get('schema', 'Unknown'),
+                'type': primary.get('type', 'Unknown'),
                 'file': f"{len(all_files)} files",
                 'classification': 'duplicate',
                 'classification_label': 'Duplicate',
-                'raw': combined_obj
+                'raw': combined_obj,
             })
     
     # Sort by classification, then by name
@@ -338,12 +348,15 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
         classification_label = obj['classification_label']
         raw = obj['raw']
         
-        # Get reason from matched patterns (use combined patterns if available, else from raw)
+        # Get reason from matched patterns (use combined patterns if available, else from raw).
+        # Patterns come straight from SCAI as regex strings; translate them to
+        # the friendly labels used by the legacy report so users see, e.g.,
+        # ``old suffix, versioned`` instead of ``_old$, _v\d+$``.
         matched_patterns = obj.get('matched_patterns') or raw.get('matched_patterns', [])
         if classification == 'duplicate':
             reason = 'duplicate files'
         elif matched_patterns:
-            reason = ', '.join(matched_patterns)  # Combine all matched patterns
+            reason = _friendly_reason(matched_patterns) or 'other'
         else:
             reason = 'other'
         reason_display = html_escape_module.escape(str(reason))
@@ -397,8 +410,10 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
                     {files_html}
                 </div>''')
         
-        # References info - what this object depends on (unified for all categories)
-        deps = raw.get('all_dependencies') or raw.get('depends_on', [])
+        # References info - what this object depends on (unified for all categories).
+        # Duplicates use the pre-aggregated `all_dependencies`; single-classification
+        # rows fall through to the SCAI-native `dependencies.depends_on`.
+        deps = raw.get('all_dependencies') or _exclusion_obj_dependencies(raw)
         if deps:
             deps_html = '<div class="refs-list">'
             for dep_name in deps[:10]:  # Show up to 10 items
@@ -412,8 +427,8 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
                 {deps_html}
             </div>''')
         
-        # Referenced by info - what depends on this object (unified for all categories)
-        refs = raw.get('all_dependents') or raw.get('depended_by', [])
+        # Referenced by info - what depends on this object (unified for all categories).
+        refs = raw.get('all_dependents') or _exclusion_obj_dependents(raw)
         if refs:
             refs_html = '<div class="refs-list">'
             for ref_name in refs[:10]:  # Show up to 10 items
@@ -473,41 +488,182 @@ def load_json_data(json_file: Path) -> Dict:
         return json.load(f)
 
 
+def _exclusion_obj_file(obj: Dict) -> str:
+    """File path for an exclusion object entry (SCAI: ``source_file``)."""
+    return obj.get('source_file', 'Unknown') if isinstance(obj, dict) else 'Unknown'
+
+
+def _exclusion_obj_dependencies(obj: Dict) -> List:
+    """``depends_on`` list for an exclusion object entry (nested under ``dependencies``)."""
+    if not isinstance(obj, dict):
+        return []
+    return obj.get('dependencies', {}).get('depends_on', []) or []
+
+
+def _exclusion_obj_dependents(obj: Dict) -> List:
+    """``depended_by`` list for an exclusion object entry (nested under ``dependencies``)."""
+    if not isinstance(obj, dict):
+        return []
+    return obj.get('dependencies', {}).get('depended_by', []) or []
+
+
+# Friendly aliases for the regex patterns SCAI emits in ``matched_patterns``.
+# Keys mirror the regex strings produced by ``scai assessment object-exclusion``
+# (and previously by the deleted ``object_exclusion_shared.NamingConventionAnalyzer``).
+# Anything not in this table falls through to a small heuristic in
+# ``_friendly_pattern`` so unknown SCAI patterns still render readably.
+_PATTERN_DISPLAY_NAMES = {
+    r'^#': 'local temp',
+    r'##': 'global temp',
+    r'^tmp_': 'tmp prefix',
+    r'^temp_': 'temp prefix',
+    r'_tmp$': 'tmp suffix',
+    r'_temp$': 'temp suffix',
+    r'^staging_': 'staging prefix',
+    r'^stg_': 'stg prefix',
+    r'_staging$': 'staging suffix',
+    r'_stg$': 'stg suffix',
+    r'^work_': 'work prefix',
+    r'^wrk_': 'wrk prefix',
+    r'_work$': 'work suffix',
+    r'_wrk$': 'wrk suffix',
+    r'^t_': 't prefix',
+    r'scratch': 'scratch',
+    r'interim': 'interim',
+    r'landing': 'landing',
+    r'\bstg\b': 'stg',
+    r'_deprecated$': 'deprecated',
+    r'_obsolete$': 'obsolete',
+    r'_bak_\d{6,8}$': 'dated backup',
+    r'_backup_\d{6,8}$': 'dated backup',
+    r'_old_\d{6,8}$': 'dated old',
+    r'_old_\d{4}$': 'year old',
+    r'_bak$': 'bak suffix',
+    r'_backup$': 'backup suffix',
+    r'_old$': 'old suffix',
+    r'_archive$': 'archive',
+    r'_archived$': 'archived',
+    r'_copy\d+$': 'numbered copy',
+    r'_copy$': 'copy',
+    r'_v\d+$': 'versioned',
+    r'_bak_': 'bak infix',
+    r'original.*bak': 'original backup',
+    r'original_slow': 'original slow',
+    r'^deprecated_': 'deprecated prefix',
+    r'^obsolete_': 'obsolete prefix',
+    r'^old_': 'old prefix',
+    r'^bak_': 'bak prefix',
+    r'^backup_': 'backup prefix',
+    r'^archive_': 'archive prefix',
+    r'_test$': 'test',
+    r'_test_': 'test',
+    r'_fake$': 'fake',
+    r'_fake_': 'fake',
+    r'^test_': 'test',
+    r'^fake_': 'fake',
+    r'_demo$': 'demo',
+    r'_demo_': 'demo',
+    r'^demo_': 'demo',
+    r'_sample$': 'sample',
+    r'_sample_': 'sample',
+    r'^sample_': 'sample',
+    r'_dummy$': 'dummy',
+    r'_dummy_': 'dummy',
+    r'^dummy_': 'dummy',
+    r'_mock$': 'mock',
+    r'_mock_': 'mock',
+    r'^mock_': 'mock',
+}
+
+
+def _friendly_pattern(pattern: str) -> str:
+    """Translate a SCAI ``matched_patterns`` entry into a user-facing label.
+
+    SCAI emits raw regex strings (``_old$``, ``^temp_``, ``_v\\d+$``) and a
+    ``schema: <name>`` marker for schema-level matches. The deleted Python
+    analyzer used to translate these via ``PATTERN_DISPLAY_NAMES`` before
+    storing them; the renderer now does that translation at display time so
+    the table shows ``old suffix`` / ``versioned`` / ``scratch`` instead of
+    leaking the regex syntax.
+    """
+    if not isinstance(pattern, str) or not pattern:
+        return ''
+    if pattern in _PATTERN_DISPLAY_NAMES:
+        return _PATTERN_DISPLAY_NAMES[pattern]
+    if pattern.startswith('schema: '):
+        # ``schema: scratch`` -> ``scratch`` (matches the legacy display where
+        # the schema name itself was the friendly label).
+        return pattern[len('schema: '):].strip() or 'staging schema'
+    return pattern
+
+
+def _friendly_reason(matched_patterns: List[str]) -> str:
+    """Join ``matched_patterns`` into a deduplicated, user-facing reason string."""
+    seen = set()
+    labels = []
+    for pat in matched_patterns or []:
+        label = _friendly_pattern(pat)
+        if label and label not in seen:
+            seen.add(label)
+            labels.append(label)
+    return ', '.join(labels)
+
+
 def flatten_dynamic_sql_json(data: Dict) -> List[Dict]:
-    """Convert dynamic SQL nested JSON structure into flat array"""
+    """Flatten ``scai assessment sql-dynamic`` JSON into per-occurrence rows.
+
+    SCAI emits a camelCase shape verified against the live CLI:
+
+    ``{ metadata: {...}, codeUnits: { <id>: { codeUnitId, procedureName,
+    fileName, codeUnitStartLine, linesOfCode, procedure,
+    occurrences: [{id, line, status, category, complexity, notes,
+    generatedSql, sqlClassification}] } } }``
+
+    Code-unit metadata fields live at the top of each code-unit entry (not
+    nested under ``metadata`` like the legacy Python helper produced).
+    The renderer expects snake_case keys, so we translate at flatten time.
+    """
     flattened = []
-    code_units = data.get('code_units', {})
-    
+    code_units = data.get('codeUnits', {}) or {}
+
     for code_unit_id, cu_data in code_units.items():
-        metadata = cu_data.get('metadata', {})
-        occurrences = cu_data.get('occurrences', [])
-        procedure_source = metadata.get('procedure', '') or ''
-        
-        for occ in occurrences:
+        if not isinstance(cu_data, dict):
+            continue
+        procedure_source = cu_data.get('procedure', '') or ''
+        procedure_name = cu_data.get('procedureName', '') or ''
+        filename = cu_data.get('fileName', '') or ''
+        code_unit_start_line = cu_data.get('codeUnitStartLine', 0) or 0
+        lines_of_code = cu_data.get('linesOfCode', 0) or 0
+
+        for occ in cu_data.get('occurrences', []) or []:
+            # ``category`` is normally a list (SCAI stores pipe-separated input
+            # as a list); accept a raw string for resilience.
             category_data = occ.get('category', [])
             if isinstance(category_data, str):
                 category = [c.strip() for c in category_data.split('|') if c.strip()] if category_data else []
+            elif isinstance(category_data, list):
+                category = [str(c).strip() for c in category_data if str(c).strip()]
             else:
-                category = category_data if category_data else []
-            
+                category = []
+
             flattened.append({
                 'id': occ.get('id'),
-                'name': metadata.get('procedure_name', ''),
-                'filename': metadata.get('filename', ''),
+                'name': procedure_name,
+                'filename': filename,
                 'line': occ.get('line'),
-                'procedure_name': metadata.get('procedure_name', ''),
+                'procedure_name': procedure_name,
                 'procedure_source': procedure_source,
                 'code_unit_id': code_unit_id,
-                'code_unit_start_line': metadata.get('code_unit_start_line', 0),
-                'lines_of_code': metadata.get('lines_of_code', 0),
+                'code_unit_start_line': code_unit_start_line,
+                'lines_of_code': lines_of_code,
                 'status': occ.get('status', 'PENDING'),
                 'category': category,
-                'complexity': occ.get('complexity', ''),
-                'notes': occ.get('notes', ''),
-                'generated_sql': occ.get('generated_sql', ''),
-                'sql_classification': occ.get('sql_classification', '')
+                'complexity': occ.get('complexity', '') or '',
+                'notes': occ.get('notes', '') or '',
+                'generated_sql': occ.get('generatedSql', '') or '',
+                'sql_classification': occ.get('sqlClassification', '') or '',
             })
-    
+
     return flattened
 
 
@@ -912,12 +1068,13 @@ def generate_multi_report(
     if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data:
         raise ValueError("At least one data source (exclusion, dynamic SQL, waves, or SSIS) must be provided")
     
-    # Process exclusion data
+    # Process exclusion data — schema produced by `scai assessment object-exclusion`
+    # is the single source of truth; field names below match that schema directly.
     exclusion_summary = exclusion_data.get('summary', {}) if exclusion_data else {}
-    temp_staging = exclusion_data.get('temporary_staging_objects', []) if exclusion_data else []
+    temp_staging = exclusion_data.get('temp_staging_objects', []) if exclusion_data else []
     deprecated = exclusion_data.get('deprecated_legacy_objects', []) if exclusion_data else []
     testing = exclusion_data.get('testing_objects', []) if exclusion_data else []
-    duplicate_objects = exclusion_data.get('duplicate_objects', []) if exclusion_data else []
+    duplicate_objects = exclusion_data.get('duplicates', []) if exclusion_data else []
     version_analysis = exclusion_data.get('version_analysis', {}) if exclusion_data else {}
     
     # Adaptive mode flag
@@ -987,10 +1144,13 @@ def generate_multi_report(
     if overview_stats:
         print(f"  - Overview: {overview_stats.get('total_objects', 0)} objects in {overview_stats.get('total_waves', 0)} waves")
 
-    # If no source_dialect in overview but have dynamic SQL with source_language, use that
-    if overview_stats and not overview_stats.get('source_dialect') and dynamic_sql_meta.get('source_language'):
-        overview_stats['source_dialect'] = dynamic_sql_meta.get('source_language')
-        print(f"  - Using source dialect from SQL Dynamic: {overview_stats['source_dialect']}")
+    # If overview lacks source_dialect, fall back to the dialect SCAI records on
+    # the dynamic SQL artifact (``sourceLanguage`` in the camelCase schema).
+    if overview_stats and not overview_stats.get('source_dialect'):
+        scai_lang = dynamic_sql_meta.get('sourceLanguage') or dynamic_sql_meta.get('source_language')
+        if scai_lang:
+            overview_stats['source_dialect'] = scai_lang
+            print(f"  - Using source dialect from SQL Dynamic: {scai_lang}")
     
     # Set default tab to overview if available
     if waves_analysis_dir:
@@ -1000,7 +1160,7 @@ def generate_multi_report(
     if exclusion_data:
         print(f"  - Exclusion: {len(all_objects_for_export)} objects from {len(exclusion_data.get('summary', {}).get('objects_by_schema', []))} schemas")
     if dynamic_sql_data:
-        print(f"  - Dynamic SQL: {len(flattened_dynamic_sql)} occurrences from {len(dynamic_sql_data.get('code_units', {}))} code units")
+        print(f"  - Dynamic SQL: {len(flattened_dynamic_sql)} occurrences from {len(dynamic_sql_data.get('codeUnits', {}))} code units")
     if waves_info:
         print(f"  - Waves: HTML content generated successfully")
     
@@ -4674,12 +4834,13 @@ def generate_html_template(
                     return dynamicSqlMeta && typeof dynamicSqlMeta === 'object' && Object.keys(dynamicSqlMeta).length > 0;
                 }},
                 dynamicSqlFiles() {{
-                    // Backwards compatible: prefer metadata.files, fallback to metadata.source
-                    const files = (dynamicSqlMeta && dynamicSqlMeta.files) ? dynamicSqlMeta.files : (dynamicSqlMeta && dynamicSqlMeta.source) ? dynamicSqlMeta.source : {{}};
+                    // SCAI emits metadata.files (camelCase keys: sourceDir,
+                    // issuesCsv, topLevelCodeUnitsCsv, registryDir).
+                    const files = (dynamicSqlMeta && dynamicSqlMeta.files) ? dynamicSqlMeta.files : {{}};
                     return files || {{}};
                 }},
                 formattedDynamicSqlGeneratedAt() {{
-                    const raw = dynamicSqlMeta && dynamicSqlMeta.generated_at ? String(dynamicSqlMeta.generated_at) : '';
+                    const raw = dynamicSqlMeta && dynamicSqlMeta.generatedAt ? String(dynamicSqlMeta.generatedAt) : '';
                     if (!raw) return 'Unknown';
                     const d = new Date(raw);
                     if (Number.isNaN(d.getTime())) return raw;

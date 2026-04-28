@@ -32,7 +32,7 @@ ORDER BY ID DESC LIMIT 5;
    WHERE ID = <workflow_id>;
    ```
 2. Or, set `affinity: <value>` in the workflow YAML before submitting.
-3. Also set `affinity = "<value>"` in the worker's `[application]` section in `WorkerConfig.toml`.
+3. Also set `affinity = "<value>"` in the worker's `[application]` section in `DataExchangeWorkerConfig.toml`.
 
 ---
 
@@ -65,9 +65,9 @@ WHERE WORKFLOW_ID != <your_workflow_id>
 
 **Symptom:** The orchestrator logs `TableNotFoundError: Table '<db>.<schema>.<table>' does not exist in the source database`. The worker completed the metadata extraction task without errors, but no data was uploaded.
 
-**Cause:** The worker's ODBC connection uses the `database` field from `WorkerConfig.toml` to set the active database. If this doesn't match the `source.databaseName` in the workflow YAML, queries against `information_schema.columns` and `SVV_TABLE_INFO` return zero rows (they are scoped to the connected database).
+**Cause:** The worker's ODBC connection uses the `database` field from `DataExchangeWorkerConfig.toml` to set the active database. If this doesn't match the `source.databaseName` in the workflow YAML, queries against `information_schema.columns` and `SVV_TABLE_INFO` return zero rows (they are scoped to the connected database).
 
-**Fix:** Ensure the `database` field in `[connections.source.*]` in `WorkerConfig.toml` matches the `source.databaseName` in `workflow-config.yaml`. Then delete the failed workflow/tasks and resubmit.
+**Fix:** Ensure the `database` field in `[connections.source.*]` in `DataExchangeWorkerConfig.toml` matches the `source.databaseName` in `workflow-config.yaml`. Then delete the failed workflow/tasks and resubmit.
 
 ---
 

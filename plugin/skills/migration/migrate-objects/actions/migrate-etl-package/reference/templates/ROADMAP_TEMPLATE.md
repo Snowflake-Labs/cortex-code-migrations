@@ -87,7 +87,12 @@
 ### Batch Assignments
 
 <!-- One row per element. Batch column groups elements into parallel agent batches.
-     Target: 2-3 elements per batch. Grouped elements (shared tables) stay in same batch.
+     Phase cap (see SKILL.md § Phase design principles): pack up to 40-50 small-medium items
+     per phase OR up to 20 large items per phase. Do not mix classes in the same phase.
+       - Small-medium = dbt project with ≤20 models, OR any orchestration element (atomic)
+       - Large = dbt project with >20 models (orchestration elements are never classified large)
+     Batch cap: ~10 small-medium items per batch, ~5 large items per batch; max 5 parallel batches.
+     Grouped elements (shared tables) stay in same batch.
      NAMING: Batch IDs use B{P}.{M} format (e.g., B1.1, B1.2, B2.1) where P=phase, M=batch number.
      Schemas: ETL_FIX_P{N}_B{M} (schema naming does not use the dot format). -->
 

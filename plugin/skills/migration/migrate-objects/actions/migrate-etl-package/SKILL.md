@@ -192,7 +192,14 @@ Using PACKAGE_ORCH_CONTEXT.md, PACKAGE_DBT_CONTEXT.md (if dbt projects exist), a
 **Phase design principles:**
 - Phases align with CREATE TASK/PROCEDURE boundaries
 - Phase types: `full-tdd`, `lightweight`, `dbt`, `final-validation`
-- Target 2-3 elements per batch, 3-5 concurrent batches per phase
+- **Item sizing caps** (an "item" is one orchestration element or one dbt project — caps apply to both):
+  - **Small-medium item**: a dbt project with ≤20 models (from `scan_results.json` `health.model_count`); OR any orchestration element (elements are atomic — 1 element = 1 item against the phase cap, regardless of internal complexity)
+  - **Large item**: a dbt project with >20 models. **Only dbt projects can be classified as large** — orchestration elements are always small-medium
+  - **Phase cap**: pack up to **40-50 small-medium items per phase** OR up to **20 large items per phase**
+  - **Do NOT mix classes in the same phase** — route small-medium and large items into separate phases so sizing stays predictable
+  - **Batch cap**: ~10 small-medium items per batch, ~5 large items per batch
+  - **Concurrency cap**: max 5 parallel batches per phase regardless of item size
+- Push each phase toward its cap rather than creating many small phases — a 48-project small-medium phase is preferable to two 24-project phases when the items share patterns
 - Never split `grouped:{name}` element sets across batches
 - Archetype elements get `full-tdd`; clones get `lightweight` phases applying the archetype's patterns
 - Orchestration phases are sequential (edit the same SQL file); batches within a phase are parallel
@@ -202,7 +209,7 @@ Using PACKAGE_ORCH_CONTEXT.md, PACKAGE_DBT_CONTEXT.md (if dbt projects exist), a
 - Every dbt project MUST be assigned to a dbt phase — no project may be omitted or deferred to "manual" resolution
 - The ROADMAP must include dbt project health summaries in the phase metadata (from scan_results.json health fields and PACKAGE_DBT_CONTEXT.md)
 
-**Phase sizing factors** (use judgment, no hard constraints):
+**Phase sizing factors** (refine assignment within the caps above — not a substitute for the caps):
 1. Post-strip orchestration file size
 2. EWI density and type complexity per statement
 3. Statement topology (don't break loops, containers, event handler groups)

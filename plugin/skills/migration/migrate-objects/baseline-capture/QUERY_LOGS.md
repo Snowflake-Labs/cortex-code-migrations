@@ -44,7 +44,7 @@ scai test capture \
   --where "source.canonicalName ILIKE '%<schema>.<object_name>%'"
 ```
 
-Output: JSON baseline files in `<project_dir>/.scai/baselines/`.
+Baselines upload to `@<DATABASE>.VALIDATION.BASELINES` (no local copy).
 
 ## Next Step
 
