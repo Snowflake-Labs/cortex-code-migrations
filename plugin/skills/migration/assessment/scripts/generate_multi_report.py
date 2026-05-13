@@ -49,10 +49,6 @@ try:
     from load_data_html_report import (
         load_issues_estimation,
         load_toplevel_code_units,
-        load_partition_membership,
-        parse_graph_summary,
-        parse_cycles,
-        parse_excluded_edges,
         load_toplevel_objects_estimation,
         find_estimation_reports,
         load_estimation_grand_totals,
@@ -62,6 +58,7 @@ try:
     )
     from generate_html_report import generate_html_report as generate_full_waves_report
     from snowconvert_reports import load_registry_entries
+    from snowconvert_reports.loaders.waves_json import WavesJsonAdapter
     WAVES_SUPPORT = True
 except ImportError as e:
     print(f"Warning: Waves generator modules not available: {e}", file=sys.stderr)
@@ -667,51 +664,51 @@ def flatten_dynamic_sql_json(data: Dict) -> List[Dict]:
     return flattened
 
 
-def load_waves_data(analysis_dir: Path, reports_dir: Path = None, issues_json_path: Path = None, registry_dir: Path = None):
+def load_waves_data(waves_json: Path, reports_dir: Path = None, issues_json_path: Path = None, registry_dir: Path = None):
     """Load waves/dependency analysis data and generate HTML content for the waves report tab."""
     if not WAVES_SUPPORT:
         return None
-    
+
     try:
         # Generate the full waves HTML report to a temp file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as tmp:
             tmp_path = Path(tmp.name)
-        
+
         # Find issues-estimation.json if not provided
         if not issues_json_path:
-            search_dirs = [analysis_dir, analysis_dir.parent.parent.parent]
+            search_dirs = [Path(waves_json).parent, Path(waves_json).parent.parent.parent.parent]
             if reports_dir:
                 search_dirs.insert(0, Path(reports_dir))
                 # Also check SnowConvert subdirectory
                 snowconvert_dir = Path(reports_dir) / 'SnowConvert'
                 if snowconvert_dir.exists():
                     search_dirs.insert(0, snowconvert_dir)
-            
+
             for search_dir in search_dirs:
                 if search_dir.exists():
                     issue_matches = list(search_dir.glob('**/issues-estimation.json'))
                     if issue_matches:
                         issues_json_path = issue_matches[0]
                         break
-            
+
             # Use a dummy path if not found
             if not issues_json_path:
                 # Create a minimal issues JSON
                 issues_json_path = Path(tempfile.mktemp(suffix='.json'))
                 with open(issues_json_path, 'w') as f:
                     json.dump({"Issues": [], "Severities": []}, f)
-        
+
         # Determine the correct reports_dir to pass (should include SnowConvert if it exists)
         reports_dir_to_use = reports_dir
         if reports_dir:
             snowconvert_dir = Path(reports_dir) / 'SnowConvert'
             if snowconvert_dir.exists():
                 reports_dir_to_use = snowconvert_dir
-        
+
         # Generate the full waves report
         print(f"Generating waves HTML content...")
         report_path = generate_full_waves_report(
-            analysis_dir=str(analysis_dir),
+            waves_json=str(waves_json),
             issues_json_path=str(issues_json_path),
             output_path=str(tmp_path),
             reports_dir=str(reports_dir_to_use) if reports_dir_to_use else None,
@@ -856,7 +853,7 @@ def _shared_refs_to_overview(shared_result: Dict) -> Dict:
 
 
 def load_missing_objects_for_overview(
-    waves_analysis_dir: Path = None,
+    waves_json: Path = None,
     snowconvert_reports_dir: Path = None,
     registry_dir: Path = None,
 ) -> Dict:
@@ -882,8 +879,7 @@ def load_missing_objects_for_overview(
 
 
 def load_overview_stats(
-    waves_analysis_dir: Path,
-    partition_membership_path: Path = None,
+    waves_json: Path,
     snowconvert_reports_dir: Path = None,
     registry_dir: Path = None,
 ) -> Dict:
@@ -900,63 +896,25 @@ def load_overview_stats(
         'source_dialect': ''
     }
 
-    if not waves_analysis_dir:
+    if not waves_json:
         return stats
 
-    # Load from partition_membership.csv
-    pm_path = partition_membership_path or (waves_analysis_dir / 'partition_membership.csv')
-    if pm_path.exists():
-        try:
-            with open(pm_path, 'r', encoding='utf-8-sig') as f:
-                reader = csv.DictReader(f)
-                waves_set = set()
-                for row in reader:
-                    stats['total_objects'] += 1
+    try:
+        adapter = WavesJsonAdapter(Path(waves_json))
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"Warning: Could not load waves JSON: {exc}", file=sys.stderr)
+        return stats
 
-                    # Track object types
-                    category = row.get('category', 'Unknown')
-                    stats['objects_by_type'][category] = stats['objects_by_type'].get(category, 0) + 1
-
-                    # Track waves
-                    partition = row.get('partition_number', '')
-                    if partition:
-                        waves_set.add(partition)
-
-                    # Track conversion status
-                    conv_status = row.get('conversion_status', '')
-                    if conv_status in stats['conversion_stats']:
-                        stats['conversion_stats'][conv_status] += 1
-
-                stats['total_waves'] = len(waves_set)
-        except Exception as e:
-            print(f"Warning: Could not load partition membership: {e}", file=sys.stderr)
-
-    # Load deployment partitions for more details
-    dp_path = waves_analysis_dir / 'deployment_partitions.json'
-    if dp_path.exists():
-        try:
-            with open(dp_path, 'r', encoding='utf-8') as f:
-                dp_data = json.load(f)
-                metadata = dp_data.get('metadata', {})
-                stats['total_waves'] = metadata.get('total_partitions', stats['total_waves'])
-                stats['total_objects'] = metadata.get('total_objects', stats['total_objects'])
-        except Exception as e:
-            print(f"Warning: Could not load deployment partitions: {e}", file=sys.stderr)
-
-    # Count temporal tables (SQL Server #/## temp tables) from partition membership
-    temporal_count = 0
-    if pm_path.exists():
-        try:
-            with open(pm_path, 'r', encoding='utf-8-sig') as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    obj_name = row.get('object_name', '')
-                    bare = obj_name.replace('[', '').replace(']', '').rsplit('.', 1)[-1]
-                    if bare.startswith('#'):
-                        temporal_count += 1
-        except Exception:
-            pass
-    stats['temporal_tables_count'] = temporal_count
+    counts = adapter.conversion_status_counts()
+    stats["total_objects"] = adapter.total_objects()
+    stats["total_waves"] = adapter.total_waves()
+    stats["objects_by_type"] = adapter.objects_by_type()
+    stats["conversion_stats"] = {
+        "Success":      counts.get("Success", 0),
+        "Partial":      counts.get("Require Attention", 0),
+        "NotSupported": counts.get("Not Supported", 0),
+    }
+    stats["temporal_tables_count"] = adapter.temporal_tables_count()
 
     # Load external tables count from registry when available.
     if registry_dir:
@@ -1022,33 +980,33 @@ def generate_multi_report(
     output_file: Path,
     exclusion_json: Path = None,
     dynamic_sql_json: Path = None,
-    waves_analysis_dir: Path = None,
+    waves_json: Path = None,
     snowconvert_reports_dir: Path = None,
     registry_dir: Path = None,
     ssis_json: Path = None
 ) -> None:
     """Generate multi-tab HTML report"""
-    
+
     # Load data
     exclusion_data = None
     dynamic_sql_data = None
     waves_info = None
     default_tab = 'exclusion'
-    
+
     if exclusion_json:
         print(f"Loading exclusion data from {exclusion_json}...")
         exclusion_data = load_json_data(exclusion_json)
         default_tab = 'exclusion'
-    
+
     if dynamic_sql_json:
         print(f"Loading dynamic SQL data from {dynamic_sql_json}...")
         dynamic_sql_data = load_json_data(dynamic_sql_json)
         if not exclusion_json:
             default_tab = 'dynamic-sql'
-    
-    if waves_analysis_dir:
-        print(f"Loading waves data from {waves_analysis_dir}...")
-        waves_info = load_waves_data(waves_analysis_dir, snowconvert_reports_dir, registry_dir=registry_dir)
+
+    if waves_json:
+        print(f"Loading waves data from {waves_json}...")
+        waves_info = load_waves_data(waves_json, snowconvert_reports_dir, registry_dir=registry_dir)
         if waves_info and not exclusion_json and not dynamic_sql_json:
             default_tab = 'waves'
     
@@ -1123,24 +1081,24 @@ def generate_multi_report(
     # Load overview and missing objects data
     overview_stats = None
     missing_objects_data = None
-    if waves_analysis_dir:
-        print(f"Loading overview statistics from {waves_analysis_dir}...")
+    if waves_json:
+        print(f"Loading overview statistics from {waves_json}...")
         overview_stats = load_overview_stats(
-            waves_analysis_dir,
+            waves_json,
             snowconvert_reports_dir=snowconvert_reports_dir,
             registry_dir=registry_dir,
         )
-    
+
     # Load missing objects from SnowConvert reports or waves analysis
-    if waves_analysis_dir or snowconvert_reports_dir or registry_dir:
+    if waves_json or snowconvert_reports_dir or registry_dir:
         print(f"Loading missing objects data...")
         missing_objects_data = load_missing_objects_for_overview(
-            waves_analysis_dir,
+            waves_json,
             snowconvert_reports_dir,
             registry_dir=registry_dir,
         )
         print(f"  - Missing objects: {len(missing_objects_data.get('missing_objects', []))} references found")
-    
+
     if overview_stats:
         print(f"  - Overview: {overview_stats.get('total_objects', 0)} objects in {overview_stats.get('total_waves', 0)} waves")
 
@@ -1151,9 +1109,9 @@ def generate_multi_report(
         if scai_lang:
             overview_stats['source_dialect'] = scai_lang
             print(f"  - Using source dialect from SQL Dynamic: {scai_lang}")
-    
+
     # Set default tab to overview if available
-    if waves_analysis_dir:
+    if waves_json:
         default_tab = 'overview'
     
     print(f"Processed data:")
@@ -5853,7 +5811,7 @@ def print_usage():
     print("\nOptions:")
     print("  --exclusion-json PATH           Path to object exclusion JSON file")
     print("  --dynamic-sql-json PATH         Path to dynamic SQL analysis JSON file")
-    print("  --waves-analysis-dir PATH       Path to waves dependency analysis directory")
+    print("  --waves-json PATH               Path to waves_analysis_*.json produced by `scai assessment waves`")
     print("  --snowconvert-reports-dir PATH  Path to SnowConvert reports directory (optional, for waves data)")
     print("  --output PATH                   Output path for HTML report (required)")
     print("\nExamples:")
@@ -5861,11 +5819,11 @@ def print_usage():
     print("  python generate_multi_report.py \\")
     print("      --exclusion-json data/object_exclusion.json \\")
     print("      --dynamic-sql-json data/sql_dynamic_analysis.json \\")
-    print("      --waves-analysis-dir data/waves/dependency_analysis_20241204_162225 \\")
+    print("      --waves-json path/to/waves_analysis_20241204_162225.json \\")
     print("      --output report.html")
     print("\n  # Generate report with only waves data")
     print("  python generate_multi_report.py \\")
-    print("      --waves-analysis-dir data/waves/dependency_analysis_20241204_162225 \\")
+    print("      --waves-json path/to/waves_analysis_20241204_162225.json \\")
     print("      --output report.html")
 
 
@@ -5889,9 +5847,9 @@ def main():
     )
     
     parser.add_argument(
-        '--waves-analysis-dir',
+        '--waves-json',
         type=Path,
-        help='Path to waves dependency analysis directory'
+        help='Path to waves_analysis_*.json produced by `scai assessment waves`.',
     )
     
     parser.add_argument(
@@ -5913,41 +5871,124 @@ def main():
     )
 
     parser.add_argument(
+        '--project-dir',
+        type=Path,
+        help='Path to the scai project root. When provided, --registry-dir and --snowconvert-reports-dir default to <project-dir>/registry and <project-dir>/reports respectively.'
+    )
+
+    parser.add_argument(
         '--output',
         type=Path,
         required=True,
         help='Output path for HTML report'
     )
-    
+
     args = parser.parse_args()
-    
-    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_analysis_dir and not args.ssis_json:
-        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-analysis-dir, or --ssis-json) must be provided", file=sys.stderr)
+
+    # --project-dir auto-discovery: fill in registry-dir and snowconvert-reports-dir
+    # from the conventional layout if they weren't set explicitly.
+    if args.project_dir:
+        if not args.project_dir.exists() or not args.project_dir.is_dir():
+            print(f"Error: project directory not found: {args.project_dir}", file=sys.stderr)
+            sys.exit(1)
+        if not args.registry_dir:
+            candidate = args.project_dir / "registry"
+            if candidate.is_dir():
+                args.registry_dir = candidate
+                print(f"Using registry dir: {candidate}", file=sys.stderr)
+            else:
+                print(f"Warning: no registry dir found at {candidate}", file=sys.stderr)
+        if not args.snowconvert_reports_dir:
+            candidate = args.project_dir / "reports"
+            if candidate.is_dir():
+                args.snowconvert_reports_dir = candidate
+                print(f"Using SnowConvert reports dir: {candidate}", file=sys.stderr)
+        if not args.exclusion_json:
+            matches = sorted((args.project_dir / "assessment").glob("object_exclusion_analysis_*.json"))
+            if matches:
+                args.exclusion_json = matches[-1]  # latest by timestamp
+                print(f"Using exclusion JSON: {args.exclusion_json}", file=sys.stderr)
+        if not args.dynamic_sql_json:
+            candidate = args.project_dir / "assessment" / "json" / "sql_dynamic_analysis.json"
+            if candidate.is_file():
+                args.dynamic_sql_json = candidate
+                print(f"Using dynamic SQL JSON: {candidate}", file=sys.stderr)
+        if not args.waves_json:
+            matches = sorted((args.project_dir / "assessment").glob("waves_analysis_*.json"))
+            if matches:
+                args.waves_json = matches[-1]  # latest by timestamp
+                print(f"Using waves JSON: {args.waves_json}", file=sys.stderr)
+
+    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.registry_dir:
+        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
         print_usage()
         sys.exit(1)
-    
+
     if args.exclusion_json and not args.exclusion_json.exists():
         print(f"Error: Exclusion JSON file not found: {args.exclusion_json}", file=sys.stderr)
         sys.exit(1)
-    
+
     if args.dynamic_sql_json and not args.dynamic_sql_json.exists():
         print(f"Error: Dynamic SQL JSON file not found: {args.dynamic_sql_json}", file=sys.stderr)
         sys.exit(1)
-    
-    if args.waves_analysis_dir and not args.waves_analysis_dir.exists():
-        print(f"Error: Waves analysis directory not found: {args.waves_analysis_dir}", file=sys.stderr)
+
+    if args.waves_json and not args.waves_json.exists():
+        print(f"Error: waves JSON not found: {args.waves_json}", file=sys.stderr)
         sys.exit(1)
-    
+
     if args.ssis_json and not args.ssis_json.exists():
         print(f"Error: SSIS JSON file not found: {args.ssis_json}", file=sys.stderr)
         sys.exit(1)
-    
+
+    # Registry-driven waves data. Two modes:
+    # 1. --registry-dir + --waves-json: synthesize intrinsic data from registry,
+    #    overlay algorithmic data (partitions, cycles, excluded_edges, is_picked_scc,
+    #    transitive counts) from the real `scai assessment waves` JSON.
+    # 2. --registry-dir only: synthesize a mock waves JSON with placeholder
+    #    partition assignments.
+    synthesized_waves_path = None
+    if args.registry_dir:
+        if not args.registry_dir.exists():
+            print(f"Error: Registry directory not found: {args.registry_dir}", file=sys.stderr)
+            sys.exit(1)
+        if not WAVES_SUPPORT:
+            print("Error: Waves modules unavailable; cannot synthesize from registry.", file=sys.stderr)
+            sys.exit(1)
+        from snowconvert_reports.loaders.waves_from_registry import (
+            write_synthesized_waves_json,
+            write_merged_waves_json,
+        )
+
+        synthesized_waves_path = Path(tempfile.mkstemp(
+            suffix=".json", prefix="waves_from_registry_"
+        )[1])
+
+        if args.waves_json:
+            print(
+                f"Merging registry ({args.registry_dir}) with waves JSON ({args.waves_json})\n"
+                f"  → {synthesized_waves_path}",
+                file=sys.stderr,
+            )
+            write_merged_waves_json(
+                args.registry_dir, args.waves_json, synthesized_waves_path
+            )
+        else:
+            print(
+                f"No --waves-json given; synthesizing from registry at {args.registry_dir}\n"
+                f"  → {synthesized_waves_path}\n"
+                f"  NOTE: partition_number / is_picked_scc / transitive counts are MOCKED.\n"
+                f"        Provide --waves-json to overlay the real `scai assessment waves` output.",
+                file=sys.stderr,
+            )
+            write_synthesized_waves_json(args.registry_dir, synthesized_waves_path)
+        args.waves_json = synthesized_waves_path
+
     try:
             generate_multi_report(
                 output_file=args.output,
                 exclusion_json=args.exclusion_json,
                 dynamic_sql_json=args.dynamic_sql_json,
-                waves_analysis_dir=args.waves_analysis_dir,
+                waves_json=args.waves_json,
                 snowconvert_reports_dir=args.snowconvert_reports_dir,
                 registry_dir=args.registry_dir,
                 ssis_json=args.ssis_json
@@ -5956,6 +5997,12 @@ def main():
         print(f"Error: {e}", file=sys.stderr)
         traceback.print_exc()
         sys.exit(1)
+    finally:
+        if synthesized_waves_path and synthesized_waves_path.exists():
+            try:
+                synthesized_waves_path.unlink()
+            except OSError:
+                pass
 
 
 if __name__ == "__main__":

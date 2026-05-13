@@ -236,7 +236,7 @@ IAM authentication generates temporary credentials internally.
 ### Test with scai
 
 ```bash
-scai connection test -l redshift -c <CONNECTION_NAME>
+scai connection test -l redshift -c <CONNECTION_NAME> --json
 ```
 
 ### Manual Network Test

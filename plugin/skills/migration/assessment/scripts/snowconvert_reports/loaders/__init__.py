@@ -20,7 +20,6 @@ from .code_units_loader import load_code_units
 from .object_references_loader import load_object_references, load_missing_references
 from .partition_loader import load_partition_membership
 from .estimation_loader import load_issues_estimation_json, load_object_estimations
-from .graph_loader import parse_graph_summary, parse_cycles, parse_excluded_edges
 from .registry_loader import (
     load_registry_entries,
     build_id_to_name_map,
@@ -28,6 +27,12 @@ from .registry_loader import (
     load_object_references_from_registry,
     load_missing_references_from_registry,
     load_missing_dependencies_by_object,
+)
+from .waves_from_registry import (
+    synthesize_waves_json,
+    write_synthesized_waves_json,
+    overlay_real_waves_json,
+    write_merged_waves_json,
 )
 from .unified_loader import (
     load_code_units_auto,
@@ -46,9 +51,6 @@ __all__ = [
     "load_partition_membership",
     "load_issues_estimation_json",
     "load_object_estimations",
-    "parse_graph_summary",
-    "parse_cycles",
-    "parse_excluded_edges",
     # Registry loaders
     "load_registry_entries",
     "build_id_to_name_map",
@@ -56,6 +58,11 @@ __all__ = [
     "load_object_references_from_registry",
     "load_missing_references_from_registry",
     "load_missing_dependencies_by_object",
+    # Registry → waves JSON synthesizer
+    "synthesize_waves_json",
+    "write_synthesized_waves_json",
+    "overlay_real_waves_json",
+    "write_merged_waves_json",
     # Unified (auto-dispatch) loaders
     "load_code_units_auto",
     "load_object_references_auto",

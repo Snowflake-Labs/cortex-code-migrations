@@ -31,40 +31,25 @@ from collections import defaultdict, Counter
 from load_data_html_report import (
     load_issues_estimation,
     load_toplevel_code_units,
-    load_partition_membership,
-    parse_graph_summary,
-    parse_cycles,
-    parse_excluded_edges,
     load_toplevel_objects_estimation,
     find_estimation_reports,
     load_estimation_grand_totals,
     estimate_hours_for_object,
     load_missing_object_references,
     load_object_references_as_dicts,
-    load_dependency_counts,
 )
 from registry_support import (
-    load_registry_entries,
-    build_id_to_object_name_map,
-    build_registry_object_id,
     is_na,
     strip_na_identifier,
 )
 
+# Add shared library to path
+_scripts_dir = str(Path(__file__).resolve().parent.parent.parent / 'scripts')
+import sys
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
 
-def load_missing_dependencies_json(json_path):
-    """Load missing dependencies JSON file.
-
-    The JSON has structure {"_metadata": {...}, "objects": {obj_name: {...}, ...}}.
-    Returns just the 'objects' dict for direct lookup by object name.
-    """
-    if not json_path or not json_path.exists():
-        return {}
-
-    with open(json_path, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
-    return data.get('objects', data)
+from snowconvert_reports.loaders.waves_json import WavesJsonAdapter
 
 
 def generate_ai_wave_benefits(waves_data, graph_summary, total_objects, total_waves, cycles, excluded_edges):
@@ -314,113 +299,36 @@ def _is_temporal_table(obj_name, obj_info, mem_info):
     return False
 
 
-def _load_missing_refs_from_registry(registry_dir):
-    """Load missing objects for the overview page directly from registry JSON files.
-
-    An entry with root-level ``isMissing: true`` is a missing object.  Its
-    ``dependencies.requiredBy`` lists the UUIDs of objects that depend on it.
-    """
-    entries = load_registry_entries(registry_dir)
-    id_to_name = build_id_to_object_name_map(entries)
-
-    missing_objects = set()
-    dependents = {}
-    details = []
-
-    for entry in entries:
-        if not entry.get('isMissing', False):
-            continue
-
-        missing_name = build_registry_object_id(entry)
-        if is_na(missing_name):
-            continue
-        missing_objects.add(missing_name)
-
-        required_by_ids = entry.get('dependencies', {}).get('requiredBy', [])
-        for req_id in required_by_ids:
-            caller = id_to_name.get(req_id, req_id)
-            if is_na(caller):
-                continue
-            dependents.setdefault(missing_name, []).append({
-                'caller': caller,
-                'relation_type': '-',
-                'line': '-',
-                'file_name': '-',
-            })
-            details.append({
-                'missing_object': missing_name,
-                'dependent': caller,
-                'relation_type': '-',
-                'line': '-',
-                'file_name': '-',
-            })
-
-    return {
-        'missing_objects': missing_objects,
-        'dependents': dependents,
-        'details': details,
-        'data_source': 'registry',
-        'warning': None,
-    }
-
-
-def generate_html_report(analysis_dir, issues_json_path, output_path=None, reports_dir=None, registry_dir=None):
+def generate_html_report(waves_json, issues_json_path, output_path=None, reports_dir=None, registry_dir=None):
     """Generate comprehensive HTML wave report with accurate analysis data.
 
     When registry_dir is provided, missing objects for the overview are loaded
     directly from registry entries where ``isMissing: true``.  Otherwise the
     CSV-based ``load_missing_object_references`` is used.
     """
-    
-    analysis_path = Path(analysis_dir)
 
-    partition_membership_path = analysis_path / 'partition_membership.csv'
-    graph_summary_path = analysis_path / 'graph_summary.txt'
-    cycles_path = analysis_path / 'cycles.txt'
-    excluded_edges_path = analysis_path / 'excluded_edges_analysis.txt'
-    wave_deployment_order_path = analysis_path / 'wave_deployment_order.json'
+    adapter = WavesJsonAdapter(Path(waves_json))
 
     toplevel_csv_path = None
-    missing_deps_json_path = None
-
-    search_dirs = [
-        analysis_path.parent.parent.parent,
-        analysis_path.parent.parent.parent / 'Reports',
-        analysis_path.parent.parent.parent / 'out' / 'Reports',
-        analysis_path.parent,
-        analysis_path,
-        Path(analysis_dir).parent / 'Reports',
-        Path(analysis_dir).parent / 'out' / 'Reports'
-    ]
-
+    search_dirs = []
     if reports_dir:
-        search_dirs.insert(0, Path(reports_dir))
-
+        search_dirs.append(Path(reports_dir))
+    waves_json_parent = Path(waves_json).parent
+    search_dirs.extend([
+        waves_json_parent,
+        waves_json_parent.parent,
+        waves_json_parent.parent / "Reports",
+        waves_json_parent.parent / "out" / "Reports",
+    ])
     for search_dir in search_dirs:
         if search_dir.exists():
-            matches = list(search_dir.glob('TopLevelCodeUnits.*.csv'))
+            matches = list(search_dir.glob("TopLevelCodeUnits.*.csv"))
             if matches:
                 toplevel_csv_path = matches[0]
                 break
 
-    missing_deps_search_paths = [
-        analysis_path / 'missing_dependencies.json',
-        analysis_path.parent.parent.parent / 'missing_dependencies.json',
-        analysis_path.parent.parent.parent / 'Reports' / 'missing_dependencies.json',
-        analysis_path.parent.parent.parent / 'out' / 'Reports' / 'missing_dependencies.json'
-    ]
-
-    for path in missing_deps_search_paths:
-        if path.exists():
-            missing_deps_json_path = path
-            break
-    
     if toplevel_csv_path is None:
         print("Error: TopLevelCodeUnits CSV not found in expected locations")
-        return
-
-    if not partition_membership_path.exists():
-        print(f"Error: partition_membership.csv not found at {partition_membership_path}")
         return
 
     estimation_data = None
@@ -430,38 +338,40 @@ def generate_html_report(analysis_dir, issues_json_path, output_path=None, repor
     reports_dir = toplevel_csv_path.parent
     estimation_files = find_estimation_reports(reports_dir)
 
-    if 'toplevel_estimation' in estimation_files:
+    if "toplevel_estimation" in estimation_files:
         print(f"Found estimation report: {estimation_files['toplevel_estimation']}")
-        estimation_data = load_toplevel_objects_estimation(estimation_files['toplevel_estimation'])
+        estimation_data = load_toplevel_objects_estimation(estimation_files["toplevel_estimation"])
         estimation_source = f"Estimation Reports ({estimation_files['toplevel_estimation'].name})"
         grand_totals_data = load_estimation_grand_totals(estimation_files)
-    
+
     _, severity_map = load_issues_estimation(issues_json_path)
     objects_data = load_toplevel_code_units(toplevel_csv_path)
-    membership = load_partition_membership(partition_membership_path)
-    missing_deps_data = load_missing_dependencies_json(missing_deps_json_path) if missing_deps_json_path else {}
-    _sanitize_missing_deps_data(missing_deps_data)
-    graph_summary = parse_graph_summary(graph_summary_path)
-    cycles = parse_cycles(cycles_path)
-    excluded_edges = parse_excluded_edges(excluded_edges_path)
-    for item in excluded_edges.get('top_undefined_referenced', []):
-        item['object'] = strip_na_identifier(item.get('object', ''))
-    
-    wave_deployment_order_data = {}
-    if wave_deployment_order_path.exists():
-        with open(wave_deployment_order_path, 'r', encoding='utf-8') as f:
-            deployment_json = json.load(f)
-            wave_deployment_order_data = deployment_json.get('waves', {})
 
-    object_references = load_object_references_as_dicts(toplevel_csv_path.parent)
-    for ref in object_references:
-        ref['caller'] = strip_na_identifier(ref['caller'])
-        ref['referenced'] = strip_na_identifier(ref['referenced'])
+    membership = adapter.partition_membership()
+    graph_summary = adapter.graph_summary()
+    cycles = adapter.cycles()
+    excluded_edges = adapter.excluded_edges()
+    for item in excluded_edges.get("top_undefined_referenced", []):
+        item["object"] = strip_na_identifier(item.get("object", ""))
+    wave_deployment_order_data = adapter.wave_deployment_order()
+    missing_deps_data = adapter.missing_dependencies()
+    _sanitize_missing_deps_data(missing_deps_data)
+    dependency_counts = adapter.dependency_counts()
+
     if registry_dir:
-        missing_obj_refs = _load_missing_refs_from_registry(registry_dir)
+        from snowconvert_reports.loaders.registry_loader import load_object_references_from_registry
+        refs = load_object_references_from_registry(registry_dir)
+        object_references = [
+            {"caller": r.caller_full_name, "referenced": r.referenced_full_name}
+            for r in refs
+            if r.caller_full_name and r.referenced_full_name
+        ]
     else:
-        missing_obj_refs = load_missing_object_references(toplevel_csv_path.parent)
-    dependency_counts = load_dependency_counts(analysis_path)
+        object_references = load_object_references_as_dicts(toplevel_csv_path.parent)
+    for ref in object_references:
+        ref["caller"] = strip_na_identifier(ref["caller"])
+        ref["referenced"] = strip_na_identifier(ref["referenced"])
+    missing_obj_refs = adapter.missing_object_refs()
 
     waves_data = defaultdict(list)
     for obj_name, mem_info in membership.items():
@@ -502,7 +412,7 @@ def generate_html_report(analysis_dir, issues_json_path, output_path=None, repor
             'is_picked_scc': mem_info.get('is_picked_scc', False),
             'missing_dependencies': missing_deps_list,
             'dependency_count': dep_counts.get('total_dependencies', 0),
-            'dependent_count': dep_counts.get('dependent_count', 0),
+            'dependent_count': dep_counts.get('total_dependents', 0),
             'technology': technology,
             'subtype': subtype,
             'partition_type': mem_info.get('partition_type', 'regular'),
@@ -564,7 +474,7 @@ def generate_html_report(analysis_dir, issues_json_path, output_path=None, repor
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     if output_path is None:
-        output_path = analysis_path / f'wave_report_{timestamp}.html'
+        output_path = Path(waves_json).parent / f'wave_report_{timestamp}.html'
 
     html_content = generate_html_content(
         graph_summary, cycles, excluded_edges, waves_data,
@@ -739,11 +649,18 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
                 'missing_dependencies': obj.get('missing_dependencies', []),
             })
 
-    # Add missing objects (external references not found in workload)
+    # Add missing objects (external references not found in workload).
+    # Skip any that already appeared in the main membership loop — that
+    # happens when the waves JSON emits isMissing entries as first-class
+    # objects[] rows (registry-synthesized mode), in which case the row is
+    # already rendered with category=OTHER / status=Missing.
+    already_rendered = {obj['name'] for obj in all_objects_data}
     missing_objects = missing_obj_refs.get('missing_objects', set())
     dependents_map = missing_obj_refs.get('dependents', {})
 
     for missing_obj_name in missing_objects:
+        if missing_obj_name in already_rendered:
+            continue
         # Get files that reference this missing object
         dependent_list = dependents_map.get(missing_obj_name, [])
         files = list(set(dep.get('file_name', '') for dep in dependent_list if dep.get('file_name')))
@@ -2414,6 +2331,12 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
 
     # Add collapsed info sections and wave details
     html += f'''
+        <style>
+            /* Hidden feature: Migration Waves section. Remove this style block to re-enable. */
+            #migration-waves-hidden-wrapper,
+            a[href="#wave-recommendations"] {{ display: none !important; }}
+        </style>
+        <div id="migration-waves-hidden-wrapper" style="display: none !important;">
         <h2 id="wave-recommendations" style="font-size: 1.5rem; font-weight: 700; color: #102E46; margin-bottom: 20px; margin-top: 32px;">Migration Waves</h2>
 
         <div class="filters" style="padding: 12px 16px;">
@@ -2673,8 +2596,9 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
                 </div>
             </div>
         </div>
+        </div>  <!-- /#migration-waves-hidden-wrapper -->
 '''
-    
+
     # Store wave data in JavaScript for modal display
     html += '''
         <script>
@@ -2815,7 +2739,10 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
         }}
 
         function normalizeObjectNameForMatch(name) {{
-            return String(name || '').trim().toUpperCase();
+            return String(name || '')
+                .replace(/[\\[\\]"]/g, '')
+                .trim()
+                .toUpperCase();
         }}
 
         function normalizeObjectNameNoSignature(name) {{
@@ -2933,7 +2860,11 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
 
         function getObjectMetaByName(name) {{
             const objectName = String(name || '');
-            const found = (allObjectsData || []).find(obj => String(obj?.name || '') === objectName);
+            const lookupKeys = getObjectNameLookupKeys(objectName);
+            const found = (allObjectsData || []).find(obj => {{
+                const candidateKeys = getObjectNameLookupKeys(String(obj?.name || ''));
+                return candidateKeys.some(key => lookupKeys.includes(key));
+            }});
             if (found) return found;
             return {{
                 name: objectName,
@@ -2949,7 +2880,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             const normalized = normalizeFilterValue(status);
             if (!normalized) return 'neutral';
             if (normalized.includes('MISSING')) return 'missing';
-            if (normalized.includes('PARTIAL')) return 'partial';
+            if (normalized.includes('PARTIAL') || normalized.includes('REQUIRE ATTENTION')) return 'partial';
             if (normalized.includes('NOT SUPPORTED') || normalized.includes('UNSUPPORTED')) return 'unsupported';
             if (normalized.includes('SUCCESS') || normalized.includes('SUPPORTED') || normalized.includes('CONVERTED')) return 'success';
             return 'neutral';
@@ -2960,7 +2891,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             if (tone === 'success') return 'color:#166534; background:#ECFDF5; border:1px solid #BBF7D0;';
             if (tone === 'partial') return 'color:#854D0E; background:#FEFCE8; border:1px solid #FDE68A;';
             if (tone === 'unsupported') return 'color:#991B1B; background:#FEF2F2; border:1px solid #FECACA;';
-            if (tone === 'missing') return 'color:#1F2937; background:#F3F4F6; border:1px solid #D1D5DB;';
+            if (tone === 'missing') return 'color:#991B1B; background:#FEF2F2; border:1px solid #FECACA;';
             return 'color:#334155; background:#F1F5F9; border:1px solid #E2E8F0;';
         }}
 
@@ -5329,8 +5260,8 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
 
 def main():
     parser = argparse.ArgumentParser(description='Generate HTML wave migration report')
-    parser.add_argument('--analysis-dir', '-a', required=True,
-                       help='Path to dependency analysis directory')
+    parser.add_argument('--waves-json', '-a', required=True,
+                       help='Path to waves.json produced by the dependency analyzer')
     parser.add_argument('--issues-json', '-i', required=True,
                        help='Path to issues-estimation.json')
     parser.add_argument('--output', '-o', required=False,
@@ -5339,10 +5270,10 @@ def main():
                        help='Path to Reports directory containing TopLevelCodeUnits CSV (optional)')
     parser.add_argument('--registry-dir', required=False,
                        help='Path to registry directory. When provided, missing objects are loaded from registry entries with isMissing=true.')
-    
+
     args = parser.parse_args()
-    
-    generate_html_report(args.analysis_dir, args.issues_json, args.output, args.reports_dir, args.registry_dir)
+
+    generate_html_report(args.waves_json, args.issues_json, args.output, args.reports_dir, args.registry_dir)
 
 
 if __name__ == '__main__':

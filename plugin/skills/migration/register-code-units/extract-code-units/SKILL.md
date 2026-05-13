@@ -10,7 +10,12 @@ license: Proprietary. See License-Skills for complete terms
 ## On Entry
 
 Tell the user:
-> **Extracting from source database** — I'll connect to your source database and pull out the DDL and code for your tables, views, procedures, and functions.
+> **Extracting from source database.**
+>
+> Here's what I'll do:
+> 1. Connect to your source database using the configured connection.
+> 2. Run read-only queries to enumerate the objects in scope.
+> 3. Extract the DDL and code for each one, and save them under `source/`.
 
 ## Prerequisites
 
@@ -26,19 +31,19 @@ Tell the user:
 **For SQL Server / Redshift:** No driver needed, test directly:
 
 ```bash
-scai connection test -l <sqlserver|redshift> -s <CONNECTION_NAME>
+scai connection test -l <sqlserver|redshift> -s <CONNECTION_NAME> --json
 ```
 
-**For Oracle or Teradata:** Resolve the driver per [`../../connection/references/driver-bootstrap.md`](../../connection/references/driver-bootstrap.md), substituting the dialect parameters from that doc. In most flows the driver was already resolved when the connection was set up, so the cache check at 1a will hit and you'll skip straight to 1e. If it doesn't hit, walk 1b → 1c/1d → 1e silently — never run `curl` without first asking how the user wants to supply the driver, and don't narrate the procedure to the user.
+**For Oracle or Teradata:** Resolve the driver per [`../../connection/references/driver-bootstrap.md`](../../connection/references/driver-bootstrap.md), substituting the dialect parameters from that doc. In most flows the driver was already resolved when the connection was set up, so the cache check at 1a will hit and you'll skip straight to 1e. If it doesn't hit, walk 1b → 1c/1d → 1e silently. Never run `curl` without first asking how the user wants to supply the driver, and don't narrate the procedure to the user.
 
 For this skill, 1e is the `connection test` invocation:
 
 ```bash
-# After Branch A / B (driver not yet cached) — pass --driver-path once
-scai connection test -l <oracle|teradata> -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG>
+# After Branch A / B (driver not yet cached); pass --driver-path once
+scai connection test -l <oracle|teradata> -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG> --json
 
-# Cache hit — --driver-path not needed
-scai connection test -l <oracle|teradata> -s <CONNECTION_NAME>
+# Cache hit; --driver-path not needed
+scai connection test -l <oracle|teradata> -s <CONNECTION_NAME> --json
 ```
 
 ### Step 2: Ask What to Extract
@@ -50,7 +55,8 @@ Ask the user what they want to extract. Present the available object types for t
 - **Oracle:** TABLE, VIEW, MATERIALIZED_VIEW, FUNCTION, PROCEDURE, PACKAGE, PACKAGE_BODY, TRIGGER, SEQUENCE, TYPE, TYPE_BODY, SYNONYM
 - **Teradata:** TABLE, VIEW, FUNCTION, PROCEDURE
 
-Ask:
+Ask the user via `ask_user_question` (`multiSelect = false`):
+
 > "What would you like to extract? You can choose:"
 > 1. **All objects** - Extract everything from the source database
 > 2. **Specific object types** - e.g. just tables and views, or just procedures
@@ -65,7 +71,7 @@ Build the `scai code extract` command based on user selections:
 
 ```bash
 # Base command
-scai code extract -s <CONNECTION_NAME>
+scai code extract -s <CONNECTION_NAME> --json
 
 # Add flags based on user choices:
 #   --schema <SCHEMA>        filter by schema
@@ -79,25 +85,25 @@ scai code extract -s <CONNECTION_NAME>
 **Examples:**
 ```bash
 # All objects
-scai code extract -s <CONNECTION_NAME>
+scai code extract -s <CONNECTION_NAME> --json
 
 # Only tables and views in the dbo schema
-scai code extract -s <CONNECTION_NAME> --schema dbo -t TABLE,VIEW
+scai code extract -s <CONNECTION_NAME> --schema dbo -t TABLE,VIEW --json
 
 # Procedures matching a pattern
-scai code extract -s <CONNECTION_NAME> -t PROCEDURE -n "Get*Data"
+scai code extract -s <CONNECTION_NAME> -t PROCEDURE -n "Get*Data" --json
 
 # Oracle: first extraction with driver path
-scai code extract -s <CONNECTION_NAME> --driver-path ./Oracle.ManagedDataAccess.Core.nupkg
+scai code extract -s <CONNECTION_NAME> --driver-path ./Oracle.ManagedDataAccess.Core.nupkg --json
 
 # Oracle: extract only packages and procedures from a schema
-scai code extract -s <CONNECTION_NAME> --schema HR -t PACKAGE,PROCEDURE
+scai code extract -s <CONNECTION_NAME> --schema HR -t PACKAGE,PROCEDURE --json
 
 # Teradata: first extraction with driver path
-scai code extract -s <CONNECTION_NAME> --driver-path ./Teradata.Client.Provider.nupkg
+scai code extract -s <CONNECTION_NAME> --driver-path ./Teradata.Client.Provider.nupkg --json
 
 # Teradata: extract only procedures from a database
-scai code extract -s <CONNECTION_NAME> --schema MY_DB -t PROCEDURE
+scai code extract -s <CONNECTION_NAME> --schema MY_DB -t PROCEDURE --json
 ```
 
 ### Step 4: Verify Extraction
@@ -151,7 +157,10 @@ Confirm with user:
 
 ## On Completion
 
-After the CHECKPOINT passes, tell the user:
-> **Extraction complete** — <N> SQL files extracted from your source database into `source/`. Next, we'll convert these to Snowflake SQL.
+After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON envelope returned by `scai code extract --json` (`catalog.{discovered,extracted,failed}`, `byType`, `failures[]`, `executionTimeSeconds`).
+
+> **Extraction complete.** `<extracted>/<discovered>` objects extracted in `<duration>`, broken down by type (filled from `byType`). Files saved under `source/`.
+> *If `failed > 0`:* `<failed>` failed. Most common error: `<top_failure_reason>`. Full list in the reports.
+> Next, we'll convert these to Snowflake SQL.
 
 Then return to the calling skill.

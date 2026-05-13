@@ -129,7 +129,7 @@ scai connection add-redshift \
 ### Step 4: Test the Connection
 
 ```bash
-scai connection test -l redshift -c <CONNECTION_NAME>
+scai connection test -l redshift -c <CONNECTION_NAME> --json
 ```
 
 **Expected:** "Status: Success" with connection details.
@@ -153,7 +153,7 @@ Call the `configure` tool with `source_connection` set to the `<CONNECTION_NAME>
 
 Confirm with user:
 - [ ] Connection test passed
-- [ ] Connection appears in `scai connection list -l redshift`
+- [ ] Connection appears in `scai connection list -l redshift --json`
 - [ ] Source connection saved to session config
 
 ## On Completion
@@ -177,7 +177,7 @@ Then return to the calling skill.
 | Add IAM provisioned | `scai connection add-redshift -c NAME --auth iam-provisioned-cluster --cluster-id CLUSTER --database DB --region REGION --user USER --access-key-id KEY --secret-access-key SECRET` |
 | Add IAM serverless | `scai connection add-redshift -c NAME --auth iam-serverless --workgroup WG --database DB --region REGION --access-key-id KEY --secret-access-key SECRET` |
 | Add standard auth | `scai connection add-redshift -c NAME --auth standard --host HOST --database DB --user USER --password PASS` |
-| Test connection | `scai connection test -l redshift -c NAME` |
-| List connections | `scai connection list -l redshift` |
+| Test connection | `scai connection test -l redshift -c NAME --json` |
+| List connections | `scai connection list -l redshift --json` |
 | Set default | `scai connection set-default -l redshift -c NAME` |
-| Extract code | `scai code extract -s NAME` |
+| Extract code | `scai code extract -s NAME --json` |

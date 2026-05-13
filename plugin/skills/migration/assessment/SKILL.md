@@ -57,16 +57,16 @@ Resolve all inputs from `project_dir`. Do not prompt the user.
 
 | Input | Resolution |
 |-------|------------|
+| SCAI project root | `project_dir` (contains `.scai/` and the registry — required by `scai assessment waves`) |
 | SnowConvert reports dir | `<project_dir>/reports/SnowConvert/` |
-| Registry dir (preferred when present) | First match of `<project_dir>/output/registry/`, `<project_dir>/reports/SnowConvert/registry/`, `<project_dir>/registry/` containing `*.json` entries |
 | Issues CSV | `<project_dir>/reports/SnowConvert/Issues.*.csv` (latest timestamp) |
 | ETL Elements / Issues CSVs | `<project_dir>/reports/SnowConvert/ETL.Elements.*.csv` and `ETL.Issues.*.csv` (only if present — drives whether SSIS analysis is included) |
-| Assessment output dir | `<project_dir>/assessment/` (create if missing) |
+| Assessment output dir | `<project_dir>/assessment/` (created by `scai assessment waves`; fall back to creating if missing for other sub-skills) |
 
 Selection rules:
-- If a `registry/` directory with JSON entries is found, use **registry mode** and pass `--registry-dir`. Pass `--snowconvert-reports-dir` as well — the multi-report needs CSV-only fields.
-- If only CSVs are present, use **CSV mode** and pass `--reports-dir` / `--snowconvert-reports-dir`.
-- If neither is present after a successful-looking convert, re-run `../convert/SKILL.md` once and stop if it still produces nothing.
+- **Wave generation is always driven by `scai assessment waves`** — it reads the registry from the current project folder and writes `<project_dir>/assessment/waves_analysis_*.json`. There is no CSV fallback for wave creation.
+- The multi-tab HTML report (`generate_multi_report.py`) takes `--project-dir` (the scai project root) and auto-discovers everything it needs: `registry/`, `reports/`, `assessment/waves_analysis_*.json`, and the exclusion / dynamic-SQL JSONs. The registry is **required** — without it the report cannot enrich the waves JSON (which emits UUIDs) with canonical names, categories, file paths, and conversion status.
+- If the registry or reports are missing after a successful-looking convert, re-run `../convert/SKILL.md` once and stop if it still produces nothing.
 
 ## Step 4: Confirm Scope (single, short)
 
@@ -85,11 +85,283 @@ Proceed with all, or pick a subset?
 
 Wait for "yes" or a subset selection, then run. Do not re-prompt for files or directories at any later point.
 
+**Note:** "Proceed with all" is **not** the last prompt. The next step (Step 5) collects every input the in-scope sub-skills need so they can run as non-interactive sub-agents. After Step 5 the assessment becomes hands-off until results are surfaced in Step 9.
+
+## Step 5: Gather Sub-Skill Inputs (single batch)
+
+Collect **every** answer the in-scope sub-skills need **before** dispatching anything. Sub-agents run non-interactively. Hold the answers in an in-message `assessment_inputs` block in your working context (do not write it to disk) — it is the source of truth for the context blocks emitted in Step 6.
+
+For sub-skills excluded by the Step 4 scope answer, skip the corresponding inputs and do not dispatch in Step 6.
+
+### 5.1 Waves inputs (always required when waves is in scope)
+
+Ask the three Required User Interactions from `waves-generator/SKILL.md` here, in this order:
+
+1. **Partition size** — "The default wave size is 40-80 objects. Keep the defaults, or set custom min/max?" Record `partition_min_size` (int) and `partition_max_size` (int).
+2. **Prioritization** — "Any objects to push into the earliest waves? Provide patterns like `*Payroll*` or `dbo.Customer`, or say no." Record `prioritization_globs` (list of strings; empty if none).
+3. **Wave ordering** — "Default is category-based (TABLE → VIEW → FUNCTIONS/PROCEDURES → ETL). Switch to dependency-based?" Record `wave_ordering` (`category` or `dependency`).
+
+### 5.2 Dynamic SQL review (when in scope)
+
+Ask once:
+
+> "Are you interested in Dynamic SQL code analysis? Each occurrence will be reviewed individually — pattern, complexity, migration considerations. (yes / no)"
+
+Map the answer to `dynamic_sql.review_mode`:
+- `yes` → `auto-review-all` — generate, then loop and update each occurrence
+- `no` → `generate-only` — generate the JSON for report visibility only; no per-occurrence review
+
+### 5.3 ETL/SSIS review (when ETL is detected)
+
+When ETL/SSIS is in scope and `ETL.*.csv` files are present, **always generate** the JSON — it gives the user visibility into their packages: component counts, control flow / data flow DAGs, and a baseline migration view in the report. Do not ask about that step.
+
+Beyond the baseline, ask once whether to run the deeper AI package analysis:
+
+> "I detected SSIS packages in this project. The assessment will give you visibility into them — component counts, control/data flow DAGs, and a baseline migration view in the report.
+>
+> Optionally, I can run an AI-driven per-package analysis that adds package classification (Ingestion / Transformation / Export / Orchestration / Hybrid), an AI HTML summary, and effort estimates. It takes more time, but runs in the background as a sub-agent in parallel with the other assessments — it doesn't block anything else. Run the AI analysis? (yes / no)"
+
+Map the answer to `etl.review_mode`:
+- `yes` → `auto-review-all` — generate, then per-package AI classification + AI HTML summary
+- `no` → `generate-only` — generate the JSON for report visibility only; no AI analysis
+
+Capture `etl_replatform_sources_path` from `migration_status` if available (otherwise leave blank for sub-agent auto-detection).
+
+### 5.4 Object exclusion (no inputs)
+
+No prompts. Note the sub-skill is in scope.
+
+### 5.5 Snapshot the inputs
+
+Lay out the resolved values in your working context like this (text only — do not write to disk):
+
+```
+assessment_inputs:
+  project_dir: <abs>
+  output_dir_assessment: <project_dir>/assessment
+  waves:
+    partition_min_size: <int>
+    partition_max_size: <int>
+    prioritization_globs: [<glob>, ...]
+    wave_ordering: category | dependency
+  exclusion: {}
+  dynamic_sql:
+    review_mode: generate-only | auto-review-all | skip
+    output_dir: <project_dir>/assessment/json
+  etl:
+    review_mode: generate-only | auto-review-all | skip
+    output_dir: <project_dir>/assessment/ssis
+    etl_replatform_sources_path: <abs or empty>
+```
+
+After Step 5 completes, do **not** prompt the user again until Step 9.
+
+## Step 6: Parallel Sub-Agent Dispatch
+
+In a **single message**, fire one Task tool call per in-scope sub-skill. Do not dispatch sequentially. After dispatching, end your turn — sub-agents run on their own and return results back to this conversation.
+
+Each Task call uses the prompt template for its sub-skill below. Substitute every `<placeholder>` with the value from the `assessment_inputs` snapshot in Step 5. Use absolute paths only.
+
+> **Important:** Do **not** dispatch any sub-skill that is out of scope (per Step 4) or whose `review_mode` is `skip`. The parent synthesizes a `"skipped"` result for those in Step 7.
+
+### 6.1 waves-runner prompt
+
+```
+Read and follow plugin/skills/migration/assessment/waves-generator/SKILL.md.
+You are running in sub-agent mode — do NOT ask the user any questions.
+
+Context (from parent):
+- project_dir: <abs_path>
+- partition_min_size: <int>
+- partition_max_size: <int>
+- prioritization_globs: <list or empty>
+- wave_ordering: category | dependency
+- output_dir: <project_dir>/assessment
+
+Steps:
+1. Call configure() with project_dir above. Snowflake credentials are not needed for waves generation.
+2. Run `scai assessment waves` from <project_dir>, passing every required
+   input as a flag derived from partition_min_size, partition_max_size,
+   prioritization_globs (one --prioritize per glob), and wave_ordering
+   (--no-category-waves only when wave_ordering = dependency). If the CLI
+   still requests TTY input, fail fast and report the missing flag — do not
+   block on stdin.
+3. Locate the timestamped waves_analysis_*.json the CLI wrote.
+
+Report back JSON only:
+{
+  "sub_skill": "waves-generator",
+  "status": "ok" | "error",
+  "output_json": "<abs_path>" | null,
+  "summary": "<one-line counts: partitions, sccs, objects>",
+  "error": "<message>" | null
+}
+```
+
+### 6.2 exclusion-runner prompt
+
+```
+Read and follow plugin/skills/migration/assessment/object_exclusion_detection/SKILL.md.
+You are running in sub-agent mode — do NOT ask the user any questions.
+
+Context (from parent):
+- project_dir: <abs_path>
+- output_dir: <project_dir>/assessment
+
+Steps:
+1. Call configure() with project_dir above. Snowflake credentials are not needed for object exclusion.
+2. Run:
+     scai assessment object-exclusion --project-dir <project_dir> -o <output_dir>
+3. Locate the timestamped object_exclusion_analysis_*.json the CLI wrote.
+
+Report back JSON only:
+{
+  "sub_skill": "object-exclusion-detection",
+  "status": "ok" | "error",
+  "output_json": "<abs_path>" | null,
+  "summary": "<one-line counts: temp/staging, deprecated, testing, duplicates>",
+  "error": "<message>" | null
+}
+```
+
+### 6.3 dynamic-sql-runner prompt
+
+```
+Read and follow plugin/skills/migration/assessment/analyzing-sql-dynamic-patterns/SKILL.md.
+You are running in sub-agent mode — do NOT ask the user any questions.
+
+Context (from parent):
+- project_dir: <abs_path>
+- output_dir: <project_dir>/assessment/json
+- review_mode: generate-only | auto-review-all
+
+Steps:
+1. Call configure() with project_dir above. Snowflake credentials are not needed for dynamic-SQL analysis.
+2. Run:
+     scai assessment sql-dynamic generate \
+       --project-dir <project_dir> \
+       --output <output_dir>/sql_dynamic_analysis.json
+3. If review_mode = auto-review-all, follow the skill's per-occurrence
+   review loop until `stats` shows zero PENDING records. Each update is a
+   single-record call with its own analysis (no batching, no copy/paste).
+4. Locate the analysis JSON.
+
+Report back JSON only:
+{
+  "sub_skill": "analyzing-sql-dynamic-patterns",
+  "status": "ok" | "error",
+  "output_json": "<abs_path>" | null,
+  "summary": "<one-line: total occurrences, REVIEWED, PENDING>",
+  "error": "<message>" | null
+}
+```
+
+### 6.4 etl-runner prompt
+
+```
+Read and follow plugin/skills/migration/assessment/etl-assessment/SKILL.md.
+You are running in sub-agent mode — do NOT ask the user any questions.
+
+Context (from parent):
+- project_dir: <abs_path>
+- output_dir: <project_dir>/assessment/ssis
+- etl_replatform_sources_path: <abs or empty>
+- review_mode: generate-only | auto-review-all
+
+Steps:
+1. Call configure() with project_dir above. Snowflake credentials are not needed for SSIS analysis.
+2. Locate ETL.Elements.*.csv and ETL.Issues.*.csv under
+   <project_dir>/reports/SnowConvert/. If etl_replatform_sources_path is
+   empty, auto-detect per the skill's Step 1.
+3. Run:
+     uv run python -m scai_assessment_analyzer \
+       <ETL.Elements> <ETL.Issues> <SSIS_SOURCE_DIR> <output_dir>
+4. If review_mode = auto-review-all, follow the skill's Step 3 + Step 4
+   to classify each package and produce ai_ssis_summary.html.
+5. Locate etl_assessment_analysis.json under <output_dir>.
+
+Report back JSON only:
+{
+  "sub_skill": "etl-assessment",
+  "status": "ok" | "error",
+  "output_json": "<abs_path>" | null,
+  "summary": "<one-line: total packages, classified, pending>",
+  "error": "<message>" | null
+}
+```
+
+### 6.5 Common rules for every dispatch
+
+1. **One message, multiple Task calls.** Send all in-scope dispatches in a single tool-use turn so the framework can run them in parallel.
+2. **Absolute paths only** in every context block.
+3. **Sub-agent calls `configure()` itself** — do not assume MCP state is inherited.
+4. **Each sub-agent writes only its own output JSON** — no edits to the registry, source SQL, or other sub-agents' artifacts.
+5. **JSON return only** — free-form text in the report is harder to consume reliably.
+
+End your turn after the dispatch message.
+
+## Step 7: Wait + Verify Outputs
+
+Each Task return contains a single JSON object: `{sub_skill, status, output_json, summary, error}`. Collect all returns. **A failing sub-agent does not block the others.**
+
+For every dispatched sub-skill, validate:
+
+| Check | Action on failure |
+|---|---|
+| Task returned a JSON object | Mark sub-skill as failed with `error: "no response"` |
+| `status == "ok"` (or `"skipped"` for skip dispatches) | Mark as failed with the returned `error` text |
+| `output_json` path exists on disk | Mark as failed with `error: "claimed JSON not found"` |
+| `output_json` file is non-empty (size > 0) | Mark as failed with `error: "JSON empty"` (do NOT schema-validate) |
+
+For sub-skills excluded by the Step 4 scope (or set to `review_mode: skip` in Step 5), synthesize `{status: "skipped", output_json: null, summary: "<reason>"}` so Step 9 has a complete row for every sub-skill.
+
+Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `analyzing-sql-dynamic-patterns`, `etl-assessment`). Carry it into Step 8 and Step 9.
+
+## Step 8: Generate Unified HTML Report
+
+Run the multi-report generator. It auto-discovers everything under `--project-dir`, including the JSONs from any sub-skill that succeeded. Missing JSONs degrade gracefully to placeholder/empty tabs.
+
+```bash
+uv run --project plugin/skills/migration/assessment \
+  python plugin/skills/migration/assessment/scripts/generate_multi_report.py \
+  --project-dir "<project_dir>" \
+  --output "<project_dir>/assessment/multi_report.html"
+```
+
+Do **not** pass per-source flags — the auto-discovery path is correct for every successful sub-skill. Do **not** write custom HTML.
+
+If the report command fails, record the failure and proceed to Step 9 anyway — the user still needs the status table.
+
+## Step 9: Surface Results + Retry
+
+Print a status table from the `results` collected in Step 7, one line per sub-skill, in this order: `waves-generator`, `object-exclusion-detection`, `analyzing-sql-dynamic-patterns`, `etl-assessment`.
+
+Format:
+
+```
+waves-generator                  ok      <output_json basename>   (<summary>)
+object-exclusion-detection       ok      <output_json basename>   (<summary>)
+analyzing-sql-dynamic-patterns   FAIL    <error message>
+etl-assessment                   skip    <reason>
+
+Multi-tab report:  <abs path to multi_report.html>   (or "FAILED — see error above")
+```
+
+If any sub-skill failed, ask:
+
+> "Retry failed sub-skills? Successful JSONs will be reused — only the failed runs re-fire. (yes / no)"
+
+On `yes`: re-fire **only** the failed sub-skills using the same single-message Task fan-out as Step 6. Reuse the `assessment_inputs` snapshot from Step 5 — do not re-prompt the user. After the retries return, re-run Step 7 verification, regenerate the report (Step 8), and re-print the status table.
+
+Each retry produces a fresh timestamped JSON; old runs are not deleted (this supports diffs across runs).
+
+After retries complete (or if no retry was requested), proceed to [On Completion](#on-completion).
+
 ## Prerequisites
 
 Handled automatically by Steps 0–3. The skill assumes:
-- `scai` CLI is installed (used by `setup` and `convert`).
-- Python 3.11+ and `uv` are available for assessment scripts (`brew install uv` or `pip install uv`).
+- `scai` CLI is installed and available on `PATH` — used by `setup`, `convert`, and `scai assessment waves`.
+- Python 3.11+ and `uv` are available for the HTML report generator and the remaining assessment scripts (`brew install uv` or `pip install uv`).
 
 ## Example Prompts
 
@@ -108,8 +380,6 @@ Help users get the best results by understanding what they can ask:
 - "Use dependency-based ordering instead of category-based"
 
 ### Iterative Refinement (After Initial Results)
-- "Move dbo.CriticalTable to Wave 1"
-- "Relocate all reporting procedures to Wave 5"
 - "Show me which objects have circular dependencies"
 - "Regenerate waves with smaller batch sizes"
 - "What objects are blocking the migration?"
@@ -152,7 +422,7 @@ Detect user intent and load the appropriate sub-skill:
 
 **Dynamic SQL Analysis** - Classify and score Dynamic SQL patterns:
 - Triggers: "dynamic sql", "sql dynamic patterns"
-- Supports: SQL Server and Redshift migrations
+- Supports: SQL Server, Redshift, Oracle, and Teradata migrations
 - Load: `analyzing-sql-dynamic-patterns/SKILL.md`
 
 **ETL/SSIS Assessment** - Analyze SSIS packages for migration complexity:
@@ -164,10 +434,13 @@ Detect user intent and load the appropriate sub-skill:
 ## Running Scripts
 When running any scripts in any of the above skills, make sure to do all of the following:
 
-When running python scripts, use `uv run --project <DIRECTORY THIS SKILL.md file is in> python <DIRECTORY THIS SKILL.md file is in>/scripts/script_name.py` to run them.
-Do not `cd` into another directory to run them, but run them from whatever directory you're already in. 
+- **Wave generation** is executed via `scai assessment waves`. It must be run from inside the SCAI project directory so that it can read the registry.
+- **All other Python scripts** in this skill and its sub-skills (report generation, ETL analysis, etc.) must be run with `uv run --project <DIRECTORY THIS SKILL.md file is in> python <DIRECTORY THIS SKILL.md file is in>/scripts/script_name.py`.
+- Do not `cd` into another directory to run Python scripts, but run them from whatever directory you're already in. When `scai assessment waves` needs the project directory, `cd` into it only for that single invocation.
 
 **WHY:** This maintains your current working context and prevents path confusion. When using `uv run --project`, you must provide absolute paths for BOTH the `--project` flag AND the script itself. Just run the script the way the skill says. Do not question it by running --help or reading the script.
+
+<!-- DEPRECATED in favor of Steps 5-9 (sub-agent dispatch). Will be removed one release after sub-agent rollout stabilizes. See dev/assessment-subagent-dispatch-design.md §11.2 Phase 3.
 
 ## Assessment Integration
 
@@ -178,8 +451,9 @@ The user has already confirmed scope in **Step 4**. Do **not** re-prompt for con
 **Sequence:**
 
 1. **Waves Generation** (First)
-   - Analyze remaining objects' dependencies
-   - Create deployment waves with proper ordering
+   - **MANDATORY:** Load `waves-generator/SKILL.md` and complete its **Required User Interactions** (partition size, prioritization, wave-ordering strategy) before running the command. These prompts are required even on the end-to-end path — do **not** skip them.
+   - Then run `scai assessment waves` from inside the SCAI project directory, passing `--min-size`, `--max-size`, `--prioritize`, `--no-category-waves` derived from the user's answers.
+   - The command builds the dependency graph from the registry, validates §15 invariants, and writes `<project_dir>/assessment/waves_analysis_<timestamp>.json`
    - Generate wave-based migration plan
 
 2. **Object Exclusion Analysis** (Second)
@@ -201,6 +475,8 @@ The user has already confirmed scope in **Step 4**. Do **not** re-prompt for con
    - Pass all available JSON outputs from previous steps
    - 🚫 Do NOT write custom HTML - the script handles all formatting
 
+-->
+
 ## Tools
 
 ### generate_multi_report.py
@@ -210,6 +486,8 @@ The user has already confirmed scope in **Step 4**. Do **not** re-prompt for con
 **Location**: `scripts/generate_multi_report.py`
 
 **When to use**: After completing any requested assessment(s) (1, 2, 3, or all) to deliver results in a consistent format, or whenever the user requests a combined HTML report.
+
+<!-- DEPRECATED in favor of Steps 5-9 (sub-agent dispatch). Will be removed one release after sub-agent rollout stabilizes. See dev/assessment-subagent-dispatch-design.md §11.2 Phase 3.
 
 ## Completing the Assessment Analysis
 
@@ -277,7 +555,11 @@ Options:
 
 **IMPORTANT:** Do NOT skip these checkpoints. The assessment is not complete until all Dynamic SQL occurrences AND all SSIS packages have been reviewed OR the user explicitly chooses to defer each.
 
+-->
+
 ## Report Generation
+
+<!-- DEPRECATED in favor of Steps 5-9 (sub-agent dispatch). Will be removed one release after sub-agent rollout stabilizes. See dev/assessment-subagent-dispatch-design.md §11.2 Phase 3.
 
 ### ⚠️ CRITICAL: Multi-Tab HTML Report Generator
 
@@ -332,6 +614,8 @@ Proceed with report generation? (Yes/No)
 
 Wait for approval.
 
+-->
+
 **MANDATORY:** When users request an assessment report (even if it’s only one sub-assessment), a migration report, or a combined HTML report—or when you have completed the requested assessment(s) and are ready to deliver results—you **MUST** use `generate_multi_report.py`. This is the **ONLY** approved method for generating consolidated assessment reports.
 
 **DO NOT:**
@@ -341,26 +625,48 @@ Wait for approval.
 
 **Script Location:** `scripts/generate_multi_report.py`
 
-**Usage with uv:**
+**Usage with uv (recommended — single `--project-dir` argument):**
 ```bash
 uv run --project <SKILL_DIRECTORY> \
   python <SKILL_DIRECTORY>/scripts/generate_multi_report.py \
-  --exclusion-json "path/to/assessment/object_exclusion.json" \
-  --dynamic-sql-json "path/to/assessment/json/sql_dynamic_analysis.json" \
-  --waves-analysis-dir "path/to/waves/dependency_analysis_TIMESTAMP" \
-  --snowconvert-reports-dir "path/to/results/conversions/CONVERSION_ID/Reports" \
-  --ssis-json "path/to/ssis/etl_assessment_analysis.json" \
-  --output "path/to/assessment/multi_report.html"
+  --project-dir "path/to/<projectRoot>" \
+  --output "path/to/<projectRoot>/assessment/multi_report.html"
 ```
+
+When `--project-dir` is provided, the script auto-discovers:
+
+- `<projectRoot>/registry/` — registry JSONs (REQUIRED for object enrichment: names, categories, files, status, missing-deps, direct dep counts)
+- `<projectRoot>/reports/` — SnowConvert CSVs (for EWI/FDM/PRF counts and severity)
+- `<projectRoot>/assessment/object_exclusion_analysis_*.json` — exclusion JSON (latest timestamp)
+- `<projectRoot>/assessment/json/sql_dynamic_analysis.json` — dynamic-SQL JSON
+- `<projectRoot>/assessment/waves_analysis_*.json` — waves JSON (latest timestamp)
+
+Explicit per-source flags (below) override auto-discovery. The individual flags are only needed when you want to mix-and-match sources from non-standard locations.
+
+**Usage with explicit paths (advanced):**
+```bash
+uv run --project <SKILL_DIRECTORY> \
+  python <SKILL_DIRECTORY>/scripts/generate_multi_report.py \
+  --project-dir "path/to/<projectRoot>" \
+  --waves-json "path/to/waves_analysis_TIMESTAMP.json" \
+  --exclusion-json "path/to/object_exclusion.json" \
+  --dynamic-sql-json "path/to/sql_dynamic_analysis.json" \
+  --snowconvert-reports-dir "path/to/reports" \
+  --ssis-json "path/to/ssis/etl_assessment_analysis.json" \
+  --output "path/to/multi_report.html"
+```
+
+**IMPORTANT:** Always pass `--project-dir` even when providing explicit flags — the registry at `<projectRoot>/registry/` is required to enrich the waves JSON (which now emits UUIDs; canonical names, categories, file paths, and status come from the registry). Without `--project-dir` (or an equivalent `--registry-dir`), the dependencies table will show UUIDs and every row will have category "UNKNOWN".
 
 **Note**: Replace `<SKILL_DIRECTORY>` with the absolute path to this skill directory.
 
 **Parameters:**
-- `--exclusion-json`: Path to object exclusion JSON file (output from object exclusion detection)
-- `--dynamic-sql-json`: Path to dynamic SQL analysis JSON file (from json/ subdirectory)
-- `--waves-analysis-dir`: Path to waves dependency analysis directory (contains deployment_partitions.json)
-- `--registry-dir`: Path to SnowConvert registry directory containing `*.json` entries
-- `--snowconvert-reports-dir`: Path to SnowConvert Reports directory containing `TopLevelCodeUnits.*.csv` and `ObjectReferences.*.csv` (CSV supplement/fallback when needed)
+- `--project-dir` **(recommended)**: Path to the scai project root. Auto-discovers registry, SnowConvert reports, and assessment artifacts. Use this alone in the common case.
+- `--waves-json`: Path to waves analysis JSON file (output from `scai assessment waves`, e.g. `waves_analysis_<timestamp>.json`). Auto-discovered from `<projectRoot>/assessment/` when `--project-dir` is provided.
+- `--registry-dir`: Path to SnowConvert registry directory containing `*.json` entries. Auto-discovered from `<projectRoot>/registry/` when `--project-dir` is provided.
+- `--exclusion-json`: Path to object exclusion JSON file. Auto-discovered.
+- `--dynamic-sql-json`: Path to dynamic SQL analysis JSON file. Auto-discovered.
+- `--snowconvert-reports-dir`: Path to SnowConvert Reports directory containing `TopLevelCodeUnits.*.csv` and `ObjectReferences.*.csv`. Auto-discovered.
 - `--ssis-json`: Path to SSIS assessment JSON file (etl_assessment_analysis.json from ETL assessment)
 - `--output`: Output HTML file path (required)
 

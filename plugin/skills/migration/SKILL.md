@@ -11,69 +11,21 @@ Tell the user:
 
 ## Step 0: Configure Session
 
-Call `configure` with `project_dir` (use the current directory, or ask the user). If a saved config is found, the response shows all restored values — proceed to Step 1.
+Call `configure` with the current directory. If a saved config is found, the response shows all restored values — proceed to Step 1.
 
 ## Step 1: Detect Current State
 
 Call the `migration_status` tool. It returns JSON with `project_exists`, `directory_empty`, `by_type`, `stage_totals`, `routing`, and `highest_stage_reached` fields.
 
-If `project_exists` is false, this is a new project. Handle the following in order:
+### Step 1.A: If `project_exists` is false, this is a new project. Go to the setup skill ./setup/SKILL.md
 
-1. **Directory check** — use `directory_empty` from the response:
-   - If `directory_empty` is **false** — tell the user:
-     > This directory isn't empty, so we can't initialize a project here. Would you like to create one in a new subdirectory?
-
-     Suggest `<current_dir>/<database>-migration` or let the user pick. Once confirmed, call `configure(project_dir=<new_path>)`.
-
-   - If `directory_empty` is **true** — confirm with the user:
-     > I'll initialize the migration project in `<project_dir>`. Can you confirm?
-
-     If the user wants a different location, call `configure(project_dir=<new_path>)`.
-
-2. **Source dialect** — if `source_language` is not set in the Step 0 configure response, ask:
-   > "What source database system are you migrating from?"
-   > 1. **SQL Server**
-   > 2. **Redshift**
-   > 3. **Teradata**
-   > 4. **Oracle**
-   > 5. **Something else**
-
-   Call `configure(source_language=<chosen dialect>)`. The response includes **user_overview** — YOU MUST present this ENTIRELY and EXACTLY to the user before moving on. DO NOT synthesize, just print it for the user.
-
-3. Ask the user:
-   > "Are you starting a new migration, or do you already have source SQL **and** pre-converted Snowflake SQL?"
-   > 1. **Starting fresh** — continue with the steps below
-   > 2. **Existing migration** — load `./setup/midway-entry/SKILL.md` (SQL Server and Redshift only, Tedata and Oracle coming soon)
-
-   If the user picks **midway entry**, load `./setup/midway-entry/SKILL.md` and stop here. Otherwise continue.
-
-4. **Snowflake connection** — if `snowflake_connection` is not set, confirm with the user that the active SQL connection should be used for Snowflake queries. Once confirmed, call `configure(snowflake_connection=<name>)`.
-
-Then go directly to `./setup/SKILL.md`. DO NOT go to Step 2.
-
-If `project_exists` is true, construct a brief narrative summary for the user from the JSON before showing the checklist. Use the `routing` booleans and `by_type` counts to describe the current state in plain language. Examples of the tone and level of detail:
+### Step 1.B: If `project_exists` is true, construct a brief narrative summary for the user from the JSON before showing the checklist. Use the `routing` booleans and `by_type` counts to describe the current state in plain language. Examples of the tone and level of detail:
 
 - **Early setup:** "Your project is initialized and connected to SQL Server. 147 objects are registered but haven't been converted yet. We're in the setup phase."
 - **Mid-migration:** "Setup is complete — 147 objects registered and converted, assessment done. You're in the migration phase: 12 of 47 objects have been deployed so far (Wave 2). 8 tables deployed, 2 views deployed, 2 procedures passed testing."
 - **Near completion:** "Almost there — 45 of 47 objects are deployed and tested. 2 procedures are still failing tests."
 
-Follow the summary with the progress checklist (see below), then go to Step 2.
-
-## Step 2: Ask the User
-
-Show the progress checklist (see below), then ask:
-
-> "What would you like to do? You can:
-> 1. **Continue with migration plan** — I'll start or pick up where we left off
-> 2. **Something specific** — tell me what you need"
-
-If the user picks **Continue** (or just says "continue", "next", etc.) → go to **Prescribed Path**.
-
-If the user describes a **specific request** → go to **Skill Match**.
-
-### Progress Checklist
-
-Render from `by_type` in the status JSON. Use `✅` (all done), `◐` (partial), `⬚` (not started):
+Also add the checklist based on the status JSON. Use `✅` (all done), `◐` (partial), `⬚` (not started):
 
 ```
 <symbol> 1. Connect                  - Connected to <source>
@@ -84,6 +36,18 @@ Render from `by_type` in the status JSON. Use `✅` (all done), `◐` (partial),
 <symbol> 6. Migrate Objects          - <table.deployed>/<table.total> tables, <view.deployed>/<view.total> views, <func+proc deployed>/<func+proc total> funcs/procs deployed; <table.data_migrated>/<table.total> data migrated; <table.validated>/<table.total> validated; <func+proc tested>/<func+proc total> tested
 ```
 
+Follow the summary with the progress checklist (see below), then go to Step 2.
+
+## Step 2: Ask the User
+
+> "What would you like to do? You can:
+> 1. **Continue with migration plan** — I'll start or pick up where we left off
+> 2. **Something specific** — tell me what you need"
+
+If the user picks **Continue** (or just says "continue", "next", etc.) → go to **Prescribed Path**.
+
+If the user describes a **specific request** → go to **Skill Match**.
+
 ---
 
 ## Prescribed Path
@@ -93,6 +57,7 @@ Use `routing` from the status JSON to delegate to the next step:
 | Condition | Sub-skill |
 |-----------|-----------|
 | `routing.project_exists` = false | Load `./setup/SKILL.md` |
+| `routing.code_conversion_only` = true | Load `./code-conversion-only/SKILL.md` |
 | `routing.assessed` = false | Load `./setup/SKILL.md` |
 | `routing.assessed` = true | Load `./migrate-objects/SKILL.md` |
 
@@ -112,26 +77,45 @@ These answer common questions about project state without loading a sub-skill:
 
 ## Skill Match
 
-Match the user's request to the most relevant skill below and load it. If the request is ambiguous, ask a clarifying question. If no skill matches, say so and offer the prescribed path instead.
+<skill-match>
+Match the user's request to the most relevant skill and load it.
 
-| Skill | Description | Location |
-|-------|-------------|----------|
-| setup | Connect, init project, register, convert, assess (steps 1-5) | `./setup/SKILL.md` |
-| midway-entry | Bring an existing project (source + pre-converted Snowflake SQL) into scai. SQL Server / Redshift only | `./setup/midway-entry/SKILL.md` |
-| register-code-units | Register source code (extract from DB or add local files) | `./register-code-units/SKILL.md` |
-| extract-code-units | Extract DDL/code from a connected source database | `./register-code-units/extract-code-units/SKILL.md` |
-| add-code-units | Import local SQL files into the project | `./register-code-units/add-code-units/SKILL.md` |
-| convert | Convert source code to Snowflake SQL via SnowConvert | `./convert/SKILL.md` |
-| assessment | Analyze workloads — waves, object exclusion, dynamic SQL, ETL | `./assessment/SKILL.md` |
-| data-migration-setup | Configure data migration — orchestrator, worker, workflow, Iceberg | `./setup/data-migration/SKILL.md` |
-| data-validation-setup | Configure cloud data validation — schema, metrics, row-level checks | `./setup/data-validation/SKILL.md` |
-| migrate-objects | Deploy all object types wave-by-wave (tables, views, functions, procedures) | `./migrate-objects/SKILL.md` |
-| validate-objects | Validate migrated data between source and Snowflake | `./validate-objects/SKILL.md` |
-| baseline-capture | Capture source proc/function output as test baselines | `./migrate-objects/baseline-capture/SKILL.md` |
-| rule-engine | Search, apply, extract, propagate, and manage migration rules | `./migrate-objects/rule-engine/SKILL.md` |
-| extract-rule | Extract a reusable rule from a code fix (interactive or git history) | `./migrate-objects/rule-engine/extract/SKILL.md` |
-| propagate-rule | Find all code units matching a rule for batch application | `./migrate-objects/rule-engine/propagate/SKILL.md` |
-| migrate-etl-package | Phase-based ETL package fixer — invoke by name only | `./migrate-objects/actions/migrate-etl-package/SKILL.md` |
+**Routing rules:**
+- Prefer the **parent (router)** skill when the child is ambiguous — it will route.
+- Indentation = parent/child. A child only applies when its parent's domain already fits.
+- If the request is ambiguous between siblings, ask one clarifying question.
+- If no skill matches, fall back to the section below.
+
+### Setup & onboarding
+- **setup** — full setup, steps 1–5: connect, init, register, convert, assess → `./setup/SKILL.md`
+  - **midway-entry** — existing project with source + pre-converted Snowflake SQL (SQL Server / Redshift only) → `./setup/midway-entry/SKILL.md`
+  - **data-migration-setup** — configure data migration: orchestrator, worker, workflow, Iceberg → `./setup/data-migration/SKILL.md`
+  - **data-validation-setup** — configure cloud data validation: schema, metrics, row-level checks → `./setup/data-validation/SKILL.md`
+
+### Source code: register & convert
+- **register-code-units** — router for getting source code into the project → `./register-code-units/SKILL.md`
+  - **extract-code-units** — extract DDL/code from a connected source database → `./register-code-units/extract-code-units/SKILL.md`
+  - **add-code-units** — import local SQL files into the project → `./register-code-units/add-code-units/SKILL.md`
+- **convert** — convert source → Snowflake SQL via SnowConvert (incl. optional Power BI `.pbit` repointing) → `./convert/SKILL.md`
+  - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
+  - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
+- **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
+
+### Migration & validation
+- **migrate-objects** — deploy tables, views, functions, procedures wave-by-wave → `./migrate-objects/SKILL.md`
+  - **baseline-capture** — capture source proc/function output as test baselines → `./migrate-objects/baseline-capture/SKILL.md`
+  - **migrate-etl-package** — phase-based ETL package fixer (invoke by name only) → `./migrate-objects/actions/migrate-etl-package/SKILL.md`
+- **validate-objects** — validate migrated data between source and Snowflake → `./validate-objects/SKILL.md`
+
+### Rules
+- **rule-engine** — search, apply, and manage migration rules → `./migrate-objects/rule-engine/SKILL.md`
+  - **extract-rule** — extract a reusable rule from a code fix (interactive or git history) → `./migrate-objects/rule-engine/extract/SKILL.md`
+  - **propagate-rule** — find all code units matching a rule for batch application → `./migrate-objects/rule-engine/propagate/SKILL.md`
+
+## Fallback
+
+If no skill matches, say so explicitly, then help with your own knowledge.
+</skill-match>
 
 
 ## Rules

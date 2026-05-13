@@ -11,12 +11,12 @@ license: Proprietary. See License-Skills for complete terms
 
 Check `support` from the `configure()` response.
 
-If `support` is `basic`, load [BASIC_SUPPORT.md](BASIC_SUPPORT.md) and **STOP** — do not continue with the steps below.
+If `support` is `basic`, load [BASIC_SUPPORT.md](BASIC_SUPPORT.md) and **STOP**. Do not continue with the steps below.
 
 ## On Entry **IMPORTANT DO NOT SKIP**
 
 Tell the user:
-> **Phase 2: Migrate Objects** — Setup is complete. Now we'll deploy your objects to Snowflake according to your wave plan (if you created one in assessments). Each object goes through a deploy-test-fix loop.
+> **Phase 2: Migrate Objects.** Setup is complete. Now we'll deploy your objects to Snowflake according to your wave plan (if you created one in assessments). Each object goes through a deploy-test-fix loop.
 
 ## Step 1: Configure Session
 
@@ -24,7 +24,7 @@ Call `configure()` to retrieve the current configuration.
 
 Check the returned values for `snowflake_connection`, `source_connection`, and `snowflake_database`:
 
-- **All three set** → confirm them with the user (e.g. "Using snowflake_connection=X, source_connection=Y, deploying to database Z — correct?"). If the user wants changes, call `configure` with the updated values.
+- **All three set** → confirm them with the user (e.g. "Using snowflake_connection=X, source_connection=Y, deploying to database Z. Correct?"). If the user wants changes, call `configure` with the updated values.
 - **Any missing** → ask the user for the missing values, then call `configure` with all of them.
 
 Before calling `configure` with the final values, verify the target database exists:
@@ -57,8 +57,8 @@ If not yet configured → ask the user
 
 > Does your source database have representative data for testing?
 >
-> - **A) Yes** — we'll capture baselines from your source DB
-> - **B) No, generate synthetic data** — AI Migrator creates test data
+> - **A) Yes.** We'll capture baselines from your source DB.
+> - **B) No, generate synthetic data**
 
 Then call `configure(testing_data_source="source_database")` or `configure(testing_data_source="synthetic")` to persist the choice.
 
@@ -70,8 +70,8 @@ Ask the user:
 >
 > This spawns parallel agents to generate test cases and capture source baselines for those function/procedure at once, so they're ready when the object's turn comes.
 >
-> 1. **Yes — batch capture** (recommended for large waves)
-> 2. **No — capture per-object** (baselines will be captured one at a time during migration)
+> 1. **Yes, batch capture** (recommended for large waves)
+> 2. **No, capture per-object** (baselines will be captured one at a time during migration)
 
 If the user chooses **batch capture**, load [baseline-capture/BATCH.md](baseline-capture/BATCH.md) and wait for it to complete before proceeding.
 
@@ -83,19 +83,19 @@ Call `next_object()`. It returns JSON with a `status` field and, when `ready`, a
 
 | Status | Type | Action |
 |--------|------|--------|
-| `tables_pending` | — | Load [actions/migrate_table.md](actions/migrate_table.md) |
+| `tables_pending` | (n/a) | Load [actions/migrate_table.md](actions/migrate_table.md) |
 | `ready` | `view` | Load [actions/migrate_view.md](actions/migrate_view.md) |
 | `ready` | `function` / `procedure` | Load [actions/migrate_function.md](actions/migrate_function.md) |
-| `done` | — | Go to Step 5. |
+| `done` | (n/a) | Go to Step 5. |
 
 After each object completes, call `next_object()` again and repeat.
 
 ## Step 5: Report
 
 Call `migration_status()` and present a completion summary to the user:
-> **Wave <N> complete** — <deployed_count> objects deployed, <tested_count> tested and passing, <failed_count> still failing. <data_migrated_count> tables with data migrated.
+> **Wave `<N>` complete.** `<deployed_count>` objects deployed, `<tested_count>` tested and passing, `<failed_count>` still failing. `<data_migrated_count>` tables with data migrated.
 
 If all waves are done:
-> **Migration complete** — All objects have been deployed to Snowflake and validated.
+> **Migration complete.** All objects have been deployed to Snowflake and validated.
 
 If the wave is complete, the next `configure()` call will auto-advance to the next wave.

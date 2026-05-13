@@ -267,7 +267,7 @@ Server=myserver.corp.local;Database=mydb;Integrated Security=True;Encrypt=True;
 ### Test with scai
 
 ```bash
-scai connection test -l sqlserver -s <CONNECTION_NAME>
+scai connection test -l sqlserver -s <CONNECTION_NAME> --json
 ```
 
 ### Manual Network Test

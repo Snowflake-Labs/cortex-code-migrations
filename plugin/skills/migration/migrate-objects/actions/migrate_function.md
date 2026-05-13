@@ -3,11 +3,11 @@
 ## On Entry
 
 Call `testing_progress()` and tell the user:
-> **Migrating functions and procedures** (Wave <N>) — <done_count>/<total> done so far, <ready_count> ready to work on, <blocked_count> blocked on dependencies.
+> **Migrating functions and procedures** (Wave `<N>`). `<done_count>/<total>` done so far, `<ready_count>` ready to work on, `<blocked_count>` blocked on dependencies.
 
 Deploy, test, and fix functions and procedures using two-sided testing (source output vs Snowflake output). Processes one object at a time in dependency order.
 
-The parent skill (`migrate-objects/SKILL.md`) passes `<testing_data_source>` — either `"source_database"` or `"synthetic"`.
+The parent skill (`migrate-objects/SKILL.md`) passes `<testing_data_source>`, either `"source_database"` or `"synthetic"`.
 
 ## Step 1: Get Next Object
 
@@ -21,11 +21,7 @@ next_object()
 
 ## Step 2: Prepare Test Data
 
-Once you have an object name (e.g., `dbo.CalculateLineTotal`), prepare test data based on `<testing_data_source>`.
-
-### If `testing_data_source == "source_database"`
-
-Check for the test YAML locally and the baselines on the Snowflake stage:
+Once you have an object name (e.g., `dbo.CalculateLineTotal`), check whether test artifacts and baselines already exist for it:
 
 ```bash
 ls <project_dir>/artifacts/**/test/*<object_name>*.yml 2>/dev/null
@@ -35,11 +31,9 @@ snow stage list-files @<DATABASE>.VALIDATION.BASELINES \
   -c <SNOWFLAKE_CONNECTION_NAME> 2>/dev/null
 ```
 
-**No baselines exist?**
+**Artifacts and baselines exist?** → proceed to Step 3.
 
-Tell the user: *"No baselines found for `<object_name>` on stage `@<DATABASE>.VALIDATION.BASELINES`. We need to capture source baselines before we can validate."*
-
-→ **Spawn a foreground subagent** (Task tool) to capture baselines:
+**Missing either?** → **Spawn a foreground subagent** (Task tool) to seed + capture:
 
 ```
 Read and follow baseline-capture/SKILL.md
@@ -50,46 +44,17 @@ Context:
 - Source connection: <source_connection_name>
 - Snowflake connection: <connection_name>
 - Database: <database_name>
+- testing_data_source: <testing_data_source>
 
-Capture source baselines for this object.
-Report back: path chosen (query_logs or ai_assisted), test case count, baseline count, upload status.
+Seed test YAMLs (per testing_data_source) and capture source baselines for this object.
+Report back: seeder chosen (query_logs / ai_assisted / synthetic), test case count, baseline count, upload status.
 ```
 
-**Baselines exist?** → proceed to Step 3.
+`baseline-capture/SKILL.md` reads `testing_data_source` to pick the seeder:
+- `source_database` → asks Query Logs vs AI-Assisted Swarm
+- `synthetic` → Branch-Driven Synthetic ([synthetic-seeder](../baseline-capture/synthetic-seeder/SKILL.md))
 
-### If `testing_data_source == "synthetic"`
-
-Check if AI-generated test artifacts already exist for this object:
-
-```bash
-ls <project_dir>/artifacts/unit_tests/**/test/*<object_name>*.yml 2>/dev/null
-```
-
-**Artifacts exist** → proceed to Step 3 (they will be reused via `--reuse-tests`).
-
-**No artifacts** → generate them for this single object:
-
-```bash
-SKILL_DIR="<absolute path to plugin/skills/migration/tools/ai-migrator>"
-SOURCE_DIR="<project_dir>/source"
-CONVERTED_DIR="<project_dir>/snowflake"
-TARGET_DIR="<project_dir>/.scai/jobs/unit-testing/$(date +%Y%m%d_%H%M%S)_$(openssl rand -hex 2)"
-
-uv run --project ${SKILL_DIR} migrate \
-    --source ${SOURCE_DIR} \
-    --converted ${CONVERTED_DIR} \
-    --converted-with-code ${CONVERTED_DIR} \
-    --target ${TARGET_DIR} \
-    --source-dialect MS_SQL_SERVER \
-    --model cortex/claude-sonnet-4-5 \
-    --no-repair \
-    --objects '["<object_name>"]'
-
-mkdir -p <project_dir>/artifacts/unit_tests
-cp -r ${TARGET_DIR}/tests/* <project_dir>/artifacts/unit_tests/
-```
-
-For detailed flags and output format, see [../../unittest/SKILL.md](../../unittest/SKILL.md).
+All three seeders end by running `scai test capture` via `baseline-capture/CAPTURE.md`, so the loop's test command is identical regardless of path.
 
 ## Step 3: Run the Migrate-Object Loop
 
@@ -97,13 +62,11 @@ Load the core migration loop for the current object:
 
 → `../migrate-object/SKILL.md`
 
-Pass `<testing_data_source>` to the migrate-object loop. It will run the appropriate tests in each deploy-test-fix iteration.
-
 This handles:
 1. Pre-apply known migration rules (regex + Cortex semantic search)
 2. Resolve EWI markers
 3. Deploy to Snowflake
-4. Run tests (source DB baselines or synthetic data, based on `testing_data_source`)
+4. Run `scai test validate` (baselines captured during prep above are reused for every iteration)
 5. If tests fail → diagnose and fix → redeploy → retest
 6. If tests pass → deduce rule (if code changed) → update registry → commit
 
@@ -118,7 +81,7 @@ testing_progress()
 ```
 
 Tell the user:
-> **Wave <N> functions/procedures complete** — <passed> passed, <failed> failed, <blocked> blocked on dependencies.
+> **Wave `<N>` functions/procedures complete.** `<passed>` passed, `<failed>` failed, `<blocked>` blocked on dependencies.
 
 Return control to the parent skill. The parent will retry any views that were blocked on these functions.
 
@@ -131,6 +94,6 @@ These files are part of the migrate-objects skill and are used by the migrate-ob
 | `../migrate-object/SKILL.md` | Core deploy → test → diagnose → fix loop |
 | `../migrate-object/DIAGNOSE_FIX.md` | Diagnose test failures and apply fixes |
 | `../migrate-object/DEDUCE_RULE.md` | Extract reusable rules from successful fixes |
-| `../baseline-capture/SKILL.md` | Capture source baselines (routes to QUERY_LOGS or SWARM) |
-| `../../unittest/SKILL.md` | Synthetic data testing reference (AI Migrator commands) |
+| `../baseline-capture/SKILL.md` | Seed YAMLs + capture source baselines (routes to QUERY_LOGS, SWARM, or synthetic-seeder based on `testing_data_source`) |
+| `../baseline-capture/synthetic-seeder/SKILL.md` | LLM-driven synthetic test generation (branch-driven seeder) |
 | `../setup/SKILL.md` | One-time validation framework setup |

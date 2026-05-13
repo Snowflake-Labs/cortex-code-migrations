@@ -46,7 +46,7 @@ WHERE code_unit_name = '<SCHEMA>.Name' AND params_hash = '<hash>';
 
 2. Deploy it first:
    ```bash
-   scai code deploy -c <CONNECTION_NAME> --where "source.canonicalName ILIKE '%<functionname>%'"
+   scai code deploy -c <CONNECTION_NAME> --where "source.canonicalName ILIKE '%<functionname>%'" --json
    ```
 
 3. Then re-run the procedure's tests.
@@ -64,7 +64,7 @@ WHERE code_unit_name = '<SCHEMA>.Name' AND params_hash = '<hash>';
 
 2. If missing, deploy it:
    ```bash
-   scai code deploy -c <CONNECTION_NAME> --where "source.canonicalName ILIKE '%<objectname>%'"
+   scai code deploy -c <CONNECTION_NAME> --where "source.canonicalName ILIKE '%<objectname>%'" --json
    ```
 
 ## Missing Schema Prefix (DBO and others)
@@ -236,7 +236,7 @@ Apply this to every PIVOT column reference (SELECT list, `NVL`, `CASE`, aliases,
 **Fix:**
 1. Verify a scai project is initialized:
    ```bash
-   scai project info
+   scai project info --json
    ```
 
 2. Verify test YAML files exist:
@@ -251,7 +251,7 @@ Apply this to every PIVOT column reference (SELECT list, `NVL`, `CASE`, aliases,
 
 4. Verify the source connection works:
    ```bash
-   scai connection test -l <sqlserver|redshift> -c <CONNECTION_NAME>
+   scai connection test -l <sqlserver|redshift> -c <CONNECTION_NAME> --json
    ```
 
 ## Deploy Errors
@@ -271,5 +271,5 @@ Apply this to every PIVOT column reference (SELECT list, `NVL`, `CASE`, aliases,
 
 4. Try deploying directly to see the full error:
    ```bash
-   scai code deploy -c <CONNECTION_NAME> --where "source.canonicalName ILIKE '%<objectname>%'"
+   scai code deploy -c <CONNECTION_NAME> --where "source.canonicalName ILIKE '%<objectname>%'" --json
 ```

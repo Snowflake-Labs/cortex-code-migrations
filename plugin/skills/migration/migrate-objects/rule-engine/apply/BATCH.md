@@ -55,4 +55,12 @@ After each successful application:
 > - AI mode: J applied (user approved), L skipped
 > - Updated `rule_applications` count in RULE_ENGINE.RULES
 >
-> Test the modified objects? → [../../../unittest/SKILL.md](../../../unittest/SKILL.md) (Test Execution section)
+> Test the modified objects?
+>
+> - **Re-validate all modified objects at once** (fast sanity check):
+>   ```bash
+>   scai test validate -c <SNOWFLAKE_CONNECTION_NAME> \
+>     --where "source.canonicalName IN (<comma-separated-canonical-names>)"
+>   ```
+>   Then call `update_testing` with `<project_dir>/test-results/results.json` so `testing_progress` and `next_object` reflect the re-run.
+> - **For any failures, run the full diagnose/fix loop per object** → [../../migrate-object/SKILL.md](../../migrate-object/SKILL.md)

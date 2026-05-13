@@ -24,8 +24,7 @@ scripts/snowconvert_reports/
 │   ├── code_units_loader.py         # load_code_units()
 │   ├── object_references_loader.py  # load_object_references(), load_missing_references()
 │   ├── partition_loader.py          # load_partition_membership()
-│   ├── estimation_loader.py         # load_issues_estimation_json(), load_object_estimations()
-│   └── graph_loader.py              # parse_graph_summary(), parse_cycles(), parse_excluded_edges()
+│   └── estimation_loader.py         # load_issues_estimation_json(), load_object_estimations()
 ├── services/
 │   ├── issue_effort_service.py      # IssueEffortService (unified effort/severity lookup)
 │   └── report_finder.py             # ReportFinder (glob-based file discovery)
@@ -70,9 +69,9 @@ scripts/snowconvert_reports/
  │     ETL     │   │    Waves     │   │  SQL Dynamic │   │  Exclusion   │
  │  Assessment │   │  Generator   │   │   Analyzer   │   │  Detection   │
  │             │   │              │   │              │   │              │
- │ SSIS/DTSX   │   │ Dependency   │   │ SSC-EWI-0030 │   │ Naming       │
- │ package     │   │ graph,       │   │ pattern      │   │ patterns,    │
- │ analysis    │   │ wave algo,   │   │ detection &  │   │ duplicate    │
+ │ SSIS/DTSX   │   │ scai         │   │ SSC-EWI-0030 │   │ Naming       │
+ │ package     │   │ assessment   │   │ pattern      │   │ patterns,    │
+ │ analysis    │   │ waves →      │   │ detection &  │   │ duplicate    │
  │             │   │ HTML reports │   │ tracking     │   │ detection    │
  └─────────────┘   └──────────────┘   └──────────────┘   └──────────────┘
 ```
@@ -98,10 +97,9 @@ snowconvert_reports
 │                                  load_partition_membership
 │                                  load_object_estimations
 │                                  load_object_references
-│                                  parse_graph_summary
-│                                  parse_cycles
-│                                  parse_excluded_edges
 │                                  ReportFinder
+│    (wave *creation* lives in the SCAI CLI — `scai assessment waves` —
+│     and emits `waves_analysis_*.json` consumed via `WavesJsonAdapter`)
 │
 ├──► analyzing-sql-dynamic-patterns
 │    └── (no in-skill loaders)  → handled by `scai assessment sql-dynamic`,
@@ -128,8 +126,6 @@ snowconvert_reports
                          │  ObjectReferences.csv  │
                          │  PartitionMembership   │
                          │  IssuesEstimation.json │
-                         │  graph_summary.txt     │
-                         │  cycles.txt            │
                          └───────────┬───────────┘
                                      │
                           ┌──────────▼──────────┐
@@ -276,7 +272,7 @@ ETL doesn't subclass `Element`. It composes a richer domain model:
 | Data models (raw rows) | `snowconvert_reports/models/` | One frozen dataclass per CSV file type |
 | Effort calculation | `snowconvert_reports/services/issue_effort_service.py` | Unified EWI/non-EWI logic |
 | SSIS package analysis | `etl-assessment/` | Domain-specific (DTSX parsing, DAGs) |
-| Wave generation algo | `waves-generator/analyze_dependencies.py` | Domain-specific (topo sort, SCC, partitioning) |
+| Wave generation algo | External — `scai assessment waves` | Owned by SCAI; emits `waves_analysis_*.json` that the HTML generators consume via `WavesJsonAdapter` |
 | Dynamic SQL detection (occurrence extraction, tracking) | External — `scai assessment sql-dynamic` | Owned by SCAI; the sub-skill is a thin wrapper that drives the CLI and applies pattern classification |
 | Object exclusion (naming patterns, duplicates, version conflicts) | External — `scai assessment object-exclusion` | Owned by SCAI; the sub-skill is a thin wrapper that consumes the resulting JSON |
 | HTML report rendering | `scripts/generate_multi_report.py` | Presentation layer (Vue.js, Chart.js) |

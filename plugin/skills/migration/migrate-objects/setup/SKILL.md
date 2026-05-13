@@ -42,16 +42,16 @@ Check if a source connection already exists:
 
 ```bash
 # Check for SQL Server connections
-scai connection list -l sqlserver 2>/dev/null
+scai connection list -l sqlserver --json 2>/dev/null
 
 # Check for Redshift connections
-scai connection list -l redshift 2>/dev/null
+scai connection list -l redshift --json 2>/dev/null
 
 # Check for Oracle connections
-scai connection list -l oracle 2>/dev/null
+scai connection list -l oracle --json 2>/dev/null
 
 # Check for Teradata connections
-scai connection list -l teradata 2>/dev/null
+scai connection list -l teradata --json 2>/dev/null
 ```
 
 **If a connection exists**, test it.
@@ -69,7 +69,7 @@ ls ~/.snowflake/scai/drivers/teradata/*.nupkg ~/.snowflake/scai/drivers/teradata
 If no driver files are found, follow the connection skill (Step 1) to download the driver, then include `--driver-path` in the test command.
 
 ```bash
-scai connection test -l <sqlserver|redshift|oracle|teradata> -s <CONNECTION_NAME>
+scai connection test -l <sqlserver|redshift|oracle|teradata> -s <CONNECTION_NAME> --json
 # Oracle/Teradata without cached driver: add --driver-path <PATH_TO_NUPKG>
 ```
 
@@ -94,7 +94,7 @@ The validation framework assumes a scai migration project exists with converted 
 
 ```bash
 # Check for existing project
-scai project info
+scai project info --json
 
 # Verify converted code exists
 ls snowflake/procedure/ 2>/dev/null

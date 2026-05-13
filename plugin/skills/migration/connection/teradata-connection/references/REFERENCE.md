@@ -31,9 +31,9 @@ When `--driver-path` is provided, SCAI copies the file into `~/.snowflake/scai/d
 
 | Command | When driver is needed |
 |---------|----------------------|
-| `scai connection test -l teradata` | Testing a Teradata connection |
-| `scai code extract -s <conn>` | Extracting code from Teradata |
-| `scai query -s <conn>` | Querying the Teradata source |
+| `scai connection test -l teradata --json` | Testing a Teradata connection |
+| `scai code extract -s <conn> --json` | Extracting code from Teradata |
+| `scai query -s <conn> --json` | Querying the Teradata source |
 | `scai project defaults set -s <conn>` | Setting project defaults with a Teradata source |
 
 ### Pre-caching the Driver
@@ -253,7 +253,7 @@ scai connection add-teradata \
 ### Test with scai
 
 ```bash
-scai connection test -l teradata -s <CONNECTION_NAME>
+scai connection test -l teradata -s <CONNECTION_NAME> --json
 ```
 
 ### Manual Network Test

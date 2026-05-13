@@ -78,7 +78,7 @@ Password will be prompted securely.
 ### Step 4: Test the Connection
 
 ```bash
-scai connection test -l sqlserver -s <SOURCE_CONNECTION_NAME>
+scai connection test -l sqlserver -s <SOURCE_CONNECTION_NAME> --json
 ```
 
 **Expected:** "Connection successful" with server version and database details.
@@ -95,7 +95,7 @@ Call the `configure` tool with `source_connection` set to the `<SOURCE_CONNECTIO
 
 Confirm with user:
 - [ ] Connection test passed
-- [ ] Connection appears in `scai connection list -l sqlserver`
+- [ ] Connection appears in `scai connection list -l sqlserver --json`
 - [ ] Source connection saved to session config
 
 ## On Completion
@@ -117,5 +117,5 @@ Then return to the calling skill.
 |--------|---------|
 | Add connection (interactive) | `scai connection add-sql-server` |
 | Add connection (inline) | `scai connection add-sql-server -s NAME --auth standard --server-url HOST --database DB --user USER` |
-| Test connection | `scai connection test -l sqlserver -s NAME` |
+| Test connection | `scai connection test -l sqlserver -s NAME --json` |
 | Set default | `scai connection set-default -l sqlserver -s NAME` |

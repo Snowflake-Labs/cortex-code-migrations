@@ -98,10 +98,10 @@ This is the "first SCAI invocation" called out as 1e in the bootstrap reference.
 
 ```bash
 # Branch A or B in Step 1 (driver not yet cached) — pass --driver-path once
-scai connection test -l teradata -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG>
+scai connection test -l teradata -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG> --json
 
 # Step 1 hit the cache — --driver-path not needed
-scai connection test -l teradata -s <CONNECTION_NAME>
+scai connection test -l teradata -s <CONNECTION_NAME> --json
 ```
 
 The first call with `--driver-path` copies the driver into `~/.snowflake/scai/drivers/teradata/`, so every subsequent `scai` command (in this project or any other) can omit the flag.
@@ -135,7 +135,7 @@ Confirm with user:
   - [ ] User-provided local path supplied via `--driver-path` (Step 1c)
   - [ ] Downloaded by the agent and supplied via `--driver-path` (Step 1d)
 - [ ] Connection test passed
-- [ ] Connection appears in `scai connection list -l teradata`
+- [ ] Connection appears in `scai connection list -l teradata --json`
 - [ ] Source connection saved to session config
 
 ## Limitations
@@ -167,8 +167,8 @@ Then return to the calling skill.
 | Add connection (interactive) | `scai connection add-teradata` |
 | Add connection (standard) | `scai connection add-teradata -s NAME --auth standard --host HOST --database DB --user USER` |
 | Add connection (LDAP) | `scai connection add-teradata -s NAME --auth ldap --host HOST --database DB --user USER` |
-| Test connection (first time) | `scai connection test -l teradata -s NAME --driver-path <PATH_TO_NUPKG>` |
-| Test connection (driver cached) | `scai connection test -l teradata -s NAME` |
-| List connections | `scai connection list -l teradata` |
+| Test connection (first time) | `scai connection test -l teradata -s NAME --driver-path <PATH_TO_NUPKG> --json` |
+| Test connection (driver cached) | `scai connection test -l teradata -s NAME --json` |
+| List connections | `scai connection list -l teradata --json` |
 | Set default | `scai connection set-default -l teradata -s NAME` |
-| Extract code | `scai code extract -s NAME` |
+| Extract code | `scai code extract -s NAME --json` |

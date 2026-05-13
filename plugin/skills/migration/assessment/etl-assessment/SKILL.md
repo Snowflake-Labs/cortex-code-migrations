@@ -11,6 +11,39 @@ license: Proprietary. See License-Skills for complete terms
 
 ---
 
+## Sub-Agent Mode
+
+When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, the parent provides a context block with the fields below. The `review_mode` field controls whether the per-package review loop runs.
+
+| Field | Required | Notes |
+|---|---|---|
+| `project_dir` | yes | absolute path to the SCAI project root |
+| `output_dir` | yes | typically `<project_dir>/assessment/ssis` |
+| `etl_replatform_sources_path` | no | absolute path to the SSIS `.dtsx` source directory; falls back to auto-detection per [Step 1](#step-1-locate-input-files-auto-detected) |
+| `review_mode` | yes | `generate-only`, `auto-review-all`, or `skip` |
+
+**On entry:** call the `configure` MCP tool with `project_dir` from the context block. Snowflake credentials are not required — `scai_assessment_analyzer` reads only local CSVs and `.dtsx` files.
+
+**Branching by `review_mode`:**
+
+- `generate-only` — run Steps 1–2 (locate inputs + generate JSON). Return the `etl_assessment_analysis.json` path; do not run per-package analysis or the AI summary.
+- `auto-review-all` — run all four steps (locate inputs, generate, analyze every package per [references/analyze_ssis_package.md](references/analyze_ssis_package.md), draft the AI HTML summary, register it). Stop only when `stats` reports no pending packages.
+- `skip` — return immediately with `"status": "skipped"`.
+
+**On completion**, return **JSON only**:
+
+```json
+{
+  "sub_skill": "etl-assessment",
+  "status": "ok",
+  "output_json": "<abs path to etl_assessment_analysis.json>",
+  "summary": "<one-line: total packages, classified count, pending count>",
+  "error": null
+}
+```
+
+On `skip`: `"status": "skipped"`, `"output_json": null`. On failure: `"status": "error"`, `"error": "<message>"`.
+
 ## Rules
 
 1. **Use ONLY Provided Scripts**

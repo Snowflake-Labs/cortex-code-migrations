@@ -85,10 +85,10 @@ Pick the appropriate command depending on what the consuming skill needs (`conne
 
 ```bash
 # After Branch A / B (driver not yet cached)
-scai connection test -l <dialect> -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG>
+scai connection test -l <dialect> -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG> --json
 
 # After 1a hit (driver already cached)
-scai connection test -l <dialect> -s <CONNECTION_NAME>
+scai connection test -l <dialect> -s <CONNECTION_NAME> --json
 ```
 
 Once the cache is populated, every subsequent `scai` command for `<dialect>` — even in other projects — can omit `--driver-path`.

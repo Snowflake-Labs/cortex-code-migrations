@@ -1,6 +1,6 @@
 ---
 name: data-infrastructure-setup
-description: Shared infrastructure setup for data migration and data validation — prerequisites, compute pool, worker config, and source database/schema capture. Loaded once before data-migration-setup and/or data-validation-setup.
+description: Shared infrastructure setup for data migration and data validation — prerequisites, compute pool, worker config, and source database/schema capture.
 parent_skill: migration
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -15,7 +15,7 @@ If `support` is `basic`, **STOP** — data infrastructure setup is not available
 
 ---
 
-Shared one-time infrastructure configuration used by both **data migration** and **data validation**. The caller (data-migration-setup or data-validation-setup) loads this skill first, then continues with its approach-specific steps.
+Shared one-time infrastructure configuration used by both **data migration** and **data validation**. This skill is invoked by the parent `setup` skill and only configures shared infrastructure (compute pool + worker config).
 
 > **Supported sources**: SQL Server, Redshift
 > **Supported target**: Snowflake
@@ -53,8 +53,7 @@ Apply to both migration and validation unless noted:
 
 - SPCS enabled on the Snowflake account
 - Compute pool created and accessible to the executing role
-- Snowflake role has USAGE on the `SNOWCONVERT_AI` database and `DATA_MIGRATION` schema (or can create them)
-- **Validation only:** role also needs USAGE on the `DATA_VALIDATION` schema
+- Snowflake role has USAGE on the `SNOWCONVERT_AI` database and `DATA_MIGRATION` and `DATA_VALIDATION` schemas
 - If the `DATA_MIGRATION_SERVICE` already exists (created by another role), the executing role needs OPERATE and MONITOR privileges on the service. Grant with:
   ```sql
   GRANT OPERATE, MONITOR ON SERVICE SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE TO ROLE <your_role>;
@@ -88,22 +87,25 @@ ALTER COMPUTE POOL <COMPUTE_POOL> RESUME;
 configure(compute_pool="<COMPUTE_POOL>")
 ```
 
-This persists the compute pool to `.scai/settings/cloud-migration.yaml` and auto-generates `.scai/settings/DataExchangeWorkerConfig.toml` with placeholders if the file does not already exist. The Snowflake connection name is pre-filled from the session config.
+This persists the compute pool to `.scai/settings/cloud-migration.yaml` and auto-generates `.scai/settings/DataExchangeWorkerConfig.toml` if the file does not already exist. `configure` pre-fills as much as it can:
+
+- **Snowflake connection name** from the session config.
+- **Source `host`, `port`, `username`, `password`, `database`** from the named scai source connection (`~/.snowflake/snowct/<dialect>.toml`). Anything the scai connection doesn't carry is left as a `<placeholder>` for Step 2.
 
 > The orchestrator SPCS service starts automatically when `migrate_data()` or `validate_data()` is called — no manual service start is required here.
 
 ---
 
-## Step 2: Edit Worker Configuration
+## Step 2: Complete Worker Configuration
 
 **First, read `.scai/settings/DataExchangeWorkerConfig.toml`.** If the file exists and contains **no `<placeholder>` tokens**, report "Worker config already complete" and skip the rest of this step — proceed directly to the checklist.
 
-Only if the file is missing or still contains `<placeholder>` values, edit it to fill in source connection details.
+Otherwise:
 
-**Explicitly ask the user for:**
-1. **Source database name** — do NOT infer from the scai connection. This value goes into `[connections.source.*].database` AND must match `source.databaseName` in the migration workflow YAML / validation JSON. A mismatch causes the orchestrator to report "table does not exist in the source database."
-2. **Source schema name** — needed for `source.schemaName` in the migration workflow YAML / validation JSON. Do not assume `public` or `dbo`.
-3. **Source host, port, credentials** — fill in the remaining `<placeholder>` values.
+1. **Show the user the pre-filled values** that came from the scai source connection (`[connections.source.*]` host, port, user, database). Ask them to confirm — and only edit if something is wrong. Do **not** re-prompt for connection values when those fields already have real values from the scai connection.
+2. **Fill any remaining `<placeholder>` tokens.** If the scai connection lacked a field (e.g., the TOML had no `port` entry), ask the user for just that field.
+
+> The scai connection's `database` also populates `[connections.source.*].database`. This value **must match** `source.databaseName` in the migration workflow YAML / validation JSON. A mismatch causes the orchestrator to report "table does not exist in the source database." If the user wants to migrate a different database than the one in their scai connection, have them update it here and remember to use the same value in the workflow YAML.
 
 > **Skip** this step for Iceberg migration strategies without a Worker (`catalog_link`, `convert_to_managed`, `copy_files` with `sourceDataStage`). See `./references/worker-config-reference.md` for advanced options.
 
@@ -115,12 +117,11 @@ Only if the file is missing or still contains `<placeholder>` values, edit it to
 - [ ] Snowflake connection has warehouse configured
 - [ ] Compute pool active (not suspended)
 - [ ] Compute pool saved via configure(compute_pool=...)
-- [ ] Worker config edited with source connection details — unless pure Iceberg
-- [ ] Source database name explicitly confirmed with user
-- [ ] Source schema name explicitly confirmed with user
+- [ ] Worker config has no remaining <placeholder> values — unless pure Iceberg
+- [ ] Pre-filled source connection values confirmed with user
 ```
 
-Return control to the caller (data-migration-setup or data-validation-setup) for approach-specific steps.
+Return control to the parent `setup` skill and continue with the next setup step.
 
 ---
 

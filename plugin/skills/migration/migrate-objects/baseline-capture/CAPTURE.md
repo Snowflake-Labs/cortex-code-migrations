@@ -1,6 +1,6 @@
 # Capture and Upload Baselines
 
-After creating the test YAML files (from query logs or AI swarm), capture baselines from the source database and upload to Snowflake.
+After creating the test YAML files, capture baselines from the source database and upload to Snowflake.
 
 > **⚠️ SCOPE: Capture baselines for ONE object at a time.**
 

@@ -31,9 +31,9 @@ When `--driver-path` is provided, SCAI copies the file into `~/.snowflake/scai/d
 
 | Command | When driver is needed |
 |---------|----------------------|
-| `scai connection test -l oracle` | Testing an Oracle connection |
-| `scai code extract -s <conn>` | Extracting code from Oracle |
-| `scai query -s <conn>` | Querying the Oracle source |
+| `scai connection test -l oracle --json` | Testing an Oracle connection |
+| `scai code extract -s <conn> --json` | Extracting code from Oracle |
+| `scai query -s <conn> --json` | Querying the Oracle source |
 | `scai project defaults set -s <conn>` | Setting project defaults with an Oracle source |
 
 ### Pre-caching the Driver
@@ -254,7 +254,7 @@ scai connection add-oracle \
 ### Test with scai
 
 ```bash
-scai connection test -l oracle -s <CONNECTION_NAME>
+scai connection test -l oracle -s <CONNECTION_NAME> --json
 ```
 
 ### Manual Network Test

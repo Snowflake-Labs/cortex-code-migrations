@@ -23,23 +23,29 @@ Tell the user:
 - Source database connection configured (SQL Server or Redshift) and Snowflake validation framework deployed (see [setup/SKILL.md](../setup/SKILL.md))
 - Source SQL files available (in `source/` directory of scai project)
 
-## Step 1: Choose a Path
+## Step 1: Choose a Seeder
 
-**Ask the user which approach to use for `<object_name>`:**
+The seeder to use is determined by `testing_data_source` (set via `configure()` from the upfront prompt in [../SKILL.md](../SKILL.md) Step 2). Seeders produce the test YAML artifacts; the capture step is the same for all of them.
 
-| Path | When to Use | Input Required |
-|------|-------------|----------------|
-| **Query Logs** | You have CSV logs of real source procedure calls | CSV file with EXEC/CALL statements |
-| **AI-Assisted** | No logs available, need to generate test cases | Source SQL files with CREATE PROCEDURE/FUNCTION |
+| `testing_data_source` | Seeder | When to Use | Input Required |
+|-----------------------|--------|-------------|----------------|
+| `source_database` + has CSV | **Query Logs** | Real source procedure calls are available as CSV | CSV file with `EXEC`/`CALL` statements |
+| `source_database` + no CSV | **AI-Assisted Swarm** | No logs, but source DB has representative data | Source SQL + live source DB connection |
+| `synthetic` | **Branch-Driven Synthetic** | No source data available; generate from SQL analysis | Source SQL files only |
 
-## Step 2: Route to Create Baselines
+If `testing_data_source == "source_database"`, ask the user which of the two source-DB seeders to use (Query Logs or AI-Assisted). If `testing_data_source == "synthetic"`, go straight to the synthetic seeder — no sub-prompt.
+
+## Step 2: Route to Seeder
 
 - **Query Logs** → Load [QUERY_LOGS.md](QUERY_LOGS.md) for `<object_name>`
-- **AI-Assisted** → Load [SWARM.md](SWARM.md) for `<object_name>`
+- **AI-Assisted Swarm** → Load [SWARM.md](SWARM.md) for `<object_name>`
+- **Branch-Driven Synthetic** → Load [synthetic-seeder/SKILL.md](synthetic-seeder/SKILL.md) for `<object_name>`
+
+All three seeders write YAML test artifacts under `artifacts/` that are directly consumable by `scai test capture` + `scai test validate`.
 
 ## Step 3: Capture Baselines from Source System and Upload to Snowflake
 
-After creating test config for `<object_name>`, load [CAPTURE.md](CAPTURE.md) to capture and upload baselines. Use `--objects <object_name>` to capture only this object.
+After the seeder returns, load [CAPTURE.md](CAPTURE.md) to capture and upload baselines. Use `--objects <object_name>` to capture only this object. This is the same step regardless of which seeder ran.
 
 ## Return to Parent
 

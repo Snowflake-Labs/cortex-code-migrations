@@ -10,7 +10,12 @@ license: Proprietary. See License-Skills for complete terms
 ## On Entry
 
 Tell the user:
-> **Importing local SQL files** — I'll add your existing SQL source files to the migration project so they can be converted to Snowflake syntax.
+> **Importing local SQL files.**
+>
+> Here's what I'll do:
+> 1. Copy the SQL files from your input path into `artifacts/source_raw/`.
+> 2. Run scai's arrange engine to organize them by type and track them in your project.
+> 3. Move the arranged output into `source/`, ready for conversion, deployment, and validation against Snowflake.
 
 ## Prerequisites
 
@@ -28,7 +33,7 @@ Ask the user for the path to their source SQL files:
 ### Step 2: Add Code to Project
 
 ```bash
-scai code add -i <INPUT_PATH>
+scai code add -i <INPUT_PATH> --json
 ```
 
 This will:
@@ -38,7 +43,7 @@ This will:
 
 **If files already exist** and you need to overwrite:
 ```bash
-scai code add -i <INPUT_PATH> --overwrite
+scai code add -i <INPUT_PATH> --overwrite --json
 ```
 
 ### Step 3: Verify Files Were Added
@@ -75,7 +80,11 @@ Confirm with user:
 
 ## On Completion
 
-After the CHECKPOINT passes, tell the user:
-> **Import complete** — <N> SQL files added to the project in `source/`. Next, we'll convert these to Snowflake SQL.
+After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON envelope returned by `scai code add --json`.
+
+> **Import complete.** `<filesCopied>` SQL files imported as `<codeUnitsAdded>` code units, broken down by type (filled from `byType`). Files in `source/`.
+> *If `etlFilesAdded > 0`:* ETL: `<etlFilesAdded>` files added.
+> *If `etlFilesSkippedInvalidSchema > 0`:* `<etlFilesSkippedInvalidSchema>` ETL files skipped due to invalid schema.
+> Next, we'll convert these to Snowflake SQL.
 
 Then return to the calling skill.

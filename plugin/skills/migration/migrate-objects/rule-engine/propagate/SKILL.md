@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 
 # Rule Propagation — Find Matching Code Units
 
-Given a rule, find all code units in the project that the rule applies to. This replaces the ai-migrator's `find_propagation_candidates.py` with a lightweight, interactive approach.
+Given a rule, find all code units in the project that the rule applies to using a lightweight, interactive reverse search (regex + Cortex semantic matching).
 
 ## Prerequisites
 

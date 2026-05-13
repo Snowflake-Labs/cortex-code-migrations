@@ -9,6 +9,33 @@ license: Proprietary. See License-Skills for complete terms
 
 This skill is a thin wrapper over the SCAI CLI command `scai assessment object-exclusion`. SCAI does the analysis directly from SnowConvert outputs (registry preferred, CSV fallback) and writes a JSON file the parent assessment skill consumes for the multi-tab HTML report.
 
+## Sub-Agent Mode
+
+When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, the parent provides a context block with the fields below. This sub-skill takes no user prompts in either mode, so the only behavioral change in sub-agent mode is the JSON return contract.
+
+| Field | Required | Notes |
+|---|---|---|
+| `project_dir` | yes | absolute path to the SCAI project root |
+| `output_dir` | yes | typically `<project_dir>/assessment` |
+
+**On entry:** call the `configure` MCP tool with `project_dir` from the context block. Snowflake credentials are not required — `scai assessment object-exclusion` reads only local SnowConvert outputs.
+
+Run the SCAI command exactly as documented in [Workflow Step 1](#step-1-run-scai), preferring `--project-dir`.
+
+**On completion**, return **JSON only**:
+
+```json
+{
+  "sub_skill": "object-exclusion-detection",
+  "status": "ok",
+  "output_json": "<abs path to object_exclusion_analysis_*.json>",
+  "summary": "<one-line: temp/staging, deprecated, testing, duplicates counts>",
+  "error": null
+}
+```
+
+On failure: `"status": "error"`, `"output_json": null`, `"error": "<message>"`.
+
 ## Critical Rules
 
 - **Use ONLY the SCAI CLI.** No inline parsing, no custom analyzers. `scai assessment object-exclusion` is the single source of truth.
@@ -63,7 +90,7 @@ Return the artifact path to the parent `assessment` skill. The parent feeds it i
 
 | Option | Description |
 |--------|-------------|
-| `--project-dir <PATH>` | SnowConvert project directory. Auto-detects registry (`<dir>/.scai/registry/`) or falls back to CSVs in `<dir>/converted/Reports/`. |
+| `--project-dir <PATH>` | SnowConvert project directory. Auto-detects registry (`<dir>/registry/`) or falls back to CSVs in `<dir>/reports/SnowConvert/`. |
 | `--csv-dir <PATH>` | Explicit path to a SnowConvert reports directory containing `TopLevelCodeUnits.*.csv` and `ObjectReferences.*.csv`. Use only when project layout is non-standard. |
 | `-o`, `--output-dir <PATH>` | Output directory for the analysis JSON. Defaults to current working directory. |
 

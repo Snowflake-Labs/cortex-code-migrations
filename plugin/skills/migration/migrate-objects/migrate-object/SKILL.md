@@ -118,9 +118,7 @@ The tool uses the connection and database from `configure` and deploys via `scai
 
 ## Step 4: Run Tests
 
-Run the test type determined by `<testing_data_source>` (passed from the parent skill). Both paths compare source output against Snowflake output — they differ only in where the test data comes from.
-
-### If `testing_data_source == "source_database"`
+Baselines were already captured during prep — either via `baseline-capture` for the `source_database` path, or via `scai test capture` after YAML generation for the `synthetic` path (see [../actions/migrate_function.md](../actions/migrate_function.md) Step 2). This loop only re-runs validation each iteration; the source-side output does not change between fix iterations.
 
 ```bash
 scai test validate -c <CONNECTION_NAME> \
@@ -134,24 +132,6 @@ cat <project_dir>/test-results/results.json
 ```
 
 Each entry has `code_unit_name`, `status`, `match_type`, `error`, and `differences`. Focus on entries where `status` is not `PASS`.
-
-### If `testing_data_source == "synthetic"`
-
-```bash
-SKILL_DIR="<absolute path to plugin/skills/migration/tools/ai-migrator>"
-TARGET_DIR="<project_dir>/.scai/jobs/unit-testing/$(date +%Y%m%d_%H%M%S)_$(openssl rand -hex 2)"
-
-uv run --project ${SKILL_DIR} run_migration_tests \
-    --source <project_dir>/source \
-    --converted <project_dir>/snowflake \
-    --converted-with-code <project_dir>/snowflake \
-    --target ${TARGET_DIR} \
-    --reuse-tests <project_dir>/artifacts/unit_tests \
-    --source-dialect MS_SQL_SERVER \
-    --objects '["<object_name>"]'
-```
-
-Check exit code: 0 = all pass, 1 = any fail. Detailed results in `${TARGET_DIR}/progress.json`.
 
 ### Test Statuses
 
@@ -228,9 +208,7 @@ Proceed to Step 6.
 
 3. **Update registry status:**
 
-   Use the `update_testing` tool with `results_path` set to:
-   - `<project_dir>/test-results/results.json` if `testing_data_source == "source_database"`
-   - `${TARGET_DIR}/progress.json` if `testing_data_source == "synthetic"`
+   Use the `update_testing` tool with `results_path` = `<project_dir>/test-results/results.json`.
 
    This is required to move on to the next step.
 

@@ -39,15 +39,18 @@ def _bracket(ident: str) -> str:
 
 
 def _entry_full_name(entry: dict) -> str:
-    """Build a bracketed identifier from an entry's source block.
+    """Build a bracketed identifier from an entry's source (or target) block.
+
+    Falls back to the ``target`` block when ``source`` is absent (e.g. for
+    Snowflake-side UDF helpers that have no source counterpart).
 
     N/A-valued parts (database, schema, name) are omitted so that
     ``[N/A].[dbo].[MyTable]`` becomes ``[dbo].[MyTable]``.
     """
-    source = entry.get("source", {})
+    block = entry.get("source") or entry.get("target") or {}
     parts = [
         _bracket(v)
-        for v in (source.get("database", ""), source.get("schema", ""), source.get("name", ""))
+        for v in (block.get("database", ""), block.get("schema", ""), block.get("name", ""))
         if not is_na(v) and not is_na(v.strip("[]"))
     ]
     return ".".join(parts) if parts else "[]"

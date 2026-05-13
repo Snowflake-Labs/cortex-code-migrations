@@ -86,10 +86,10 @@ This is the "first SCAI invocation" called out as 1e in the bootstrap reference.
 
 ```bash
 # Branch A or B in Step 1 (driver not yet cached) — pass --driver-path once
-scai connection test -l oracle -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG>
+scai connection test -l oracle -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG> --json
 
 # Step 1 hit the cache — --driver-path not needed
-scai connection test -l oracle -s <CONNECTION_NAME>
+scai connection test -l oracle -s <CONNECTION_NAME> --json
 ```
 
 The first call with `--driver-path` copies the driver into `~/.snowflake/scai/drivers/oracle/`, so every subsequent `scai` command (in this project or any other) can omit the flag.
@@ -122,7 +122,7 @@ Confirm with user:
   - [ ] User-provided local path supplied via `--driver-path` (Step 1c)
   - [ ] Downloaded by the agent and supplied via `--driver-path` (Step 1d)
 - [ ] Connection test passed
-- [ ] Connection appears in `scai connection list -l oracle`
+- [ ] Connection appears in `scai connection list -l oracle --json`
 - [ ] Source connection saved to session config
 
 ## Limitations
@@ -153,8 +153,8 @@ Then return to the calling skill.
 | Download driver (macOS/Linux) | `curl -L -o Oracle.ManagedDataAccess.Core.nupkg https://www.nuget.org/api/v2/package/Oracle.ManagedDataAccess.Core` |
 | Add connection (interactive) | `scai connection add-oracle` |
 | Add connection (inline) | `scai connection add-oracle -c NAME --auth standard --host HOST --service-name SVC --user USER` |
-| Test connection (first time) | `scai connection test -l oracle -s NAME --driver-path <PATH_TO_NUPKG>` |
-| Test connection (driver cached) | `scai connection test -l oracle -s NAME` |
-| List connections | `scai connection list -l oracle` |
+| Test connection (first time) | `scai connection test -l oracle -s NAME --driver-path <PATH_TO_NUPKG> --json` |
+| Test connection (driver cached) | `scai connection test -l oracle -s NAME --json` |
+| List connections | `scai connection list -l oracle --json` |
 | Set default | `scai connection set-default -l oracle -c NAME` |
-| Extract code | `scai code extract -s NAME` |
+| Extract code | `scai code extract -s NAME --json` |

@@ -68,42 +68,6 @@ def load_toplevel_code_units(csv_path):
     return objects_data
 
 
-def load_partition_membership(csv_path):
-    """Load partition membership CSV with object metadata."""
-    from snowconvert_reports import load_partition_membership as _load
-    members = _load(csv_path)
-    return {m.object_name: {
-        'partition': m.partition_number,
-        'is_root': m.is_root,
-        'is_leaf': m.is_leaf,
-        'is_picked_scc': m.is_picked_scc,
-        'category': m.category,
-        'file_name': m.file_name,
-        'technology': m.technology,
-        'conversion_status': m.conversion_status,
-        'subtype': m.subtype,
-        'partition_type': m.partition_type,
-    } for m in members}
-
-
-def parse_graph_summary(txt_path):
-    """Parse graph_summary.txt for comprehensive statistics."""
-    from snowconvert_reports import parse_graph_summary as _parse
-    return _parse(txt_path)
-
-
-def parse_cycles(txt_path):
-    """Parse cycles.txt for cyclic dependency information."""
-    from snowconvert_reports import parse_cycles as _parse
-    return _parse(txt_path)
-
-
-def parse_excluded_edges(txt_path):
-    """Parse excluded_edges_analysis.txt for comprehensive information."""
-    from snowconvert_reports import parse_excluded_edges as _parse
-    return _parse(txt_path)
-
-
 def load_toplevel_objects_estimation(csv_path):
     """Load TopLevelObjectsEstimation report with per-object effort data and EWI counts."""
     from snowconvert_reports import load_object_estimations
@@ -251,27 +215,6 @@ def load_object_references_as_dicts(reports_dir):
         if r.caller_full_name and r.referenced_full_name
         and r.caller_full_name not in _NA_VALUES and r.referenced_full_name not in _NA_VALUES
     ]
-
-
-def load_dependency_counts(analysis_dir):
-    """Load per-object dependency counts from object_dependencies.csv."""
-    from snowconvert_reports.loaders.csv_reader import read_csv_rows
-
-    csv_path = Path(analysis_dir) / 'object_dependencies.csv'
-    if not csv_path.exists():
-        return {}
-
-    counts = {}
-    for row in read_csv_rows(csv_path):
-        obj_name = row.get('object', '')
-        if obj_name:
-            counts[obj_name] = {
-                'direct_dependencies': int(row.get('direct_dependencies_count', 0) or 0),
-                'direct_dependents': int(row.get('direct_dependents_count', 0) or 0),
-                'total_dependencies': int(row.get('total_dependencies', 0) or 0),
-                'total_dependents': int(row.get('total_dependents', 0) or 0),
-            }
-    return counts
 
 
 def load_missing_object_references(reports_dir):

@@ -3,7 +3,7 @@
 ## On Entry
 
 Tell the user which view is being worked on:
-> **Migrating view: `<name>`** — I'll apply any known fix rules, deploy it to Snowflake, and validate it returns matching data.
+> **Migrating view: `<name>`.** I'll apply any known fix rules, deploy it to Snowflake, and validate it returns matching data.
 
 > **Entry:** Called from the parent dispatch loop with a specific view (`name` from `next_object()`). If you don't have one, call `next_object()`.
 
@@ -32,7 +32,7 @@ For each matched rule where `replacement_mode = 'regex'`:
 - Write the updated file
 
 For rules where `replacement_mode = 'ai'`:
-- **Present to the user for approval** — read the rule's `ai_context`, show the proposed fix, apply only if approved
+- **Present to the user for approval.** Read the rule's `ai_context`, show the proposed fix, apply only if approved.
 
 ## Step 3: Deploy
 
@@ -40,7 +40,7 @@ For rules where `replacement_mode = 'ai'`:
 deploy(object_name="<schema>.<view_name>")
 ```
 
-If it fails, go back to **Step 1** — read → fix → redeploy. Continue until it deploys successfully.
+If it fails, go back to **Step 1** (read, fix, redeploy). Continue until it deploys successfully.
 
 ## Step 4: Validate
 
@@ -66,6 +66,8 @@ If validation fails, report the differences to the user.
 ## Step 5: Return
 
 Tell the user:
-> **View `<name>` deployed** — Validation <passed/failed>: <row_count> rows, <differences if any>.
+> **View `<name>` deployed** in `<duration>`. Validation `<passed/failed>`: `<row_count>` rows.
+> *If differences:* `<differences>`.
+> AI-mode rules applied: `<list or "none">`.
 
 Return control to the parent dispatch loop.

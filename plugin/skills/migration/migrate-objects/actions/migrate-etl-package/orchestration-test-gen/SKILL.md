@@ -32,7 +32,7 @@ This sub-skill expects:
 - Python 3.11+ installed
 - The source definition file must be accessible and readable
 - Active Snowflake connection with a warehouse configured
-- The `etl_configuration/` directory must exist at `<CONVERTED_OUTPUT>/Output/SnowConvert/ETL/etl_configuration/`
+- The `etl_configuration/` directory must exist at `<CONVERTED_OUTPUT>/ETL/etl_configuration/` (SnowConvert output root is typically the project `snowflake/` directory; legacy trees may use `Output/SnowConvert/ETL/etl_configuration/`)
 - **Snowflake privileges**: `CREATE TABLE`, `CREATE FUNCTION`, and `CREATE PROCEDURE` on a user-provided database and schema
 
 ### Output Location

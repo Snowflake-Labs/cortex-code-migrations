@@ -20,7 +20,7 @@ This skill is designed for interactive use:
 | Capability | Description |
 |------------|-------------|
 | 📊 **View Reports** | After analysis, an interactive HTML report is generated that you can explore |
-| 🔄 **Iterate & Refine** | Ask to adjust results - change wave sizes, prioritize objects, or relocate items |
+| 🔄 **Iterate & Refine** | Ask to adjust results - change wave sizes or prioritize objects |
 | 🎯 **Set Goals Upfront** | Specify your preferences before analysis (e.g., number of waves, priority objects) |
 
 ## Getting Started
@@ -275,11 +275,6 @@ Use prioritization:
 Prioritize *CriticalProcess* objects to appear in Wave 1
 ```
 
-Or relocate after generation:
-```
-Move dbo.CriticalTable to Wave 1
-```
-
 ### "I have too many waves"
 
 Increase wave size:
@@ -289,7 +284,7 @@ Regenerate with larger waves - 60-100 objects each
 
 ### "Objects with circular dependencies"
 
-Review the `cycles.txt` output and consider:
+Review the `sccs` section of `waves_analysis_<timestamp>.json` and consider:
 - Schema refactoring
 - Deploying circular dependency groups together
 - Manual intervention for complex cases

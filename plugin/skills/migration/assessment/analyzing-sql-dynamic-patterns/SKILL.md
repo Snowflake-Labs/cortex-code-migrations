@@ -1,6 +1,6 @@
 ---
 name: sql-dynamic-pattern-analyzer
-description: Analyzes Dynamic SQL occurrences from SnowConvert issues, classifies patterns, scores complexity, and records migration considerations. Use for SQL Server or Redshift to Snowflake migrations. Driven entirely by `scai assessment sql-dynamic`; no custom scripts.
+description: Analyzes Dynamic SQL occurrences from SnowConvert issues, classifies patterns, scores complexity, and records migration considerations. Use for SQL Server, Redshift, Oracle, or Teradata to Snowflake migrations. Driven entirely by `scai assessment sql-dynamic`; no custom scripts.
 parent_skill: assessment
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -8,6 +8,38 @@ license: Proprietary. See License-Skills for complete terms
 # Analyzing SQL Dynamic Patterns
 
 Analyzes Dynamic SQL occurrences flagged by SnowConvert (issue code `SSC-EWI-0030`), classifies them against a dialect-specific pattern catalog, scores complexity, and records migration considerations. All operations go through the `scai assessment sql-dynamic` command — there are no Python helpers, no CSV/JSON scripts, no bash loops.
+
+## Sub-Agent Mode
+
+When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, the parent provides a context block with the fields below. The `review_mode` field controls whether the per-occurrence review loop runs.
+
+| Field | Required | Notes |
+|---|---|---|
+| `project_dir` | yes | absolute path to the SCAI project root |
+| `output_dir` | yes | typically `<project_dir>/assessment/json` |
+| `review_mode` | yes | `generate-only`, `auto-review-all`, or `skip` |
+
+**On entry:** call the `configure` MCP tool with `project_dir` from the context block. Snowflake credentials are not required — `scai assessment sql-dynamic` reads only local CSVs and source files.
+
+**Branching by `review_mode`:**
+
+- `generate-only` — run only `scai assessment sql-dynamic generate` (Workflow Step 1) and return. The output JSON will contain `PENDING` occurrences; that is expected.
+- `auto-review-all` — generate, then loop `show-code-unit` → analyze → `update --status REVIEWED` for **every** PENDING occurrence (Workflow Steps 2–6). Run `stats` at the end and confirm zero PENDING. The single-record / unique-analysis rule from [Critical Rules](#critical-rules) (NO BATCH UPDATES) still applies — each occurrence gets its own analysis.
+- `skip` — return immediately with `"status": "skipped"`. The parent should not have dispatched in this case; this branch is defensive.
+
+**On completion**, return **JSON only**:
+
+```json
+{
+  "sub_skill": "analyzing-sql-dynamic-patterns",
+  "status": "ok",
+  "output_json": "<abs path to sql_dynamic_analysis.json>",
+  "summary": "<one-line: total occurrences, REVIEWED count, PENDING count>",
+  "error": null
+}
+```
+
+On `skip`: `"status": "skipped"`, `"output_json": null`. On failure: `"status": "error"`, `"error": "<message>"`.
 
 ## Critical Rules
 
@@ -28,15 +60,19 @@ Analyzes Dynamic SQL occurrences flagged by SnowConvert (issue code `SSC-EWI-003
 **CRITICAL FIRST STEP:** Before classifying patterns, determine the source platform.
 
 **Detection methods:**
-1. Check `TopLevelCodeUnits.*.csv` — `SourceLanguage` column (e.g. `Transact` for SQL Server, `RedShift` for Redshift).
+1. Check `TopLevelCodeUnits.*.csv` — `SourceLanguage` column (e.g. `Transact` for SQL Server, `RedShift` for Redshift, `Oracle` for Oracle, `Teradata` for Teradata).
 2. Examine code syntax in the procedure source (visible in the analysis JSON):
    - **SQL Server indicators:** `sp_executesql`, `EXEC(@sql)`, `QUOTENAME()`, `sys.*` catalog views.
    - **Redshift indicators:** `EXECUTE ... USING`, `QUOTE_IDENT()`, `QUOTE_LITERAL()`, `pg_catalog.*`, `plpgsql` functions.
+   - **Oracle indicators:** `EXECUTE IMMEDIATE`, `DBMS_SQL.*`, `DBMS_ASSERT.*`, `ALL_*`/`USER_*`/`DBA_*` catalog views, `PRAGMA AUTONOMOUS_TRANSACTION`, `:varname` named bind variables, `@dblink` references.
+   - **Teradata indicators:** `REPLACE PROCEDURE ... BEGIN ... END`, `EXECUTE IMMEDIATE <sql> USING ...` with positional `?` placeholders, `DBC.TablesV` / `DBC.ColumnsV` / `DBC.DatabasesV` / `DBC.IndicesV` catalog views, `REPLACE MACRO` / `EXEC macro_name(...)`, `VOLATILE TABLE`, `MULTISET` / `SET` table semantics, `SET QUERY_BAND`, BTEQ `&variable` substitution and `BT` / `ET` transaction control.
 3. Review source file extensions and DDL: `.sql`, `.prc`, `.fnc`.
 
 **Pattern catalog selection:**
 - **SQL Server → Snowflake:** `reference/PATTERNS_TRANSACT.md`
 - **Redshift → Snowflake:** `reference/PATTERNS_REDSHIFT.md`
+- **Oracle → Snowflake:** `reference/PATTERNS_ORACLE.md`
+- **Teradata → Snowflake:** `reference/PATTERNS_TERADATA.md`
 
 ⚠️ Always confirm the source platform with the user if it is unclear. Pattern definitions differ significantly between platforms.
 
@@ -112,6 +148,8 @@ scai assessment sql-dynamic show <analysis.json> --id <N>
 **Reference per dialect (must read before classifying):**
 - **SQL Server migrations** → `reference/PATTERNS_TRANSACT.md`
 - **Redshift migrations** → `reference/PATTERNS_REDSHIFT.md`
+- **Oracle migrations** → `reference/PATTERNS_ORACLE.md`
+- **Teradata migrations** → `reference/PATTERNS_TERADATA.md`
 
 ⚠️ Pick the correct catalog based on the source platform (see [Source Platform Detection](#source-platform-detection)).
 
@@ -204,7 +242,11 @@ Each `--notes` value must be a JSON object with the three required keys below:
 
 - `reference/PATTERNS_TRANSACT.md` — pattern catalog for SQL Server → Snowflake migrations.
 - `reference/PATTERNS_REDSHIFT.md` — pattern catalog for Redshift → Snowflake migrations.
+- `reference/PATTERNS_ORACLE.md` — pattern catalog for Oracle → Snowflake migrations.
+- `reference/PATTERNS_TERADATA.md` — pattern catalog for Teradata → Snowflake migrations.
 
 **Platform selection:**
 - Use `PATTERNS_TRANSACT.md` for SQL Server sources.
 - Use `PATTERNS_REDSHIFT.md` for Redshift sources.
+- Use `PATTERNS_ORACLE.md` for Oracle sources.
+- Use `PATTERNS_TERADATA.md` for Teradata sources.

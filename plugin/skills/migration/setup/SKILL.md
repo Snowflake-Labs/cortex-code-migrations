@@ -13,7 +13,7 @@ Tell the user:
 
 ## Routing
 
-Use `routing` from the migration_status tool output to follow ONE path:
+Use `routing` from `migration_status()` tool output to follow ONE path:
 
 ---
 
@@ -21,16 +21,80 @@ Use `routing` from the migration_status tool output to follow ONE path:
 
 **When:** `routing.project_exists` = false
 
-**Step A.1: Ask about source connection**
+**Step A.1: Configure project directory**
+
+Use `directory_empty` from the `migration_status` response:
+
+- If `directory_empty` is **false**, tell the user:
+  > This directory isn't empty, so we can't initialize a project here. Would you like to create one in a new subdirectory?
+
+  Suggest `<current_dir>/<database>-migration` or let the user pick. Once confirmed, call `configure(project_dir=<new_path>)`.
+
+- If `directory_empty` is **true**, confirm with the user:
+  > I'll use `<project_dir>` for the migration project. Can you confirm?
+
+  If the user wants a different location, call `configure(project_dir=<new_path>)`. Otherwise, continue with the configured `<project_dir>`.
+
+**Step A.2: Choose source dialect**
+
+**Source dialect** — if `source_language` is not set yet, use `ask_user_question` (`multiSelect = false`):
+   > "What source database system are you migrating from?"
+   > 1. **SQL Server**
+   > 2. **Redshift**
+   > 3. **Teradata**
+   > 4. **Oracle**
+
+These are the 4 key workstreams, but the user might choose "Something else".
+
+Match the response to this table:
+
+| User choice | `source_language` |
+|-------------|-------------------|
+| SQL Server | `SqlServer` |
+| Redshift | `Redshift` |
+| Teradata | `Teradata` |
+| Oracle | `Oracle` |
+| Sybase IQ | `Sybase` |
+| Azure Synapse | `synapse` |
+| Spark SQL | `Spark` |
+| Databricks SQL | `Databricks` |
+| BigQuery | `BigQuery` |
+| PostgreSQL | `Postgresql` |
+| Greenplum | `Greenplum` |
+| Netezza | `Netezza` |
+| Vertica | `Vertica` |
+| Hive | `Hive` |
+| IBM DB2 | `Db2` |
+
+Call `configure(source_language=<chosen dialect>)` to initialize the project and return routing metadata.
+
+The `configure` response includes **user_overview** and `project_type` — YOU MUST present this ENTIRELY and EXACTLY to the user before moving on. DO NOT synthesize, just print it for the user.
+
+If the latest `configure` response showed `project_type: code_conversion_only`, load `../code-conversion-only/SKILL.md`. **DO NOT GO TO ANY OTHER STEP**.
+
+If the latest `configure` response showed `project_type: full_migration`, continue to Step A.3.
+
+**Step A.3: Choose entry mode**
+
+Ask the user:
+> "Are you starting a new migration, or do you already have source SQL **and** pre-converted Snowflake SQL?"
+> 1. **Starting fresh** — continue with the steps below
+> 2. **Existing migration** — load `./midway-entry/SKILL.md` (SQL Server and Redshift only, Teradata and Oracle coming soon)
+
+If the user picks **Existing migration**, load `./midway-entry/SKILL.md` and stop here. Otherwise continue.
+
+**Step A.4: Configure Snowflake connection**
+
+If `snowflake_connection` is not set, confirm with the user that the active SQL connection should be used for Snowflake queries. Once confirmed, call `configure(snowflake_connection=<name>)`.
+
+**Step A.5: Set up source connection**
 
 Ask the user:
 > "Will you need to connect to your source system? Some common reasons are extracting code for conversion, migrating data, and testing functional equivalence."
 > 1. **Yes** — set up a source connection
 > 2. **No** — skip for now (you can set one up later)
 
-If **No** → skip to Step A.3.
-
-**Step A.2: Set up source connection**
+If **No** → skip to Step A.6.
 
 Call `configure(needs_source_connection=true)` to list existing source connections for the configured dialect.
 
@@ -41,11 +105,11 @@ If `existing_connections` listed connections, ask:
 
 If `existing_connections` was `none`, go directly to "Create new connection".
 
-**Step A.2a: If "Use existing connection"**
+**Step A.5a: If "Use existing connection"**
 
 Present the connections returned by `configure` and ask user to pick.
 
-**Step A.2b: If "Create new connection"**
+**Step A.5b: If "Create new connection"**
 
 Load the connection sub-skill for `<SOURCE_DIALECT>`:
 - `sqlserver` → `../connection/sql-server-connection/SKILL.md`
@@ -53,32 +117,19 @@ Load the connection sub-skill for `<SOURCE_DIALECT>`:
 - `oracle` → `../connection/oracle-connection/SKILL.md`
 - `teradata` → `../connection/teradata-connection/SKILL.md`
 
-**Step A.3: Configure project defaults (shared vs local)**
+**Step A.6: Ask about data migration and validation**
 
-Load `./configure-defaults/SKILL.md`
-
-This prompt must happen after project creation and connection registration so the user can choose:
-
-1. **Shared defaults** in `.scai/config/project.yml` (team/project settings, intended to be committed)
-2. **Local defaults** in `.scai/config/project.local.yml` (`--local`, workspace-specific, typically gitignored)
-3. **Skip for now**
-
-**Step A.4: Ask about data migration and validation**
-
-**Skip this step if `<SOURCE_DIALECT>` is `oracle` or `teradata`** — data migration is not supported for these sources. Go directly to Step A.5.
-
-For `sqlserver` and `redshift`, ask the user:
+Ask the user:
 > "Will you also need to migrate data from the source database into Snowflake?"
 >
-> 1. **Yes — set up data migration and data validation** — First load `./data-infrastructure/SKILL.md` to configure shared infrastructure (compute pool, worker config, source database/schema). Then load `./data-migration/SKILL.md` for migration-specific setup (approach, workflow config, target database). Then load `./data-validation/SKILL.md` for validation-specific setup (scope, validation config, service verification). After all three complete, return here and continue to Step A.5.
-> 2. **Yes — set up data migration only** — First load `./data-infrastructure/SKILL.md` to configure shared infrastructure. Then load `./data-migration/SKILL.md` for migration-specific setup. After setup completes, return here and continue to Step A.5.
-> 3. **No** — Continue to Step A.5.
+> 1. **Yes — configure shared data infrastructure now** — Read `./data-infrastructure/SKILL.md` and follow the instructions. Afterwards, continue to Step A.7.
+> 2. **No** — Continue to Step A.7.
 
-**Step A.5: Register source code**
+**Step A.7: Register source code**
 
-Go to Path B: Project Exists, No Source Code
+Load `../register-code-units/SKILL.md`. When registration completes, return here and continue to Step A.8.
 
-**Step A.6: Convert source code**
+**Step A.8: Convert source code**
 
 Load `../convert/SKILL.md`
 
@@ -112,8 +163,7 @@ Offer options:
 2. **Re-convert** → Load `../convert/SKILL.md`
 3. **Review converted** → Show contents of `snowflake/` and `artifacts/`
 4. **Skip to migrate objects** → Load `../migrate-objects/SKILL.md`
-5. **Set up data migration** → Load `./data-infrastructure/SKILL.md` first, then `./data-migration/SKILL.md`
-6. **Set up data validation** → Load `./data-infrastructure/SKILL.md` first (no-op if already configured), then `./data-validation/SKILL.md`
+5. **Set up data migration and validation** → Load `./data-infrastructure/SKILL.md`
 
 ---
 
@@ -125,10 +175,10 @@ Offer options:
 | 1 | redshift-connection | `../connection/redshift-connection/SKILL.md` |
 | 1 | oracle-connection | `../connection/oracle-connection/SKILL.md` |
 | 1 | teradata-connection | `../connection/teradata-connection/SKILL.md` |
-| 2 | configure-defaults | `./configure-defaults/SKILL.md` |
 | — | midway-entry (existing project with pre-converted code; SQL Server/Redshift only) | `./midway-entry/SKILL.md` |
 | 3 | register-code-units | `../register-code-units/SKILL.md` |
 | 4 | convert | `../convert/SKILL.md` |
+| 4 | code-conversion-only | `../code-conversion-only/SKILL.md` |
 | 5 | snowconvert-assessment | `../assessment/SKILL.md` |
 | — | data-infrastructure-setup | `./data-infrastructure/SKILL.md` |
 | — | data-migration-setup | `./data-migration/SKILL.md` |
