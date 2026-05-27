@@ -149,7 +149,7 @@ ORDER BY Statement;
 GO
 ```
 
-Export the results to CSV, then create test YAML files for each procedure in `artifacts/<database>/<schema>/procedure/<ProcedureName>/test/<procedure_name>.yml`. See [baseline-capture/QUERY_LOGS.md](../baseline-capture/QUERY_LOGS.md) for the test YAML format.
+Export the results to CSV, then feed it to `scai test seed --execution-log <path>` to populate test YAML stubs. See [`references/step-based-yaml.md`](step-based-yaml.md) for the YAML schema.
 
 ## Stop Query Logging
 

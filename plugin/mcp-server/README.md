@@ -10,18 +10,24 @@ Uses an embedded Python interpreter (via PyO3) for Snowflake connectivity throug
 
 | Tool | Description |
 |------|-------------|
-| `configure` | Set session defaults: `project_dir`, `source_connection`, `snowflake_connection`, `snowflake_database`. Call once at session start. |
+| `configure` | Set session defaults: `project_dir`, `source_connection`, `snowflake_connection`, `snowflake_database`, `dashboard_port`. Call once at session start. |
+
+### Local dashboard (opt-in)
+
+The server can host a small read-only HTML dashboard on `127.0.0.1` (no data leaves the host). It is **off by default** — enable it one of three ways:
+
+- **Per project (persisted):** call `configure(dashboard_port=-1)` for the default port `7878`, or `configure(dashboard_port=<port>)` for an explicit port. The chosen port is saved to `.scai/config/plugin.yml` and the dashboard auto-starts on every future MCP session for that project. To opt out later, remove `dashboard_port` from `plugin.yml`.
+- **One-shot, no persistence:** set `MIGRATION_DASHBOARD_ADDR=127.0.0.1:7878` (or any `host:port`) before launching the server. The env var is checked once at startup and never written to disk.
+- **Idempotent:** repeat `configure(dashboard_port=...)` calls report the existing URL instead of re-binding. Bind failures (e.g. port already in use) are surfaced in the `configure` response, so the agent can offer a different port.
 
 ### Local (no Snowflake connection needed)
 
 | Tool | Description |
 |------|-------------|
-| `migration_status` | Full project status from registry (by-type counts, stage totals, routing flags) |
+| `migration_status` | Project status. `mode="summary"` (default) returns by-type counts, stage totals, routing flags. `mode="next_objects"` pulls main and returns the next ready objects in the current wave plus any of the current user's open claims. `mode="collaborators"` returns objects other Snowflake users are currently working on (latest open claim per object, where the claimant isn't the current user). |
+| `transition_status` | Drive the per-object git+claim lifecycle. `status="start"` checks out a feature branch, fetches and rebases onto `<git_remote_name>/<git_main_branch>`, and claims the object. `status="done"` commits, fast-forward-merges into main, pushes, and marks the claim completed. Returns structured JSON errors on dirty tree, missing config, or merge conflict. |
 | `update_registry` | Update registry fields |
-| `update_testing` | Update testing status from test results |
 | `query_registry` | Query the project registry with SQL-like filters |
-| `next_object` | Get next procedure/function to migrate (dependency-aware) |
-| `testing_progress` | Testing progress summary (passed, failed, ready, blocked) |
 
 ### Rule engine (need Snowflake connection)
 
@@ -41,8 +47,7 @@ Uses an embedded Python interpreter (via PyO3) for Snowflake connectivity throug
 |------|-------------|
 | `deploy` | Deploy objects via `scai code deploy` (single `object_name` or `where` filter) |
 | `query_source` | Run a SQL query against the source database via `scai query` |
-| `migrate_data` | Migrate data from source to Snowflake (async, background job). Uses SPCS orchestrator + worker when `configure(compute_pool=...)` is set and a workflow config exists. |
-| `migrate_data_status` | Check status of a data migration job. Includes per-table progress in `progress`. |
+| `migrate_data` | Two-mode tool. `mode="setup"` generates a per-`where` workflow YAML at `artifacts/data_migration/workflows/<hash>.yaml` (forwarding `where` to scai's `--where`) and persists the other params under `data_migration:` in `plugin.yml` as defaults; the agent reviews/edits before running. `mode="run"` takes the `workflow_path` and starts the migration (orchestrator + worker + cloud-migrate) in the background. |
 | `validate_data` | Validate migrated data between source and Snowflake. Uses cloud validation (SPCS) when configured. |
 | `validate_data_status` | Check status of a data validation job. Includes per-table progress from the SPCS orchestrator. |
 

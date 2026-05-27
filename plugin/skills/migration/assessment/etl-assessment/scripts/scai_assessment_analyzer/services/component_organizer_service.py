@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pathlib import PureWindowsPath
 from typing import Dict, Optional, Tuple
 
 from ..models import Component, DataFlow, PackageAnalysis
@@ -32,7 +33,9 @@ class ComponentOrganizerService:
         package_path = component.file_name
 
         if package_path not in packages:
-            package_name = package_path.split('/')[-1]
+            # `file_name` may arrive in POSIX or Windows form; PureWindowsPath
+            # treats both `/` and `\\` as separators on every OS.
+            package_name = PureWindowsPath(package_path).name or package_path
             packages[package_path] = PackageAnalysis(
                 name=package_name,
                 path=package_path,

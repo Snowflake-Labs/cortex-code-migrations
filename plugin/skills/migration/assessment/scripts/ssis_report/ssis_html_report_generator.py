@@ -1915,10 +1915,12 @@ class HTMLReportGenerator:
         if generate_package_pages:
             packages_dir = output_dir / "packages"
             package_count = 0
+            # `dag_base_path` is interpolated into HTML href= attributes, which
+            # require forward slashes regardless of OS.
             dag_base_path = os.path.relpath(
                 self.json_path.parent.resolve(),
                 packages_dir.resolve()
-            )
+            ).replace(os.sep, '/')
             
             for package_csv_row in self.packages:
                 package_path = package_csv_row.get('path', '')

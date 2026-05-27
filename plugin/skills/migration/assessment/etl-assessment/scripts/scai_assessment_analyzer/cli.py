@@ -91,52 +91,51 @@ def handle_etl_commands():
                         if df_dag:
                             print(df_dag)
             
-            # Execute extraction commands
-            # TODO: This is a temporary solution to extract the data from the DTSX file, we need to find a better way to do this
-            import subprocess
-            
-            def run_grep(pattern, file_path, after=10, before=0, head=None):
-                """Run grep and return output."""
+            # Snippets pulled directly from the .dtsx XML for the LLM context.
+            # Equivalent to `grep -B <before> -A <after> <pattern>` but avoids
+            # the grep binary, which isn't on Windows by default.
+            def find_with_context(pattern, file_path, after=10, before=0, head=None):
                 try:
-                    cmd = ['grep']
-                    if before > 0:
-                        cmd.extend(['-B', str(before)])
-                    if after > 0:
-                        cmd.extend(['-A', str(after)])
-                    cmd.extend([pattern, file_path])
-                    
-                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-                    output = result.stdout
-                    
-                    if head and output:
-                        lines = output.split('\n')[:head]
-                        output = '\n'.join(lines)
-                    
-                    return output if output else "(No matches found)"
-                except subprocess.TimeoutExpired:
-                    return "(Command timed out)"
-                except Exception as e:
+                    with open(file_path, encoding='utf-8', errors='replace') as fh:
+                        lines = fh.read().splitlines()
+                except OSError as e:
                     return f"(Error: {e})"
+
+                emitted = []
+                last_emitted = -1
+                for i, line in enumerate(lines):
+                    if pattern not in line:
+                        continue
+                    start = max(last_emitted + 1, i - before)
+                    end = min(len(lines), i + after + 1)
+                    emitted.extend(lines[start:end])
+                    last_emitted = end - 1
+
+                if not emitted:
+                    return "(No matches found)"
+                if head:
+                    emitted = emitted[:head]
+                return "\n".join(emitted)
             
             print("\n" + "=" * 70)
             print("VARIABLES")
             print("=" * 70)
-            print(run_grep('<DTS:Variables>', dtsx_path, after=100, head=150))
-            
+            print(find_with_context('<DTS:Variables>', dtsx_path, after=100, head=150))
+
             print("\n" + "=" * 70)
             print("SQL STATEMENTS")
             print("=" * 70)
-            print(run_grep('SQLTask:SqlStatementSource=', dtsx_path, after=10, before=10, head=300))
-            
+            print(find_with_context('SQLTask:SqlStatementSource=', dtsx_path, after=10, before=10, head=300))
+
             print("\n" + "=" * 70)
             print("CONNECTION MANAGERS")
             print("=" * 70)
-            print(run_grep('<DTS:ConnectionManagers>', dtsx_path, after=50, head=200))
-            
+            print(find_with_context('<DTS:ConnectionManagers>', dtsx_path, after=50, head=200))
+
             print("\n" + "=" * 70)
             print("SCRIPT TASKS")
             print("=" * 70)
-            print(run_grep('DTS:ExecutableType="Microsoft.ScriptTask"', dtsx_path, before=5, after=50))
+            print(find_with_context('DTS:ExecutableType="Microsoft.ScriptTask"', dtsx_path, before=5, after=50))
             
             return
         elif command == 'update' and len(sys.argv) > 4:

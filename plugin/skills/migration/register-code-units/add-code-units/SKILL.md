@@ -48,12 +48,18 @@ scai code add -i <INPUT_PATH> --overwrite --json
 
 ### Step 3: Verify Files Were Added
 
-```bash
-# Check source files were processed
-find source/ -name "*.sql" | head -20
+Check that `source/` contains the expected `.sql` files and report a count. Use whichever portable form fits the host:
 
-# Count total files
+```bash
+# macOS / Linux
+find source/ -name "*.sql" | head -20
 find source/ -name "*.sql" | wc -l
+```
+
+```powershell
+# Windows PowerShell
+Get-ChildItem -Recurse -Filter *.sql source/ | Select-Object -First 20
+(Get-ChildItem -Recurse -Filter *.sql source/).Count
 ```
 
 ## Output Structure

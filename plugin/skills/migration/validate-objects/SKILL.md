@@ -32,3 +32,5 @@ Call `migration_status()` and tell the user:
 > **Validation complete** — <validated_count>/<total> tables validated. <passed> passed, <failed> failed. <details of failures if any>.
 
 If the wave is complete, the next `configure()` call will auto-advance to the next wave.
+
+> **Note:** the per-wave cost-saving teardown prompt is handled inside [actions/validate_tables.md](actions/validate_tables.md) Step 4. When `migration_status()` shows no remaining waves (all-waves-done), invoke [../data-infrastructure/teardown/SKILL.md](../data-infrastructure/teardown/SKILL.md) unconditionally before returning to the parent.

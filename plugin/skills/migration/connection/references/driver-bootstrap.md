@@ -1,6 +1,6 @@
 # Driver Bootstrap (Oracle / Teradata)
 
-Canonical flow for resolving a NuGet `.NET` driver before any `scai` command that talks to Oracle or Teradata (`scai connection test`, `scai code extract`, etc.).
+Canonical flow for resolving a NuGet `.NET` driver before any operation that talks to Oracle or Teradata. The first such operation is typically the MCP `configure` tool call (which runs `scai connection test` internally), or a direct `scai code extract` if connection setup is already done.
 
 **Use this any time a `.nupkg` driver is required.** Consumer skills (`oracle-connection`, `teradata-connection`, `extract-code-units`) should link here instead of duplicating the flow.
 
@@ -27,7 +27,13 @@ Resolve these once for the dialect you are working with, then substitute them in
 SCAI caches the driver at `<cache_dir>` and reuses it machine-wide. If a `.nupkg` or `.dll` is present, the driver is already resolved and no further bootstrap is needed — skip directly to **1e**.
 
 ```bash
+# macOS / Linux
 ls <cache_dir>*.nupkg <cache_dir>*.dll 2>/dev/null
+```
+
+```powershell
+# Windows PowerShell — <cache_dir> uses %USERPROFILE%\.snowflake\... with backslashes
+Get-ChildItem -Path "<cache_dir>" -Filter *.nupkg,*.dll -ErrorAction SilentlyContinue
 ```
 
 If nothing is listed, continue to 1b.
@@ -61,7 +67,7 @@ Take **Branch A** (1c) on answer 1, **Branch B** (1d) on answer 2.
    ls <PATH_TO_NUPKG_OR_DLL>
    ```
 
-3. Record the path. The first SCAI command using `--driver-path <PATH>` (typically `connection test` in 1e) will copy it into `<cache_dir>` so subsequent commands can omit the flag.
+3. Record the path. The first call that uses the driver (typically the consuming skill's `configure(... driver_path=<PATH>)` in 1e) will copy it into `<cache_dir>` so subsequent calls can omit the path.
 
 ### 1d. Branch B — download the driver
 
@@ -77,27 +83,35 @@ curl -L -o <driver_file> <nuget_url>
 curl.exe -L -o <driver_file> <nuget_url>
 ```
 
-Note the full path to the resulting `.nupkg`. The first SCAI command using `--driver-path <PATH>` will copy it into `<cache_dir>`.
+Note the full path to the resulting `.nupkg`. The first call that uses the driver will copy it into `<cache_dir>`.
 
-### 1e. First SCAI invocation
+### 1e. First driver-using invocation
 
-Pick the appropriate command depending on what the consuming skill needs (`connection test`, `code extract`, etc.) and include `--driver-path <PATH>` if Branch A or B was taken:
+The consuming skill is responsible for the actual call. For `oracle-connection` / `teradata-connection`, this is the `configure` MCP tool call that triggers the connection test:
 
-```bash
-# After Branch A / B (driver not yet cached)
-scai connection test -l <dialect> -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG> --json
+- **After Branch A / B (driver not yet cached):**
 
-# After 1a hit (driver already cached)
-scai connection test -l <dialect> -s <CONNECTION_NAME> --json
-```
+  ```
+  configure(source_connection=<CONNECTION_NAME>, driver_path=<PATH_TO_NUPKG>)
+  ```
 
-Once the cache is populated, every subsequent `scai` command for `<dialect>` — even in other projects — can omit `--driver-path`.
+  The MCP server invokes `scai connection test --driver-path <PATH>` internally, which copies the driver into `<cache_dir>`.
+
+- **After 1a hit (driver already cached):**
+
+  ```
+  configure(source_connection=<CONNECTION_NAME>)
+  ```
+
+For other consumers (e.g., `scai code extract` invoked directly outside the configure flow), include `--driver-path <PATH>` on the first such command after Branch A or B.
+
+Once the cache is populated, every subsequent operation for `<dialect>` — even in other projects — can omit the path.
 
 ## Failure modes
 
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
-| `Driver not found` | `--driver-path` was omitted on first use, or the cached file is corrupt | Re-resolve through 1a–1e, passing `--driver-path` on the first invocation |
+| `Driver not found` | `driver_path` was omitted on first use, or the cached file is corrupt | Re-resolve through 1a–1e, passing `driver_path` on the first invocation |
 | `curl: (22) … 404` | NuGet feed temporarily unreachable | Retry, or fall back to Branch A with a manually downloaded copy |
 | Path provided in Branch A is wrong | Typo / file moved | Re-validate with `ls <PATH>` and re-prompt |
 
@@ -106,5 +120,5 @@ Once the cache is populated, every subsequent `scai` command for `<dialect>` —
 Before continuing in the consuming skill, confirm:
 
 - [ ] Driver is resolved via 1a (cached), 1c (user path), or 1d (downloaded)
-- [ ] If 1c or 1d, the next `scai` command will include `--driver-path <PATH>`
+- [ ] If 1c or 1d, the next driver-using call will include `driver_path=<PATH>` (or `--driver-path` for direct scai commands)
 - [ ] The user has not been asked to do anything they did not opt into (no silent downloads)

@@ -59,6 +59,8 @@ BINARY_URL="${BLOB_BASE}/migration-mcp-server-v${VERSION}-${PLATFORM}"
 NEEDS_DOWNLOAD=true
 if [ -f "$BIN" ] && [ -f "$BIN_DIR/.version" ]; then
   INSTALLED_VERSION=$(cat "$BIN_DIR/.version" 2>/dev/null | tr -d '[:space:]')
+  # "dev" is the literal sentinel that crates/mcp-server/build-plugin.sh
+  # writes into .version after a local build; never produced by CI.
   if [ "$INSTALLED_VERSION" = "dev" ]; then
     NEEDS_DOWNLOAD=false
     log "MCP server binary is a local dev build — skipping download"

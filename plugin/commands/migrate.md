@@ -18,23 +18,28 @@ Match the user's request to the most relevant skill and load it.
 
 ### Setup & onboarding
 - **setup** — full setup, steps 1–5: connect, init, register, convert, assess → `./setup/SKILL.md`
-  - **midway-entry** — existing project with source + pre-converted Snowflake SQL (SQL Server / Redshift only) → `./setup/midway-entry/SKILL.md`
-  - **data-migration-setup** — configure data migration: orchestrator, worker, workflow, Iceberg → `./setup/data-migration/SKILL.md`
+  - **midway-entry** — existing project with source + pre-converted Snowflake SQL (SQL Server / Redshift only) → `./setup/midway-entry.md`
   - **data-validation-setup** — configure cloud data validation: schema, metrics, row-level checks → `./setup/data-validation/SKILL.md`
+  - **data-infrastructure-teardown** — suspend SPCS service + compute pool, stop local worker (cost-saving) → `./data-infrastructure/teardown/SKILL.md`
+
+### Data infrastructure (reusable actions)
+- **data-infrastructure** — shared infrastructure for data migration and validation: compute pools, workers, network access → `./data-infrastructure/SKILL.md`
+  - **compute-pool-setup** — create and configure a Snowpark Container Services compute pool → `./data-infrastructure/compute-pool-setup/SKILL.md`
+  - **worker-local-setup** — install and start the worker on a user-managed machine (laptop, VM, or on-prem) → `./data-infrastructure/worker-local-setup/SKILL.md`
 
 ### Source code: register & convert
 - **register-code-units** — router for getting source code into the project → `./register-code-units/SKILL.md`
   - **extract-code-units** — extract DDL/code from a connected source database → `./register-code-units/extract-code-units/SKILL.md`
   - **add-code-units** — import local SQL files into the project → `./register-code-units/add-code-units/SKILL.md`
-- **convert** — convert source → Snowflake SQL via SnowConvert → `./convert/SKILL.md`
-  - **code-conversion-only** — convert local source files for code-conversion-only source systems → `./code-conversion-only/SKILL.md`
+- **convert** — convert source → Snowflake SQL via SnowConvert (incl. optional Power BI `.pbit` repointing) → `./convert/SKILL.md`
+  - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
   - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
 - **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
 
 ### Migration & validation
 - **migrate-objects** — deploy tables, views, functions, procedures wave-by-wave → `./migrate-objects/SKILL.md`
-  - **baseline-capture** — capture source proc/function output as test baselines → `./migrate-objects/baseline-capture/SKILL.md`
   - **migrate-etl-package** — phase-based ETL package fixer (invoke by name only) → `./migrate-objects/actions/migrate-etl-package/SKILL.md`
+  - **data-migration-setup** — choose approach, generate workflow YAML, create target database for `migrate_data` → `./migrate-objects/actions/data-migration/SKILL.md`
 - **validate-objects** — validate migrated data between source and Snowflake → `./validate-objects/SKILL.md`
 
 ### Rules

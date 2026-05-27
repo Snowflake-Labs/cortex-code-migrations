@@ -15,8 +15,15 @@
 
 """Data models for ETL assessment analysis"""
 
-from .component import Component
-from .issue import Issue
+import sys
+from pathlib import Path
+
+# Add shared scripts to path for snowconvert_reports
+_scripts_dir = str(Path(__file__).resolve().parents[4] / "scripts")
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+
+from snowconvert_reports import Issue, Component
 from .data_flow import DataFlow
 from .package import PackageAnalysis
 

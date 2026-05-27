@@ -126,15 +126,12 @@ scai connection add-redshift \
   --password <PASSWORD>
 ```
 
-### Step 4: Test the Connection
+### Step 4: Save and Test Source Connection
 
-```bash
-scai connection test -l redshift -c <CONNECTION_NAME> --json
-```
+Call the `configure` tool with `source_connection` set to `<CONNECTION_NAME>`. The MCP server runs `scai connection test` internally and only persists the connection if the test passes.
 
-**Expected:** "Status: Success" with connection details.
-
-**If test fails:** See `./references/REFERENCE.md` for detailed troubleshooting.
+- **On success:** the response includes `connection_test: ok`.
+- **On failure:** the tool returns an error containing the scai message. Surface it to the user, help them fix the issue, then re-run `configure(source_connection=<CONNECTION_NAME>)`. See `./references/REFERENCE.md` for detailed troubleshooting.
 
 **Common errors:**
 | Error | Cause | Solution |
@@ -143,16 +140,10 @@ scai connection test -l redshift -c <CONNECTION_NAME> --json
 | `database "X" does not exist` | Wrong database name | Verify database name on cluster |
 | `IAM authentication failed` | Invalid AWS credentials | Check access key ID and secret |
 
-### Step 5: Save Source Connection
-
-After a successful connection test, save the connection name to the session config so other tools can use it:
-
-Call the `configure` tool with `source_connection` set to the `<CONNECTION_NAME>` used above.
-
 ## CHECKPOINT
 
 Confirm with user:
-- [ ] Connection test passed
+- [ ] `configure` returned `connection_test: ok`
 - [ ] Connection appears in `scai connection list -l redshift --json`
 - [ ] Source connection saved to session config
 
@@ -177,7 +168,7 @@ Then return to the calling skill.
 | Add IAM provisioned | `scai connection add-redshift -c NAME --auth iam-provisioned-cluster --cluster-id CLUSTER --database DB --region REGION --user USER --access-key-id KEY --secret-access-key SECRET` |
 | Add IAM serverless | `scai connection add-redshift -c NAME --auth iam-serverless --workgroup WG --database DB --region REGION --access-key-id KEY --secret-access-key SECRET` |
 | Add standard auth | `scai connection add-redshift -c NAME --auth standard --host HOST --database DB --user USER --password PASS` |
-| Test connection | `scai connection test -l redshift -c NAME --json` |
+| Test connection | `configure(source_connection=NAME)` (runs the test internally) |
 | List connections | `scai connection list -l redshift --json` |
 | Set default | `scai connection set-default -l redshift -c NAME` |
 | Extract code | `scai code extract -s NAME --json` |

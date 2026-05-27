@@ -15,7 +15,7 @@ Tell the user:
 ## Prerequisites
 
 - Snowflake connection active with direct SQL ability
-- Session `configure`d with a Snowflake connection and database (see [../../setup/configure-defaults/SKILL.md](../../setup/configure-defaults/SKILL.md)). The `configure` MCP tool sets up the `RULE_ENGINE` schema automatically on first call.
+- Session `configure`d with a Snowflake connection and database. The `configure` MCP tool sets up the `RULE_ENGINE` schema automatically on first call.
 
 ## Setup (automatic)
 

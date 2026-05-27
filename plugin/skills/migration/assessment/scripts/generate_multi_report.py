@@ -72,6 +72,14 @@ except ImportError as e:
     print(f"Warning: SSIS report generator not available: {e}", file=sys.stderr)
     SSIS_SUPPORT = False
 
+# Informatica report generator (optional)
+try:
+    from informatica_report import generate_informatica_html_content
+    INFORMATICA_SUPPORT = True
+except ImportError as e:
+    print(f"Warning: Informatica report generator not available: {e}", file=sys.stderr)
+    INFORMATICA_SUPPORT = False
+
 
 def generate_ai_summary(summary: Dict, temp_staging: List, deprecated: List, testing: List) -> str:
     """Generate AI summary of the exclusion analysis"""
@@ -671,7 +679,7 @@ def load_waves_data(waves_json: Path, reports_dir: Path = None, issues_json_path
 
     try:
         # Generate the full waves HTML report to a temp file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.html', encoding='utf-8', delete=False) as tmp:
             tmp_path = Path(tmp.name)
 
         # Find issues-estimation.json if not provided
@@ -693,10 +701,14 @@ def load_waves_data(waves_json: Path, reports_dir: Path = None, issues_json_path
 
             # Use a dummy path if not found
             if not issues_json_path:
-                # Create a minimal issues JSON
-                issues_json_path = Path(tempfile.mktemp(suffix='.json'))
-                with open(issues_json_path, 'w') as f:
-                    json.dump({"Issues": [], "Severities": []}, f)
+                # Create a minimal issues JSON. NamedTemporaryFile (vs the
+                # deprecated tempfile.mktemp) avoids the well-known race and
+                # gives us a real file handle whose path we can pass on.
+                with tempfile.NamedTemporaryFile(
+                    mode='w', suffix='.json', encoding='utf-8', delete=False,
+                ) as fh:
+                    json.dump({"Issues": [], "Severities": []}, fh)
+                    issues_json_path = Path(fh.name)
 
         # Determine the correct reports_dir to pass (should include SnowConvert if it exists)
         reports_dir_to_use = reports_dir
@@ -983,7 +995,9 @@ def generate_multi_report(
     waves_json: Path = None,
     snowconvert_reports_dir: Path = None,
     registry_dir: Path = None,
-    ssis_json: Path = None
+    ssis_json: Path = None,
+    informatica_json: Path = None,
+    informatica_source_dir: Path = None
 ) -> None:
     """Generate multi-tab HTML report"""
 
@@ -1023,8 +1037,21 @@ def generate_multi_report(
         except Exception as e:
             print(f"Warning: Could not load SSIS data: {e}", file=sys.stderr)
     
-    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data:
-        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, or SSIS) must be provided")
+    # Load Informatica data
+    informatica_data = None
+    has_informatica = False
+    if informatica_json and INFORMATICA_SUPPORT:
+        print(f"Loading Informatica data from {informatica_json}...")
+        try:
+            informatica_data = load_json_data(informatica_json)
+            has_informatica = True
+            if not exclusion_json and not dynamic_sql_json and not waves_info and not ssis_data:
+                default_tab = 'informatica'
+        except Exception as e:
+            print(f"Warning: Could not load Informatica data: {e}", file=sys.stderr)
+    
+    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data:
+        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, or Informatica) must be provided")
     
     # Process exclusion data — schema produced by `scai assessment object-exclusion`
     # is the single source of truth; field names below match that schema directly.
@@ -1134,6 +1161,9 @@ def generate_multi_report(
         waves_info=waves_info,
         has_ssis=has_ssis,
         ssis_json=ssis_json if has_ssis else None,
+        has_informatica=has_informatica,
+        informatica_json=informatica_json if has_informatica else None,
+        informatica_source_dir=informatica_source_dir,
         output_file=output_file,
         dynamic_sql_meta=dynamic_sql_meta,
         exclusion_summary=exclusion_summary,
@@ -1177,6 +1207,9 @@ def generate_html_template(
     waves_info: Dict,
     has_ssis: bool,
     ssis_json: Path,
+    has_informatica: bool,
+    informatica_json: Path,
+    informatica_source_dir: Path,
     output_file: Path,
     dynamic_sql_meta: Dict,
     exclusion_summary: Dict,
@@ -1505,6 +1538,23 @@ def generate_html_template(
                     </div>
                 </div>
 
+                <div style="background: white; padding: 24px; border-radius: 12px; border: 1px solid #E2E8F0; transition: transform 0.2s; cursor: pointer;" 
+                     onclick="document.querySelector('.nav-link[data-tab=\\'informatica\\']').click()"
+                     onmouseover="this.style.borderColor='#29B5E8'; this.style.transform='translateY(-2px)'" 
+                     onmouseout="this.style.borderColor='#E2E8F0'; this.style.transform='translateY(0)'">
+                    <div style="width: 40px; height: 40px; background: #F0F9FF; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; font-size: 1.25rem;">
+                        5
+                    </div>
+                    <h3 style="margin: 0 0 8px 0; color: #102E46; font-size: 1.1rem;">Informatica Report</h3>
+                    <p style="color: #64748B; font-size: 0.9rem; line-height: 1.5; margin-bottom: 16px;">
+                        <strong>Goal:</strong> Assess ETL pipelines. <br>
+                        Analyze Informatica PowerCenter workflows and mappings for migration complexity, conversion readiness, and transformation patterns.
+                    </p>
+                    <div style="background: #F8FAFC; padding: 10px; border-radius: 6px; font-size: 0.85rem; color: #475569;">
+                        <strong>Key Insight:</strong> Review Informatica workflows for migration readiness.
+                    </div>
+                </div>
+
             </div>
 
             <!-- Missing Objects Section -->
@@ -1570,6 +1620,36 @@ def generate_html_template(
                 <div class="empty-state">
                     <h3>No Data Available</h3>
                     <p>SSIS assessment data was not provided. Please provide the SSIS JSON file using --ssis-json parameter.</p>
+                </div>
+            </div>
+        """
+    
+    # Generate Informatica HTML content
+    informatica_html = ""
+    informatica_js = ""
+    informatica_css = ""
+    if has_informatica and INFORMATICA_SUPPORT and informatica_json:
+        informatica_content, informatica_js, informatica_css = generate_informatica_html_content(informatica_json, output_html_path=output_file, source_dir=informatica_source_dir)
+        informatica_html = f"""
+            <!-- Informatica Report Tab -->
+            <div class="tab-content" :class="{{active: activeTab === 'informatica'}}">
+                {informatica_content}
+            </div>
+        """
+    else:
+        informatica_html = """
+            <div class="tab-content" :class="{active: activeTab === 'informatica'}">
+                <div style="margin-bottom: 32px;">
+                    <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
+                        Informatica Power Center Assessment
+                    </h1>
+                    <p style="color: #64748B; font-size: 1.1rem;">
+                        Comprehensive analysis of Informatica PowerCenter workflows and mappings for migration planning.
+                    </p>
+                </div>
+                <div class="empty-state">
+                    <h3>No Data Available</h3>
+                    <p>Informatica assessment data was not provided. Please provide the JSON file using --informatica-json parameter.</p>
                 </div>
             </div>
         """
@@ -3666,6 +3746,9 @@ def generate_html_template(
         
         /* SSIS report styles (scoped to #ssis-report) */
 {ssis_css}
+
+        /* Informatica report styles (scoped to #informatica-report) */
+{informatica_css}
         .empty-state {{
             text-align: center;
             padding: 60px 20px;
@@ -4643,6 +4726,15 @@ def generate_html_template(
                     <a @click="scrollToSection('#package-summary')" class="nav-sublink">Package Classification</a>
                     <a @click="scrollToSection('#not-supported')" class="nav-sublink">Component Breakdown</a>
                 </div>
+                <a @click="activeTab = 'informatica'" class="nav-link" data-tab="informatica" :class="{{active: activeTab === 'informatica'}}">
+                    Informatica Report
+                </a>
+                <div v-if="activeTab === 'informatica'" class="nav-sublist">
+                    <a @click="scrollToSection('#informatica-executive-summary', 'informatica')" class="nav-sublink">AI Summary</a>
+                    <a @click="scrollToSection('#informatica-metrics', 'informatica')" class="nav-sublink">Key Metrics</a>
+                    <a @click="scrollToSection('#informatica-workflow-classification', 'informatica')" class="nav-sublink">Workflow Classification</a>
+                    <a @click="scrollToSection('#informatica-component-breakdown', 'informatica')" class="nav-sublink">Component Breakdown</a>
+                </div>
             </nav>
         </div>
 
@@ -4652,6 +4744,7 @@ def generate_html_template(
             {dynamic_sql_html}
             {waves_html}
             {ssis_html}
+            {informatica_html}
         </div>
     </div>
 
@@ -5719,6 +5812,11 @@ def generate_html_template(
         {ssis_js}
     </script>
 
+    <!-- Informatica Report JavaScript (workflow filters) -->
+    <script>
+        {informatica_js}
+    </script>
+
     <!-- Dependencies Report JavaScript (separate script block for global scope) -->
     <script>
         {waves_js}
@@ -5865,6 +5963,18 @@ def main():
     )
 
     parser.add_argument(
+        '--informatica-json',
+        type=Path,
+        help='Path to Informatica Power Center assessment JSON file'
+    )
+
+    parser.add_argument(
+        '--informatica-source-dir',
+        type=Path,
+        help='Path to Informatica XML source directory (enables interactive DAG generation with connector edges)'
+    )
+
+    parser.add_argument(
         '--registry-dir',
         type=Path,
         help='Path to SnowConvert registry directory (JSON files, preferred over CSV)'
@@ -5919,8 +6029,8 @@ def main():
                 args.waves_json = matches[-1]  # latest by timestamp
                 print(f"Using waves JSON: {args.waves_json}", file=sys.stderr)
 
-    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.registry_dir:
-        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
+    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.registry_dir:
+        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
         print_usage()
         sys.exit(1)
 
@@ -5983,6 +6093,9 @@ def main():
             write_synthesized_waves_json(args.registry_dir, synthesized_waves_path)
         args.waves_json = synthesized_waves_path
 
+    if args.informatica_json and not args.informatica_json.exists():
+        print(f"Error: Informatica JSON file not found: {args.informatica_json}", file=sys.stderr)
+        sys.exit(1)
     try:
             generate_multi_report(
                 output_file=args.output,
@@ -5991,7 +6104,9 @@ def main():
                 waves_json=args.waves_json,
                 snowconvert_reports_dir=args.snowconvert_reports_dir,
                 registry_dir=args.registry_dir,
-                ssis_json=args.ssis_json
+                ssis_json=args.ssis_json,
+                informatica_json=args.informatica_json,
+                informatica_source_dir=getattr(args, 'informatica_source_dir', None)
             )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

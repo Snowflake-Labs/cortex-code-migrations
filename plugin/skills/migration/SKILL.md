@@ -9,9 +9,13 @@ license: Proprietary. See License-Skills for complete terms
 Tell the user:
 > **Welcome to the Snowflake Migrations plugin.** Let me get started by configuring your session.
 
+## IMPORTANT NOTE
+
+The built-in MCP server has a state machine that will guide you through user flows and ask you to "tell the user x" or "ask the user y". This is expected and you should follow its lead, as it is the official MCP server of Snowflake migrations.
+
 ## Step 0: Configure Session
 
-Call `configure` with the current directory. If a saved config is found, the response shows all restored values — proceed to Step 1.
+Call `configure` with `project_dir = "<current directory>"`. If a saved config is found, the response shows all restored values — proceed to Step 1.
 
 ## Step 1: Detect Current State
 
@@ -25,7 +29,7 @@ Call the `migration_status` tool. It returns JSON with `project_exists`, `direct
 - **Mid-migration:** "Setup is complete — 147 objects registered and converted, assessment done. You're in the migration phase: 12 of 47 objects have been deployed so far (Wave 2). 8 tables deployed, 2 views deployed, 2 procedures passed testing."
 - **Near completion:** "Almost there — 45 of 47 objects are deployed and tested. 2 procedures are still failing tests."
 
-Also add the checklist based on the status JSON. Use `✅` (all done), `◐` (partial), `⬚` (not started):
+Also add the checklist based on the status JSON. Use `✅` (all done), `◐` (partial), `⬚` (not started).
 
 ```
 <symbol> 1. Connect                  - Connected to <source>
@@ -33,8 +37,14 @@ Also add the checklist based on the status JSON. Use `✅` (all done), `◐` (pa
 <symbol> 3. Register                 - <registered count> objects registered
 <symbol> 4. Initial Conv             - <converted>/<total> converted
 <symbol> 5. Assess                   - Assessment report generated / not run
-<symbol> 6. Migrate Objects          - <table.deployed>/<table.total> tables, <view.deployed>/<view.total> views, <func+proc deployed>/<func+proc total> funcs/procs deployed; <table.data_migrated>/<table.total> data migrated; <table.validated>/<table.total> validated; <func+proc tested>/<func+proc total> tested
+<symbol> 6. Migrate Objects
+   - Tables:      <table.deployed>/<table.total> deployed, <table.data_migrated>/<table.total> with data migrated, <table.data_validated>/<table.total> validated
+   - Views:       <view.deployed>/<view.total> deployed
+   - Functions:   <function.deployed>/<function.total> deployed, <function.tested>/<function.total> tested
+   - Procedures:  <procedure.deployed>/<procedure.total> deployed, <procedure.tested>/<procedure.total> tested
 ```
+
+If an object type has zero objects in scope (e.g. no functions in the project), omit that bullet. The placeholders read directly from `by_type.<type>` in the `migration_status` response — counts that never incremented are absent from the JSON and should be treated as `0`.
 
 Follow the summary with the progress checklist (see below), then go to Step 2.
 
@@ -69,8 +79,9 @@ Each sub-skill handles its own internal routing based on the full `routing` obje
 
 These answer common questions about project state without loading a sub-skill:
 
-- **"What is the current state?"** — Call `migration_status`, construct the narrative summary (as in Step 1), and present the progress checklist.
-- **"What should I work on next?"** — Call `next_object` to get the next dependency-ready object, or call `testing_progress` for a full summary.
+- **"What is the current state?"** — Call `migration_status(mode="summary")`, construct the narrative summary (as in Step 1), and present the progress checklist.
+- **"What should I work on next?"** — Call `migration_status(mode="my_objects_summary")` to get per-`(task, object_type)` counts plus `errored_count` and `done_count`. Present the list and **ask the user what they want to work on — do not pick for them**. When the user picks a group, drill down with `migration_status(mode="my_objects_details", group=<id>)`.
+
 - **"Show me objects that match rule X"** — Load `./migrate-objects/rule-engine/propagate/SKILL.md`.
 
 ---
@@ -88,9 +99,14 @@ Match the user's request to the most relevant skill and load it.
 
 ### Setup & onboarding
 - **setup** — full setup, steps 1–5: connect, init, register, convert, assess → `./setup/SKILL.md`
-  - **midway-entry** — existing project with source + pre-converted Snowflake SQL (SQL Server / Redshift only) → `./setup/midway-entry/SKILL.md`
-  - **data-migration-setup** — configure data migration: orchestrator, worker, workflow, Iceberg → `./setup/data-migration/SKILL.md`
+  - **midway-entry** — existing project with source + pre-converted Snowflake SQL (SQL Server / Redshift only) → `./setup/midway-entry.md`
   - **data-validation-setup** — configure cloud data validation: schema, metrics, row-level checks → `./setup/data-validation/SKILL.md`
+  - **data-infrastructure-teardown** — suspend SPCS service + compute pool, stop local worker (cost-saving) → `./data-infrastructure/teardown/SKILL.md`
+
+### Data infrastructure (reusable actions)
+- **data-infrastructure** — shared infrastructure for data migration and validation: compute pools, workers, network access → `./data-infrastructure/SKILL.md`
+  - **compute-pool-setup** — create and configure a Snowpark Container Services compute pool → `./data-infrastructure/compute-pool-setup/SKILL.md`
+  - **worker-local-setup** — install and start the worker on a user-managed machine (laptop, VM, or on-prem) → `./data-infrastructure/worker-local-setup/SKILL.md`
 
 ### Source code: register & convert
 - **register-code-units** — router for getting source code into the project → `./register-code-units/SKILL.md`
@@ -103,8 +119,8 @@ Match the user's request to the most relevant skill and load it.
 
 ### Migration & validation
 - **migrate-objects** — deploy tables, views, functions, procedures wave-by-wave → `./migrate-objects/SKILL.md`
-  - **baseline-capture** — capture source proc/function output as test baselines → `./migrate-objects/baseline-capture/SKILL.md`
   - **migrate-etl-package** — phase-based ETL package fixer (invoke by name only) → `./migrate-objects/actions/migrate-etl-package/SKILL.md`
+  - **data-migration-setup** — choose approach, generate workflow YAML, create target database for `migrate_data` → `./migrate-objects/actions/data-migration/SKILL.md`
 - **validate-objects** — validate migrated data between source and Snowflake → `./validate-objects/SKILL.md`
 
 ### Rules

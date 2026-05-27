@@ -75,26 +75,17 @@ scai connection add-sql-server \
 ```
 Password will be prompted securely.
 
-### Step 4: Test the Connection
+### Step 4: Save and Test Source Connection
 
-```bash
-scai connection test -l sqlserver -s <SOURCE_CONNECTION_NAME> --json
-```
+Call the `configure` tool with `source_connection` set to `<SOURCE_CONNECTION_NAME>`. The MCP server runs `scai connection test` internally and only persists the connection if the test passes.
 
-**Expected:** "Connection successful" with server version and database details.
-
-**If test fails:** See `./references/REFERENCE.md` for troubleshooting.
-
-### Step 5: Save Source Connection
-
-After a successful connection test, save the connection name to the session config so other tools can use it:
-
-Call the `configure` tool with `source_connection` set to the `<SOURCE_CONNECTION_NAME>` used above.
+- **On success:** the response includes `connection_test: ok`.
+- **On failure:** the tool returns an error containing the scai message. Surface it to the user, help them fix the issue, then re-run `configure(source_connection=<SOURCE_CONNECTION_NAME>)`. See `./references/REFERENCE.md` for troubleshooting.
 
 ## CHECKPOINT
 
 Confirm with user:
-- [ ] Connection test passed
+- [ ] `configure` returned `connection_test: ok`
 - [ ] Connection appears in `scai connection list -l sqlserver --json`
 - [ ] Source connection saved to session config
 
@@ -117,5 +108,5 @@ Then return to the calling skill.
 |--------|---------|
 | Add connection (interactive) | `scai connection add-sql-server` |
 | Add connection (inline) | `scai connection add-sql-server -s NAME --auth standard --server-url HOST --database DB --user USER` |
-| Test connection | `scai connection test -l sqlserver -s NAME --json` |
+| Test connection | `configure(source_connection=NAME)` (runs the test internally) |
 | Set default | `scai connection set-default -l sqlserver -s NAME` |

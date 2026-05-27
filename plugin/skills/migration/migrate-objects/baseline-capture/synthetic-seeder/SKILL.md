@@ -17,6 +17,8 @@ Tests are derived from **source SQL analysis** — the source is the oracle, not
 converted code. Each test is a step-based YAML artifact directly consumable by
 `scai test capture` and `scai test validate`.
 
+> **YAML schema reference.** See [`../../references/step-based-yaml.md`](../../references/step-based-yaml.md) for the step types (SQL Query / Output Parameter / Table Read / Cursor Read), the `validate: true | false | [list]` semantics, and the `modifies_data` / `affected_tables` inference rules. This file describes *what* to generate for each procedure; the cheat sheet is the source of truth for the *shape* of each step. For special cases (multi-RS, OUT params, cursor reads, before/after capture) see [`../../migrate-object/EDIT_TEST_YAML.md`](../../migrate-object/EDIT_TEST_YAML.md).
+
 > **Autonomous mode:** When spawned as a subagent, skip interactive stopping points,
 > apply reasonable defaults, document assumptions in the completion report, and send
 > a `send_message` to `main` when done.
@@ -47,7 +49,6 @@ converted code. Each test is a step-based YAML artifact directly consumable by
 | `configure()` | Retrieve `project_dir`, `source_dialect`, `snowflake_database` |
 | `query_registry` | Look up code unit metadata and transitive dependencies for isolation enrichment |
 | `snowflake_sql_execute` | Execute SQL on Snowflake for validation |
-| `update_testing` | Register test results in the Code Unit Registry |
 
 ---
 

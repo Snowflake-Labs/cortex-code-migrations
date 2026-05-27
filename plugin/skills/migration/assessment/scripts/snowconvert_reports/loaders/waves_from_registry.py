@@ -56,13 +56,23 @@ def _is_udf_helper(entry: dict) -> bool:
     return UDF_HELPER_PATH_MARKER in converted
 
 
+def _is_etl(entry: dict) -> bool:
+    return entry.get("kind") == "etl"
+
+
 def _is_non_toplevel_other(entry: dict) -> bool:
     """True when the entry is ``objectType=other`` but NOT a missing reference.
 
     These are internal / non-code-unit registry rows (synonyms, indexes, etc.)
     that shouldn't appear as first-class rows. ``other``-typed entries that
     are ``isMissing=true`` stay — they represent real missing references.
+
+    ETL units (``kind == "etl"``) also have ``objectType: other`` at the
+    source block; they are exempt from this filter and surface as their own
+    category.
     """
+    if _is_etl(entry):
+        return False
     obj_type = (_source_or_target(entry).get("objectType") or "").lower()
     return obj_type == "other" and not entry.get("isMissing", False)
 
@@ -97,7 +107,16 @@ def _canonical_name(entry: dict) -> str:
     which causes downstream deduplication against ``build_id_to_name_map`` to
     fail. Reconstructing from the parts guarantees the bracketed form used
     everywhere else in the pipeline.
+
+    ETL units (``kind == "etl"``) have no ``source.database/schema/name``;
+    their natural identifier is ``files.source.path`` (e.g. the ``.dtsx`` /
+    ``.xml`` definition file).
     """
+    if _is_etl(entry):
+        path = (
+            entry.get("files", {}).get("source", {}).get("path", "") or ""
+        ).strip()
+        return path or (entry.get("id") or "")
     source = _source_or_target(entry)
     parts = [
         _bracket(v)
@@ -105,6 +124,75 @@ def _canonical_name(entry: dict) -> str:
         if v and v.strip() and v.strip("[]")
     ]
     return ".".join(parts) if parts else ""
+
+
+def _aggregate_etl_dependencies(entry: dict) -> tuple[list[dict], list[dict]]:
+    """Flatten ``parts[*].dependencies`` into a single (depends_on, required_by) pair.
+
+    ETL registry entries carry empty top-level ``dependencies`` — the real
+    dependency edges live one level down inside ``parts[*].dependencies``.
+    Each part can reference different SQL objects (Execute SQL Tasks point at
+    procedures and tables; Pipeline / Data Flow parts point at staging
+    tables, etc.), so aggregating across all parts gives the correct
+    code-unit-level view for the dependency graph and the report table.
+
+    Deduplicate by dependency ``id``: a single staging table referenced by
+    multiple Execute SQL Tasks must count as one edge, not N. Each merged
+    dep keeps a stable ``relationTypes`` list (deduped, preserving order).
+    """
+    seen_deps: dict[str, dict] = {}
+    seen_req: dict[str, dict] = {}
+    for part in entry.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        deps = part.get("dependencies") or {}
+        for dep in deps.get("dependsOn") or []:
+            if not isinstance(dep, dict):
+                continue
+            dep_id = dep.get("id") or ""
+            if not dep_id:
+                continue
+            existing = seen_deps.get(dep_id)
+            if existing:
+                rel_set = {*(existing.get("relationTypes") or [])}
+                for r in dep.get("relationTypes") or []:
+                    if r not in rel_set:
+                        existing.setdefault("relationTypes", []).append(r)
+                        rel_set.add(r)
+                # If any part says missing, the aggregate is missing
+                if dep.get("isMissing"):
+                    existing["isMissing"] = True
+            else:
+                seen_deps[dep_id] = {
+                    "id": dep_id,
+                    "isMissing": bool(dep.get("isMissing")),
+                    "relationTypes": list(dep.get("relationTypes") or []),
+                }
+        for req in deps.get("requiredBy") or []:
+            if not isinstance(req, dict):
+                continue
+            rid = req.get("id") or ""
+            if rid and rid not in seen_req:
+                seen_req[rid] = dict(req)
+    return list(seen_deps.values()), list(seen_req.values())
+
+
+def _aggregate_etl_issues(entry: dict) -> list[dict]:
+    """Concatenate ``parts[*].issues`` for an ETL entry.
+
+    Top-level ``entry.issues`` is empty for ETL; the SnowConvert EWIs / FDMs
+    raised during conversion are attached per-part. Used by
+    ``_map_conversion_status`` so an ETL with conversion gaps surfaces as
+    "Require Attention" instead of "Success".
+    """
+    out: list[dict] = []
+    for part in entry.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        for issue in part.get("issues") or []:
+            if isinstance(issue, dict):
+                out.append(issue)
+    return out
 
 
 def _map_conversion_status(entry: dict) -> str:
@@ -117,6 +205,9 @@ def _map_conversion_status(entry: dict) -> str:
     - ``conversion.status == "completed"`` and issues > 0 → "Require Attention"
     - ``conversion.status == "completed"`` and no issues → "Success"
     - otherwise: "Require Attention" if issues else "Pending Conversion"
+
+    For ETL units, "issues" includes ``parts[*].issues`` since the
+    SnowConvert conversion attaches gaps per-part.
     """
     if entry.get("isMissing"):
         return "Missing"
@@ -124,7 +215,10 @@ def _map_conversion_status(entry: dict) -> str:
     conv = (
         entry.get("codeStatus", {}).get("conversion", {}).get("status", "") or ""
     ).strip().lower()
-    has_issues = bool(entry.get("issues"))
+    issues = entry.get("issues") or []
+    if _is_etl(entry):
+        issues = list(issues) + _aggregate_etl_issues(entry)
+    has_issues = bool(issues)
 
     if conv == "pending":
         return "Require Attention" if has_issues else "Pending Conversion"
@@ -147,9 +241,18 @@ def _build_object(
     id_map: dict[str, str],
 ) -> dict[str, Any]:
     source = _source_or_target(entry)
-    deps = entry.get("dependencies", {}) or {}
-    depends_on = deps.get("dependsOn", []) or []
-    required_by = deps.get("requiredBy", []) or []
+    is_etl = _is_etl(entry)
+
+    if is_etl:
+        # Edges live one level down for ETL; flatten and dedupe across parts
+        # so the dependency table sees the staging tables / procedures the
+        # SSIS / Informatica package actually reads from and writes to.
+        depends_on, required_by = _aggregate_etl_dependencies(entry)
+    else:
+        deps = entry.get("dependencies", {}) or {}
+        depends_on = deps.get("dependsOn", []) or []
+        required_by = deps.get("requiredBy", []) or []
+
     files = entry.get("files", {}) or {}
     # Prefer the source-side path; fall back to converted path for target-only
     # entries (Snowflake UDF helpers and similar) that have no source file.
@@ -161,7 +264,15 @@ def _build_object(
 
     name = _canonical_name(entry)
     obj_id = name or (entry.get("id") or "")
-    category = (source.get("objectType") or "").upper() or "UNKNOWN"
+    if is_etl:
+        # First-class ETL row in the dependency table; surface the platform
+        # (SSIS, Informatica, ...) as the subtype so users can distinguish
+        # the engine without leaving the table.
+        category = "ETL"
+        subtype = (source.get("platform") or "").upper()
+    else:
+        category = (source.get("objectType") or "").upper() or "UNKNOWN"
+        subtype = ""
 
     missing_dependencies: list[dict[str, Any]] = []
     for dep in depends_on:
@@ -192,7 +303,7 @@ def _build_object(
         "id": obj_id,
         "name": name,
         "category": category,
-        "subtype": "",
+        "subtype": subtype,
         "technology": "",
         "fileName": file_name,
         "conversionStatus": _map_conversion_status(entry),

@@ -60,7 +60,12 @@ $BinaryUrl = "${BlobBase}/migration-mcp-server-v${Version}-${platform}"
 $NeedsDownload = $true
 if ((Test-Path $ExePath) -and (Test-Path $VersionMarker)) {
     $InstalledVersion = (Get-Content $VersionMarker -Raw).Trim()
-    if ($InstalledVersion -eq $Version) {
+    # "dev" is the literal sentinel that crates/mcp-server/build-plugin.sh
+    # writes into .version after a local build; never produced by CI.
+    if ($InstalledVersion -eq "dev") {
+        $NeedsDownload = $false
+        Log "MCP server binary is a local dev build -- skipping download"
+    } elseif ($InstalledVersion -eq $Version) {
         $NeedsDownload = $false
         Log "MCP server binary up to date (v$Version)"
     } else {

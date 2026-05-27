@@ -25,6 +25,10 @@ from .models import (
     IssueEstimationEntry,
     SeverityBaseline,
     ObjectEstimation,
+    Issue,
+    Component,
+    ETLComponent,
+    ETLIssue,
 )
 from .loaders import (
     read_csv_rows,
@@ -52,6 +56,10 @@ from .services import (
     IssueEffortService,
     ReportFinder,
 )
+from .repositories import (
+    ElementRepository,
+    IssueRepository,
+)
 
 __all__ = [
     # N/A utilities
@@ -68,6 +76,10 @@ __all__ = [
     "IssueEstimationEntry",
     "SeverityBaseline",
     "ObjectEstimation",
+    "Issue",
+    "Component",
+    "ETLComponent",
+    "ETLIssue",
     # Loaders
     "read_csv_rows",
     "load_csv_as",
@@ -92,4 +104,7 @@ __all__ = [
     # Services
     "IssueEffortService",
     "ReportFinder",
+    # Repositories
+    "ElementRepository",
+    "IssueRepository",
 ]

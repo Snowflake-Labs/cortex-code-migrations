@@ -28,12 +28,9 @@ Convert source code to Snowflake SQL using SnowConvert.
 
 ### Step 1: Verify Source Code Exists
 
-```bash
-# Check for source files
-find source/ -name "*.sql" | head -10
-```
+Confirm `source/` contains `.sql` files (use whichever portable form fits the host).
 
-If no files are found, load `../register-code-units/SKILL.md`.
+If no files are found, the setup state machine should have already routed back to `register-code-units` before you got here. If somehow you arrived with an empty `source/`, return to the parent setup skill so it can re-query `next_setup_task`.
 
 ### Step 2: Check for ETL Code
 

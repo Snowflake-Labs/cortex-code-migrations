@@ -45,7 +45,7 @@ That doc walks through cache check → ask-on-miss → user-provided path or dow
 
 **Naming guard:** the driver is a `.NET` NuGet package, **not** a JDBC driver. Refer to it only as "the Oracle driver" or "the Oracle NuGet package" when talking to the user.
 
-For this skill specifically, the first SCAI invocation called out by the bootstrap is the `connection test` command in **Step 4 below** — pass `--driver-path <PATH>` there if the driver wasn't already cached.
+For this skill specifically, the first SCAI invocation called out by the bootstrap is the `configure` tool call in **Step 4 below** — pass `driver_path=<PATH>` there if the driver wasn't already cached. The MCP server invokes `scai connection test --driver-path <PATH>` internally, which seeds the driver cache.
 
 ### Step 2: Ask How to Provide Credentials
 
@@ -80,23 +80,26 @@ scai connection add-oracle \
 ```
 Password will be prompted securely.
 
-### Step 4: Test the Connection
+### Step 4: Save and Test Source Connection
 
-This is the "first SCAI invocation" called out as 1e in the bootstrap reference. Use the path resolved in Step 1:
+This is the "first SCAI invocation" called out as 1e in the bootstrap reference. Use the path resolved in Step 1.
 
-```bash
-# Branch A or B in Step 1 (driver not yet cached) — pass --driver-path once
-scai connection test -l oracle -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG> --json
+Call the `configure` tool with `source_connection` set to `<CONNECTION_NAME>`. The MCP server runs `scai connection test` internally and only persists the connection if the test passes.
 
-# Step 1 hit the cache — --driver-path not needed
-scai connection test -l oracle -s <CONNECTION_NAME> --json
-```
+- **First use (driver not yet cached):** also pass `driver_path=<PATH_TO_NUPKG>`. The first call copies the driver into `~/.snowflake/scai/drivers/oracle/`, so every subsequent `configure` call (in this project or any other) can omit `driver_path`.
 
-The first call with `--driver-path` copies the driver into `~/.snowflake/scai/drivers/oracle/`, so every subsequent `scai` command (in this project or any other) can omit the flag.
+  ```
+  configure(source_connection=<CONNECTION_NAME>, driver_path=<PATH_TO_NUPKG>)
+  ```
 
-**Expected:** "Connection successful" with Oracle version and database details.
+- **Driver already cached:** omit `driver_path`.
 
-**If test fails:** See `./references/REFERENCE.md` for detailed troubleshooting.
+  ```
+  configure(source_connection=<CONNECTION_NAME>)
+  ```
+
+- **On success:** the response includes `connection_test: ok`.
+- **On failure:** the tool returns an error containing the scai message. Surface it to the user, help them fix the issue, then re-run `configure(...)`. See `./references/REFERENCE.md` for detailed troubleshooting.
 
 **Common errors:**
 
@@ -106,22 +109,16 @@ The first call with `--driver-path` copies the driver into `~/.snowflake/scai/dr
 | `ORA-01017: invalid username/password` | Wrong credentials | Check username and password |
 | `ORA-12541: TNS:no listener` | Listener not running or wrong port | Verify port number and that the listener is running |
 | `Connection timed out` | Network/firewall issue | Check VPN, firewall rules, security groups |
-| `Driver not found` | Missing or invalid `--driver-path` | Re-download the NuGet package and verify the file path |
-
-### Step 5: Save Source Connection
-
-After a successful connection test, save the connection name to the session config so other tools can use it:
-
-Call the `configure` tool with `source_connection` set to the `<CONNECTION_NAME>` used above.
+| `Driver not found` | Missing or invalid `driver_path` | Re-download the NuGet package and verify the file path |
 
 ## CHECKPOINT
 
 Confirm with user:
 - [ ] Oracle driver resolved via one of:
   - [ ] Already cached in `~/.snowflake/scai/drivers/oracle/` (Step 1a)
-  - [ ] User-provided local path supplied via `--driver-path` (Step 1c)
-  - [ ] Downloaded by the agent and supplied via `--driver-path` (Step 1d)
-- [ ] Connection test passed
+  - [ ] User-provided local path supplied via `driver_path` (Step 1c)
+  - [ ] Downloaded by the agent and supplied via `driver_path` (Step 1d)
+- [ ] `configure` returned `connection_test: ok`
 - [ ] Connection appears in `scai connection list -l oracle --json`
 - [ ] Source connection saved to session config
 
@@ -148,13 +145,14 @@ Then return to the calling skill.
 
 | Action | Command |
 |--------|---------|
-| Check driver cache | `ls ~/.snowflake/scai/drivers/oracle/*.nupkg ~/.snowflake/scai/drivers/oracle/*.dll 2>/dev/null` |
+| Check driver cache | List `.nupkg`/`.dll` files in `~/.snowflake/scai/drivers/oracle/` (POSIX) or `%USERPROFILE%\.snowflake\scai\drivers\oracle\` (Windows) |
 | Use existing local driver | `scai project defaults set -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG>` |
 | Download driver (macOS/Linux) | `curl -L -o Oracle.ManagedDataAccess.Core.nupkg https://www.nuget.org/api/v2/package/Oracle.ManagedDataAccess.Core` |
+| Download driver (Windows PowerShell) | `curl.exe -L -o Oracle.ManagedDataAccess.Core.nupkg https://www.nuget.org/api/v2/package/Oracle.ManagedDataAccess.Core` |
 | Add connection (interactive) | `scai connection add-oracle` |
 | Add connection (inline) | `scai connection add-oracle -c NAME --auth standard --host HOST --service-name SVC --user USER` |
-| Test connection (first time) | `scai connection test -l oracle -s NAME --driver-path <PATH_TO_NUPKG> --json` |
-| Test connection (driver cached) | `scai connection test -l oracle -s NAME --json` |
+| Test connection (first time) | `configure(source_connection=NAME, driver_path=<PATH_TO_NUPKG>)` |
+| Test connection (driver cached) | `configure(source_connection=NAME)` |
 | List connections | `scai connection list -l oracle --json` |
 | Set default | `scai connection set-default -l oracle -c NAME` |
 | Extract code | `scai code extract -s NAME --json` |

@@ -11,161 +11,75 @@ license: Proprietary. See License-Skills for complete terms
 Tell the user:
 > **Phase 1: Setup** — I'll walk you through connecting to your source database, initializing the project, registering your objects, converting them to Snowflake SQL, and generating an assessment report.
 
-## Routing
+## Flow
 
-Use `routing` from `migration_status()` tool output to follow ONE path:
+Setup is driven by the **`setup` state machine** — the resolver picks
+the next step automatically. The flow:
 
----
+1. Call `progress_setup()`. The response carries the following keys
+   when relevant — fields that would otherwise be the no-op default
+   (`completed: false`, `blocked: false`, etc.) are omitted to keep
+   responses small:
+   - `next_task` — id of the task the resolver landed on
+   - `next_skill` — sub-skill path to load (omitted when the task is
+     handled inline via `next_prompt`)
+   - `next_skill_md` — when present, the **full body** of the skill at
+     `next_skill`. Execute it directly without calling Read. Only
+     emitted for skills small enough to inline; for larger ones (or
+     any skill not in the inline set), `next_skill` is the path and
+     you Read it normally.
+   - `next_prompt` — present when the task is an inline question (see
+     step 3 below)
+   - `planned_steps` — remaining task ids in order
+   - `completed: true` — only when the machine reached its terminal
+     state; absence means "not done, keep looping"
+   - `blocked: true` (+ `blocked_on`), `errored: true` (+
+     `error_reason`), `committed: [...]`, `project_initialized: false`
+     — emitted only when actionable
+2. If `completed` is `true`, jump to **On Completion** below.
+3. If `next_prompt` is non-null, the engine wants you to ask the user a
+   question directly — no sub-skill load required. Surface the prompt
+   exactly as the engine returned it via `ask_user_question` (`multiSelect = false`):
+   - `next_prompt.question` is the question text.
+   - `next_prompt.options` is the list of `{label, value, description?}`
+     entries to render. Use `label` as the user-facing choice; **never**
+     show `value` to the user.
+   - When the user answers, call
+     `configure(<next_prompt.write_to>=<chosen option's value>)` to
+     persist the answer. Then go back to step 1.
+4. Otherwise (no prompt): if `next_skill_md` is set, **execute its
+   instructions directly in this same turn** — no Read needed.
+   Otherwise **load the skill at `next_skill` immediately** (Read it,
+   then execute in the same turn). The sub-skill is responsible for
+   asking the user any question it needs. Do not surface "Next step
+   pending: X — let me know" prose and wait — that's a wasted
+   round-trip; the user already said "continue" upstream. When the
+   sub-skill returns, go back to step 1.
 
-### Path A: No Project Exists
+Note: `progress_setup()` also handles git commits automatically — when a
+task with `commitOnComplete` completes, the tool commits and pushes
+project files. You do not need to run git commands manually.
 
-**When:** `routing.project_exists` = false
+Tasks the machine routes through, in order:
 
-**Step A.1: Configure project directory**
+| Task id                          | How the agent handles it                                          |
+|----------------------------------|-------------------------------------------------------------------|
+| `configureProjectDir`            | sub-skill: `setup/configure-project.md`                           |
+| `enableDashboard`                | inline prompt (`next_prompt`) — no sub-skill load                 |
+| `recommendSafeTools`             | inline prompt (`next_prompt`) — no sub-skill load                 |
+| `chooseSourceDialect`            | inline prompt (`next_prompt`) — no sub-skill load                 |
+| `chooseEntryMode`                | inline prompt (`next_prompt`) — no sub-skill load                 |
+| `midwayEntry`                    | sub-skill: `setup/midway-entry.md`                                |
+| `configureSnowflakeConnection`   | sub-skill: `setup/configure-snowflake-connection.md`              |
+| `configureSourceConnection`      | sub-skill: `setup/configure-source-connection.md`                 |
+| `configureGit`                   | sub-skill: `setup/git.md`                                         |
+| `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
+| `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
+| `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
 
-Use `directory_empty` from the `migration_status` response:
-
-- If `directory_empty` is **false**, tell the user:
-  > This directory isn't empty, so we can't initialize a project here. Would you like to create one in a new subdirectory?
-
-  Suggest `<current_dir>/<database>-migration` or let the user pick. Once confirmed, call `configure(project_dir=<new_path>)`.
-
-- If `directory_empty` is **true**, confirm with the user:
-  > I'll use `<project_dir>` for the migration project. Can you confirm?
-
-  If the user wants a different location, call `configure(project_dir=<new_path>)`. Otherwise, continue with the configured `<project_dir>`.
-
-**Step A.2: Choose source dialect**
-
-**Source dialect** — if `source_language` is not set yet, use `ask_user_question` (`multiSelect = false`):
-   > "What source database system are you migrating from?"
-   > 1. **SQL Server**
-   > 2. **Redshift**
-   > 3. **Teradata**
-   > 4. **Oracle**
-
-These are the 4 key workstreams, but the user might choose "Something else".
-
-Match the response to this table:
-
-| User choice | `source_language` |
-|-------------|-------------------|
-| SQL Server | `SqlServer` |
-| Redshift | `Redshift` |
-| Teradata | `Teradata` |
-| Oracle | `Oracle` |
-| Sybase IQ | `Sybase` |
-| Azure Synapse | `synapse` |
-| Spark SQL | `Spark` |
-| Databricks SQL | `Databricks` |
-| BigQuery | `BigQuery` |
-| PostgreSQL | `Postgresql` |
-| Greenplum | `Greenplum` |
-| Netezza | `Netezza` |
-| Vertica | `Vertica` |
-| Hive | `Hive` |
-| IBM DB2 | `Db2` |
-
-Call `configure(source_language=<chosen dialect>)` to initialize the project and return routing metadata.
-
-The `configure` response includes **user_overview** and `project_type` — YOU MUST present this ENTIRELY and EXACTLY to the user before moving on. DO NOT synthesize, just print it for the user.
-
-If the latest `configure` response showed `project_type: code_conversion_only`, load `../code-conversion-only/SKILL.md`. **DO NOT GO TO ANY OTHER STEP**.
-
-If the latest `configure` response showed `project_type: full_migration`, continue to Step A.3.
-
-**Step A.3: Choose entry mode**
-
-Ask the user:
-> "Are you starting a new migration, or do you already have source SQL **and** pre-converted Snowflake SQL?"
-> 1. **Starting fresh** — continue with the steps below
-> 2. **Existing migration** — load `./midway-entry/SKILL.md` (SQL Server and Redshift only, Teradata and Oracle coming soon)
-
-If the user picks **Existing migration**, load `./midway-entry/SKILL.md` and stop here. Otherwise continue.
-
-**Step A.4: Configure Snowflake connection**
-
-If `snowflake_connection` is not set, confirm with the user that the active SQL connection should be used for Snowflake queries. Once confirmed, call `configure(snowflake_connection=<name>)`.
-
-**Step A.5: Set up source connection**
-
-Ask the user:
-> "Will you need to connect to your source system? Some common reasons are extracting code for conversion, migrating data, and testing functional equivalence."
-> 1. **Yes** — set up a source connection
-> 2. **No** — skip for now (you can set one up later)
-
-If **No** → skip to Step A.6.
-
-Call `configure(needs_source_connection=true)` to list existing source connections for the configured dialect.
-
-If `existing_connections` listed connections, ask:
-> "Would you like to:"
-> 1. **Use an existing connection** — Select from the connections listed above
-> 2. **Create a new connection** — Set up a new source database connection
-
-If `existing_connections` was `none`, go directly to "Create new connection".
-
-**Step A.5a: If "Use existing connection"**
-
-Present the connections returned by `configure` and ask user to pick.
-
-**Step A.5b: If "Create new connection"**
-
-Load the connection sub-skill for `<SOURCE_DIALECT>`:
-- `sqlserver` → `../connection/sql-server-connection/SKILL.md`
-- `redshift` → `../connection/redshift-connection/SKILL.md`
-- `oracle` → `../connection/oracle-connection/SKILL.md`
-- `teradata` → `../connection/teradata-connection/SKILL.md`
-
-**Step A.6: Ask about data migration and validation**
-
-Ask the user:
-> "Will you also need to migrate data from the source database into Snowflake?"
->
-> 1. **Yes — configure shared data infrastructure now** — Read `./data-infrastructure/SKILL.md` and follow the instructions. Afterwards, continue to Step A.7.
-> 2. **No** — Continue to Step A.7.
-
-**Step A.7: Register source code**
-
-Load `../register-code-units/SKILL.md`. When registration completes, return here and continue to Step A.8.
-
-**Step A.8: Convert source code**
-
-Load `../convert/SKILL.md`
-
----
-
-### Path B: Project Exists, No Source Code
-
-**When:** `routing.registered` = false
-
-Load `../register-code-units/SKILL.md`
-
----
-
-### Path C: Source Code Exists, Not Converted
-
-**When:** `routing.registered` = true AND `routing.converted` = false
-
-Offer options:
-1. **Register more** → Load `../register-code-units/SKILL.md`
-2. **Convert** → Load `../convert/SKILL.md`
-3. **Review source** → Show contents of `source/`
-
----
-
-### Path D: Converted Code Exists, No Assessment
-
-**When:** `routing.converted` = true AND `routing.assessed` = false
-
-Offer options:
-1. **Run assessment** → Load `../assessment/SKILL.md`
-2. **Re-convert** → Load `../convert/SKILL.md`
-3. **Review converted** → Show contents of `snowflake/` and `artifacts/`
-4. **Skip to migrate objects** → Load `../migrate-objects/SKILL.md`
-5. **Set up data migration and validation** → Load `./data-infrastructure/SKILL.md`
-
----
+If `progress_setup()` returns an unexpected `next_task` not listed above,
+surface the raw response to the user and stop — do not invent a skill
+path.
 
 ## Sub-Skills Reference
 
@@ -175,14 +89,16 @@ Offer options:
 | 1 | redshift-connection | `../connection/redshift-connection/SKILL.md` |
 | 1 | oracle-connection | `../connection/oracle-connection/SKILL.md` |
 | 1 | teradata-connection | `../connection/teradata-connection/SKILL.md` |
-| — | midway-entry (existing project with pre-converted code; SQL Server/Redshift only) | `./midway-entry/SKILL.md` |
+| 1 | postgresql-connection | `../connection/postgresql-connection/SKILL.md` |
+| — | midway-entry (existing project with pre-converted code; SQL Server/Redshift only) | `./midway-entry.md` |
 | 3 | register-code-units | `../register-code-units/SKILL.md` |
 | 4 | convert | `../convert/SKILL.md` |
 | 4 | code-conversion-only | `../code-conversion-only/SKILL.md` |
 | 5 | snowconvert-assessment | `../assessment/SKILL.md` |
-| — | data-infrastructure-setup | `./data-infrastructure/SKILL.md` |
-| — | data-migration-setup | `./data-migration/SKILL.md` |
+| — | data-infrastructure-setup | `../data-infrastructure/SKILL.md` |
+| — | data-migration-setup | `../migrate-objects/actions/data-migration/SKILL.md` |
 | — | data-validation-setup | `./data-validation/SKILL.md` |
+| — | data-infrastructure-teardown | `../data-infrastructure/teardown/SKILL.md` |
 
 ## Rules
 
@@ -191,7 +107,12 @@ Offer options:
 
 ## On Completion
 
-When all setup paths have been exhausted (the user has reached `routing.assessed = true` or chosen to skip to migrate-objects), tell the user:
+When the setup machine reaches `setupComplete`, tell the user:
 > **Setup complete** — Your migration project is configured: connected to <source_type>, <N> objects registered, code converted, and assessment generated. Ready to start migrating objects to Snowflake.
+>
+> Every step along the way was committed to git. This is a good time
+> to share the project with your team — the next phase (object
+> migration) is designed to be multi-user, with multiple engineers
+> working through waves in parallel.
 
 Then return to the parent migration skill.

@@ -20,33 +20,12 @@ Tell the user:
 ## Prerequisites
 
 - Migration project initialized (`scai init`)
-- Source database connection configured and tested
+- `configure()` called at session start — validates the source connection and, for Oracle/Teradata, seeds the driver cache via [`../../connection/references/driver-bootstrap.md`](../../connection/references/driver-bootstrap.md)
 - Network access to source database
-- **Oracle / Teradata only:** the dialect's NuGet driver must be resolvable. If it isn't already cached at `~/.snowflake/scai/drivers/<dialect>/`, Step 1 will run the canonical bootstrap from [`../../connection/references/driver-bootstrap.md`](../../connection/references/driver-bootstrap.md) and ask the user how to provide it before any `curl` is run.
 
 ## Workflow
 
-### Step 1: Verify Connection
-
-**For SQL Server / Redshift:** No driver needed, test directly:
-
-```bash
-scai connection test -l <sqlserver|redshift> -s <CONNECTION_NAME> --json
-```
-
-**For Oracle or Teradata:** Resolve the driver per [`../../connection/references/driver-bootstrap.md`](../../connection/references/driver-bootstrap.md), substituting the dialect parameters from that doc. In most flows the driver was already resolved when the connection was set up, so the cache check at 1a will hit and you'll skip straight to 1e. If it doesn't hit, walk 1b → 1c/1d → 1e silently. Never run `curl` without first asking how the user wants to supply the driver, and don't narrate the procedure to the user.
-
-For this skill, 1e is the `connection test` invocation:
-
-```bash
-# After Branch A / B (driver not yet cached); pass --driver-path once
-scai connection test -l <oracle|teradata> -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG> --json
-
-# Cache hit; --driver-path not needed
-scai connection test -l <oracle|teradata> -s <CONNECTION_NAME> --json
-```
-
-### Step 2: Ask What to Extract
+### Step 1: Ask What to Extract
 
 Ask the user what they want to extract. Present the available object types for their source dialect:
 
@@ -54,6 +33,7 @@ Ask the user what they want to extract. Present the available object types for t
 - **Redshift:** TABLE, VIEW, MATERIALIZED_VIEW, FUNCTION, PROCEDURE
 - **Oracle:** TABLE, VIEW, MATERIALIZED_VIEW, FUNCTION, PROCEDURE, PACKAGE, PACKAGE_BODY, TRIGGER, SEQUENCE, TYPE, TYPE_BODY, SYNONYM
 - **Teradata:** TABLE, VIEW, FUNCTION, PROCEDURE
+- **Postgresql:** TABLE, VIEW, MATERIALIZED_VIEW, FUNCTION, PROCEDURE
 
 Ask the user via `ask_user_question` (`multiSelect = false`):
 
@@ -65,7 +45,7 @@ Ask the user via `ask_user_question` (`multiSelect = false`):
 
 Allow combining options (e.g. specific types within a specific schema).
 
-### Step 3: Run Extraction
+### Step 2: Run Extraction
 
 Build the `scai code extract` command based on user selections:
 
@@ -80,7 +60,7 @@ scai code extract -s <CONNECTION_NAME> --json
 #   --driver-path <PATH>     path to driver .nupkg (Oracle only, first use)
 ```
 
-**Driver note (Oracle / Teradata):** If the driver was not already cached at the start of Step 1 (i.e. the user went through Branch A or B), include `--driver-path <PATH_TO_NUPKG>` here too. SCAI persists the driver path machine-wide after first use, so subsequent extractions (even in other projects) do not need it.
+**Driver note (Oracle / Teradata):** `configure()` seeds the driver cache, so `--driver-path` is normally not needed here. If the cache was missed for any reason, pass `--driver-path <PATH_TO_NUPKG>` on first use; SCAI persists the path machine-wide and reuses it across projects.
 
 **Examples:**
 ```bash
@@ -106,16 +86,20 @@ scai code extract -s <CONNECTION_NAME> --driver-path ./Teradata.Client.Provider.
 scai code extract -s <CONNECTION_NAME> --schema MY_DB -t PROCEDURE --json
 ```
 
-### Step 4: Verify Extraction
+### Step 3: Verify Extraction
 
-After extraction completes, verify the results:
+After extraction completes, verify the results: count `.sql` files under `source/` and list its sub-directories by object type. Use whichever portable form fits the host:
 
 ```bash
-# Check extracted files
+# macOS / Linux
 find source/ -name "*.sql" | wc -l
-
-# List by object type
 ls -la source/*/
+```
+
+```powershell
+# Windows PowerShell
+(Get-ChildItem -Recurse -Filter *.sql source/).Count
+Get-ChildItem source/ -Directory | ForEach-Object { Get-ChildItem $_ }
 ```
 
 ## Output Structure

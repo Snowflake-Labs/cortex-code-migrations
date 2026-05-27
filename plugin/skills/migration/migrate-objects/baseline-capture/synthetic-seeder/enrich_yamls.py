@@ -78,7 +78,7 @@ def enrich(
     count = 0
 
     for yml_path in yaml_files:
-        with open(yml_path, "r") as fh:
+        with open(yml_path, "r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh) or {}
 
         validation = data.get("validation", {})
@@ -100,7 +100,7 @@ def enrich(
         validation["affected_tables"] = affected
         data["validation"] = validation
 
-        with open(yml_path, "w") as fh:
+        with open(yml_path, "w", encoding="utf-8") as fh:
             yaml.dump(data, fh, default_flow_style=False, sort_keys=False)
 
         count += 1

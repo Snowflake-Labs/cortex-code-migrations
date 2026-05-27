@@ -215,6 +215,27 @@ Some SQL Server instances require VPN access before connecting.
 3. Check SQL Server authentication mode (Mixed Mode required for SQL auth)
 4. For Windows auth, verify domain connectivity
 
+### Windows auth from WSL/Linux
+
+**Symptoms** (any of these from `scai connection test` or the underlying ODBC driver when `--auth windows` is used):
+- `UnknownCredentials`
+- `Cannot generate SSPI context`
+- `The target principal name is incorrect. Cannot generate SSPI context.`
+- `SSPI Provider: Realm not local to KDC`
+- `SSPI Provider: No credentials cache found`
+- `Client not found in Kerberos database`
+- `Error Code: CNX0025` (the `scai` wrapper error code for this whole class of failure)
+
+**Cause:** The Microsoft ODBC driver for SQL Server requires a Kerberos ticket to perform Windows Authentication from WSL or Linux — there is no implicit "current Windows user" the way there is on a domain-joined Windows host. The `user` field in `sqlserver.toml` is just a label and does **not** supply credentials when `--auth windows`.
+
+**Solutions:**
+1. If SQL authentication is enabled on the server, switch the connection to `--auth standard` (username/password). This is the fastest fix and avoids Kerberos entirely.
+2. Otherwise, set up Kerberos in WSL (install `krb5-user`, determine your real AD realm from `cmd.exe /c "whoami /fqdn"`, configure `/etc/krb5.conf` for that realm and its KDCs, then `kinit <user>@<REALM>`) and retry the test.
+
+> Tip: if `server_url` uses `HOST\INSTANCE` syntax and you see `Login timeout expired`, that's a separate problem — SQL Browser (UDP 1434) is usually blocked on WSL/VPN. Prefer `HOST,PORT` form.
+
+See [`./wsl-windows-auth.md`](./wsl-windows-auth.md) for the full walkthrough of both options, including package list, how to find the correct realm, `krb5.conf` shape (single-realm and cross-realm), keytab use for automation, and how to verify with `klist` and `sqlcmd -E` before retrying `scai`.
+
 ### SSL/TLS Errors
 
 **Symptoms:**

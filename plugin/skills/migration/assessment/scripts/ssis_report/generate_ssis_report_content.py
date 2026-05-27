@@ -73,10 +73,12 @@ def generate_ssis_html_content(ssis_json_path: Path, output_html_path: Path = No
             
             # Generate individual package pages
             package_count = 0
+            # `dag_base_path` is interpolated into HTML href= attributes, which
+            # require forward slashes regardless of OS.
             dag_base_path = os.path.relpath(
                 ssis_json_path.parent.resolve(),
                 packages_dir.resolve()
-            )
+            ).replace(os.sep, '/')
             for package_csv_row in generator.packages:
                 package_path = package_csv_row.get('path', '')
                 package_name = package_csv_row.get('name', '')

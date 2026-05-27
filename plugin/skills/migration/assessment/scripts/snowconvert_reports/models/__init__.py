@@ -19,6 +19,9 @@ from .code_unit import TopLevelCodeUnit
 from .object_reference import ObjectReference
 from .partition_member import PartitionMember
 from .estimation import IssueEstimationEntry, SeverityBaseline, ObjectEstimation
+from .etl_issue import Issue
+from .component import Component
+from .etl_component import ETLIssue, ETLComponent  # backward-compatible aliases
 
 __all__ = [
     "IssueRecord",
@@ -29,4 +32,8 @@ __all__ = [
     "IssueEstimationEntry",
     "SeverityBaseline",
     "ObjectEstimation",
+    "Issue",
+    "Component",
+    "ETLIssue",
+    "ETLComponent",
 ]

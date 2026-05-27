@@ -1,12 +1,16 @@
 ---
 name: edge-cases-test-agent
-description: Generates test cases focusing on edge cases and boundary values — NULLs, zeros, empty strings, type limits, overflow, and precision boundaries. Does not require source database access. Triggers: edge case tests, boundary value tests, null handling tests.
+description: Produces `test_cases:` rows for an existing step-based YAML stub focusing on edge cases and boundary values — NULLs, zeros, empty strings, type limits, overflow, precision boundaries. No source DB access required. Triggers: edge case tests, boundary value tests, null handling tests.
 parent_skill: baseline-capture
 ---
 
 # Agent: Edge Cases & Boundaries
 
-You generate test cases for `<object_name>` focusing on **edge cases and boundary values**.
+You produce **`test_cases:` rows** for `<object_name>` focusing on edge cases and boundary values.
+
+> You are NOT writing a YAML file. The stub YAML already exists (created by `scai test seed`). Your job is to produce **just the `test_cases:` rows** that will be merged into the existing stub.
+>
+> See [`../../references/step-based-yaml.md` → Placeholders and `test_cases`](../../references/step-based-yaml.md#placeholders-and-test_cases) for the row shape and dialect literal formatting.
 
 ## Inputs
 
@@ -16,36 +20,44 @@ You generate test cases for `<object_name>` focusing on **edge cases and boundar
 
 ## Instructions
 
-Generate test cases covering:
+Produce rows covering:
 
-### Edge Cases
-- NULL values for each parameter (one at a time, then all NULLs)
-- Zero values for numeric parameters
-- Empty strings for string parameters
-- Maximum/minimum type values
+### Edge cases
 
-### Boundary Values
-- Values at type limits (e.g., -1, 0, 1 for integers)
-- Decimal precision limits (e.g., 999999.99 for DECIMAL(8,2))
-- Date boundaries (min/max SQL dates, year boundaries)
-- Values that might cause overflow or truncation
+- `null` for each parameter, one at a time, then all `null` at once.
+- `0` for numeric parameters.
+- `""` (empty string) for string parameters.
+- Type-min / type-max values for the proc's declared types.
+
+### Boundary values
+
+- Off-by-one neighbors of meaningful values: `-1`, `0`, `1` for integers; one less and one more than thresholds the source code branches on.
+- Decimal precision limits (e.g. `999999.99` for `DECIMAL(8,2)`).
+- Date boundaries: min/max SQL dates, year/month boundaries.
+- Values likely to trigger overflow or truncation in either dialect.
 
 ## Output
 
-Write your final test cases to: `<project_dir>/.scai/tmp/<object_name>_edge_cases.yml`
+Write your rows to: `<project_dir>/.scai/tmp/<object_name>_edge_cases.yml`
 
-The file must contain only valid YAML starting with `test_cases:`.
-Also print the test cases to stdout as a backup.
-
-**Placeholders:** Use `{0}`, `{1}`, `{2}` etc. as positional placeholders (NOT `?`).
+The file must contain only valid YAML starting with `test_cases:`. Also print the rows to stdout as a backup.
 
 ```yaml
 test_cases:
-  - [param1_value, param2_value, ...]  # description
+  - [null, null]          # all-null
+  - [0, 0]                # zeros
+  - [-1, 0]               # negative ID
+  - [2147483647, 0]       # INT max
+  - [1, 999999.99]        # DECIMAL(8,2) max
 ```
 
-## Complex Objects (when instructed to split)
+Each row is a JSON-ish array of literals matching the proc's parameter order.
 
-If the orchestrator spawns two edge/boundary agents:
-- **Agent 2A**: Focus on NULL handling and zero/empty values
-- **Agent 2B**: Focus on type limits, overflow, and precision boundaries
+## When the orchestrator splits edge cases into A/B
+
+For complex objects, two edge-case agents may be spawned:
+
+- **Agent 2A** — focus on NULL handling and zero / empty values.
+- **Agent 2B** — focus on type limits, overflow, and precision boundaries.
+
+Each writes its own tmp file (`<object_name>_edge_cases_a.yml` vs `_b.yml`); the orchestrator merges them.

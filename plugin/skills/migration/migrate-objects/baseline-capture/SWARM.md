@@ -1,208 +1,186 @@
-# Test Case Generation: AI-Assisted Swarm
+---
+name: seed-source-db
+description: Seed-first orchestrator for a single source-database test target. Runs `scai test seed` to scaffold the step-based YAML stub (optionally hydrating from a query-log CSV), then — if `test_cases:` is still empty — spawns an AI swarm to fill them.
+parent_skill: baseline-capture
+---
 
-Use when no query logs exist. Spawns a swarm of agents, each focusing on a different testing dimension to generate comprehensive, non-overlapping test cases for a single object.
+# Seed Source-DB Tests (Seed → Maybe-Fill)
 
-> **SCOPE: Generate test cases for ONE object (`<object_name>`) only.**
+State-machine entry point for `testing_data_source = "source_database"`. Handles **one object (`<object_name>`)** at a time. Two stages:
 
-## Step 1: Gather Context
+1. **Seed** — run `scai test seed` to scaffold the step-based YAML stub. If `test_seed_source = logs`, pass `--execution-log <path>` to hydrate `test_cases:` from real captured calls.
+2. **Maybe-fill** — if the stub came back with empty `test_cases:`, spawn an AI swarm to fill them. The swarm fills *rows only*; it never edits `steps:`.
 
-First, read the source code and understand `<object_name>`:
+> **SCOPE: One object only.** Triggered per-object by the `seedSourceDb` state-machine task. Do not loop here — the state machine handles the next object after `captureBaseline` completes.
 
-```bash
-# Find the source file
-find <project_dir>/source -name "*.sql" | xargs grep -l "<object_name>"
+---
+
+## On entry
+
+Tell the user one line:
+
+> Generating test cases for `<object_name>`.
+
+## Step 1: Pull settings from `configure()`
+
+Call `configure()` and read:
+
+- `project_dir`
+- `source_connection`, `snowflake_connection`, `snowflake_database`
+- `testing_data_source` (expected: `source_database`)
+- `test_seed_source` (`logs` or `source_db_query`; may be absent on fallback)
+- `execution_log_path` (only meaningful when `test_seed_source = logs`)
+
+`test_seed_source` and `execution_log_path` come from the Q2 prompts in [`../SKILL.md`](../SKILL.md) Step 2 and are persisted across sessions.
+
+**Fallback when `test_seed_source` is unset** (a state-machine entry that didn't go through Step 2 — rare): default to `source_db_query`. Don't prompt — the state machine doesn't have a user surface here. The user can rerun the parent flow to re-prompt.
+
+## Step 2: Look up the source SQL file
+
+Use `query_registry` (don't `find`) so paths are reliable:
+
+```
+query_registry(
+  where = "source.canonicalName ilike '%<object_name>%'",
+  fields = "id,source,files,target",
+  include_dependencies = false
+)
 ```
 
-Read the source SQL file to understand:
-- Parameter names and types
-- Tables/views referenced
-- Business logic and code branches
-- Any constraints or validation
+From the response, hold onto:
 
-## Step 2: Determine Complexity
+- `files.source.path` — used by the swarm in Step 4.
+- `target.canonicalName` — `<database>.<schema>.<name>` of the proc on Snowflake. The YAML's path on disk uses these segments.
 
-| Complexity | Characteristics | Agents |
-|------------|-----------------|--------|
-| **Simple** | 1-3 params, straightforward logic | 3 (one of each type) |
-| **Complex** | 4+ params, multiple branches, table lookups | 6 (two of each type) |
+The expected YAML path is `artifacts/<database>/<schema>/<object_type>/<sanitized_name>/test/<sanitized_name>.yml` (single file per object; `scai test seed` writes here).
 
-## Step 3: Spawn Agent Swarm
+## Step 3: Run `scai test seed`
 
-Launch agents **in parallel** using the Task tool. Each agent reads its own instruction file — do NOT paste agent instructions into your context.
+Always invoke seed — it's the universal scaffolder. The flags depend on `test_seed_source`:
 
-**IMPORTANT** Propogate the current SQL connection to each agent.
+```bash
+# test_seed_source = logs
+scai test seed \
+  --where "source.canonicalName ILIKE '%<object_name>%'" \
+  --append \
+  --execution-log "<execution_log_path>"
 
-| Agent Type | Instruction File | Needs Source DB | Key Focus |
-|------------|-----------------|-----------------|-----------|
-| **Data-Driven** (most important) | `agents/data_driven.md` | Yes | Real parameter values from actual data |
+# test_seed_source = source_db_query (or fallback)
+scai test seed \
+  --where "source.canonicalName ILIKE '%<object_name>%'" \
+  --append
+```
+
+Notes:
+
+- `--append` is always on. If a YAML already exists for this object, `scai test seed` will leave existing rows alone and only add new ones (relevant when the user re-runs with a different log).
+- `--where` is scoped to one object so we don't rescaffold the whole project.
+- Source / Snowflake connection names come from `configure()`; `scai` picks them up via the per-project config — don't pass them on the command line unless probing fails.
+- The seed command writes the stub YAML to the artifacts path even if no log row matched. The stub uses **step-based schema** (`validation.steps[]` with `source_query`/`target_query`, plus `test_cases: []`).
+
+If `scai test seed` returns a non-zero exit:
+
+- Print its stderr verbatim.
+- **Stop.** Don't try to recover by hand-writing the YAML — that defeats the seed-first contract. Reroute via `DIAGNOSE_FIX.md` if the state machine retries this task; otherwise the user fixes the seed input (bad log path, malformed CSV) and reruns.
+
+## Step 4: Inspect the resulting YAML
+
+Read the file at `artifacts/<database>/<schema>/<object_type>/<sanitized_name>/test/<sanitized_name>.yml`. Look at `validation.test_cases`:
+
+- **Populated** (`test_cases:` contains one or more rows) → the seed (probably via `--execution-log`) covered this proc. **Skip to Step 6 (report).**
+- **Empty** (`test_cases: []`, or commented `# TODO`) → continue to Step 5.
+
+This branch decision is content-based, not flag-based. A `logs` run can produce an empty stub if the log didn't reference this proc; a `source_db_query` run is always empty after seed (no `--execution-log`).
+
+> **YAML reference.** Need to read the stub structure? See [`../references/step-based-yaml.md`](../references/step-based-yaml.md). Never hand-author `steps:` — `scai test seed` writes that block; you only add `test_cases:` rows.
+
+## Step 5: Fill `test_cases:` with the AI swarm
+
+The swarm produces *only* `test_cases:` rows for this object. It never touches `steps:`.
+
+### 5.1 — Read the source SQL
+
+Use the `files.source.path` from Step 2. Internalize:
+
+- Parameter names + types.
+- Tables/views referenced.
+- Branches (IF/CASE), NULL paths, boundary values.
+- Any obvious error paths (e.g. negative IDs).
+
+### 5.2 — Determine complexity
+
+| Complexity | Signals | Agents to spawn |
+|---|---|---|
+| **Simple** | 1–3 params, straightforward logic | 3 (one of each type) |
+| **Complex** | 4+ params, multiple branches, table lookups, OUT params | 6 (two of each type — see A/B split in each agent file) |
+
+### 5.3 — Spawn agents in parallel
+
+Use the Task tool. Each agent reads its own instruction file; do **not** paste instructions inline.
+
+| Agent | Instruction file | Needs source DB | Focus |
+|---|---|---|---|
+| **Data-Driven** (most important) | `agents/data_driven.md` | Yes (or testbed CSVs as fallback) | Real parameter values from actual data |
 | **Edge Cases & Boundaries** | `agents/edge_cases.md` | No | NULLs, zeros, type limits, overflow |
-| **Business Logic** | `agents/business_logic.md` | No | Code path coverage, branch testing |
+| **Business Logic** | `agents/business_logic.md` | No | Branch coverage from source SQL analysis |
 
-### Spawning Each Agent
-
-For each agent, use the Task tool with a prompt like:
+Spawn prompt for each agent:
 
 ```
 Read the instructions at <baseline_capture_dir>/agents/<agent_type>.md
-then generate test cases for <object_name>.
+then produce test_cases for <object_name>.
 
 Object signature: <signature>
 Source code: <source_code>
-Referenced tables: <table_list>           # data-driven only
-Source connection name: <source_connection_name>  # data-driven only
+Referenced tables: <table_list>            # data-driven only
+Source connection name: <source_connection>  # data-driven only
 Project directory: <project_dir>
 ```
 
-Where `<baseline_capture_dir>` is the directory containing this file.
+For **complex** objects spawn 2 agents per type — the agent files describe the A/B split.
 
-For **complex objects**, spawn 2 agents per type (see each agent doc for A/B split guidance).
+### 5.4 — Collect, dedupe, target 15–25 rows
 
-## Step 4: Merge and Deduplicate
+Each agent writes its rows to `<project_dir>/.scai/tmp/<object_name>_<agent_type>.yml` (also prints them to stdout as a backup). After all agents complete:
 
-After agents complete:
+1. Read each tmp file. Fall back to stdout parsing if a tmp file is missing.
+2. Concatenate `test_cases:` lists. Drop exact duplicates.
+3. Aim for 15–25 rows total. If you have more, prefer keeping data-driven rows over synthetic ones.
 
-1. Read test cases from `<project_dir>/.scai/tmp/<object_name>_*.yml` files
-2. If any tmp file is missing, fall back to parsing the agent's stdout output
-3. Remove exact duplicates
-4. Aim for **15-25 test cases** total
+### 5.5 — Apply rows to the YAML
 
-## Step 5: Create Test YAML File
+Open the YAML at the artifacts path. Replace its `validation.test_cases:` (currently empty) with the merged list. **Do not touch `steps:`, `modifies_data:`, or `affected_tables:`** — those come from `scai test seed` + CUR inference and are correct by construction.
 
-Create the test YAML file for `<object_name>` at:
+The cheat sheet's placeholder table ([`../references/step-based-yaml.md` → Placeholders](../references/step-based-yaml.md#placeholders-and-test_cases)) explains how each row's values become `{0}`, `{1}`, ... substitutions. The agents already produce values in array form; no escaping needed.
+
+## Step 6: Report and return
+
+Tell the user one line, then return to the state machine:
 
 ```
-<project_dir>/artifacts/<database>/<schema>/procedure/<ProcedureName>/test/<procedure_name>.yml
+Test cases for <object_name>: <N> cases (<source>).
+
+  source ∈ { "from scai test seed --execution-log",
+             "from AI swarm fill",
+             "from scai test seed + AI swarm fill" }
+  Path:   artifacts/<database>/<schema>/<object_type>/<sanitized_name>/test/<sanitized_name>.yml
 ```
 
-### Stored Procedure Template
+Don't load `CAPTURE.md` — the state machine transitions to `captureBaseline` next, which loads it.
 
-```yaml
-validation:
-  source:
-    steps:
-      run: |-
-        EXECUTE <database>.<schema>.<ProcedureName> @Param1 = {0}, @Param2 = {1}
-  target:
-    steps:
-      run: |-
-        CALL <DATABASE>.<SCHEMA>.<PROCEDURENAME>({0}, {1})
-  test_cases:
-    # Data-driven (real values from DB)
-    - [42, 19.99]            # valid customer, typical price
-    - [999, 0.01]            # valid customer, minimum price
-    # Edge cases & boundaries
-    - [null, null]           # all nulls
-    - [0, 0]                 # zeros
-    # Business logic
-    - [1, 100.00]            # happy path
-    - [-1, 10.00]            # error path (negative ID)
-```
+---
 
-**Placeholders:** Use `{0}`, `{1}`, `{2}`, etc. to reference test case values by position. The template engine substitutes them with properly formatted literals (strings quoted, nulls as `NULL`, etc.). Do NOT use `?` -- it will be sent literally and cause syntax errors.
+## Things this skill is not for
 
-### Scalar Function Template
+- **Editing `steps:`** (multi-RS, OUT param compare, table-read, side-effect DML, before/after capture). That's a failure-mode response — see [`../migrate-object/EDIT_TEST_YAML.md`](../migrate-object/EDIT_TEST_YAML.md), loaded on demand from `DIAGNOSE_FIX.md`.
+- **Authoring a YAML from scratch.** If `scai test seed` won't produce a stub for an object (e.g. dialect quirk), that's a testing-infrastructure bug — file it upstream. Don't hand-write step-based YAMLs here.
+- **Loop control.** One object per invocation. State machine handles the queue.
 
-**Important:** Always alias the SELECT expression with `AS RESULT`. Without an alias, SQL Server returns an unnamed column (empty string) while Snowflake uses the full expression as the column name — causing every comparison to fail on column name mismatch.
+## Troubleshooting
 
-```yaml
-validation:
-  source:
-    steps:
-      run: |-
-        SELECT <database>.<schema>.<FunctionName>({0}) AS RESULT
-  target:
-    steps:
-      run: |-
-        SELECT <DATABASE>.<SCHEMA>.<FUNCTIONNAME>({0}) AS RESULT
-  test_cases:
-    - [<value1>]
-    - [<value2>]
-```
-
-### Procedures That Return via Temp Table or OUT Parameter
-
-For procedures that populate a temp table or use an OUT parameter, add `capture` steps:
-
-```yaml
-validation:
-  source:
-    steps:
-      run: |-
-        EXECUTE <database>.<schema>.<ProcedureName> @Param1 = {0}
-      capture:
-        - "SELECT * FROM {UNQUOTED:0}"
-  target:
-    steps:
-      run: |-
-        CALL <DATABASE>.<SCHEMA>.<PROCEDURENAME>({0})
-      capture:
-        - "SELECT * FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))"
-  test_cases:
-    - ["#TempTable"]
-```
-
-### Redshift Procedures with INOUT/OUT Parameters (Temp Table Pattern)
-
-When a Redshift procedure has an `INOUT` parameter used to return a temp table
-name, and the converted Snowflake procedure has a corresponding `OUT` parameter:
-
-- **Source (Redshift):** Can pass a literal for INOUT: `CALL proc({0}, {1}, '')`
-- **Target (Snowflake):** OUT params require a variable — wrap in anonymous block
-- **Capture:** Query the temp table directly (it persists in the session)
-
-```yaml
-validation:
-  source:
-    steps:
-      run: |-
-        CALL <schema>.<proc_name>({0}, {1}, '')
-      capture:
-        - "SELECT * FROM <temp_table_name> ORDER BY <key_column>"
-  target:
-    steps:
-      run: |-
-        BEGIN LET out_var VARCHAR := ''; CALL <DATABASE>.<SCHEMA>.<PROC_NAME>({0}::TIMESTAMP_NTZ, {1}::TIMESTAMP_NTZ, :out_var); END;
-      capture:
-        - "SELECT * FROM <temp_table_name> ORDER BY <key_column>"
-  test_cases:
-    - ["2025-01-01 00:00:00", "2025-01-31 23:59:59"]
-```
-
-Key points:
-- The anonymous block `BEGIN LET ... CALL ... END;` is required because
-  Snowflake OUT parameters cannot accept literal values
-- Both source and target capture from the temp table directly (not RESULT_SCAN)
-- Add `ORDER BY` to capture queries for deterministic row ordering
-- Cast timestamp parameters with `::TIMESTAMP_NTZ` on the Snowflake side
-  when the procedure expects `TIMESTAMP_NTZ` parameters
-
-### Redshift Procedures with Scalar INOUT (Return Value Pattern)
-
-When a Redshift procedure has an `INOUT` parameter that returns a **scalar value**
-(not a temp table name), the Snowflake anonymous block returns a column named
-`ANONYMOUS BLOCK` instead of the parameter name. The capture query must alias it
-to match the Redshift baseline column name.
-
-```yaml
-validation:
-  source:
-    steps:
-      run: |-
-        CALL <schema>.<proc_name>({0}, {1}, 0)
-  target:
-    steps:
-      run: |-
-        BEGIN LET out_var NUMERIC := 0; CALL <DATABASE>.<SCHEMA>.<PROC_NAME>({0}, {1}, :out_var); RETURN :out_var; END;
-      capture:
-        - "SELECT \"ANONYMOUS BLOCK\" AS <INOUT_PARAM_NAME> FROM TABLE(RESULT_SCAN(LAST_QUERY_ID()))"
-  test_cases:
-    - [2024, 1]
-```
-
-Key points:
-- Redshift `CALL` with a scalar INOUT returns a column named after the parameter
-  (e.g., `P_RESULT`). The Snowflake anonymous block returns `ANONYMOUS BLOCK`.
-- The capture query must alias `"ANONYMOUS BLOCK"` to the Redshift parameter name
-  so column names match during comparison.
-- Use `RETURN :out_var;` in the anonymous block to surface the scalar value.
-- Match the INOUT parameter's default value type (`0` for numeric, `''` for varchar).
+| Symptom | What to do |
+|---|---|
+| `scai test seed` reports `no matching objects` | Verify `<object_name>` matches `source.canonicalName` in the registry (check casing / schema prefix). The `--where` is a literal SQL ILIKE; quote escaping matters. |
+| `scai test seed --execution-log ...` runs but YAML still empty | The log didn't contain a row for this proc. Continue to Step 5 — the swarm will fill from source SQL + (optionally) live source DB. |
+| Swarm agents return zero rows | Source SQL likely refers to objects not in the registry, so the data-driven agent fell back to testbed-CSV mode (Teradata) or had no data path. Inspect the agent's stdout — it should report `branch_values` it used. |
+| Test cases written but `scai test validate` later fails on YAML shape | The stub `steps:` block didn't match the proc's actual shape (multi-RS, OUT param, DML side effect, ...). That's not this skill's problem — `DIAGNOSE_FIX.md` Step 2.5 catches it and routes to `EDIT_TEST_YAML.md`. |

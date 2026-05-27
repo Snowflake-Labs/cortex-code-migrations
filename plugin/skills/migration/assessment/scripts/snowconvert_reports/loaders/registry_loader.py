@@ -46,7 +46,19 @@ def _entry_full_name(entry: dict) -> str:
 
     N/A-valued parts (database, schema, name) are omitted so that
     ``[N/A].[dbo].[MyTable]`` becomes ``[dbo].[MyTable]``.
+
+    ETL units (``kind == "etl"``) have no ``source.database/schema/name``;
+    their natural identifier is ``files.source.path`` (e.g. the ``.dtsx`` /
+    ``.xml`` definition file). Returning the path here lets dependency-edge
+    UUID resolution (``build_id_to_name_map``) round-trip ETL units the
+    same way SQL units round-trip via ``[db].[schema].[name]``.
     """
+    if entry.get("kind") == "etl":
+        path = (
+            entry.get("files", {}).get("source", {}).get("path", "") or ""
+        ).strip()
+        if path:
+            return path
     block = entry.get("source") or entry.get("target") or {}
     parts = [
         _bracket(v)
@@ -103,10 +115,56 @@ def load_code_units_from_registry(registry_dir: Path) -> list[TopLevelCodeUnit]:
     return units
 
 
+def _iter_unit_dep_specs(entry: dict):
+    """Yield ``dependsOn`` entries for a code unit, including those nested
+    inside ``parts[*]``.
+
+    SQL units carry their references on the top-level
+    ``dependencies.dependsOn`` array. ETL units (``kind == "etl"``) leave
+    that array empty and instead store references inside each
+    ``parts[i].dependencies.dependsOn``; one referenced object typically
+    repeats across many parts. Yielding both shapes lets the caller dedupe
+    once and treat ETL units the same way as SQL units in the report.
+    """
+    seen: set[tuple[str, str, bool]] = set()
+    sources: list[list[dict]] = []
+    sources.append(entry.get("dependencies", {}).get("dependsOn", []) or [])
+    for part in entry.get("parts", []) or []:
+        if not isinstance(part, dict):
+            continue
+        sources.append(part.get("dependencies", {}).get("dependsOn", []) or [])
+
+    for deps in sources:
+        for dep in deps:
+            if not isinstance(dep, dict):
+                continue
+            dep_id = dep.get("id") or ""
+            is_missing = bool(dep.get("isMissing", False))
+            rel_types = tuple(dep.get("relationTypes", []) or [""])
+            for rel in rel_types:
+                key = (dep_id, rel, is_missing)
+                if key in seen:
+                    continue
+                seen.add(key)
+                # Yield a single-relation copy so downstream emits one
+                # ObjectReference per (dep, relation_type) pair.
+                yield {
+                    "id": dep_id,
+                    "isMissing": is_missing,
+                    "relationTypes": [rel] if rel else [],
+                }
+
+
 def load_object_references_from_registry(
     registry_dir: Path | str,
 ) -> list[ObjectReference]:
-    """Load all object references by flattening ``dependsOn`` arrays."""
+    """Load all object references by flattening ``dependsOn`` arrays.
+
+    For ETL units (``kind == "etl"``), references nested under
+    ``parts[*].dependencies.dependsOn`` are also included and deduped per
+    ``(dep_id, relation_type)`` so the rendered report shows one row per
+    unique downstream dependency rather than one row per part.
+    """
     entries = load_registry_entries(registry_dir)
     id_map = build_id_to_name_map(entries)
 
@@ -116,7 +174,7 @@ def load_object_references_from_registry(
         caller_type = entry.get("source", {}).get("objectType", "").upper()
         caller_file = entry.get("files", {}).get("source", {}).get("path", "")
 
-        for dep in entry.get("dependencies", {}).get("dependsOn", []):
+        for dep in _iter_unit_dep_specs(entry):
             refs.extend(
                 ObjectReference.from_registry_dependency(
                     caller_name, caller_type, caller_file, dep, id_map
@@ -139,6 +197,10 @@ def load_missing_dependencies_by_object(
     """Load missing dependencies grouped by object.
 
     Returns a dict mapping code_unit_id to list of missing dependency names.
+    For ETL units (``kind == "etl"``), missing references inside
+    ``parts[*].dependencies.dependsOn`` are also collected so the report's
+    "missing deps" section attributes them to the parent ETL unit instead of
+    silently dropping them.
 
     Example:
         {
@@ -155,7 +217,7 @@ def load_missing_dependencies_by_object(
         caller_name = _entry_full_name(entry)
 
         missing_deps: list[str] = []
-        for dep in entry.get("dependencies", {}).get("dependsOn", []):
+        for dep in _iter_unit_dep_specs(entry):
             if dep.get("isMissing", False):
                 dep_id = dep.get("id") or ""
                 dep_name = id_map.get(dep_id, dep_id)

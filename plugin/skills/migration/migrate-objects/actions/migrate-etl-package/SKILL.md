@@ -142,10 +142,13 @@ uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py set-test
 
 ### Step 5: Backup and Strip Dead Code
 
+Snapshot the package directory before stripping:
+
 ```bash
-mkdir -p {PACKAGE}/.migrate-etl-package/original
-rsync -a --exclude '.migrate-etl-package' {PACKAGE}/ {PACKAGE}/.migrate-etl-package/original/
+uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/backup_package.py {PACKAGE}
 ```
+
+This creates `{PACKAGE}/.migrate-etl-package/original/` with a copy of the package excluding the `.migrate-etl-package/` sub-tree.
 
 If the platform profile defines a `strip_script` (not null), run dead code stripping:
 ```bash

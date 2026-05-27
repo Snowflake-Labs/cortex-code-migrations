@@ -79,9 +79,29 @@ Then the failure likely involves dynamic SQL conversion. Read the canonical dyna
 - Temp table transformation in dynamic context
 - Handling of commented-out dynamic SQL (SnowConvert `!!!RESOLVE EWI!!!` markers)
 
+### Check for Test YAML Shape Mismatch
+
+Before assuming the failure is a SQL bug, ask: **does the test YAML's `steps:` block match the actual shape of this procedure?** `scai test seed` and the swarm both produce a default-shape YAML (one CALL step, one return-value comparison). Many procedures don't fit that default and need a different step structure.
+
+Scan the failure context for any of these smells:
+
+| Smell | Likely YAML-shape issue | Recipe |
+|---|---|---|
+| Error mentions multiple result sets, "got N result sets, expected M", or first-RS-only comparison while source proc emits several `SELECT` statements | Default `validate: true` only compares the first RS | [`EDIT_TEST_YAML.md` → Multi-result-set validation](EDIT_TEST_YAML.md#multi-result-set-validation) |
+| Proc has OUT / INOUT params and the diff is on a column that looks like a param name, or "expected non-null, got null" on what should be an output | YAML doesn't emit Output Parameter Comparison step | [`EDIT_TEST_YAML.md` → OUT / INOUT parameter comparison](EDIT_TEST_YAML.md#out--inout-parameter-comparison) |
+| Proc is DML (INSERT / UPDATE / DELETE / MERGE) and result shows "no rows captured" or empty diff | Delta capture not active or no post-condition SELECT in `steps:` | [`EDIT_TEST_YAML.md` → Side-effect-only DML](EDIT_TEST_YAML.md#side-effect-only-dml) |
+| Proc populates a temp table or persistent table and the diff is on that table not being read | YAML missing Table Read Step after the CALL | [`EDIT_TEST_YAML.md` → Table-read assertion](EDIT_TEST_YAML.md#table-read-assertion) |
+| Redshift proc returns a refcursor and the diff is "RESULT_SCAN returned no rows" / "cursor not found" | YAML missing Cursor Read Step | [`EDIT_TEST_YAML.md` → Cursor-read step](EDIT_TEST_YAML.md#cursor-read-step) |
+| Snowflake column name is `"ANONYMOUS BLOCK"` while baseline expects the Redshift param name | Anonymous-block alias missing in `validate:` list | [`EDIT_TEST_YAML.md` → Per-dialect gotchas: Redshift scalar INOUT](EDIT_TEST_YAML.md#redshift-scalar-inout--anonymous-block--column-aliasing) |
+| Teradata proc fails with `Error 5315: does not have SELECT/INSERT access` on the source side | Cross-database GRANT steps missing | [`EDIT_TEST_YAML.md` → Per-dialect gotchas: Teradata cross-database GRANTs](EDIT_TEST_YAML.md#teradata-cross-database-grants-when-using-clone-isolation) |
+
+**If a match is found:** load [`EDIT_TEST_YAML.md`](EDIT_TEST_YAML.md), apply the matching recipe to the YAML at `artifacts/<db>/<schema>/<type>/<sanitized_name>/test/<sanitized_name>.yml`, then re-run `scai test capture --where "source.canonicalName ILIKE '%<object_name>%'"` to refresh the baseline. Re-run `scai test validate` to confirm — go directly to [SKILL.md](SKILL.md) Step 4 (retest), skipping the investigation swarm. This is **not a SQL fix**, so there is nothing to redeploy.
+
+**If unsure whether the YAML shape is at fault:** prefer to continue with the investigation swarm. Agent 3 (Output Analysis) will surface the same smells with more context, and you can come back to this recipe after seeing its output. False positives here cost a YAML edit that might not be needed; false negatives cost an extra swarm iteration.
+
 ### Check Troubleshooting Reference
 
-If neither of the above matched, also consult [../references/troubleshooting.md](../references/troubleshooting.md) for common test failure scenarios (wrong schema prefix, missing base data, connection issues, etc.) that may explain the failure without needing the full swarm.
+If none of the above matched, also consult [../references/troubleshooting.md](../references/troubleshooting.md) for common test failure scenarios (wrong schema prefix, missing base data, connection issues, etc.) that may explain the failure without needing the full swarm.
 
 ---
 
@@ -216,6 +236,12 @@ For common issues and their solutions, also consult [../references/troubleshooti
    ```
 
 2. **Make the minimal change** to fix the root cause. **Preserve all original source code comments** (synopsis, metadata, author, archive, change log, examples) — do not strip them during fixes or rewrites.
+
+   Also verify these common conversion issues before redeploying:
+   - `USE DATABASE <source_db>` at the top referencing the source database — remove it.
+   - Object name must be fully qualified with the target database: `<TARGET_DATABASE>.<SCHEMA>.<object_name>`.
+   - Variable binding in LANGUAGE SQL procedures: parameters/variables in SQL statements must use `:param_name` syntax (SnowConvert often omits the colon).
+   - Edit the file in `snowflake/` — do NOT deploy directly without updating the file.
 
    If the fix was informed by a rule from Step 3, record the application: use the `record_rule_application` tool with `rule_id` set to the rule's ID and `outcome` set to `"applied"`.
 

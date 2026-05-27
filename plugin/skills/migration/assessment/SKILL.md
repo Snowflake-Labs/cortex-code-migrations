@@ -20,38 +20,11 @@ End-to-end migration assessment. The user only needs to point at the source — 
 
 Call the `configure` MCP tool with `project_dir` (use the current directory, or ask the user if ambiguous). If `snowflake_connection` is not set, ask which Snowflake connection to use and call `configure` again. Other settings are filled in by sub-skills as the workflow progresses.
 
-## Step 1: Detect State
+## Step 1: Verify Prerequisites
 
-Call `migration_status`. Use `routing` from the returned JSON to decide what to do — do **not** ask the user for paths or files.
+If you arrived here directly (not through the setup state machine), call `migration_status(mode='next_setup_task')` first. If it returns anything other than `assess`, follow the engine's response (run init / register / convert first) and re-enter assessment when the engine routes here.
 
-| Routing condition | Next action |
-|-------------------|-------------|
-| `routing.project_exists` = false | Go to **Step 2 — Bootstrap** |
-| `routing.registered` = false | Go to **Step 2 — Bootstrap** |
-| `routing.converted` = false | Go to **Step 2 — Bootstrap** |
-| `routing.converted` = true | Skip to **Step 3 — Auto-Detect Inputs** |
-
-## Step 2: Bootstrap (only if not yet converted)
-
-Assessment requires SnowConvert reports. The conversion is what produces them (`TopLevelCodeUnits.*.csv`, `ObjectReferences.*.csv`, `Issues.*.csv`, `ETL.*.csv`, and the `registry/`). Do **not** prompt the user for any of those files — bootstrap will create them.
-
-Ask the user the **single source question** and nothing else:
-
-> "To assess your workload I need to first set up the migration project.
->
-> What is your source?
-> 1. Use an existing scai connection (I'll list the configured ones)
-> 2. Create a new connection (SQL Server or Redshift)
-> 3. A folder of local `.sql` files I should register as-is"
-
-Then load `../setup/SKILL.md` and let it drive bootstrap end-to-end. The setup skill handles connect → `scai init` → register → `scai code convert`. Do not duplicate any of its prompts here.
-
-When setup returns:
-1. Call `migration_status` again.
-2. Verify `routing.converted` is now true.
-3. If conversion did not complete, surface the failure and stop — assessment cannot run without reports. Do not fall back to asking the user for files.
-
-## Step 3: Auto-Detect SnowConvert Outputs
+## Step 2: Auto-Detect SnowConvert Outputs
 
 Resolve all inputs from `project_dir`. Do not prompt the user.
 
@@ -68,7 +41,7 @@ Selection rules:
 - The multi-tab HTML report (`generate_multi_report.py`) takes `--project-dir` (the scai project root) and auto-discovers everything it needs: `registry/`, `reports/`, `assessment/waves_analysis_*.json`, and the exclusion / dynamic-SQL JSONs. The registry is **required** — without it the report cannot enrich the waves JSON (which emits UUIDs) with canonical names, categories, file paths, and conversion status.
 - If the registry or reports are missing after a successful-looking convert, re-run `../convert/SKILL.md` once and stop if it still produces nothing.
 
-## Step 4: Confirm Scope (single, short)
+## Step 3: Confirm Scope (single, short)
 
 Show one compact confirmation that lists what will run. This is the **only** confirmation between source-question and execution.
 
@@ -78,20 +51,21 @@ I will run:
 2. Object Exclusion
 3. Dynamic SQL Patterns
 4. ETL/SSIS Assessment  (only if present)
-5. HTML Report
+5. Informatica Assessment  (only if present)
+6. HTML Report
 
 Proceed with all, or pick a subset?
 ```
 
 Wait for "yes" or a subset selection, then run. Do not re-prompt for files or directories at any later point.
 
-**Note:** "Proceed with all" is **not** the last prompt. The next step (Step 5) collects every input the in-scope sub-skills need so they can run as non-interactive sub-agents. After Step 5 the assessment becomes hands-off until results are surfaced in Step 9.
+**Note:** "Proceed with all" is **not** the last prompt. The next step (Step 4) collects every input the in-scope sub-skills need so they can run as non-interactive sub-agents. After Step 4 the assessment becomes hands-off until results are surfaced in Step 8.
 
-## Step 5: Gather Sub-Skill Inputs (single batch)
+## Step 4: Gather Sub-Skill Inputs (single batch)
 
-Collect **every** answer the in-scope sub-skills need **before** dispatching anything. Sub-agents run non-interactively. Hold the answers in an in-message `assessment_inputs` block in your working context (do not write it to disk) — it is the source of truth for the context blocks emitted in Step 6.
+Collect **every** answer the in-scope sub-skills need **before** dispatching anything. Sub-agents run non-interactively. Hold the answers in an in-message `assessment_inputs` block in your working context (do not write it to disk) — it is the source of truth for the context blocks emitted in Step 5.
 
-For sub-skills excluded by the Step 4 scope answer, skip the corresponding inputs and do not dispatch in Step 6.
+For sub-skills excluded by the Step 3 scope answer, skip the corresponding inputs and do not dispatch in Step 5.
 
 ### 5.1 Waves inputs (always required when waves is in scope)
 
@@ -154,15 +128,15 @@ assessment_inputs:
     etl_replatform_sources_path: <abs or empty>
 ```
 
-After Step 5 completes, do **not** prompt the user again until Step 9.
+After Step 4 completes, do **not** prompt the user again until Step 8.
 
-## Step 6: Parallel Sub-Agent Dispatch
+## Step 5: Parallel Sub-Agent Dispatch
 
 In a **single message**, fire one Task tool call per in-scope sub-skill. Do not dispatch sequentially. After dispatching, end your turn — sub-agents run on their own and return results back to this conversation.
 
-Each Task call uses the prompt template for its sub-skill below. Substitute every `<placeholder>` with the value from the `assessment_inputs` snapshot in Step 5. Use absolute paths only.
+Each Task call uses the prompt template for its sub-skill below. Substitute every `<placeholder>` with the value from the `assessment_inputs` snapshot in Step 4. Use absolute paths only.
 
-> **Important:** Do **not** dispatch any sub-skill that is out of scope (per Step 4) or whose `review_mode` is `skip`. The parent synthesizes a `"skipped"` result for those in Step 7.
+> **Important:** Do **not** dispatch any sub-skill that is out of scope (per Step 3) or whose `review_mode` is `skip`. The parent synthesizes a `"skipped"` result for those in Step 6.
 
 ### 6.1 waves-runner prompt
 
@@ -300,7 +274,7 @@ Report back JSON only:
 
 End your turn after the dispatch message.
 
-## Step 7: Wait + Verify Outputs
+## Step 6: Wait + Verify Outputs
 
 Each Task return contains a single JSON object: `{sub_skill, status, output_json, summary, error}`. Collect all returns. **A failing sub-agent does not block the others.**
 
@@ -313,11 +287,11 @@ For every dispatched sub-skill, validate:
 | `output_json` path exists on disk | Mark as failed with `error: "claimed JSON not found"` |
 | `output_json` file is non-empty (size > 0) | Mark as failed with `error: "JSON empty"` (do NOT schema-validate) |
 
-For sub-skills excluded by the Step 4 scope (or set to `review_mode: skip` in Step 5), synthesize `{status: "skipped", output_json: null, summary: "<reason>"}` so Step 9 has a complete row for every sub-skill.
+For sub-skills excluded by the Step 3 scope (or set to `review_mode: skip` in Step 4), synthesize `{status: "skipped", output_json: null, summary: "<reason>"}` so Step 8 has a complete row for every sub-skill.
 
-Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `analyzing-sql-dynamic-patterns`, `etl-assessment`). Carry it into Step 8 and Step 9.
+Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `analyzing-sql-dynamic-patterns`, `etl-assessment`). Carry it into Step 7 and Step 8.
 
-## Step 8: Generate Unified HTML Report
+## Step 7: Generate Unified HTML Report
 
 Run the multi-report generator. It auto-discovers everything under `--project-dir`, including the JSONs from any sub-skill that succeeded. Missing JSONs degrade gracefully to placeholder/empty tabs.
 
@@ -330,11 +304,11 @@ uv run --project plugin/skills/migration/assessment \
 
 Do **not** pass per-source flags — the auto-discovery path is correct for every successful sub-skill. Do **not** write custom HTML.
 
-If the report command fails, record the failure and proceed to Step 9 anyway — the user still needs the status table.
+If the report command fails, record the failure and proceed to Step 8 anyway — the user still needs the status table.
 
-## Step 9: Surface Results + Retry
+## Step 8: Surface Results + Retry
 
-Print a status table from the `results` collected in Step 7, one line per sub-skill, in this order: `waves-generator`, `object-exclusion-detection`, `analyzing-sql-dynamic-patterns`, `etl-assessment`.
+Print a status table from the `results` collected in Step 6, one line per sub-skill, in this order: `waves-generator`, `object-exclusion-detection`, `analyzing-sql-dynamic-patterns`, `etl-assessment`.
 
 Format:
 
@@ -351,7 +325,7 @@ If any sub-skill failed, ask:
 
 > "Retry failed sub-skills? Successful JSONs will be reused — only the failed runs re-fire. (yes / no)"
 
-On `yes`: re-fire **only** the failed sub-skills using the same single-message Task fan-out as Step 6. Reuse the `assessment_inputs` snapshot from Step 5 — do not re-prompt the user. After the retries return, re-run Step 7 verification, regenerate the report (Step 8), and re-print the status table.
+On `yes`: re-fire **only** the failed sub-skills using the same single-message Task fan-out as Step 5. Reuse the `assessment_inputs` snapshot from Step 4 — do not re-prompt the user. After the retries return, re-run Step 6 verification, regenerate the report (Step 7), and re-print the status table.
 
 Each retry produces a fresh timestamped JSON; old runs are not deleted (this supports diffs across runs).
 
@@ -361,7 +335,7 @@ After retries complete (or if no retry was requested), proceed to [On Completion
 
 Handled automatically by Steps 0–3. The skill assumes:
 - `scai` CLI is installed and available on `PATH` — used by `setup`, `convert`, and `scai assessment waves`.
-- Python 3.11+ and `uv` are available for the HTML report generator and the remaining assessment scripts (`brew install uv` or `pip install uv`).
+- Python 3.11+ and `uv` are available for the HTML report generator and the remaining assessment scripts (install `uv` per https://docs.astral.sh/uv/getting-started/installation/ — `brew install uv` on macOS, `winget install astral-sh.uv` on Windows, or `pip install uv` anywhere).
 
 ## Example Prompts
 
@@ -428,6 +402,10 @@ Detect user intent and load the appropriate sub-skill:
 **ETL/SSIS Assessment** - Analyze SSIS packages for migration complexity:
 - Triggers: "ssis", "etl packages", "ssis analysis"
 - Load: `etl-assessment/SKILL.md`
+
+**Informatica Power Center Assessment** - Analyze Informatica workflows/mappings for migration complexity:
+- Triggers: "informatica", "power center", "powercenter", "informatica assessment", "informatica analysis"
+- Load: `informatica-assessment/SKILL.md`
 
 **Multiple Assessments** - Load all applicable sub-skills if request requires comprehensive analysis.
 
@@ -668,11 +646,14 @@ uv run --project <SKILL_DIRECTORY> \
 - `--dynamic-sql-json`: Path to dynamic SQL analysis JSON file. Auto-discovered.
 - `--snowconvert-reports-dir`: Path to SnowConvert Reports directory containing `TopLevelCodeUnits.*.csv` and `ObjectReferences.*.csv`. Auto-discovered.
 - `--ssis-json`: Path to SSIS assessment JSON file (etl_assessment_analysis.json from ETL assessment)
+- `--informatica-json`: Path to Informatica Power Center assessment JSON file (informatica_assessment_analysis.json from Informatica assessment)
 - `--output`: Output HTML file path (required)
 
 **Note:** At least one data source parameter must be provided. If only partial assessment was completed, provide only the available data sources.
 
 **SSIS Report Generation:** When SSIS packages are analyzed using the ETL assessment sub-skill, the resulting `etl_assessment_analysis.json` file should be provided via `--ssis-json` to include the SSIS tab in the unified report.
+
+**Informatica Report Generation:** When Informatica workflows are analyzed using the Informatica assessment sub-skill, the resulting `informatica_assessment_analysis.json` file should be provided via `--informatica-json` to include the Informatica tab in the unified report.
 
 ## Report Styling
 
@@ -707,7 +688,11 @@ If any answer is "No", go back and use the correct script.
 
 ## On Completion
 
-Tell the user:
-> **Assessment complete** — Generated a migration report with <N> deployment waves covering <M> objects. The report is at `<report_path>`. Key findings: <top 2-3 findings from the report, e.g., "12 objects with critical EWIs, 3 waves planned, 5 objects flagged for exclusion">.
+Present the closing message with: **opening line** (`migration_status.in_scope` objects in `wave_count` waves), **summary table** (Register, Convert, ETL conversion, Waves, Object exclusion, Dynamic SQL, SSIS/Informatica analysis, Missing objects — pull from `migration_status` and Code Unit Registry), **key findings** (2–4 bullets interpreting the data: heavy staging footprint ≥30%, unresolved external refs, conversion friction, ETL risk, circular dependencies — only when triggers fire), **report path** (platform-specific open command for `<project_dir>/assessment/multi_report.html`), and **next-steps menu**:
 
-Then return to the calling skill.
+> What would you like to do?
+> 1. **Review the report** — open HTML or ask any questions
+> 2. **Modify the assessment** — re-run with changed parameters
+> 3. **Move on to migration** — start Phase 2 (loads `../migrate-objects/SKILL.md`)
+
+Mark option **(1)** as `(recommended)` when `missing > 0`, otherwise **(3)**. Wait for response.

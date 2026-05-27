@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import sys
 import warnings
@@ -200,6 +201,61 @@ def missing_dependency_name(dep: Dict[str, Any], fallback_index: int) -> str:
     if dep_id:
         return dep_id
     return f"MISSING_DEPENDENCY_{fallback_index:04d}"
+
+
+def sync_planning_wave_to_registry(
+    output_folder: Path,
+    registry_dir: str | Path,
+) -> Dict[str, int]:
+    """Read partition_membership.csv and stamp planning.wave on each registry entry.
+    """
+    partition_csv = output_folder / "partition_membership.csv"
+    if not partition_csv.exists():
+        print("Warning: partition_membership.csv not found; skipping registry sync")
+        return {"updated": 0, "skipped": 0, "missing_in_registry": 0}
+
+    registry_path = Path(registry_dir)
+    entries = load_registry_entries(registry_path)
+    name_to_id: Dict[str, str] = {}
+    for entry in entries:
+        entry_id = (entry.get("id") or "").strip()
+        if entry_id:
+            name_to_id[build_registry_object_id(entry)] = entry_id
+
+    updated = skipped = missing = 0
+    with partition_csv.open(encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            object_name = row.get("object", "")
+            try:
+                wave = int(row["partition_number"])
+            except (KeyError, ValueError):
+                skipped += 1
+                continue
+            entry_id = name_to_id.get(object_name)
+            if not entry_id:
+                missing += 1
+                continue
+            entry_path = registry_path / f"{entry_id}.json"
+            try:
+                with entry_path.open(encoding="utf-8") as f:
+                    entry = json.load(f)
+            except (OSError, json.JSONDecodeError) as exc:
+                warnings.warn(f"Could not read {entry_path.name}: {exc}")
+                skipped += 1
+                continue
+            entry.setdefault("planning", {})["wave"] = wave
+            with entry_path.open("w", encoding="utf-8") as f:
+                json.dump(entry, f, indent=2, sort_keys=True)
+                f.write("\n")
+            updated += 1
+
+    print(
+        f"Synced planning.wave to {updated} registry entries "
+        f"({missing} CSV rows had no matching registry entry, "
+        f"{skipped} CSV rows skipped)"
+    )
+    return {"updated": updated, "skipped": skipped, "missing_in_registry": missing}
 
 
 def build_missing_objects(entries: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:

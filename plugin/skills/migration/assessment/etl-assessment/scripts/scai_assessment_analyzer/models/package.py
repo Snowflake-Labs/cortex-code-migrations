@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Set, Optional
 from collections import defaultdict
 
-from .component import Component
+from snowconvert_reports import Component
 from .data_flow import DataFlow
 from ..utils import sanitize_filename
 

@@ -1,6 +1,6 @@
 ---
 name: code-conversion-only
-description: Convert local source code to Snowflake SQL for code-conversion-only source systems such as Sybase IQ, Azure Synapse, Spark SQL, Databricks SQL, BigQuery, PostgreSQL, Greenplum, Netezza, Vertica, Hive, and IBM DB2. Optionally repoints Power BI reports. Use when configure returns project_type code_conversion_only for these sources.
+description: Convert local source code to Snowflake SQL for code-conversion-only source systems such as Sybase IQ, Azure Synapse, Spark SQL, Databricks SQL, BigQuery, Greenplum, Netezza, Vertica, Hive, and IBM DB2. Optionally repoints Power BI reports. Use when configure returns project_type code_conversion_only for these sources.
 parent_skill: migration
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -33,6 +33,8 @@ If `configure()` does not already have source_language configured, use the CLI d
 | IBM DB2 | `Db2` |
 
 If the user says "PostgreSQL & Based Languages" but does not specify one, ask whether they mean PostgreSQL, Greenplum, or Netezza.
+
+> **Note on PostgreSQL:** New PostgreSQL projects default to `project_type: full_migration` and are routed through `setup/SKILL.md`. PostgreSQL appears in this table only for **legacy** projects whose `project.yml` already has `project_type: code_conversion_only` persisted from before full-pipeline support shipped. If you reach this skill for PostgreSQL, the legacy project configuration is being honored.
 
 ## Workflow
 
