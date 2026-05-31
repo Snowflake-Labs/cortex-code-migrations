@@ -293,16 +293,22 @@ Build a `results` table indexed by sub-skill name (`waves-generator`, `object-ex
 
 ## Step 7: Generate Unified HTML Report
 
-Run the multi-report generator. It auto-discovers everything under `--project-dir`, including the JSONs from any sub-skill that succeeded. Missing JSONs degrade gracefully to placeholder/empty tabs.
+Run the multi-report generator with `--project-dir` and **pass flags for ssis or informatica if they apply* from the `results` table:
 
 ```bash
 uv run --project plugin/skills/migration/assessment \
   python plugin/skills/migration/assessment/scripts/generate_multi_report.py \
   --project-dir "<project_dir>" \
-  --output "<project_dir>/assessment/multi_report.html"
+  --output "<project_dir>/assessment/multi_report.html" \
+  [--ssis-json "<path>" if etl-assessment succeeded] \
+  [--informatica-json "<path>" if informatica-assessment succeeded]
 ```
 
-Do **not** pass per-source flags — the auto-discovery path is correct for every successful sub-skill. Do **not** write custom HTML.
+**Rules:**
+1. Always pass `--project-dir` — it auto-discovers waves, exclusion, dynamic-SQL, registry, and reports directories
+2. **Explicitly pass `--ssis-json`** if the `etl-assessment` sub-skill in the `results` table has `status == "ok"` and a valid `output_json` path
+3. **Explicitly pass `--informatica-json`** if the `informatica-assessment` sub-skill in the `results` table has `status == "ok"` and a valid `output_json` path
+4. Do **not** write custom HTML
 
 If the report command fails, record the failure and proceed to Step 8 anyway — the user still needs the status table.
 
@@ -645,15 +651,15 @@ uv run --project <SKILL_DIRECTORY> \
 - `--exclusion-json`: Path to object exclusion JSON file. Auto-discovered.
 - `--dynamic-sql-json`: Path to dynamic SQL analysis JSON file. Auto-discovered.
 - `--snowconvert-reports-dir`: Path to SnowConvert Reports directory containing `TopLevelCodeUnits.*.csv` and `ObjectReferences.*.csv`. Auto-discovered.
-- `--ssis-json`: Path to SSIS assessment JSON file (etl_assessment_analysis.json from ETL assessment)
-- `--informatica-json`: Path to Informatica Power Center assessment JSON file (informatica_assessment_analysis.json from Informatica assessment)
+- `--ssis-json`: Path to SSIS assessment JSON file (etl_assessment_analysis.json from ETL assessment). **MUST be explicitly passed when the etl-assessment sub-skill succeeds.**
+- `--informatica-json`: Path to Informatica Power Center assessment JSON file (informatica_assessment_analysis.json from Informatica assessment). **MUST be explicitly passed when the informatica-assessment sub-skill succeeds.**
 - `--output`: Output HTML file path (required)
 
 **Note:** At least one data source parameter must be provided. If only partial assessment was completed, provide only the available data sources.
 
-**SSIS Report Generation:** When SSIS packages are analyzed using the ETL assessment sub-skill, the resulting `etl_assessment_analysis.json` file should be provided via `--ssis-json` to include the SSIS tab in the unified report.
+**SSIS Report Generation:** When SSIS packages are analyzed using the ETL assessment sub-skill, you **MUST explicitly pass `--ssis-json`** with the path to `etl_assessment_analysis.json` returned by the sub-skill in Step 7.
 
-**Informatica Report Generation:** When Informatica workflows are analyzed using the Informatica assessment sub-skill, the resulting `informatica_assessment_analysis.json` file should be provided via `--informatica-json` to include the Informatica tab in the unified report.
+**Informatica Report Generation:** When Informatica workflows are analyzed using the Informatica assessment sub-skill, you **MUST explicitly pass `--informatica-json`** with the path to `informatica_assessment_analysis.json` returned by the sub-skill in Step 7.
 
 ## Report Styling
 

@@ -29,7 +29,6 @@ from pathlib import Path
 from collections import defaultdict, Counter
 
 from load_data_html_report import (
-    load_issues_estimation,
     load_toplevel_code_units,
     load_toplevel_objects_estimation,
     find_estimation_reports,
@@ -299,7 +298,7 @@ def _is_temporal_table(obj_name, obj_info, mem_info):
     return False
 
 
-def generate_html_report(waves_json, issues_json_path, output_path=None, reports_dir=None, registry_dir=None):
+def generate_html_report(waves_json, output_path=None, reports_dir=None, registry_dir=None):
     """Generate comprehensive HTML wave report with accurate analysis data.
 
     When registry_dir is provided, missing objects for the overview are loaded
@@ -333,7 +332,7 @@ def generate_html_report(waves_json, issues_json_path, output_path=None, reports
 
     estimation_data = None
     grand_totals_data = None
-    estimation_source = "Baseline (issues-estimation.json)"
+    estimation_source = "Estimation Reports"
 
     reports_dir = toplevel_csv_path.parent
     estimation_files = find_estimation_reports(reports_dir)
@@ -344,7 +343,7 @@ def generate_html_report(waves_json, issues_json_path, output_path=None, reports
         estimation_source = f"Estimation Reports ({estimation_files['toplevel_estimation'].name})"
         grand_totals_data = load_estimation_grand_totals(estimation_files)
 
-    _, severity_map = load_issues_estimation(issues_json_path)
+    severity_map = {}
     objects_data = load_toplevel_code_units(toplevel_csv_path)
 
     membership = adapter.partition_membership()
@@ -5262,8 +5261,6 @@ def main():
     parser = argparse.ArgumentParser(description='Generate HTML wave migration report')
     parser.add_argument('--waves-json', '-a', required=True,
                        help='Path to waves.json produced by the dependency analyzer')
-    parser.add_argument('--issues-json', '-i', required=True,
-                       help='Path to issues-estimation.json')
     parser.add_argument('--output', '-o', required=False,
                        help='Output HTML file path (optional)')
     parser.add_argument('--reports-dir', '-r', required=False,
@@ -5273,7 +5270,7 @@ def main():
 
     args = parser.parse_args()
 
-    generate_html_report(args.waves_json, args.issues_json, args.output, args.reports_dir, args.registry_dir)
+    generate_html_report(args.waves_json, args.output, args.reports_dir, args.registry_dir)
 
 
 if __name__ == '__main__':

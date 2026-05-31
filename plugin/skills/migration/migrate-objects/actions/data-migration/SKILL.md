@@ -14,7 +14,7 @@ One-time configuration for migrating data from a source database into Snowflake 
 
 ## Prerequisite
 
-Load `../../../setup/data-infrastructure/SKILL.md` first. It handles shared prerequisites, compute pool registration, and worker config (source host/port/credentials, source database, source schema). Return here after it completes.
+Load `../../../data-infrastructure/SKILL.md` first. It handles shared prerequisites, compute pool registration, and worker config (source host/port/credentials, source database, source schema). Return here after it completes.
 
 ---
 
@@ -154,7 +154,7 @@ or `scai data start-cloud-worker` directly.**
 
 ## Checklist
 
-Shared infrastructure checklist is owned by `../../../setup/data-infrastructure/SKILL.md`. Migration-specific items:
+Shared infrastructure checklist is owned by `../../../data-infrastructure/SKILL.md`. Migration-specific items:
 
 ```
 - [ ] Migration approach selected

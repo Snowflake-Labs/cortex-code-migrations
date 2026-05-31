@@ -105,7 +105,6 @@ Match the user's request to the most relevant skill and load it.
 
 ### Data infrastructure (reusable actions)
 - **data-infrastructure** — shared infrastructure for data migration and validation: compute pools, workers, network access → `./data-infrastructure/SKILL.md`
-  - **compute-pool-setup** — create and configure a Snowpark Container Services compute pool → `./data-infrastructure/compute-pool-setup/SKILL.md`
   - **worker-local-setup** — install and start the worker on a user-managed machine (laptop, VM, or on-prem) → `./data-infrastructure/worker-local-setup/SKILL.md`
 
 ### Source code: register & convert

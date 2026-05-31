@@ -672,7 +672,7 @@ def flatten_dynamic_sql_json(data: Dict) -> List[Dict]:
     return flattened
 
 
-def load_waves_data(waves_json: Path, reports_dir: Path = None, issues_json_path: Path = None, registry_dir: Path = None):
+def load_waves_data(waves_json: Path, reports_dir: Path = None, registry_dir: Path = None):
     """Load waves/dependency analysis data and generate HTML content for the waves report tab."""
     if not WAVES_SUPPORT:
         return None
@@ -681,34 +681,6 @@ def load_waves_data(waves_json: Path, reports_dir: Path = None, issues_json_path
         # Generate the full waves HTML report to a temp file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.html', encoding='utf-8', delete=False) as tmp:
             tmp_path = Path(tmp.name)
-
-        # Find issues-estimation.json if not provided
-        if not issues_json_path:
-            search_dirs = [Path(waves_json).parent, Path(waves_json).parent.parent.parent.parent]
-            if reports_dir:
-                search_dirs.insert(0, Path(reports_dir))
-                # Also check SnowConvert subdirectory
-                snowconvert_dir = Path(reports_dir) / 'SnowConvert'
-                if snowconvert_dir.exists():
-                    search_dirs.insert(0, snowconvert_dir)
-
-            for search_dir in search_dirs:
-                if search_dir.exists():
-                    issue_matches = list(search_dir.glob('**/issues-estimation.json'))
-                    if issue_matches:
-                        issues_json_path = issue_matches[0]
-                        break
-
-            # Use a dummy path if not found
-            if not issues_json_path:
-                # Create a minimal issues JSON. NamedTemporaryFile (vs the
-                # deprecated tempfile.mktemp) avoids the well-known race and
-                # gives us a real file handle whose path we can pass on.
-                with tempfile.NamedTemporaryFile(
-                    mode='w', suffix='.json', encoding='utf-8', delete=False,
-                ) as fh:
-                    json.dump({"Issues": [], "Severities": []}, fh)
-                    issues_json_path = Path(fh.name)
 
         # Determine the correct reports_dir to pass (should include SnowConvert if it exists)
         reports_dir_to_use = reports_dir
@@ -721,7 +693,6 @@ def load_waves_data(waves_json: Path, reports_dir: Path = None, issues_json_path
         print(f"Generating waves HTML content...")
         report_path = generate_full_waves_report(
             waves_json=str(waves_json),
-            issues_json_path=str(issues_json_path),
             output_path=str(tmp_path),
             reports_dir=str(reports_dir_to_use) if reports_dir_to_use else None,
             registry_dir=str(registry_dir) if registry_dir else None,
@@ -1021,8 +992,14 @@ def generate_multi_report(
     if waves_json:
         print(f"Loading waves data from {waves_json}...")
         waves_info = load_waves_data(waves_json, snowconvert_reports_dir, registry_dir=registry_dir)
-        if waves_info and not exclusion_json and not dynamic_sql_json:
-            default_tab = 'waves'
+        if waves_info:
+            if not exclusion_json and not dynamic_sql_json:
+                default_tab = 'waves'
+        else:
+            print(f"ERROR: Waves data failed to load from {waves_json}. The Waves tab will be missing from the report.", file=sys.stderr)
+            # If waves was the only requested data source, this is a hard failure
+            if not exclusion_json and not dynamic_sql_json and not ssis_json and not informatica_json:
+                raise ValueError(f"Failed to load waves data and no other data sources were provided")
     
     # Load SSIS data
     ssis_data = None
@@ -6028,6 +6005,28 @@ def main():
             if matches:
                 args.waves_json = matches[-1]  # latest by timestamp
                 print(f"Using waves JSON: {args.waves_json}", file=sys.stderr)
+        if not args.ssis_json:
+            # Check common locations for SSIS analysis output
+            candidates = [
+                args.project_dir / "assessment" / "ssis" / "etl_assessment_analysis.json",
+                args.project_dir / "assessment" / "etl_assessment_analysis.json",
+            ]
+            for candidate in candidates:
+                if candidate.is_file():
+                    args.ssis_json = candidate
+                    print(f"Using SSIS JSON: {args.ssis_json}", file=sys.stderr)
+                    break
+        if not args.informatica_json:
+            # Check common locations for Informatica analysis output
+            candidates = [
+                args.project_dir / "assessment" / "informatica" / "informatica_assessment_analysis.json",
+                args.project_dir / "assessment" / "informatica_assessment_analysis.json",
+            ]
+            for candidate in candidates:
+                if candidate.is_file():
+                    args.informatica_json = candidate
+                    print(f"Using Informatica JSON: {args.informatica_json}", file=sys.stderr)
+                    break
 
     if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.registry_dir:
         print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)

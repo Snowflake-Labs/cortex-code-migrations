@@ -43,7 +43,7 @@ Before starting any configuration, tell the user verbatim:
 
 ## Idempotency
 
-If this sub-skill has already been completed in the current project — i.e., `.scai/settings/cloud-migration.yaml` already has a `compute_pool` value **and** `.scai/settings/DataExchangeWorkerConfig.toml` exists with no remaining `<placeholder>` values — report "Data infrastructure already configured" and return to the caller without re-prompting.
+If this sub-skill has already been completed in the current project — i.e., `.scai/settings/DataExchangeWorkerConfig.toml` exists with no remaining `<placeholder>` values — report "Data infrastructure already configured" and return to the caller without re-prompting.
 
 Otherwise, proceed through the steps below.
 
