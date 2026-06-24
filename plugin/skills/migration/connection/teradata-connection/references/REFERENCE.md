@@ -2,6 +2,19 @@
 
 Detailed reference for Teradata connection options, authentication methods, driver setup, and troubleshooting.
 
+## Supported SCAI Operations
+
+Teradata is a **full-migration** source. After `scai connection add-teradata` and a successful connection test:
+
+| Area | Commands / flows |
+|------|------------------|
+| Connection | `scai connection test`, `scai query` |
+| Code | `scai code extract`, `scai code convert`, `scai code deploy` |
+| 2-sided testing | `scai test seed`, `scai test capture`, `scai test validate` |
+| Cloud table data | `scai data migrate`, cloud data validation (Data Exchange Worker) |
+
+New Teradata projects default to `project_type: full_migration`. Legacy projects with `project_type: code_conversion_only` in `project.yml` stay on the code-conversion-only path until upgraded.
+
 ## Driver Setup
 
 Teradata requires the **`Teradata.Client.Provider` NuGet package** (.NET driver). This is **not** the Teradata JDBC driver (`terajdbc*.jar`) — SCAI uses .NET internally, so the JDBC driver will not work. The NuGet package is **not** bundled with SCAI.
@@ -154,6 +167,17 @@ scai connection add-teradata \
   --database MY_DB \
   --user dbc
 ```
+
+## Data Exchange Worker (cloud migration / validation)
+
+The Data Exchange Agent worker connects with **`teradatasql`** (preferred) or Teradata ODBC using the same host, port, database, and credentials as `scai connection add-teradata`. (SCAI code extraction uses the separate .NET `Teradata.Client.Provider` NuGet package — that driver is not used by the worker.) Ensure the Teradata user can:
+
+- `SELECT` on tables (and views) being migrated or validated
+- Read catalog/metadata needed for schema extraction (typical: `DBC` dictionary access or explicit grants as required by your security model)
+
+Network: the worker host must reach the Teradata listener (`host`:`port`, default 1025). For SPCS workers, configure `EXTERNAL_ACCESS_INTEGRATIONS` for the database host and the NuGet driver download endpoint (see [`../../data-infrastructure/worker-spcs/SKILL.md`](../../data-infrastructure/worker-spcs/SKILL.md)).
+
+Worker TOML `[connections.source.teradata].database` must be the **database name**, matching `source.databaseName` in migration/validation workflow YAML.
 
 ## Troubleshooting
 

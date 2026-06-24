@@ -2,7 +2,7 @@
 
 Rust MCP server that exposes Snowflake database migration tools — registry status, rule engine, testing orchestrator, deployment, and direct SQL execution — to any MCP-compatible client.
 
-Uses an embedded Python interpreter (via PyO3) for Snowflake connectivity through `snowflake-snowpark-python`.
+Snowflake connectivity runs through the `scai` CLI: the server spawns `scai mcp worker` as a persistent JSON-over-stdio subprocess and reuses it for all rule-engine, registry, and schema SQL. No Python runtime is required.
 
 ## Tools
 
@@ -47,34 +47,34 @@ The server can host a small read-only HTML dashboard on `127.0.0.1` (no data lea
 |------|-------------|
 | `deploy` | Deploy objects via `scai code deploy` (single `object_name` or `where` filter) |
 | `query_source` | Run a SQL query against the source database via `scai query` |
-| `migrate_data` | Two-mode tool. `mode="setup"` generates a per-`where` workflow YAML at `artifacts/data_migration/workflows/<hash>.yaml` (forwarding `where` to scai's `--where`) and persists the other params under `data_migration:` in `plugin.yml` as defaults; the agent reviews/edits before running. `mode="run"` takes the `workflow_path` and starts the migration (orchestrator + worker + cloud-migrate) in the background. |
+| `migrate_data` | Two-mode tool. `mode="setup"` generates a per-`where` workflow YAML at `artifacts/data_migration/workflows/<hash>.yaml` (forwarding `where` to scai's `--where`) and persists the other params under `data_migration:` in `plugin.yml` as defaults; the agent reviews/edits before running. `mode="run"` takes the `workflow_path` and starts the migration (`scai data orchestrator setup`, `scai data worker start`, then `scai data migrate create-workflow`) in the background. |
 | `validate_data` | Validate migrated data between source and Snowflake. Uses cloud validation (SPCS) when configured. |
 | `validate_data_status` | Check status of a data validation job. Includes per-table progress from the SPCS orchestrator. |
 
 ## Building
 
 ```bash
-# Build binary + install Python deps
 crates/mcp-server/build-plugin.sh
 ```
 
-This builds the Rust binary to `plugin/mcp-server/bin/` and runs `uv sync` to install `snowflake-snowpark-python` in a local venv.
+This builds the Rust binary to `plugin/mcp-server/bin/`.
 
 ## Running
 
 ```bash
-# Via wrapper (sets up PYTHONPATH automatically)
-plugin/mcp-server/run.sh
+# Directly
+plugin/mcp-server/bin/migration-mcp-server
+
+# Or hosted by scai (what an MCP client launches)
+scai mcp run
 ```
 
-The wrapper finds the venv's `site-packages`, sets `PYTHONPATH`, and execs the binary.
+`scai mcp run` locates the binary next to the `scai` executable (or via `MIGRATION_MCP_SERVER_BIN`) and runs it with inherited stdio.
 
 ## Dependencies
 
 - Rust toolchain (for building)
-- Python 3.11+ (runtime, for Snowpark)
-- [uv](https://github.com/astral-sh/uv) (for managing the Python venv)
-- `scai` CLI on PATH (for `deploy`, `query_source`, `migrate_data`)
+- `scai` CLI on PATH — all Snowflake connectivity (`scai mcp worker`) plus `deploy`, `query_source`, `migrate_data`
 - Snowflake connection configured in `~/.snowflake/connections.toml`
 
 ## License

@@ -1,7 +1,7 @@
 ---
 name: synthetic-seeder
 description: >
-  Generate two-sided synthetic unit tests (source + Snowflake) for migrated stored
+  Generate two-sided synthetic data tests (source + Snowflake) for migrated stored
   procedures and functions. Derives test scenarios from source SQL branch analysis,
   writes step-based validation YAML artifacts, and enriches them with isolation metadata.
   Use when generating or refreshing test cases for a migrated object.
@@ -12,7 +12,7 @@ parent_skill: baseline-capture
 
 # Synthetic Seeder Skill
 
-Generate two-sided synthetic unit tests for migrated stored procedures and functions.
+Generate two-sided synthetic data tests for migrated stored procedures and functions.
 Tests are derived from **source SQL analysis** — the source is the oracle, not the
 converted code. Each test is a step-based YAML artifact directly consumable by
 `scai test capture` and `scai test validate`.

@@ -10,7 +10,7 @@ Use this command to extract all signals in one place. It returns a well‑format
 4) Connection managers (name + creationName)
 
 ```bash
-uv run python -m scai_assessment_analyzer etl <JSON_PATH> summary
+scai assessment etl summary
 ```
 
 ### Step: Draft AI Summary (HTML)
@@ -21,7 +21,7 @@ Add this step after generating `etl_assessment_analysis.json`:
 3. Save it as `ai_ssis_summary.html` so it can be embedded into the SSIS report later.
 4. Update the assessment JSON to point to the summary HTML:
 ```bash
-uv run python -m scai_assessment_analyzer etl <JSON_PATH> ai-summary ai_ssis_summary.html
+scai assessment etl ai-summary <HTML_PATH>
 ```
 
 ### What to Look For

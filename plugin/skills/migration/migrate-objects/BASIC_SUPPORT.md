@@ -1,6 +1,6 @@
 ---
 name: basic-support
-description: Post-conversion guidance for basic-support dialects (Oracle, Teradata). Offers deployment and next-step options.
+description: Post-conversion guidance for code-conversion-only dialects (Sybase, Spark, BigQuery, etc.). Offers deployment and next-step options. For full-migration sources (SQL Server, Redshift, Oracle, Teradata), use [migrate-objects](./SKILL.md) instead.
 parent_skill: migrate-objects
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -16,4 +16,4 @@ If the user chooses **Deploy**, run `scai code deploy -c <snowflake_connection> 
 
 If the user chooses **Something else**, follow their instructions.
 
-Return to the parent [SKILL.md](../SKILL.md) after handling the user's choice.
+Return to the parent [SKILL.md](./SKILL.md) after handling the user's choice.

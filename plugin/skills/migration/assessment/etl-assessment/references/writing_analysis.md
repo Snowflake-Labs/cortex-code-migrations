@@ -274,12 +274,21 @@ Before submitting analysis, verify:
 
 ## Update JSON Command
 
-After completing analysis:
+After writing your analysis, update the package record using command options (NOT a file path):
 
 ```bash
-uv run python -m scai_assessment_analyzer etl <JSON_PATH> update 'package_path.dtsx' \
+scai assessment etl update '<PACKAGE_PATH>' \
   --ai-status DONE \
-  --ai-analysis "..." \
-  --classification "Ingestion|Data Transformation|Configuration & Control" \
-  --effort <HOURS>
+  --ai-analysis '<YOUR_FULL_ANALYSIS_TEXT>' \
+  --classification '<CATEGORY>' \
+  --effort '<HOURS>'
 ```
+
+**Parameters:**
+- `<PACKAGE_PATH>` — relative path matching the package (e.g., `Extract_CWSO_DEALER_TBL.dtsx`)
+- `--ai-status` — must be `DONE` when submitting completed analysis
+- `--ai-analysis` — your full analysis text (all four sections: Classification, Sources & Destinations, Purpose, Conversion)
+- `--classification` — one of: `Ingestion`, `Data Transformation`, `Configuration & Control`, `Mixed`
+- `--effort` — estimated hours (e.g., `20-28 hours`, `16-24 hours`)
+
+**Important:** Pass the analysis text directly as a command option, NOT as a file path. The command validates the analysis format before updating the JSON.

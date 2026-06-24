@@ -369,7 +369,7 @@ validation:
 
 Oracle procs that return result sets do so via `SYS_REFCURSOR` OUT params. The pattern mirrors [Cursor-read step](#cursor-read-step) for Redshift, but the source side uses an OUT-param read instead of `FETCH ALL`.
 
-> **Note:** Oracle source support is code-conversion-only in scai today. This recipe is here for completeness; if you hit it in practice, escalate to the testing-infrastructure team.
+> **Note:** Oracle is a full-migration source with extract, registry, and testing support. If you encounter issues with Oracle ref-cursor testing, consult the testing-infrastructure team.
 
 ---
 

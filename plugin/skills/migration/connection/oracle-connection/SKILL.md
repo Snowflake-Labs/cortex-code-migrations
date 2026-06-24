@@ -122,12 +122,6 @@ Confirm with user:
 - [ ] Connection appears in `scai connection list -l oracle --json`
 - [ ] Source connection saved to session config
 
-## Limitations
-
-- **Data migration is not supported for Oracle.** The `scai data migrate` command does not support Oracle as a source. Table data must be migrated through other means (e.g., external ETL tools, Oracle Data Pump, or manual export/import).
-- **Data validation is not supported for Oracle.** The 2-sided testing framework (`scai test`) does not support Oracle as a source for baseline capture or result comparison.
-- **Supported Oracle operations:** code extraction (`scai code extract`), code conversion (`scai code convert`), and deployment to Snowflake (`scai code deploy`).
-
 ## On Completion
 
 After the CHECKPOINT passes, tell the user:

@@ -1,7 +1,7 @@
 [project]
 name = "migration-mcp-python-deps"
 version = "0.1.0"
-description = "Python runtime dependencies for the migration MCP server (Snowpark) and the rule benchmark harness"
+description = "Python dependencies for the rule benchmark harness. The MCP server no longer embeds Python — it reaches Snowflake through the scai CLI."
 requires-python = ">=3.11"
 dependencies = [
     "snowflake-snowpark-python>=1.20",

@@ -32,7 +32,7 @@ The instructions in the steps must be follow for each package strictly.
 
 **NEVER** read the json file directly, **ALWAYS** use this command:
 ```bash
-uv run python -m scai_assessment_analyzer etl <JSON_PATH> pending
+scai assessment etl pending
 ```
 
 Returns: `Name: package.dtsx | Relative Path: Folder/package.dtsx`
@@ -41,11 +41,12 @@ Returns: `Name: package.dtsx | Relative Path: Folder/package.dtsx`
 
 ## Step 2: Scan Package
 
-Run the scan command with the package path and DTSX file path:
+Run the scan command with ONLY the package path (relative path from the SSIS source directory):
 
 ```bash
-uv run python -m scai_assessment_analyzer etl <JSON_PATH> scan-package '<PACKAGE_PATH>' '<DTSX_PATH>'
+scai assessment etl scan-package '<PACKAGE_PATH>'
 ```
+**Note:** The command takes a single argument (the relative package path). Do NOT pass an absolute DTSX path as a second argument.
 
 This outputs everything needed for analysis:
 - **Package Info**: Metrics, connection managers, component breakdown

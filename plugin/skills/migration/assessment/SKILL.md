@@ -247,12 +247,14 @@ Steps:
 2. Locate ETL.Elements.*.csv and ETL.Issues.*.csv under
    <project_dir>/reports/SnowConvert/. If etl_replatform_sources_path is
    empty, auto-detect per the skill's Step 1.
-3. Run:
-     uv run python -m scai_assessment_analyzer \
-       <ETL.Elements> <ETL.Issues> <SSIS_SOURCE_DIR> <output_dir>
-4. If review_mode = auto-review-all, follow the skill's Step 3 + Step 4
-   to classify each package and produce ai_ssis_summary.html.
-5. Locate etl_assessment_analysis.json under <output_dir>.
+3. Run (from the project root):
+     scai assessment etl generate
+   This writes etl_assessment_analysis_<timestamp>.json and dag_model_<timestamp>.json
+   to <output_dir>.
+4. Render DAG HTMLs from the newest dag_model_*.json (conditional, per the skill's Step 2).
+5. If review_mode = auto-review-all, follow the skill's Step 3 + Step 4
+   to classify each package and produce ai_ssis_summary.html
+6. Locate etl_assessment_analysis_<timestamp>.json under <output_dir>.
 
 Report back JSON only:
 {
@@ -556,11 +558,12 @@ Before generating the report, you **MUST** check for incomplete analysis and war
    scai assessment sql-dynamic stats <path/to/sql_dynamic_analysis.json>
    ```
 
-2. **Check SSIS status** using the ETL analyzer:
+2. **Check SSIS status** using the scai assessment etl command:
    ```bash
-   uv run --project <SKILL_DIRECTORY>/etl-assessment \
-     python -m scai_assessment_analyzer etl <path/to/etl_assessment_analysis.json> stats
+   scai assessment etl stats
    ```
+   
+   Note: The `stats` command reads the JSON produced by `scai assessment etl generate` and auto-detects the file from project context.
 
 **If there are PENDING Dynamic SQL records OR unclassified SSIS packages**, present this warning:
 

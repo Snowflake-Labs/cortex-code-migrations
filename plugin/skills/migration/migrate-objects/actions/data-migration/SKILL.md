@@ -9,7 +9,7 @@ license: Proprietary. See License-Skills for complete terms
 
 One-time configuration for migrating data from a source database into Snowflake via the **scai CLI**.
 
-> **Supported sources**: SQL Server, Redshift
+> **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL
 > **Supported targets**: Native tables (default), Iceberg tables
 
 ## Prerequisite
@@ -40,49 +40,29 @@ Decide the value in this order:
    construct the filter from the listed columns (`source.objectType`,
    `source.schema`, `source.canonicalName`, etc.).
 
-Show the proposed `where` to the user and get confirmation before generating.
+Show the proposed `where` to the user and get confirmation before continuing.
 
-### 1.B — Migration Type (controls per-table sync + row scope)
+### 1.B — Migration approach (state machine)
 
-Once tables are chosen, decide what happens *inside* each table:
+Migration type, sync strategy, extraction strategy, and target table type are
+driven by the **`data-migration-setup` state machine**. Call
+`progress_setup(mode="data_migration")` in a loop until `completed` is true —
+follow each response's `next_prompt` (persist answers with `configure`) the same
+way as project setup in `setup/SKILL.md`.
 
-> 1. **Preliminary** — Subset of rows to verify setup. After YAML generation,
->    add `whereClauseCriteria` to each table with a valid WHERE predicate for
->    your source platform; sync = `none`.
->    - **SQL Server**: Filter on a key column (e.g., `"id <= 1000"`)
->    - **Redshift**: Filter on a key column (e.g., `"id <= 1000"`)
->    - **Important**: `whereClauseCriteria` is injected after `WHERE` in the
->      extraction query. `TOP` (SQL Server) and `LIMIT` (Redshift) are **not
->      valid** inside a WHERE clause and will cause a syntax error.
->    - This is **separate from** the table-selection `where` in 1.A.
->      `whereClauseCriteria` is a YAML edit applied to each table after the
->      file is generated.
-> 2. **Incremental** — Only new/changed data. Ask: **Checksum** (partition
->    hashing) or **Watermark** (monotonic column)?
-> 3. **Full** — All rows, one-time load. Sync = `none`. No
->    `whereClauseCriteria`.
+For **Preliminary** migrations, after YAML generation (Step 2a), add
+`whereClauseCriteria` per table with a valid WHERE predicate; see
+`./references/workflow-config-reference.md`.
 
-### 1.C — Extraction Strategy
-
-Only for **Redshift** (default `regular`):
-
-> 1. **Regular** — Direct ODBC read.
-> 2. **UNLOAD** — Redshift writes to S3, loaded via External Stage.
-
-### 1.D — Target Table Type
-
-> 1. **Native (default)** — Standard Snowflake tables.
-> 2. **Iceberg** — See `./references/iceberg-setup-reference.md` for strategy selection and prerequisite setup.
-
-### 1.E — Confirm
+### 1.C — Confirm
 
 ```
 Migration approach:
   Tables (where): <registry filter or "all in scope">
-  Type:           Preliminary | Incremental | Full
-  Sync:           none | checksum | watermark
-  Extraction:     regular | unload
-  Target:         native | iceberg
+  Type:           <from machine>
+  Sync:           <from machine, or none for preliminary/full>
+  Extraction:     <from machine, or regular default>
+  Target:         <from machine>
 ```
 
 ---
@@ -106,16 +86,19 @@ migrate_data(
 
 Notes:
 
-- `where` is forwarded to `scai data generate-cloud-migration-config --where`
-  as a **table-selection filter** (registry syntax). It controls which tables
-  show up in the generated `tables:` list. Row-level filtering for the
-  Preliminary type is a separate YAML edit (`whereClauseCriteria`) applied in
-  Step 2a.
-- The tool writes the generated YAML to
-  `artifacts/data_migration/workflows/<hash>.yaml`, where `<hash>` is derived
-  from `where`. Same `where` always maps to the same file; distinct table
-  selections produce distinct files. If the file already exists, the tool
-  reuses it — no overwrite.
+- `where` is forwarded to `scai data migrate generate-config --where` as a
+  **table-selection filter** (registry syntax). It controls which tables show
+  up in the generated `tables:` list. Row-level filtering for the Preliminary
+  type is a separate YAML edit (`whereClauseCriteria`) applied in Step 2a.
+- The tool writes the YAML to `artifacts/data_migration/workflows/<hash>.yaml`.
+  Same `where` always maps to the same file. **Re-running setup reuses the
+  existing file** (preserves your edits). Pass `force_regenerate=true` only
+  when you intentionally want a fresh file from scai (previous file copied to
+  `.yaml.bak`).
+- On first generation, the MCP server fills missing `source.databaseName` (from
+  the scai source connection), `target.databaseName` (from
+  `configure(snowflake_database=...)`), and Oracle `columnNamesToPartitionBy`
+  (`ROWID`) when the CLI left them empty.
 
 ### Step 2a: Read, edit, and confirm
 
@@ -125,9 +108,13 @@ Notes:
 3. **For Preliminary type**: add `whereClauseCriteria: "<row predicate>"` to
    each table (or to `defaultTableConfiguration` for a shared filter). This
    is the row-level filter and is unrelated to the table-selection `where`.
-4. Fill in any missing per-table fields (`columnNamesToPartitionBy` is
-   **required** by the CLI validator for native tables; `target.databaseName`
-   / `schemaName` / `tableName` if not auto-populated).
+4. Fill in any remaining per-table fields. **`columnNamesToPartitionBy` must
+   have at least one column** for native tables (empty `[]` finishes the
+   workflow without moving data). SQL Server / Redshift need an explicit PK or
+   partition column — Oracle defaults to `ROWID` on first generate —
+   PostgreSQL should use a monotonic integer PK (e.g. `id BIGINT`) or a
+   timestamp column; avoid `ctid` (unstable across vacuum). If no suitable
+   column exists, omit the field for a single-partition full extract.
 5. For **Iceberg** workflows, also follow `./references/iceberg-setup-reference.md`.
 6. Show the final YAML to the user and get explicit confirmation before running.
 
@@ -144,11 +131,20 @@ CREATE DATABASE IF NOT EXISTS <target_db>;
 CREATE SCHEMA IF NOT EXISTS <target_db>.<target_schema>;
 ```
 
-This completes the **setup** phase. The actual migration is started later by the
-migrate-objects skill via `migrate_data(mode="run", workflow_path=<path>)`,
-which handles the orchestrator and worker lifecycle internally. Track progress
-with `migration_status(mode="data_migration")`. **Do not run `scai data cloud-migrate`
-or `scai data start-cloud-worker` directly.**
+This completes the **setup** phase. Start migration via
+`migrate_data(mode="run", workflow_path=<path>)`. That runs, in order:
+
+1. `scai data orchestrator setup --compute-pool ...`
+2. `scai data worker start --local .scai/settings/DataExchangeWorkerConfig.toml` (when config exists)
+3. `scai data migrate create-workflow --config <path> --start-service --compute-pool ...`
+
+Track progress with `migration_status(mode="data_migration")`.
+
+**Do not** use `scai data migrate start` for cloud/SPCS workflows — it follows a
+different path and may accept YAML the orchestrator rejects.
+
+**Removed commands (do not use):** `cloud-migrate`, `start-cloud-worker`, etc.
+Use the `migrate_data` MCP tool or `scai data migrate create-workflow` / `scai data worker start`.
 
 ---
 

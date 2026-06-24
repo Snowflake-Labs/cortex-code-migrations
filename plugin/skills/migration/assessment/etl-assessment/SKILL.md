@@ -22,7 +22,7 @@ When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, t
 | `etl_replatform_sources_path` | no | absolute path to the SSIS `.dtsx` source directory; falls back to auto-detection per [Step 1](#step-1-locate-input-files-auto-detected) |
 | `review_mode` | yes | `generate-only`, `auto-review-all`, or `skip` |
 
-**On entry:** call the `configure` MCP tool with `project_dir` from the context block. Snowflake credentials are not required — `scai_assessment_analyzer` reads only local CSVs and `.dtsx` files.
+**On entry:** call the `configure` MCP tool with `project_dir` from the context block. Snowflake credentials are not required — `scai assessment etl generate` reads converted CSVs and SSIS `.dtsx` sources.
 
 **Branching by `review_mode`:**
 
@@ -44,10 +44,16 @@ When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, t
 
 On `skip`: `"status": "skipped"`, `"output_json": null`. On failure: `"status": "error"`, `"error": "<message>"`.
 
+## Important Notes
+
+- **No help command**: The `scai assessment etl` commands are hidden (AI-agent-only, like `sql-dynamic`). Running `scai assessment etl <command> --help` returns "No help available". Commands are documented in this skill file only.
+- **Auto-detection**: All C# commands (`generate`, `pending`, `scan-package`, `stats`, `summary`, `update`, `ai-summary`) auto-detect the JSON path and SSIS source directory from the configured project context. You do not need to pass explicit paths.
+- **Single argument for scan-package**: The `scan-package` command takes ONLY the package path (relative to the SSIS source directory). Do NOT pass a second argument with an absolute path. Example: `scai assessment etl scan-package 'MyPackage.dtsx'` (NOT `... 'MyPackage.dtsx' '/full/path/to/MyPackage.dtsx'`).
+
 ## Rules
 
 1. **Use ONLY Provided Scripts**
-   - ONLY use the provided CLI commands: `python -m scai_assessment_analyzer`
+   - ONLY use the provided `scai assessment etl` commands (generation) and Python reader commands (analysis tracking)
    - DO NOT create custom scripts to read or manipulate the JSON file
    - DO NOT use grep, jq, or other tools to parse the JSON directly
    - All JSON interactions MUST go through the provided CLI
@@ -103,11 +109,28 @@ Analysis Progress:
 
 ## Step 2: Generate JSON Analysis
 
-Run with the auto-detected paths from Step 1:
+Run the C# assessment generator from the project root (it auto-detects all paths from the configured project):
 
 ``` bash
-uv run python -m scai_assessment_analyzer <ETL.Elements> <ETL.Issues> <SSIS_SOURCE_DIR> <OUTPUT>
+scai assessment etl generate
 ```
+
+This writes two timestamped files to `<project>/artifacts/assessment/etl/`:
+- `etl_assessment_analysis_<timestamp>.json` — the main assessment data
+- `dag_model_<timestamp>.json` — control-flow and data-flow graph data for DAG rendering
+
+**Immediately after generation**, render the DAG HTMLs from the newest `dag_model_*.json`:
+
+``` bash
+dag_model=$(ls -t <project>/artifacts/assessment/etl/dag_model_*.json 2>/dev/null | head -1)
+if [[ -n "$dag_model" ]]; then
+  uv run --project ai ai/plugin/skills/migration/assessment/etl-assessment/scripts/dag_renderer/render_dags.py "$dag_model"
+else
+  echo "No dag_model.json found; skipping DAG render (expected if no control-flow or data-flow components)"
+fi
+```
+
+The renderer writes `dags/*.html` interactive visualizations to the same output directory.
 
 ## Step 3: Analyze SSIS Packages
 
@@ -125,7 +148,7 @@ To analyze SSIS packages, follow the instructions of the workflow of this refere
 
 1. Run the summary command to get all signals:
 ```bash
-uv run python -m scai_assessment_analyzer etl <JSON_PATH> summary
+scai assessment etl summary
 ```
 
 2. Read the guide: [references/ai_summary_guide.md](references/ai_summary_guide.md)
@@ -134,8 +157,10 @@ uv run python -m scai_assessment_analyzer etl <JSON_PATH> summary
 
 4. Register the summary in the JSON:
 ```bash
-uv run python -m scai_assessment_analyzer etl <JSON_PATH> ai-summary <HTML_PATH>
+scai assessment etl ai-summary <HTML_PATH>
 ```
+
+**Note:** The `summary` and `ai-summary` commands use the C# CLI to read and mutate the assessment JSON (auto-detected from project context).
 
 **Verification Checklist:**
 - [ ] `ai_ssis_summary.html` file exists

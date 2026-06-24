@@ -34,7 +34,6 @@ from load_data_html_report import (
     find_estimation_reports,
     load_estimation_grand_totals,
     estimate_hours_for_object,
-    load_missing_object_references,
     load_object_references_as_dicts,
 )
 from registry_support import (
@@ -301,9 +300,8 @@ def _is_temporal_table(obj_name, obj_info, mem_info):
 def generate_html_report(waves_json, output_path=None, reports_dir=None, registry_dir=None):
     """Generate comprehensive HTML wave report with accurate analysis data.
 
-    When registry_dir is provided, missing objects for the overview are loaded
-    directly from registry entries where ``isMissing: true``.  Otherwise the
-    CSV-based ``load_missing_object_references`` is used.
+    Missing objects are loaded from registry entries where ``isMissing: true``.
+    Registry directory (--registry-dir) is required for missing dependencies analysis.
     """
 
     adapter = WavesJsonAdapter(Path(waves_json))

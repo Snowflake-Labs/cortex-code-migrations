@@ -1,13 +1,14 @@
 ---
 name: configure-source-connection
-description: Optionally set up a connection to the source database (extract DDL, migrate data, run baselines). Routes to per-dialect connection skills or marks the task excluded if the user opts out.
+description: Optionally set up a connection to the source database (extract DDL, migrate data, run baselines). Routes to per-dialect connection skills, defers the question for later, or marks the task excluded if the user opts out permanently.
 license: Proprietary. See License-Skills for complete terms
 ---
 
 # Configure source connection
 
 Invoked by the setup state machine after the Snowflake connection is
-set. Corresponds to "Step A.5" of the legacy `setup/SKILL.md`.
+set. Also re-invoked from `seedSourceDb` / `migrateData` when their
+prereq isn't met.
 
 ## What to do
 
@@ -15,19 +16,14 @@ Ask the user:
 > "Will you need to connect to your source system? Some common reasons
 > are extracting code for conversion, migrating data, and testing
 > functional equivalence."
-> 1. **Yes** — set up a source connection
-> 2. **No** — skip for now (you can set one up later)
+> 1. **Yes** — set up a source connection now
+> 2. **Skip for now** — keep the option open; I'll re-ask before tests-from-source or data migration
+> 3. **Never** — won't need a source connection; use synthetic test data only
 
-If **No**, mark the task excluded by calling:
+### If **Yes**
 
-```
-transition_status(machine="setup", task="configureSourceConnection", outcome="excluded")
-```
-
-The resolver will then pick `registerCode` as the next task.
-
-If **Yes**, call `configure(needs_source_connection=true)` to list
-existing connections for the configured dialect.
+Call `configure(needs_source_connection=true)` to list existing
+connections for the configured dialect.
 
 - If `existing_connections` listed connections, ask the user to pick
   one.
@@ -38,7 +34,19 @@ existing connections for the configured dialect.
   - `teradata` → `../connection/teradata-connection/SKILL.md`
   - `postgresql` → `../connection/postgresql-connection/SKILL.md`
 
+### If **Skip for now**
+
+```
+configure(tasks={"configureSourceConnection": {"skipped": true}})
+```
+
+### If **Never**
+
+```
+configure(tasks={"configureSourceConnection": {"enabled": false}})
+```
+
 ## On completion
 
 Return to the parent setup skill once the connection is set or the user
-has chosen to skip.
+has chosen Skip / Never.

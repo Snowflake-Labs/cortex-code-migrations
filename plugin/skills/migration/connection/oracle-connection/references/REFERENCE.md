@@ -138,6 +138,17 @@ scai connection add-oracle \
   --user myuser
 ```
 
+## Data Exchange Worker (cloud migration / validation)
+
+The worker connects with ODP.NET using the same credentials as `scai connection add-oracle`. Ensure the Oracle user can:
+
+- `SELECT` on tables (and views) being migrated or validated
+- Read data dictionary views needed for schema/metadata extraction (typical: `SELECT_CATALOG_ROLE` or explicit grants on `ALL_*` / `DBA_*` views as required by your security model)
+
+Network: the worker host must reach the Oracle listener (`host`:`port`). For SPCS workers, configure `EXTERNAL_ACCESS_INTEGRATIONS` for the database host and the NuGet driver download endpoint (see [`../../data-infrastructure/worker-spcs/SKILL.md`](../../data-infrastructure/worker-spcs/SKILL.md)).
+
+Worker TOML `[connections.source.oracle].database` must be the **service name**, matching `source.databaseName` in migration/validation workflow YAML.
+
 ## Troubleshooting
 
 ### Driver Not Found

@@ -41,7 +41,8 @@ Tell the user:
 
 Ask the user:
 > "I need the following to connect to PostgreSQL:
-> - **Host** and (optionally) **port**
+> - **Host**
+> - **Port** (default `5432`)
 > - **Database name**
 > - **Username** and **password**
 > - **SSL mode** (default `Require` is right for managed PG)
@@ -50,39 +51,32 @@ Ask the user:
 
 Options:
 1. **1Password** — Credentials stored in 1Password vault
-2. **Enter manually** — Provide values interactively
+2. **Enter manually** — Provide values directly
 
 ### Step 2: Route Based on Answer
 
 | User says | Action |
 |-----------|--------|
-| "1Password" | Follow `../1PASSWORD.md` (PostgreSQL section, if present; otherwise treat as manual entry with secrets retrieved by the user) |
+| "1Password" | Follow `../1PASSWORD.md` (PostgreSQL section) |
 | "Enter manually" | Proceed to Step 3 |
 | Other credential manager | Check if `../references/<NAME>.md` exists; if not, ask user to explain their setup |
 
-### Step 3: Add the Connection (Manual Entry)
-
-**Interactive mode (recommended):**
-
-```bash
-scai connection add-postgresql
-```
-
-**Standard auth (inline):**
+### Step 3: Add the Connection
 
 ```bash
 scai connection add-postgresql \
   -c <CONNECTION_NAME> \
   --auth standard \
   --host <HOST> \
-  --port 5432 \
+  --port <PORT> \
   --database <DATABASE> \
   --user <USERNAME> \
   --password <PASSWORD> \
   --ssl-mode Require
 ```
 
-For local Docker / unencrypted dev databases:
+- Omit `--port` if the server uses the default (`5432`).
+- For local Docker / unencrypted dev databases, use `--ssl-mode Disable`:
 
 ```bash
 scai connection add-postgresql \
@@ -130,15 +124,14 @@ Then return to the calling skill.
 ## Security Rules
 
 - **NEVER** log or display secrets (passwords) in plain text.
-- **NEVER** include secrets in command-line arguments that might be logged. Prefer interactive mode or a credential manager.
+- **NEVER** include secrets in command-line arguments that might be logged. Prefer a credential manager (e.g. 1Password `op run`, or use /secrets capability from Cortex Code to store them).
 - For managed PG, keep `--ssl-mode Require` (or stricter). Only relax for trusted local dev.
 
 ## Quick Reference
 
 | Action | Command |
 |--------|---------|
-| Add connection (interactive) | `scai connection add-postgresql` |
-| Add standard auth | `scai connection add-postgresql -c NAME --auth standard --host HOST --database DB --user USER --password PASS` |
+| Add connection | `scai connection add-postgresql -c NAME --auth standard --host HOST --port 5432 --database DB --user USER --password PASS --ssl-mode Require` |
 | Test connection | `configure(source_connection=NAME)` (runs the test internally) |
 | List connections | `scai connection list -l postgresql --json` |
 | Set default | `scai connection set-default -l postgresql -c NAME` |

@@ -1,14 +1,14 @@
 {
   "name": "snowflake-migration",
-  "version": "0.4.2",
+  "version": "2.33.0",
   "description": "End-to-end database migration to Snowflake — assessment, conversion, validation, and deployment",
   "author": { "name": "db-eng-migrations" },
   "skills": ["skills/migration"],
   "mcpServers": {
     "mcp": {
       "type": "stdio",
-      "command": "${CLAUDE_PLUGIN_ROOT}/mcp-server/bin/migration-mcp-server",
-      "args": [],
+      "command": "scai",
+      "args": ["mcp", "run"],
       "env": {}
     }
   },

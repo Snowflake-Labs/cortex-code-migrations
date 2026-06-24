@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# SessionStart hook -- downloads the MCP server binary and installs system dependencies.
-# Windows (PowerShell).
+# SessionStart hook -- installs system dependencies (uv, scai CLI) on Windows.
+# The migration MCP server binary ships inside the scai CLI (launched via 'scai mcp').
 
 $ErrorActionPreference = "Stop"
 
@@ -40,72 +40,13 @@ if (!(Test-Path $VersionFile)) {
 }
 $Version = (Get-Content $VersionFile -Raw).Trim()
 
-$arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64) { "arm64" } else { "x64" }
-$platform = "win-$arch"
-$BlobBase = "https://sctoolsartifacts.z5.web.core.windows.net/linux/beta/plugins/bin"
-
 if (-not $env:SCAI_CHANNEL) { $env:SCAI_CHANNEL = "preview" }
 
-Log "SessionStart hook running (v$Version, $platform, plugin root: $PluginRoot)"
+Log "SessionStart hook running (v$Version, plugin root: $PluginRoot)"
 $cortexCh = if ($env:CORTEX_CHANNEL) { $env:CORTEX_CHANNEL } else { "(not set)" }
 Log "SCAI_CHANNEL=$($env:SCAI_CHANNEL), CORTEX_CHANNEL=$cortexCh"
 
-# -- MCP server binary ------------------------------------------------
-$BinDir = Join-Path $PluginRoot "mcp-server\bin"
-$ExePath = Join-Path $BinDir "migration-mcp-server.exe"
-$CmdShim = Join-Path $BinDir "migration-mcp-server.cmd"
-$VersionMarker = Join-Path $BinDir ".version"
-$BinaryUrl = "${BlobBase}/migration-mcp-server-v${Version}-${platform}"
-
-$NeedsDownload = $true
-if ((Test-Path $ExePath) -and (Test-Path $VersionMarker)) {
-    $InstalledVersion = (Get-Content $VersionMarker -Raw).Trim()
-    # "dev" is the literal sentinel that crates/mcp-server/build-plugin.sh
-    # writes into .version after a local build; never produced by CI.
-    if ($InstalledVersion -eq "dev") {
-        $NeedsDownload = $false
-        Log "MCP server binary is a local dev build -- skipping download"
-    } elseif ($InstalledVersion -eq $Version) {
-        $NeedsDownload = $false
-        Log "MCP server binary up to date (v$Version)"
-    } else {
-        Log "MCP server binary outdated (v$InstalledVersion -> v$Version)"
-    }
-}
-
-if ($NeedsDownload) {
-    New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
-    $start = Get-Date
-    Log "Downloading MCP server binary ($platform, v$Version)..."
-    try {
-        Invoke-WebRequest -Uri $BinaryUrl -OutFile $ExePath -UseBasicParsing
-        '@"%~dp0migration-mcp-server.exe" %*' | Out-File -FilePath $CmdShim -Encoding ascii -NoNewline
-        $Version | Out-File -FilePath $VersionMarker -NoNewline
-        $size = [math]::Round((Get-Item $ExePath).Length / 1MB, 1)
-        Log "MCP server binary installed ($([math]::Round(((Get-Date) - $start).TotalSeconds))s, ${size}MB)"
-    } catch {
-        Log "Binary download failed - MCP server will be unavailable: $_"
-    }
-}
-
-# -- Python dependencies (snowpark) -----------------------------------
-$pyproject = Join-Path $PluginRoot "mcp-server\pyproject.toml"
-$venvDir = Join-Path $PluginRoot "mcp-server\.venv"
-if ((Test-Path $pyproject) -and !(Test-Path $venvDir) -and (Get-Command "uv" -ErrorAction SilentlyContinue)) {
-    $start = Get-Date
-    Log "Installing Python dependencies (snowpark)..."
-    try {
-        Push-Location (Join-Path $PluginRoot "mcp-server")
-        uv sync --quiet 2>&1
-        Pop-Location
-        Log "Python dependencies installed ($([math]::Round(((Get-Date) - $start).TotalSeconds))s)"
-    } catch {
-        Pop-Location
-        Log "uv sync failed (snowpark will be unavailable): $_"
-    }
-}
-
-# -- System dependencies -----------------------------------------------
+# System dependencies
 
 # uv
 if (Get-Command "uv" -ErrorAction SilentlyContinue) {
@@ -137,7 +78,7 @@ if (Get-Command "brew" -ErrorAction SilentlyContinue) {
     }
 }
 
-# scai CLI
+# scai CLI (bundles the migration MCP server binary)
 $start = Get-Date
 if (Get-Command "scai" -ErrorAction SilentlyContinue) {
     Log "scai already installed, running explicit update..."

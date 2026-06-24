@@ -32,6 +32,7 @@ Record that exact version tag (e.g., `1.11.1`). Use it as `<version>` in all sub
 | SQL Server    | `sqlserver`        |
 | Redshift      | `redshift`         |
 | Oracle        | `oracle`           |
+| Teradata      | `teradata`         |
 | PostgreSQL    | `postgresql`       |
 
 ## Step 2 — Affinity Label

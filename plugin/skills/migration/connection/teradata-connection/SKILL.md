@@ -1,6 +1,6 @@
 ---
 name: teradata-connection
-description: Connect to a source Teradata database for migration to Snowflake using scai CLI. Requires a user-provided Teradata driver (NuGet package). Triggers: teradata, source connection, source database, connect to teradata, add teradata connection.
+description: Connect to a source Teradata database for full migration to Snowflake using scai CLI (code, scai test, cloud table data migration/validation). Requires a user-provided Teradata driver (NuGet package). Triggers: teradata, source connection, source database, connect to teradata, add teradata connection.
 ---
 
 # Teradata Connection Skill
@@ -135,11 +135,17 @@ Confirm with user:
 - [ ] Connection appears in `scai connection list -l teradata --json`
 - [ ] Source connection saved to session config
 
-## Limitations
+## Supported Operations
 
-- **Data migration is not supported for Teradata.** The `scai data migrate` command does not support Teradata as a source. Table data must be migrated through other means (e.g., Teradata Parallel Transporter, external ETL tools, or manual export/import).
-- **Data validation is not supported for Teradata.** The 2-sided testing framework (`scai test`) does not support Teradata as a source for baseline capture or result comparison.
-- **Supported Teradata operations:** code extraction (`scai code extract`), code conversion (`scai code convert`), and deployment to Snowflake (`scai code deploy`).
+Teradata is a **full-migration** source (`project_type: full_migration`). After connection setup:
+
+- **Code pipeline:** `scai code extract`, `scai code convert`, `scai code deploy`
+- **2-sided testing:** `scai test capture`, `scai test validate` (baseline capture and Snowflake result comparison)
+- **Cloud table data:** `scai data migrate` and cloud data validation via the Data Exchange Worker
+
+For cloud data paths, align worker TOML `[connections.source.teradata].database` with workflow YAML `source.databaseName` (the `--database` value from this connection). LDAP connections map to worker TOML `authentication = "LDAP"`. See [`./references/REFERENCE.md`](./references/REFERENCE.md) for worker setup and troubleshooting.
+
+> **Legacy projects:** If an older project has `project_type: code_conversion_only` in `project.yml`, the CLI honors that setting and routes through the code-conversion-only flow. New Teradata projects default to `full_migration`.
 
 ## On Completion
 

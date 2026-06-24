@@ -27,6 +27,7 @@ Converted files may contain issues that need manual fixes before deployment:
 | Unknown function `<name>` | Missing dependency | Deploy that function first |
 | Object does not exist | Missing table/view | Deploy or check schema |
 | Schema does not exist | Missing schema | `CREATE SCHEMA IF NOT EXISTS <schema>` |
+| `Error [XXXXXXX]: ...` | Planner error | Try to fix the SQL and redeploy; if the error persists, do **not** use `sql_execute` — call `transition_status(outcome='failed', error='dependency')` and surface the error to the user |
 
 1. **Read the error message** — identify the line/issue.
 2. **Look for EWI comments** — SnowConvert comments (`--** SSC-`) near the error indicate unconverted constructs.
@@ -43,4 +44,4 @@ Workflow:
 
 ## After deployment
 
-Once the tool returns success, call `transition_status(status='advance', task='deploy', outcome='completed')` to let the machine decide the next step. If it failed and you cannot fix it, call with `outcome='failed'`.
+Once the tool returns success, call `transition_status(status='advance', task='deploy', outcome='completed')` to let the machine decide the next step. If it failed and you cannot fix it, call `transition_status(status='advance', task='deploy', outcome='failed')` with the appropriate `error` code.

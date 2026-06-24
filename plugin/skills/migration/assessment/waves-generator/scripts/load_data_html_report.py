@@ -217,48 +217,6 @@ def load_object_references_as_dicts(reports_dir):
     ]
 
 
-def load_missing_object_references(reports_dir):
-    """Load missing object references to identify blocked objects.
-
-    Tries ObjectReferences.*.csv first, then falls back to legacy MissingObjectReferences.*.csv.
-    """
-    from snowconvert_reports import ReportFinder, load_object_references
-
-    reports_path = Path(reports_dir)
-    finder = ReportFinder(reports_dir)
-
-    obj_ref_path = finder.find_object_references()
-    if obj_ref_path:
-        result = _load_missing_refs_from_object_references(obj_ref_path, load_object_references)
-        if result['missing_objects'] or result['details']:
-            result['data_source'] = 'ObjectReferences'
-            result['warning'] = None
-            return result
-
-    missing_ref_matches = list(reports_path.glob('MissingObjectReferences.*.csv'))
-    if missing_ref_matches:
-        result = _load_missing_refs_from_legacy_csv(missing_ref_matches[0])
-        if result['missing_objects'] or result['details']:
-            result['data_source'] = 'MissingObjectReferences'
-            result['warning'] = None
-            return result
-
-    obj_ref_matches = list(reports_path.glob('ObjectReferences.*.csv'))
-    warning_msg = None
-    if not obj_ref_matches and not missing_ref_matches:
-        warning_msg = "Warning: Could not load missing dependencies data. Neither ObjectReferences.csv nor MissingObjectReferences.csv was found in the reports directory. This does not mean there are no missing dependencies - the data source is unavailable."
-    elif obj_ref_matches and not missing_ref_matches:
-        warning_msg = "Warning: ObjectReferences.csv was found but contains no 'MISSING' entries, and MissingObjectReferences.csv (legacy format) was not found. Cannot determine if there are missing dependencies."
-
-    return {
-        'missing_objects': set(),
-        'dependents': {},
-        'details': [],
-        'data_source': 'none',
-        'warning': warning_msg
-    }
-
-
 def _accumulate_missing_refs(caller_referenced_pairs):
     """Build missing-refs result dict from (caller, referenced, relation_type, line, file_name) tuples."""
     missing_objects = set()
@@ -281,46 +239,15 @@ def _accumulate_missing_refs(caller_referenced_pairs):
     return {'missing_objects': missing_objects, 'dependents': dependents, 'details': details}
 
 
-def _load_missing_refs_from_object_references(csv_path, loader_fn):
-    """Filter ObjectReferences for MISSING entries, rolling up ETL callers to package level."""
-    refs = loader_fn(csv_path)
-
-    def _iter():
-        for ref in refs:
-            if not ref.is_missing_reference:
-                continue
-            caller = ref.caller_full_name
-            if ref.caller_code_unit == 'ETL PROCESS' and ref.file_name.endswith('.dtsx'):
-                caller = str(Path(ref.file_name).with_suffix(''))
-            yield caller, ref.referenced_full_name, ref.relation_type, ref.line, ref.file_name
-
-    return _accumulate_missing_refs(_iter())
-
-
-def _load_missing_refs_from_legacy_csv(csv_path):
-    """Load from legacy MissingObjectReferences.*.csv file."""
-    from snowconvert_reports.loaders.csv_reader import read_csv_rows
-
-    def _iter():
-        for row in read_csv_rows(csv_path):
-            yield (
-                row.get('Caller_CodeUnit_FullName', ''),
-                row.get('Referenced_Element_FullName', ''),
-                row.get('Relation_Type', ''),
-                row.get('Line', ''),
-                row.get('FileName', ''),
-            )
-
-    return _accumulate_missing_refs(_iter())
-
-
 def load_missing_object_references_from_registry(registry_dir):
     """Load missing object references from SnowConvert registry JSON files.
 
-    Returns the same contract as :func:`load_missing_object_references`::
-
-        {'missing_objects': set, 'dependents': dict, 'details': list,
-         'data_source': str, 'warning': str|None}
+    Returns dict with keys:
+        - missing_objects: set of missing object names
+        - dependents: dict mapping missing object -> list of dependents
+        - details: list of dependency details
+        - data_source: 'registry'
+        - warning: None (or error message on failure)
     """
     import re
     from snowconvert_reports import load_missing_references_from_registry
@@ -348,43 +275,35 @@ def load_missing_object_references_from_registry(registry_dir):
 
 
 def load_missing_refs(registry_dir=None, reports_dir=None):
-    """Unified loader: picks registry or CSV backend automatically.
+    """Load missing object references from registry only.
 
-    Callers don't need ``if registry_dir … else …`` branching.
-
-    Returns the same contract as :func:`load_missing_object_references`.
+    Returns dict with keys:
+        - missing_objects: set of missing object names
+        - dependents: dict mapping missing object -> list of dependents
+        - details: list of dependency details
+        - data_source: 'registry' or 'none'
+        - warning: error message if registry not available, None otherwise
     """
-    if registry_dir:
-        try:
-            result = load_missing_object_references_from_registry(registry_dir)
-            if result['missing_objects'] or result['details']:
-                return result
-        except Exception as exc:
-            import sys as _sys
-            print(f"Warning: registry missing-refs failed, falling back to CSV: {exc}", file=_sys.stderr)
+    if not registry_dir:
+        return {
+            'missing_objects': set(),
+            'dependents': {},
+            'details': [],
+            'data_source': 'none',
+            'warning': 'No registry directory provided. Missing dependencies analysis requires --registry-dir.',
+        }
 
-    if reports_dir:
-        reports_path = Path(reports_dir)
-        dirs_to_try = [reports_path]
-        sc_sub = reports_path / 'SnowConvert'
-        if sc_sub.exists():
-            dirs_to_try.append(sc_sub)
-        for d in dirs_to_try:
-            if not d.exists():
-                continue
-            result = load_missing_object_references(d)
-            if result['missing_objects'] or result['details']:
-                return result
-            if result.get('warning'):
-                return result
-
-    return {
-        'missing_objects': set(),
-        'dependents': {},
-        'details': [],
-        'data_source': 'none',
-        'warning': (
-            'No data source available for missing references. '
-            'Provide --registry-dir or --snowconvert-reports-dir.'
-        ),
-    }
+    try:
+        result = load_missing_object_references_from_registry(registry_dir)
+        # Registry loaded successfully - return result (even if 0 missing deps)
+        return result
+    except Exception as exc:
+        import sys as _sys
+        print(f"Error loading missing refs from registry: {exc}", file=_sys.stderr)
+        return {
+            'missing_objects': set(),
+            'dependents': {},
+            'details': [],
+            'data_source': 'none',
+            'warning': f'Failed to load missing dependencies from registry: {exc}',
+        }

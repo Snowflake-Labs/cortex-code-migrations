@@ -9,7 +9,7 @@ license: Proprietary. See License-Skills for complete terms
 
 One-time infrastructure setup for validating migrated data between a source database and Snowflake using the **Cloud Data Validation** feature via the **scai CLI**.
 
-> **Supported sources**: SQL Server, Redshift
+> **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL
 > **Supported target**: Snowflake
 
 ## Prerequisite
@@ -39,9 +39,9 @@ Wait 30-60s and re-check until status shows `READY`.
 This completes infrastructure setup. The actual validation is started later by the `validate-objects` skill via:
 
 1. `validate_data(mode="setup", where=...)` — generates `artifacts/data_validation/workflows/<hash>.yaml`.
-2. `validate_data(mode="run", workflow_path=...)` — runs the orchestrator + worker + `cloud-validate` lifecycle.
+2. `validate_data(mode="run", workflow_path=...)` — runs the orchestrator + worker + `validate create-workflow` lifecycle.
 
-**Do not run `scai data cloud-validate` directly** — `validate_data` handles service and worker lifecycle internally.
+**Do not run `scai data validate create-workflow` directly** — `validate_data` handles service and worker lifecycle internally.
 
 ---
 

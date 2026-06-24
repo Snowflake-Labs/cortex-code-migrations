@@ -20,7 +20,7 @@
 | `columnTypeMappings` | `ColumnTypeMapping[]` | No | Type conversions during migration |
 | `columnNameMappings` | `ColumnNameMapping[]` | No | Column renaming mappings |
 | `primaryKeyColumns` | `String[]` | No | Required for `watermark` sync with `trackModifications` |
-| `whereClauseCriteria` | String | No | SQL filter appended after `WHERE` in the extraction query (e.g., `"is_deleted = 0"`, `"c_custkey <= 1000"`). **Do not use** `TOP` (SQL Server) or `LIMIT` (Redshift) here — they are not valid WHERE clause syntax and cause extraction errors. |
+| `whereClauseCriteria` | String | No | SQL filter appended after `WHERE` in the extraction query (e.g., `"is_deleted = 0"`, `"c_custkey <= 1000"`). **Do not use** `TOP` (SQL Server) or `LIMIT` (Redshift/Oracle) here — they are not valid WHERE clause syntax and cause extraction errors. Teradata: use normal predicates (e.g. `"id <= 1000"`). |
 
 ## SourceTargetIdentifier
 
@@ -93,7 +93,7 @@ The `icebergConfig` at the table level is **merged** with `defaultTableConfigura
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `strategy` | `"regular"` \| `"unload"` | Yes | `"regular"` is the default. `"unload"` is Redshift-only. |
+| `strategy` | `"regular"` \| `"unload"` \| `"tpt"` \| `"write_nos"` | Yes | `"regular"` is the default. `"unload"` is Redshift-only. `"tpt"` and `"write_nos"` are Teradata-only (see [`worker-config-reference.md`](../../../../data-infrastructure/references/worker-config-reference.md)). |
 | `externalStage` | String | UNLOAD only | Snowflake external stage (e.g. `MY_DB.MY_SCHEMA.S3_STAGE`) |
 
 ```yaml

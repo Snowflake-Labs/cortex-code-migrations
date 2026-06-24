@@ -69,6 +69,10 @@ WHERE WORKFLOW_ID != <your_workflow_id>
 
 **Fix:** Ensure the `database` field in `[connections.source.*]` in `DataExchangeWorkerConfig.toml` matches the `source.databaseName` in `workflow-config.yaml`. Then delete the failed workflow/tasks and resubmit.
 
+**Oracle:** `[connections.source.oracle].database` is the **service name** (from `scai connection add-oracle --service-name`), not a SQL Server–style database name. It must match `source.databaseName` in the workflow YAML the same way.
+
+**Teradata:** `[connections.source.teradata].database` is the Teradata **database name** (from `scai connection add-teradata --database`). It must match `source.databaseName` in the workflow YAML. Teradata uses two-part names (`database.table`); align `databaseName` with the database that owns the table.
+
 ---
 
 ## `whereClauseCriteria` syntax error during extraction
@@ -84,6 +88,8 @@ Using `TOP 1000 1=1` (SQL Server syntax) or `LIMIT 1000` (Redshift syntax) is in
 
 **Fix:** Use a valid WHERE predicate to limit rows:
 - Filter on a key column: `"<primary_key> <= 1000"`
+- **Oracle:** e.g. `"ROWNUM <= 1000"` (do not use `TOP` or `LIMIT` in `whereClauseCriteria`)
+- **Teradata:** e.g. `"customer_id <= 1000"` (valid WHERE predicates only; do not use `TOP` or `LIMIT` here)
 - Use a boolean condition: `"is_active = true"`
 - Or remove `whereClauseCriteria` entirely and migrate the full table
 

@@ -116,6 +116,64 @@ EOF
 
 ---
 
+## PostgreSQL
+
+Search for an existing 1Password item:
+
+```bash
+op item list | grep -i postgres
+```
+
+Get item details:
+
+```bash
+op item get <ITEM_NAME> --vault=<VAULT_NAME> --format=json
+```
+
+Add connection using `op run` with inline env-file:
+
+```bash
+op run --env-file=<(cat <<'EOF'
+PG_HOST="op://vault_name/item_name/host"
+PG_PORT="op://vault_name/item_name/port"
+PG_DATABASE="op://vault_name/item_name/database"
+PG_USER="op://vault_name/item_name/username"
+PG_PASSWORD="op://vault_name/item_name/password"
+EOF
+) -- bash -c 'scai connection add-postgresql \
+  -c <CONNECTION_NAME> \
+  --auth standard \
+  --host "$PG_HOST" \
+  --port "${PG_PORT:-5432}" \
+  --database "$PG_DATABASE" \
+  --user "$PG_USER" \
+  --password "$PG_PASSWORD" \
+  --ssl-mode Require'
+```
+
+**Example with real values:**
+
+```bash
+op run --env-file=<(cat <<'EOF'
+PG_HOST="op://migrations_demo/postgresql_northwind/host"
+PG_PORT="op://migrations_demo/postgresql_northwind/port"
+PG_DATABASE="op://migrations_demo/postgresql_northwind/database"
+PG_USER="op://migrations_demo/postgresql_northwind/username"
+PG_PASSWORD="op://migrations_demo/postgresql_northwind/password"
+EOF
+) -- bash -c 'scai connection add-postgresql \
+  -c postgresql_northwind \
+  --auth standard \
+  --host "$PG_HOST" \
+  --port "${PG_PORT:-5432}" \
+  --database "$PG_DATABASE" \
+  --user "$PG_USER" \
+  --password "$PG_PASSWORD" \
+  --ssl-mode Require'
+```
+
+---
+
 ## Troubleshooting
 
 | Issue | Solution |

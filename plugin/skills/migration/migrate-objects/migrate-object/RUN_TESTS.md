@@ -21,6 +21,7 @@ Each entry has `code_unit_name`, `status`, `match_type`, `error`, and `differenc
 | `PASS` | Output matches baseline |
 | `FAIL` | Output differs from baseline |
 | `ERROR` | Exception during execution |
+| `NO_BASELINE` | No captured baseline exists for this test case. Run `scai test capture` first. |
 
 ## Check for dependency failures first
 

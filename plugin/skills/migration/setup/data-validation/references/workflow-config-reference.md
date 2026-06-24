@@ -51,3 +51,39 @@ The four bool fields can be set directly via setup-mode params (`schema_validati
 | `views`    | top-level | Array of view validation entries (same schema as `tables`)     |
 
 > View validation is handled separately from table validation — see the migrate-objects view validation flow.
+
+## Source platform
+
+Generated validation workflows include `sourcePlatform` from the project dialect (lowercase orchestrator id):
+
+| Project source | `sourcePlatform` |
+|----------------|------------------|
+| SQL Server | `sqlserver` |
+| Redshift | `redshift` |
+| Oracle | `oracle` |
+| Teradata | `teradata` |
+| PostgreSQL | `postgresql` |
+
+Optional top-level `affinity: <dialect>` routes work to workers with matching affinity (e.g. `affinity: teradata`).
+
+## Oracle identifiers
+
+Oracle table FQNs in `tables[]` may use quoted identifiers when names are case-sensitive or reserved:
+
+```yaml
+sourcePlatform: oracle
+tables:
+  - source:
+      databaseName: ORCL
+      schemaName: TEST_SCHEMA
+      name: EMPLOYEES
+      fullyQualifiedName: '"TEST_SCHEMA"."EMPLOYEES"'
+```
+
+Align `source.databaseName` with the Oracle **service name** used in the worker TOML `database` field.
+
+## Teradata identifiers
+
+Teradata uses **database** as the schema-level container (two-part names: `database.table`). Table FQNs in `tables[]` use `databaseName` and `tableName`; `schemaName` is typically the same as `databaseName` or omitted per orchestrator conventions.
+
+Align `source.databaseName` with the Teradata **database name** in worker TOML `[connections.source.teradata].database` (from `--database` / `database` in `~/.snowflake/snowct/teradata.toml`).

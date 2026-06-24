@@ -43,7 +43,7 @@ Ask the user via `ask_user_question` (`multiSelect = false`):
 
 - If **Yes**, ask which platform (SSIS or Informatica).
   - **If Informatica**, present this recommendation before asking for the path:
-    > For the smoothest Informatica migration, we recommend exporting your workflows using Snowflake's official DDL Export Script. This produces one XML file per workflow in a consistent format that SnowConvert and the downstream `migrate-etl-package` skill are designed to read.
+    > For the smoothest Informatica migration, we recommend exporting your workflows using Snowflake's official DDL Export Script. This produces one XML file per workflow in a consistent format that SnowConvert and the downstream `stabilization` skill are designed to read.
     >
     > **Extraction guide:** https://github.com/Snowflake-Labs/SC.DDLExportScripts/blob/main/ETL/Informatica%20PowerCenter/README.md
     >
@@ -117,7 +117,7 @@ For Power BI options, see `../powerbi-repointing/SKILL.md`.
 
 **Example with options:**
 ```bash
-scai code convert --database MY_DB --customschema MY_SCHEMA --json
+scai code convert --show-ewis --overwrite-working-directory --json
 ```
 
 ## Understanding EWIs

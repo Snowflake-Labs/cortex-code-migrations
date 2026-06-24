@@ -19,7 +19,7 @@ Before starting any configuration, tell the user verbatim:
 >
 > **The same infrastructure is used for validation.** You choose what level of validation to run: **schema validation**, **metrics validation**, and **row-level validation**.
 
-> **Supported sources**: SQL Server, Redshift
+> **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL
 > **Supported target**: Snowflake
 
 ## Architecture

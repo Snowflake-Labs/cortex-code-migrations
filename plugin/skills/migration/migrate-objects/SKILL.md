@@ -36,10 +36,10 @@ Once a `snowflake_connection` and `snowflake_database` are set, the same `config
 `configure()` carries the user's testing preference in `testing_data_source`. On entry:
 
 - **Already set** → returning user. Skip 2.a (sell), 2.b (Q1), 2.c (Q2). Show a one-line recap and run 2.d to confirm the environment is still ready in this session:
-  >  Continuing in **integration mode** with `<test_seed_source>` (`<execution_log_path>` if logs). Say "change testing path" to switch.
+  >  Continuing in **source-data mode** with `<test_seed_source>` (`<execution_log_path>` if logs). Say "change testing path" to switch.
 
   If `testing_data_source == "synthetic"`:
-  >  Continuing in **unit (synthetic)** mode. Say "change testing path" to switch.
+  >  Continuing in **synthetic-data mode**. Say "change testing path" to switch.
 
   If the user says "change testing path", fall through to 2.a–2.c with the existing values cleared (re-ask Q1, then Q2 if applicable).
 
@@ -56,28 +56,28 @@ Show the user this block verbatim:
 > - **It handles the hard cases.** Procedures that return multiple result sets, that use OUTPUT/INOUT parameters, or that modify tables (DML) are all covered — for DML, table changes are compared, not just return values.
 > - **Tests are isolated.** Each test runs against a fresh clone of your data on the Snowflake side; the source side uses snapshot or transactional isolation. Tests can't pollute each other or your real data.
 > - **Results are saved in Snowflake.** Expected outputs from your source DB are captured once and stored in Snowflake, so the framework can compare against them repeatedly while you iterate on a fix — no need to re-query the source. Test outcomes are also stored in Snowflake, ready to review or share later.
-> - **Multi-dialect.** Works for SQL Server, Oracle, Redshift, and Teradata source databases.
+> - **Multi-dialect.** Works for SQL Server, Oracle, Redshift, PostgreSQL, and Teradata source databases.
 
-### 2.b — Q1: integration or synthetic
+### 2.b — Q1: synthetic-data or source-data
 
 Show the two-path framing, then ask:
 
 > **Two testing paths, picked once per project:**
 >
-> **Integration tests (source-data path)** — when your source DB has representative production-like data. Test cases come from real values (either query logs or queries against the source).
+> **Source-data tests** — when your source DB has representative production-like data. Test cases come from real values (either query logs or queries against the source).
 >
-> **Unit tests (synthetic path)** — when source data isn't representative or you want isolated logic tests. The agent analyzes each proc's branches and generates seed data + assertions from scratch.
+> **Synthetic-data tests** — when source data isn't representative or you want isolated logic tests. The agent analyzes each proc's branches and generates seed data + assertions from scratch.
 >
 > Does your source DB have representative production-like data?
-> - **A) Yes** → integration path
-> - **B) No** → unit path (synthetic)
+> - **A) Yes** → source-data path
+> - **B) No** → synthetic-data path
 
 Persist the answer **without** `recheck=true` yet — we batch the recheck for 2.d.
 
 - A → `configure(testing_data_source="source_database")`
 - B → `configure(testing_data_source="synthetic")`
 
-### 2.c — Q2: query logs (integration only)
+### 2.c — Q2: query logs (source-data only)
 
 If the user picked synthetic, skip this section.
 
@@ -129,15 +129,17 @@ If `groups` is empty, `blocked_groups` is empty, and `errored_count` and `done_c
 
 Show **only** the following status lines, all derived from the cached summary response. Skip any line whose count is zero or whose group is empty — do not write "(no errored bucket)" or "(none)" placeholders, and do not mention buckets that don't apply.
 
-- One line per `group`: `<group.count> <group.object_type>s ready to <group.task>`.
-- One line per `blocked_groups` entry: `<count> <object_type>s blocked at <task> (waiting on dependencies)` — only if `blocked_groups` is non-empty. Don't list individual deps here; that comes from the drill-down in 3c.
+> **Use `group.user_label` verbatim.** Every group entry carries a server-controlled `user_label` (e.g. `"Generate test cases from source database"`). Render it exactly as returned. **Do not paraphrase, shorten, or substitute the camelCase `group.task` identifier** — those identifiers (`seedSourceDb`, `captureBaseline`, `extractRules`, ...) are opaque to end users and must not appear in your output.
+
+- One line per `group`: `<group.count> <group.object_type>s ready: <group.user_label>`.
+- One line per `blocked_groups` entry: `<count> <object_type>s blocked at "<blocked_group.user_label>" (waiting on dependencies)` — only if `blocked_groups` is non-empty. Don't list individual deps here; that comes from the drill-down in 3c.
 - `<done_count> objects ready to finish (merge)` — only if `done_count > 0`.
 - `<errored_count> objects errored` — only if `errored_count > 0`.
 
 Then ask the user to pick a next action. **Only list actions you are actually offering** — never include an absent option just to acknowledge it. Build the action menu like this:
 
-1. One numbered item per task or blocked group, labelled with the group description (e.g. "Deploy the 5 tables" or "Resolve blocked ...").
-2. One numbered item per `blocked_groups` entry, labelled "Resolve blocked `<object_type>`s (see deps)" — only if `blocked_groups` is non-empty.
+1. One numbered item per task group, labelled `<group.user_label> for the <group.count> <group.object_type>(s)` — e.g. `Deploy to Snowflake for the 5 tables`, `Generate test cases from source database for the 1 function`. Use `group.user_label` verbatim.
+2. One numbered item per `blocked_groups` entry, labelled `Resolve blocked <object_type>s waiting on "<blocked_group.user_label>" (see deps)` — only if `blocked_groups` is non-empty.
 3. `finishObjects` — only if `done_count > 0`.
 4. `claimObjects` — only if `done_count == 0` (when `done_count > 0`, omit this entirely; the user must merge first). The exception: if the user *explicitly overrides* on a later turn ("I know, claim anyway", "skip the merge for now"), proceed to claim and flag the unmerged done objects in your reply.
 5. The errored bucket — only if `errored_count > 0`.
@@ -152,8 +154,6 @@ Then ask the user to pick a next action. **Only list actions you are actually of
 migration_status(mode="my_objects_details", group=<group.id>)
 ```
 
-This returns a `TaskGroupDetails { id, task, object_type, executor, object_ids, object_names, batch, is_async, reason, instructions }`.
-
 When `object_type == "etl"`, the group is an ETL stabilization batch — load [migrate-etl/SKILL.md](migrate-etl/SKILL.md) and follow it. SQL object types (`table`, `view`, `procedure`, `function`) follow the deploy → test → fix loop already described by `instructions`.
 
 VERY IMPORTANT: **Wait for user input before acting.** Once the user confirms which objects to operate on, follow the `instructions` field on the response.
@@ -162,7 +162,7 @@ VERY IMPORTANT: **Wait for user input before acting.** Once the user confirms wh
 
 **User picked `finishObjects`** → load [actions/finish_objects.md](actions/finish_objects.md).
 
-**User picked a blocked group** → call `migration_status(mode="my_objects_details", group="<blocked_id>")`. The response is a `BlockedGroupDetails { id, task, object_type, objects[{ object_id, object_name, blocked_on[{ id, name, object_type, blocking_task, reason }] }], reason, instructions }`.
+**User picked a blocked group** → call `migration_status(mode="my_objects_details", group="<blocked_id>")`.
 
 > **Differentiate "missing" deps from "not-yet-completed" deps.** Walk every `objects[i].blocked_on[]` entry and look at `reason`:
 >

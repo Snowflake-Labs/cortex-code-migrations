@@ -14,7 +14,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# SessionStart hook — downloads the MCP server binary and installs system dependencies.
+# SessionStart hook — installs system dependencies (uv, scai CLI). The migration
+# MCP server binary ships inside the scai CLI and is launched via `scai mcp`.
 # Wrapped in { ...; exit; } so bash reads the entire script into memory before
 # executing, making it safe to overwrite this file during updates.
 
@@ -38,65 +39,12 @@ if [ -z "$VERSION" ]; then
   exit 1
 fi
 
-PLAT_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
-PLAT_ARCH=$(uname -m)
-case "$PLAT_OS" in darwin) PLAT_OS=osx ;; *) PLAT_OS=linux ;; esac
-case "$PLAT_ARCH" in x86_64) PLAT_ARCH=x64 ;; arm64|aarch64) PLAT_ARCH=arm64 ;; esac
-PLATFORM="${PLAT_OS}-${PLAT_ARCH}"
-
-BLOB_BASE="https://sctoolsartifacts.z5.web.core.windows.net/linux/beta/plugins/bin"
-
 export SCAI_CHANNEL="${SCAI_CHANNEL:-preview}"
 
-log "SessionStart hook running (v$VERSION, $PLATFORM, plugin root: $PLUGIN_ROOT)"
+log "SessionStart hook running (v$VERSION, plugin root: $PLUGIN_ROOT)"
 log "SCAI_CHANNEL=$SCAI_CHANNEL, CORTEX_CHANNEL=${CORTEX_CHANNEL:-(not set)}"
 
-# ── MCP server binary ───────────────────────────────────────────
-BIN_DIR="$PLUGIN_ROOT/mcp-server/bin"
-BIN="$BIN_DIR/migration-mcp-server"
-BINARY_URL="${BLOB_BASE}/migration-mcp-server-v${VERSION}-${PLATFORM}"
-
-NEEDS_DOWNLOAD=true
-if [ -f "$BIN" ] && [ -f "$BIN_DIR/.version" ]; then
-  INSTALLED_VERSION=$(cat "$BIN_DIR/.version" 2>/dev/null | tr -d '[:space:]')
-  # "dev" is the literal sentinel that crates/mcp-server/build-plugin.sh
-  # writes into .version after a local build; never produced by CI.
-  if [ "$INSTALLED_VERSION" = "dev" ]; then
-    NEEDS_DOWNLOAD=false
-    log "MCP server binary is a local dev build — skipping download"
-  elif [ "$INSTALLED_VERSION" = "$VERSION" ]; then
-    NEEDS_DOWNLOAD=false
-    log "MCP server binary up to date (v$VERSION)"
-  else
-    log "MCP server binary outdated (v$INSTALLED_VERSION → v$VERSION)"
-  fi
-fi
-
-if [ "$NEEDS_DOWNLOAD" = "true" ]; then
-  start=$SECONDS
-  mkdir -p "$BIN_DIR"
-  log "Downloading MCP server binary ($PLATFORM, v$VERSION)..."
-  if curl -fsSL "$BINARY_URL" -o "$BIN"; then
-    chmod +x "$BIN"
-    xattr -dr com.apple.quarantine "$BIN" 2>/dev/null || true
-    echo "$VERSION" > "$BIN_DIR/.version"
-    log "MCP server binary installed ($(( SECONDS - start ))s, $(du -h "$BIN" | cut -f1))"
-  else
-    log "Binary download failed — MCP server will be unavailable"
-  fi
-fi
-
-# ── Python dependencies (snowpark) ──────────────────────────────
-if [ -f "$PLUGIN_ROOT/mcp-server/pyproject.toml" ] && command -v uv &>/dev/null; then
-  if [ ! -d "$PLUGIN_ROOT/mcp-server/.venv" ]; then
-    start=$SECONDS
-    log "Installing Python dependencies (snowpark)..."
-    (cd "$PLUGIN_ROOT/mcp-server" && uv sync --quiet 2>&1) || log "uv sync failed (snowpark will be unavailable)"
-    log "Python dependencies installed ($(( SECONDS - start ))s)"
-  fi
-fi
-
-# ── System dependencies ─────────────────────────────────────────
+# System dependencies
 
 # uv
 if command -v uv &>/dev/null; then
@@ -122,7 +70,7 @@ if command -v brew &>/dev/null; then
   done
 fi
 
-# scai CLI
+# scai CLI (bundles the migration MCP server binary)
 start=$SECONDS
 if command -v scai &>/dev/null; then
   log "scai already installed, running explicit update..."

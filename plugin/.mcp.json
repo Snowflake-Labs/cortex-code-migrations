@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "snowflake-migration": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/mcp-server/bin/migration-mcp-server",
-      "args": []
+      "command": "scai",
+      "args": ["mcp", "run"]
     }
   }
 }

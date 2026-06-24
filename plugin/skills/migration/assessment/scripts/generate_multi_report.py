@@ -53,7 +53,6 @@ try:
         find_estimation_reports,
         load_estimation_grand_totals,
         estimate_hours_for_object,
-        load_missing_object_references,
         load_missing_refs,
     )
     from generate_html_report import generate_html_report as generate_full_waves_report
@@ -1314,7 +1313,7 @@ def generate_html_template(
                 </div>
             </div>
         '''
-    else:
+    elif missing_objects_count > 0:
         missing_objects_section_html = f'''
             <div style="background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%); border: 1px solid #F59E0B; border-radius: 12px; padding: 18px 20px; margin-bottom: 16px;">
                 <div style="display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap;">
@@ -1362,7 +1361,28 @@ def generate_html_template(
                 </table>
             </div>
         '''
-    
+    else:
+        # No missing dependencies found - show success banner
+        missing_objects_section_html = f'''
+            <div style="background: linear-gradient(135deg, #DCFCE7 0%, #BBF7D0 100%); border: 1px solid #10B981; border-radius: 12px; padding: 18px 20px; margin-bottom: 16px;">
+                <div style="display: flex; align-items: center; gap: 14px;">
+                    <div style="font-size: 1.9rem;">✅</div>
+                    <div>
+                        <h3 style="margin: 0; color: #065F46; font-size: 1.1rem;">No Missing Dependencies Found</h3>
+                        <p style="margin: 4px 0 0 0; color: #047857; font-size: 0.86rem;">
+                            All referenced objects are defined in the source workload. Your dependencies report and waves are ready to review.
+                        </p>
+                    </div>
+                </div>
+            </div>
+            <div style="margin: 0 0 12px 0; background: #F8FBFC; border: 1px solid #B6D5F3; border-left: 4px solid #29B5E8; border-radius: 8px; padding: 10px 12px; color: #2A3342; font-size: 0.85rem;">
+                <div>
+                    To view the complete dependencies analysis, open
+                    <a href="#all-objects" onclick="document.querySelector('.nav-link[data-tab=\\'waves\\']').click(); setTimeout(function(){{ window.location.hash = 'all-objects'; }}, 0);" style="color: #005C8F; font-weight: 700; text-decoration: underline;">Dependencies Report (All Objects)</a>.
+                </div>
+            </div>
+        '''
+
     # Temporal tables (SQL Server #/## temp tables) — count from membership + missing objects
     temporal_tables_count = overview_stats.get('temporal_tables_count', 0) if overview_stats else 0
     if missing_objects_data:
