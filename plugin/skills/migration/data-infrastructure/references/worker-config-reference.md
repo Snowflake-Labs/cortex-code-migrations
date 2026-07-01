@@ -37,6 +37,19 @@ Default extraction is `regular` (ODBC / `teradatasql` → Snowflake internal sta
 
 See migrations-data-validation docs (`teradata-odbc-extraction.md`, `tpt-extraction.md`, `write-nos-extraction.md`) for full `write_nos` and TPT setup.
 
+## Advanced: Oracle DBMS_CLOUD
+
+For `extraction.strategy: dbms_cloud` in workflow YAML, add to `[connections.source.oracle]`:
+
+```toml
+dbms_cloud_credential_name = "AWS_S3_CRED"
+dbms_cloud_file_uri_prefix = "https://my-bucket.s3.us-east-1.amazonaws.com/prefix"
+```
+
+Oracle must grant `EXECUTE` on `DBMS_CLOUD` and create the credential for the HTTPS prefix. Set `externalStage` in workflow YAML to the Snowflake stage that reads the same object-storage path.
+
+See [extraction-strategies-reference.md](../../migrate-objects/actions/data-migration/references/extraction-strategies-reference.md) and `dmvf/data-exchange-agent/docs/oracle-dbms-cloud-local-setup.md`.
+
 ## Advanced: Redshift UNLOAD
 
 For large Redshift tables, use the `unload` extraction strategy. This writes query results directly to an S3 bucket instead of downloading to the worker machine.

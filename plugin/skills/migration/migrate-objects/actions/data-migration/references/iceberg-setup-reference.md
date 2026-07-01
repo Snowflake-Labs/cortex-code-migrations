@@ -1,5 +1,7 @@
 # Iceberg Prerequisites — Automated Setup Reference
 
+> **Scope:** Iceberg target migration is **Redshift-only** (partial support). Use this reference when `target_table_type=iceberg` and the source is Redshift. For workflow field definitions, see [workflow-config-reference.md](./workflow-config-reference.md). For orchestrator behavior, see `dmvf/docs/data-migration-orchestrator/iceberg-migration-support.md`.
+
 This reference provides step-by-step procedures for the AI agent to execute when setting up Iceberg migration prerequisites. Each section is a self-contained procedure with input collection, execution commands, and verification.
 
 > **Important**: These procedures use **AWS CLI** and **Snowflake SQL**. The agent should execute commands directly and parse outputs to chain steps together (e.g., extracting Snowflake-generated IAM ARNs from DESCRIBE results).

@@ -343,33 +343,11 @@ The temp table persists in the session, so both source and target read from it d
 
 ### Teradata: cross-database GRANTs (when using clone isolation)
 
-Teradata clone isolation creates database copies with random suffixes. Stored procedures execute with **definer rights**, so the procedure's database needs explicit access to every other database it touches. Without these grants, the proc fails with `Error 5315: does not have SELECT/INSERT access`.
+See [`platforms/teradata.md`](../baseline-capture/synthetic-seeder/platforms/teradata.md) — the full guidance, including the GRANT step template and call syntax, lives there.
 
-**Immediately before the CALL step, add `source_query`-only GRANT steps** for each database the procedure references. No `target_query` is needed (Snowflake doesn't have this issue). The test runner will suffix the database names automatically.
+### Oracle
 
-```yaml
-validation:
-  steps:
-    # Cross-database grants for Teradata isolation:
-    - source_query: "GRANT ALL ON SCHEMA_A TO PROC_SCHEMA"
-      validate: false
-    - source_query: "GRANT ALL ON SCHEMA_B TO PROC_SCHEMA"
-      validate: false
-
-    - source_query: "CALL PROC_SCHEMA.do_work({0})"
-      target_query: "CALL PROC_SCHEMA.DO_WORK({0})"
-
-  test_cases:
-    - [42]
-```
-
-`PROC_SCHEMA` is the database containing the procedure; `SCHEMA_A` / `SCHEMA_B` are every other database it reads from or writes to.
-
-### Oracle: ref-cursor returns
-
-Oracle procs that return result sets do so via `SYS_REFCURSOR` OUT params. The pattern mirrors [Cursor-read step](#cursor-read-step) for Redshift, but the source side uses an OUT-param read instead of `FETCH ALL`.
-
-> **Note:** Oracle is a full-migration source with extract, registry, and testing support. If you encounter issues with Oracle ref-cursor testing, consult the testing-infrastructure team.
+See [`synthetic-seeder/platforms/oracle.md`](../baseline-capture/synthetic-seeder/platforms/oracle.md) for all Oracle-specific patterns: anonymous PL/SQL block execution model, `source_declare` syntax, package member three-part FQN, artifact path conventions, OUT params, and SYS_REFCURSOR.
 
 ---
 

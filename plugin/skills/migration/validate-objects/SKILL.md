@@ -1,6 +1,6 @@
 ---
 name: validate-objects
-description: Validate migrated data between source and Snowflake using cloud validation (SPCS). Triggers: validate data, validate tables, data validation, check data.
+description: Validate migrated data between source and Snowflake using cloud validation (SPCS). Setup, run, poll, and end-of-run summary. Triggers: validate data, validate tables, data validation, check data.
 parent_skill: migration
 ---
 
@@ -26,11 +26,11 @@ Verify a `compute_pool` is configured (shown in the configure output under "Clou
 
 Load [actions/validate_tables.md](actions/validate_tables.md).
 
-## Step 3: Report
+## Step 3: Wave progress
 
-Call `migration_status()` and tell the user:
-> **Validation complete** — <validated_count>/<total> tables validated. <passed> passed, <failed> failed. <details of failures if any>.
+The **error-first data validation report** (Result + Workflow, Errors, Suggested fixes) is produced in [actions/validate_tables.md](actions/validate_tables.md) **Step 5** via `validate_data_status()`. Do not substitute `migration_status()` for that report.
 
-If the wave is complete, the next `configure()` call will auto-advance to the next wave.
+After `validate_tables.md` completes (including the summary and teardown offer), optionally call `migration_status()` for wave-level context only:
 
-> **Note:** the per-wave cost-saving teardown prompt is handled inside [actions/validate_tables.md](actions/validate_tables.md) Step 4. When `migration_status()` shows no remaining waves (all-waves-done), invoke [../data-infrastructure/teardown/SKILL.md](../data-infrastructure/teardown/SKILL.md) unconditionally before returning to the parent.
+- If the wave is complete, the next `configure()` call will auto-advance to the next wave.
+- When `migration_status()` shows no remaining waves (all-waves-done), invoke [../data-infrastructure/teardown/SKILL.md](../data-infrastructure/teardown/SKILL.md) unconditionally before returning to the parent — in addition to the per-wave teardown prompt in `validate_tables.md` Step 6 when applicable.

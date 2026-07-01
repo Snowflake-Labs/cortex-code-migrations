@@ -49,7 +49,8 @@ The server can host a small read-only HTML dashboard on `127.0.0.1` (no data lea
 | `query_source` | Run a SQL query against the source database via `scai query` |
 | `migrate_data` | Two-mode tool. `mode="setup"` generates a per-`where` workflow YAML at `artifacts/data_migration/workflows/<hash>.yaml` (forwarding `where` to scai's `--where`) and persists the other params under `data_migration:` in `plugin.yml` as defaults; the agent reviews/edits before running. `mode="run"` takes the `workflow_path` and starts the migration (`scai data orchestrator setup`, `scai data worker start`, then `scai data migrate create-workflow`) in the background. |
 | `validate_data` | Validate migrated data between source and Snowflake. Uses cloud validation (SPCS) when configured. |
-| `validate_data_status` | Check status of a data validation job. Includes per-table progress from the SPCS orchestrator. |
+| `migrate_data_status` | Check status of a data migration job. Includes per-table progress and parsed CSV failure reports (`reports.files.progress` / `errors`). |
+| `validate_data_status` | Check status of a data validation job. Includes per-table progress and parsed CSV reports (`reports.files`) for schema/metrics/row detail. |
 
 ## Building
 

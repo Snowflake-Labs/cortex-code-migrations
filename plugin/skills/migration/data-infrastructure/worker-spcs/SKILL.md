@@ -175,4 +175,4 @@ Then tell the user:
 
 ## Done
 
-The SPCS worker service is deployed and all instances are READY. Return control to the parent skill.
+The SPCS worker service is deployed and all instances are READY. Return control to the parent skill, which runs Level 1 Data Doctor before proceeding.

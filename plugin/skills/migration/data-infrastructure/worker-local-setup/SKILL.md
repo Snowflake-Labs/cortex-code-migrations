@@ -13,9 +13,9 @@ Set up and run the Data Exchange Worker on whatever machine will execute it: a l
 
 > **Note:** Ensure the host can reach both the source database and your Snowflake account (and meets any corporate firewall or proxy rules when applicable).
 
-<!-- WIP: SNOW-3550358 Prerequisites vary by execution strategy (e.g., ODBC driver for direct extraction, Docker for containerized mode, S3 access for Redshift UNLOAD). Document strategy-specific prerequisites here once finalized. -->
+Prerequisites depend on the **source dialect** and the **extraction strategy** chosen in data migration setup. Load [extraction-strategies-reference.md](../../migrate-objects/actions/data-migration/references/extraction-strategies-reference.md) for the full matrix; complete the matching section below before Step 1.
 
-### SQL Server: ODBC driver pre-flight
+### SQL Server — `regular` (ODBC)
 
 The Data Exchange Worker connects to SQL Server via the Microsoft ODBC Driver. Before starting the worker, verify it is installed:
 
@@ -49,6 +49,30 @@ Tell the user:
 > Then resume the setup.
 
 Once the user confirms the driver is installed, re-run the check and continue.
+
+### PostgreSQL — `regular` (COPY)
+
+No ODBC driver. The worker uses bundled Npgsql with `use_copy = true`. Skip the ODBC pre-flight above.
+
+### Oracle — `regular` (ODP.NET)
+
+No SQL Server ODBC check. Ensure the worker can reach Oracle with the service name in TOML `database` (same as scai connection).
+
+### Oracle — `dbms_cloud`
+
+Configure `dbms_cloud_credential_name` and `dbms_cloud_file_uri_prefix` in `[connections.source.oracle]` after generate-config. Oracle must grant `EXECUTE` on `DBMS_CLOUD` and a credential for the HTTPS prefix. Set `extraction.strategy: dbms_cloud` and `externalStage` in workflow YAML. See extraction-strategies reference and `dmvf/data-exchange-agent/docs/oracle-dbms-cloud-local-setup.md`.
+
+### Redshift — `unload`
+
+Add `unload_s3_bucket` and `unload_iam_role_arn` to `[connections.source.redshift]`. Set `extraction.strategy: unload` and `externalStage` in workflow YAML.
+
+### Teradata — `tpt`
+
+Install Teradata TTU on the worker host (`tbuild`). Optional `tpt_*` fields in TOML. Workflow may use `extraction.strategy: tpt`.
+
+### Teradata — `write_nos`
+
+Configure `write_nos_*` fields in `[connections.source.teradata]`. Set `extraction.strategy: write_nos` and `externalStage` in workflow YAML.
 
 ## Step 1 — Generate the Worker Config
 
@@ -89,6 +113,10 @@ scai data worker start --local .scai/settings/DataExchangeWorkerConfig.toml
 
 This command installs the worker if it is not already present, then starts it using the configuration in `.scai/settings/DataExchangeWorkerConfig.toml`.
 
+Tell the user:
+
+> **Cost note:** The local Data Exchange Worker polls Snowflake on an interval and can accrue warehouse credits even when no migration tasks are running. Stop the worker when data work for this wave is done (teardown skill), or when ending the session if it was started outside MCP.
+
 ## Step 3 — Verify the Worker Is Running
 
 The CLI prints worker status on startup. Confirm the output shows the worker has connected to the orchestrator and is polling for tasks.
@@ -101,4 +129,4 @@ If the worker fails to start, check:
 
 ## Done
 
-The worker is running on the host. Return control to the parent skill.
+The worker is running on the host. Return control to the parent skill, which runs Level 1 Data Doctor before proceeding.

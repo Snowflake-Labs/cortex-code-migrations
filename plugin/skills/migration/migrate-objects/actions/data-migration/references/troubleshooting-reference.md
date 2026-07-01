@@ -136,6 +136,34 @@ Then wait 30-60 seconds for the container to start and re-check the status.
 
 ---
 
+## Workflow finished but tables incomplete
+
+**Symptom:** `progress.output.isFinished` is `true` (workflow status `Finished`) but work did not complete for every table:
+
+| Job | Incomplete signal |
+|-----|-------------------|
+| **Migration** | `preprocessedTables < totalTables`, or any `tablePartitions[].hasBeenPreprocessed == false`, or `aggregatedCounts.failedPartitions > 0` |
+| **Validation** | `validatedTables + failedTables < totalTables`, or any `tableStates[].status == "Pending"` |
+
+**Meaning:** The orchestrator closed the workflow while one or more tables never finished. This is an **error**, not success — scai treats it as `HasErrors`.
+
+**Do not assume** the only cause is “workers not processing.” Common causes include:
+
+- Local worker not running, wrong affinity, or claiming stale tasks from another workflow
+- Worker `database` / connection mismatch (tasks complete but produce no data)
+- Tasks **failed** or **cancelled** in `TASK_QUEUE` while the workflow still marked finished
+- SPCS orchestrator suspended or not picking up workflows
+
+**Fix path (in order):**
+
+1. **MCP / reports (no SQL):** Re-read the latest status response. Use `reports.files.errors` / `reports.files.progress` (migration) or `tableStates[].errorMessage` and `reports.files.data_validation_errors` (validation) for `LastErrorMessage` / task detail.
+2. **Task queue:** Resolve `WORKFLOW_ID` from `WORKFLOW` (match `NAME` to `progress.output.workflowName`), then run the queries below. Look for tasks still `pending` / `executing` / `blocked` vs `failed` / `cancelled` / `completed`, and read `LAST_ERROR_MESSAGE`.
+3. **Infrastructure:** If tasks are stuck pending with no errors, check worker process, affinity, stale `TASK_QUEUE` rows, and `SYSTEM$GET_SERVICE_STATUS` for the orchestrator — see sections above in this reference.
+
+**Tell the user:** “Workflow finished but N table(s) never completed — checking task errors…” — then report what `reports` and (if needed) `TASK_QUEUE` show. Offer troubleshooting steps before suggesting re-run.
+
+---
+
 ## Useful diagnostic queries
 
 ```sql

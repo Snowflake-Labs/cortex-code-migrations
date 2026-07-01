@@ -142,7 +142,7 @@ CUR is the source of truth for file paths — use `query_registry` instead of
 **Step 1 — Get the object's files and dependency IDs.** Call `query_registry`
 with:
 - `where` = `"source.canonicalName ilike '%<object_name>%'"`
-- `fields` = `"id,source,files,dependencies"`
+- `fields` = `"id,source,target,files,dependencies"`
 - `include_dependencies` = `true`
 
 From the response, read both SQL files (resolve paths relative to
@@ -151,6 +151,14 @@ From the response, read both SQL files (resolve paths relative to
 - `files.converted.path` — converted Snowflake SQL
 
 Collect every `dependencies.dependsOn[*].id` for Step 2.
+
+**Step 1.1 — Oracle package member check:** if `source.package` is non-empty in the
+registry entry, this is a package member. Record:
+- `source_package` = value of `source.package` (e.g. `"ITEM_MGMT"`)
+- `source_schema` = value of `source.schema` (e.g. `"TEST"`)
+- `target_schema` = value of `target.schema` (e.g. `"TEST_ITEM_MGMT"` — SnowConvert convention: `{source_schema}_{PACKAGE_NAME}`)
+
+These three values are used in Phase 3 to construct the correct call syntax.
 
 **Step 2 — Get the dependency files in one call.** Call `query_registry`
 again with:
@@ -230,22 +238,9 @@ For each YAML in the coverage matrix, generate the setup steps.
 - Use `:out_param` syntax on the Snowflake side for OUT parameters
 - If the source uses `EXEC proc @param = value` syntax, translate to positional `CALL proc(value)` on the Snowflake side
 
-### Cross-database GRANT steps (Teradata)
-
-The test runner creates isolated database copies with random suffixes on Teradata. Stored procedures execute with **definer rights** (the owning database's privileges), so the procedure's database needs explicit access to every other database it touches. Without these grants, the procedure fails with `Error 5315: does not have SELECT/INSERT access`.
-
-**Immediately before the CALL step**, add a `source_query`-only GRANT step for each database the procedure references. No `target_query` is needed (Snowflake doesn't have this issue). The test runner will suffix the database names automatically.
-
-```yaml
-  # --- Cross-database grants for Teradata isolation ---
-  - source_query: GRANT ALL ON SCHEMA_A TO PROC_SCHEMA;
-    validate: false
-  - source_query: GRANT ALL ON SCHEMA_B TO PROC_SCHEMA;
-    validate: false
-  # ... one per referenced database
-```
-
-Where `PROC_SCHEMA` is the database containing the procedure, and `SCHEMA_A`, `SCHEMA_B` are all other databases it reads from or writes to.
+**Dialect-specific call guidance:**
+- **Oracle** — load [`./platforms/oracle.md`](./platforms/oracle.md) for: anonymous PL/SQL block execution model, `source_declare` syntax, package member three-part FQN, artifact path conventions, OUT params / SYS_REFCURSOR.
+- **Teradata** — load [`./platforms/teradata.md`](./platforms/teradata.md) for: cross-database GRANT steps required before each CALL in clone-isolated environments.
 
 ### Assertion SELECT steps
 
@@ -274,6 +269,8 @@ artifacts/<snowflake_database>/<schema>/<object_type_lower>/<sanitized_name>/tes
 ```
 
 Where `<snowflake_database>` comes from `configure()`, `<schema>` is the object's schema (e.g. `dbo`), `<sanitized_name>` replaces non-alphanumeric characters (except `.` and `-`) with `_`, and `<object_type_lower>` is `procedure` or `function`.
+
+**Oracle package members:** see [`./platforms/oracle.md`](./platforms/oracle.md) — the CUR `files.artifacts.path` already includes the package subdirectory; always read it from `query_registry`.
 
 YAML content — **always include `test_cases: [[]]`**:
 ```yaml

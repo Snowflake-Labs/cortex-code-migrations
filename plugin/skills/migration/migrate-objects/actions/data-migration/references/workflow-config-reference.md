@@ -39,10 +39,12 @@ Extends `SourceTargetIdentifier` with optional Iceberg fields.
 | `databaseName` | String | Yes | Database name |
 | `schemaName` | String | Yes | Schema name |
 | `tableName` | String | Yes | Table name |
-| `tableType` | `"native"` \| `"iceberg"` | No | Target table format. Defaults to `"native"`. Set to `"iceberg"` to create an Iceberg table. |
+| `tableType` | `"native"` \| `"iceberg"` | No | Target table format. Defaults to `"native"`. **`"iceberg"` is Redshift-source only today** (partial support). |
 | `icebergConfig` | `IcebergConfig` | When `tableType` is `"iceberg"` | Iceberg-specific configuration (see below) |
 
 ## IcebergConfig
+
+> **Scope:** End-to-end Iceberg migration is **Redshift-only** (native → UNLOAD → `copy_files`, or Glue-catalog `catalog_link` / `convert_to_managed`). Do not set `tableType: iceberg` for other source dialects unless product support expands.
 
 Configuration for Iceberg table targets. Required when `tableType` is `"iceberg"`.
 
@@ -93,8 +95,8 @@ The `icebergConfig` at the table level is **merged** with `defaultTableConfigura
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `strategy` | `"regular"` \| `"unload"` \| `"tpt"` \| `"write_nos"` | Yes | `"regular"` is the default. `"unload"` is Redshift-only. `"tpt"` and `"write_nos"` are Teradata-only (see [`worker-config-reference.md`](../../../../data-infrastructure/references/worker-config-reference.md)). |
-| `externalStage` | String | UNLOAD only | Snowflake external stage (e.g. `MY_DB.MY_SCHEMA.S3_STAGE`) |
+| `strategy` | `"regular"` \| `"unload"` \| `"tpt"` \| `"write_nos"` \| `"dbms_cloud"` | Yes | `"regular"` is the default. `"unload"` is Redshift-only. `"tpt"` and `"write_nos"` are Teradata-only. `"dbms_cloud"` is Oracle-only. See [extraction-strategies-reference.md](./extraction-strategies-reference.md) and [`worker-config-reference.md`](../../../../data-infrastructure/references/worker-config-reference.md). |
+| `externalStage` | String | UNLOAD / WRITE_NOS / DBMS_CLOUD | Snowflake external stage (e.g. `MY_DB.MY_SCHEMA.S3_STAGE`) |
 
 ```yaml
 extraction:
@@ -102,6 +104,10 @@ extraction:
 
 extraction:
   strategy: unload
+  externalStage: MY_DB.MY_SCHEMA.S3_EXTERNAL_STAGE
+
+extraction:
+  strategy: dbms_cloud
   externalStage: MY_DB.MY_SCHEMA.S3_EXTERNAL_STAGE
 ```
 

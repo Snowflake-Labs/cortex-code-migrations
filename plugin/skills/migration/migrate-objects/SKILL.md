@@ -202,6 +202,20 @@ out-of-band and wants the resolver to re-evaluate — for example,
 they corrected a column type in Snowflake and want `validateData` to
 re-run.
 
+### After `migrateData` (data migration run)
+
+When the current task is **`migrateData`** and you call `migrate_data(mode="run")` (from FSM instructions or this skill), you **must** complete poll and report before marking work done:
+
+1. Load [actions/data-migration/SKILL.md](actions/data-migration/SKILL.md) **Steps 5–7** if you have not already (poll with `migrate_data_status()`, present the error-first migration report, offer teardown).
+2. Do not return to the object loop or claim the next task until the user has seen the summary.
+
+### After `validateData` (data validation run)
+
+When the current task is **`validateData`** and you call `validate_data(mode="run")` (from FSM instructions or the validate-objects skill), you **must** complete poll and report before marking work done:
+
+1. Load [../validate-objects/actions/validate_tables.md](../validate-objects/actions/validate_tables.md) **Steps 4–6** if you have not already (poll with `validate_data_status()`, present the error-first validation report, offer teardown).
+2. Do not return to the object loop or claim the next task until the user has seen the summary.
+
 ## Step 4: Report
 
 Call `migration_status()` and present a completion summary to the user:

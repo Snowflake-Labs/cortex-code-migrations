@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "snowflake-migration": {
-      "command": "scai",
-      "args": ["mcp", "run"]
-    }
-  }
-}

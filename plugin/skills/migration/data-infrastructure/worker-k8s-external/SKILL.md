@@ -237,4 +237,4 @@ Tell the user:
 
 ## Done
 
-The worker deployment is running on the external cluster and all pods are polling for tasks. Return control to the parent skill.
+The worker deployment is running on the external cluster and all pods are polling for tasks. Return control to the parent skill, which runs Level 1 Data Doctor before proceeding.

@@ -40,10 +40,11 @@ Before starting any configuration, tell the user verbatim:
 - **Orchestrator** runs on SPCS (requires a compute pool). Handles migration workflows (break into tasks, `COPY INTO`) and validation workflows (schema/metrics/row comparison).
 - **Worker** runs locally. Reads from the source and uploads to a Snowflake stage (migration) or streams rows for comparison (validation). Not needed for most Iceberg migration strategies.
 - Both can be stopped and resumed safely. The next `migrate_data()` / `validate_data()` call auto-resumes the SPCS service. To suspend everything between waves and minimise idle SPCS / warehouse cost, use [./teardown/SKILL.md](./teardown/SKILL.md).
+- **Whenever a worker or orchestrator starts**, tell the user that idle infrastructure can accrue Snowflake credits until teardown — `migrate_data` / `validate_data` run responses include a `cost_reminder` field to relay.
 
 ## Idempotency
 
-If this sub-skill has already been completed in the current project — i.e., `.scai/settings/DataExchangeWorkerConfig.toml` exists with no remaining `<placeholder>` values — report "Data infrastructure already configured" and return to the caller without re-prompting.
+If this sub-skill has already been completed in the current project — i.e., `.scai/settings/DataExchangeWorkerConfig.toml` exists with no remaining `<placeholder>` values — tell the user verbatim: "Data infrastructure already configured — running `scai data doctor` to confirm nothing has drifted." This runs live checks against Snowflake and the source, so say it out loud rather than running silently. Then run [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastructure-no-workflow-yaml) (iterate until `result.hasFailures` is `false`) and return to the caller without re-prompting.
 
 Otherwise, proceed through the steps below.
 
@@ -139,8 +140,27 @@ Ask the user:
 | **Snowpark Container Services (SPCS)** | → `./worker-spcs/SKILL.md` — handles image selection, Snowflake Secrets, and CREATE SERVICE |
 | **Kubernetes on an external cluster** | → `./worker-k8s-external/SKILL.md` — handles image selection, Kubernetes Secrets, and Deployment manifest |
 
-**Stop here** — do not continue; the routed skill handles the rest.
+**Stop here for worker deployment** — the routed sub-skill handles install/start, then **returns control here**. After it returns (or after you complete a path that does not route to a worker sub-skill), run the Data Doctor section below before returning to the caller.
 
+---
+
+## Data Doctor (Level 1)
+
+This is the **single place** Level 1 Data Doctor runs — after **any** worker deployment path (local, distributed, SPCS, Kubernetes) returns control here. The worker sub-skills do not run it themselves.
+
+Run [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastructure-no-workflow-yaml). **Do not** start migration or validation setup until `result.hasFailures` is `false`. Iterate with the user on failures and warnings using each check's `suggestion`; you do not need to fix everything automatically.
+
+---
+
+## Checklist
+
+```
+- [ ] Compute pool registered (configure(compute_pool=...)) — when using SPCS orchestrator
+- [ ] Snowflake role has DATA_MIGRATION / DATA_VALIDATION usage (and service grants if needed)
+- [ ] Warehouse configured on the Snowflake connection
+- [ ] Worker config complete (no <placeholder> values) — unless pure Iceberg
+- [ ] Level 1 scai data doctor — no Fail checks
+```
 
 ---
 
@@ -150,5 +170,6 @@ Return control to the calling skill.
 
 ## Reference
 
+- [Data Doctor reference](./references/data-doctor-reference.md)
 - [Worker Config Reference](./references/worker-config-reference.md)
 - [Teardown (cost-saving suspend)](./teardown/SKILL.md)

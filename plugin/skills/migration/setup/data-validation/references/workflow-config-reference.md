@@ -4,14 +4,18 @@
 
 ## Top-level `validation_configuration`
 
-| Field                    | Type   | Default | Description                                     |
-| ------------------------ | ------ | ------- | ----------------------------------------------- |
-| `schema_validation`      | bool   | true    | Compare column definitions                      |
-| `metrics_validation`     | bool   | true    | Compare aggregate statistics                    |
-| `row_validation`         | bool   | false   | Row-by-row comparison (expensive)               |
-| `row_validation_mode`    | string | null    | Mode for row validation                         |
-| `continue_on_failure`    | bool   | true    | Continue validating remaining tables on failure |
-| `max_failed_rows_number` | int    | null    | Stop row validation after N mismatches          |
+| Field                    | Type   | Default (scai `generate-config`) | Description                                     |
+| ------------------------ | ------ | -------------------------------- | ----------------------------------------------- |
+| `schema_validation`      | bool   | true                             | Compare column definitions                      |
+| `metrics_validation`     | bool   | **false**                        | Compare aggregate statistics (opt-in)           |
+| `row_validation`         | bool   | true                             | Row-by-row comparison (expensive at scale)      |
+| `row_validation_mode`    | string | null                             | Mode for row validation                         |
+| `continue_on_failure`    | bool   | true                             | Continue validating remaining tables on failure |
+| `max_failed_rows_number` | int    | null                             | Stop row validation after N mismatches          |
+
+Defaults above match `scai data validate generate-config`. MCP setup only patches toggles you pass explicitly (`metrics_validation=`, etc.) or that were previously persisted in `plugin.yml`.
+
+For user-facing explanations of each level, see [Validation levels reference](../../../validate-objects/actions/references/validation-levels-reference.md).
 
 The four bool fields can be set directly via setup-mode params (`schema_validation=`, `metrics_validation=`, `row_validation=`, `continue_on_failure=`) and persist as session defaults under `data_validation_*` in `plugin.yml`. The other two fields require an in-place edit.
 
