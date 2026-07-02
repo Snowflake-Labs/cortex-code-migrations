@@ -12,7 +12,7 @@ One-time configuration for migrating data from a source database into Snowflake 
 > **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL
 > **Supported targets**: Native Snowflake tables (default). **Iceberg** targets are **Redshift-only** (partial support) — see [Extraction strategies reference](./references/extraction-strategies-reference.md#iceberg-target-redshift-only--partial-support).
 
-> **Run-only entry:** If you were routed here only to execute `migrateData` (registry task) and the workflow YAML already exists, skip to **Step 4**. You **must** complete **Steps 5–7** (poll, error-first migration report, teardown offer) before returning to the parent skill — even when the state machine invoked `migrate_data(mode="run")` without walking setup.
+> **Run-only entry:** If you were routed here only to execute `migrateData` (registry task) and the workflow YAML already exists, skip Steps 1–2 and complete **Step 2a** (display the existing `workflow_path` and offer optional updates) before **Step 4**. You **must** complete **Steps 5–7** (poll, error-first migration report, teardown offer) before returning to the parent skill — even when the state machine invoked `migrate_data(mode="run")` without walking setup.
 
 ## Prerequisite
 
@@ -115,24 +115,31 @@ Notes:
   `configure(snowflake_database=...)`), and Oracle `columnNamesToPartitionBy`
   (`ROWID`) when the CLI left them empty.
 
-### Step 2a: Read, edit, and confirm
+### Step 2a: Display, optional edits, confirm
 
 1. Read `workflow_path`.
-2. Apply each entry in `edit_hints`. Refer to `./references/workflow-config-reference.md`
-   for field-level details.
-3. **For Preliminary type**: add `whereClauseCriteria: "<row predicate>"` to
-   each table (or to `defaultTableConfiguration` for a shared filter). This
-   is the row-level filter and is unrelated to the table-selection `where`.
-4. Fill in any remaining per-table fields. **`columnNamesToPartitionBy` must
-   have at least one column** for native tables (empty `[]` finishes the
-   workflow without moving data). SQL Server / Redshift need an explicit PK or
-   partition column — Oracle defaults to `ROWID` on first generate —
-   PostgreSQL should use a monotonic integer PK (e.g. `id BIGINT`) or a
-   timestamp column; avoid `ctid` (unstable across vacuum). If no suitable
-   column exists, omit the field for a single-partition full extract.
-5. Apply **extraction strategy** fields from [extraction-strategies-reference.md](./references/extraction-strategies-reference.md) (`extraction.strategy`, `externalStage`, worker TOML extras for `unload` / `write_nos` / `dbms_cloud` / `tpt`).
-6. For **Redshift Iceberg** workflows (`target_table_type=iceberg`), also follow `./references/iceberg-setup-reference.md`.
-7. Show the final YAML to the user and get explicit confirmation before running.
+2. **Display** the workflow file to the user:
+   - **Small/medium files** — show the full YAML in chat.
+   - **Large files** — show the path, `tables:` count, `defaultTableConfiguration`, and table names; offer to show the full file or specific tables on request.
+   - Note whether setup **reused** an existing file (`workflow_reused`) or regenerated it.
+3. **Summarize:** table count, `migration_type`, sync strategy, extraction strategy, `target_table_type`, and any `partition_key_findings` from setup.
+4. Ask verbatim:
+
+> Here is the migration workflow at `<workflow_path>`.
+>
+> **Would you like to update any fields before we run?**
+> 1. **No — proceed**
+> 2. **Yes — I want to change something** (tell me which table, section, or field names)
+
+5. **If Yes:** apply the user's requested edits using `./references/workflow-config-reference.md` and [extraction-strategies-reference.md](./references/extraction-strategies-reference.md). Use `edit_hints` as a guide when the user is unsure what can be changed. Re-display the sections you changed. Repeat the question in step 4 until the user chooses **No — proceed** or says they are done editing.
+6. **If No:** skip discretionary edits unless agent-only blockers remain (step 7).
+7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
+   - Resolve `partition_key_findings` and required `columnNamesToPartitionBy` per `edit_hints` (empty `[]` finishes the workflow without moving data; SQL Server / Redshift need an explicit PK or partition column; Oracle defaults to `ROWID`; PostgreSQL: monotonic integer PK or timestamp — avoid `ctid`).
+   - **Preliminary type:** add `whereClauseCriteria: "<row predicate>"` per table or `defaultTableConfiguration` when missing.
+   - Required **extraction strategy** fields (`extraction.strategy`, `externalStage`, worker TOML cross-refs for `unload` / `write_nos` / `dbms_cloud` / `tpt`).
+   - **Redshift Iceberg** (`target_table_type=iceberg`): required fields from [iceberg-setup-reference.md](./references/iceberg-setup-reference.md).
+   - Tell the user what you changed and why before confirming.
+8. Get **explicit confirmation** to run with the final workflow, then continue to Step 3.
 
 > `columnNamesToPartitionBy` is **required** by the CLI validator for all configs.
 
@@ -142,7 +149,7 @@ Notes:
 
 ## Step 2b: Doctor gate (automatic)
 
-You no longer run doctor by hand here. `migrate_data(mode="run")` runs a `scai data doctor` check and **refuses to start** if any check fails, returning `doctor_failures`. Surface those to the user and fix them, or call `migrate_data(mode="run", skip_doctor=true)` only after the user explicitly accepts the failures. `migrate_data(mode="setup")` also returns `partition_key_findings` for tables that still need a partition column — resolve those while editing the YAML.
+You no longer run doctor by hand here. `migrate_data(mode="run")` runs a `scai data doctor` check and **refuses to start** if any check fails, returning `doctor_failures`. Surface those to the user and fix them, or call `migrate_data(mode="run", skip_doctor=true)` only after the user explicitly accepts the failures. Resolve `partition_key_findings` during Step 2a (blockers or user-requested edits).
 
 ---
 
@@ -423,9 +430,10 @@ Shared infrastructure checklist is owned by `../../../data-infrastructure/SKILL.
 ```
 - [ ] Migration approach selected (including extraction mechanism for this dialect)
 - [ ] Strategy-specific setup completed per extraction-strategies-reference.md
-- [ ] Workflow YAML generated via migrate_data(mode="setup", ...) and edited
-- [ ] User confirmed the final workflow YAML
-- [ ] Partition-key findings from setup resolved (or accepted)
+- [ ] Workflow YAML generated via migrate_data(mode="setup", ...) (or existing file reviewed at Step 2a)
+- [ ] User saw workflow YAML and was offered optional field updates (Step 2a)
+- [ ] User confirmed the final workflow YAML before run
+- [ ] Partition-key findings resolved (or accepted) at Step 2a
 - [ ] Target database and schema exist
 - [ ] Iceberg prerequisites validated — if Redshift + `target_table_type=iceberg`
 - [ ] migrate_data(mode="run") started

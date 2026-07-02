@@ -4,7 +4,7 @@ Validate migrated table data between source and Snowflake using cloud validation
 
 > **Scope is set per call.** `validate_data(mode="run")` validates **every** table listed in the workflow file produced by setup. Pass a `where` filter to setup that matches exactly the tables you intend to validate.
 
-> **Run-only entry:** If you were routed here only to execute `validateData` (registry task) and the workflow YAML already exists, skip to **Step 3**. You **must** complete **Steps 4–6** (poll, error-first validation report, teardown offer) before returning to the parent skill — even when the state machine invoked `validate_data(mode="run")` without walking setup.
+> **Run-only entry:** If you were routed here only to execute `validateData` (registry task) and the workflow YAML already exists, skip Step 1 and complete **Step 2** (display the existing `workflow_path` and offer optional updates) before **Step 3**. You **must** complete **Steps 4–6** (poll, error-first validation report, teardown offer) before returning to the parent skill — even when the state machine invoked `validate_data(mode="run")` without walking setup.
 
 ## Step 1: Generate the validation workflow
 
@@ -34,7 +34,7 @@ Do **not** prompt for `metrics_validation` unless the user asks for aggregate-st
 
 If setup returns `status: "error"` with a message about validation not being configured, load `../../setup/data-validation/SKILL.md` to complete the one-time infrastructure setup, then retry.
 
-## Step 2: Review and edit the workflow
+## Step 2: Display, optional edits, confirm
 
 The setup response contains:
 
@@ -42,18 +42,36 @@ The setup response contains:
 - `regenerated` — `false` means scai re-used an existing file.
 - `defaults` — the merged session defaults applied to this call.
 - `applied_overrides` — toggle values that were patched into `validation_configuration`.
-- `edit_hints` — the agent should walk through these.
+- `edit_hints` — use as a guide when the user is unsure what can be changed.
 
-If you need per-table overrides (column_mappings, index_column_list, where_clause for row filters, target_database/target_schema/target_name for renamed tables), edit the file directly — see `../../setup/data-validation/references/workflow-config-reference.md` for the field reference.
+1. Read `workflow_path`.
+2. **Display** the workflow file to the user:
+   - **Small/medium files** — show the full YAML in chat.
+   - **Large files** — show the path, `validation_configuration`, `tables:` count, and table names; offer to show the full file or specific tables on request.
+   - Note whether setup **reused** an existing file (`regenerated: false`).
+3. **Summarize:** table count, effective validation toggles (`schema_validation`, `metrics_validation`, `row_validation`, `continue_on_failure`), and which levels will run (e.g. schema + row; metrics off unless enabled).
+4. Ask verbatim:
 
-Show the user the final `tables:` list and the **effective** validation toggles from the workflow YAML (`defaults` / `applied_overrides` / read the file). State clearly which levels will run (e.g. schema + row; metrics off unless enabled).
+> Here is the validation workflow at `<workflow_path>`.
+>
+> **Would you like to update any fields before we run?**
+> 1. **No — proceed**
+> 2. **Yes — I want to change something** (tell me which table, section, or field names)
 
-**Optional — explain validation levels:** After showing toggles, offer a brief explanation unless the user is clearly repeating a prior run or only asked to execute:
+5. **If Yes:** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (e.g. `column_mappings`, `index_column_list`, `where_clause`, `target_database` / `target_schema` / `target_name`). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **No — proceed** or says they are done editing.
+6. **If No:** skip discretionary edits unless agent-only blockers remain (step 7).
+7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
+   - When `row_validation` is on: ensure each table has usable `index_column_list` (and `target_index_column_list` when names differ) per `edit_hints`.
+   - Verify `target_database` / per-table targets match the deployed Snowflake objects.
+   - Tell the user what you changed and why before confirming.
+8. Get **explicit confirmation** to run with the final workflow, then continue to Step 3.
+
+**Optional — explain validation levels:** After step 4 (or while the user is reviewing), offer a brief explanation unless they are clearly repeating a prior run or only asked to execute:
 
 > Would you like a quick explanation of what schema, row, and metrics validation mean before we run?
 
 - **Yes** — summarize from [Validation levels reference](./references/validation-levels-reference.md) (setup toggles table); mention only levels that are **on** in this workflow, plus note that metrics is off by default when disabled.
-- **No / skip** — proceed to Step 3 when the user confirms the workflow.
+- **No / skip** — continue the Step 2 flow.
 
 Also answer ad-hoc questions about levels at any time using the same reference; do not block the run on the offer.
 
@@ -257,8 +275,9 @@ If the user picks **Yes** (or doesn't respond), load the teardown sub-skill, the
 ## Checklist
 
 ```
-- [ ] Validation workflow YAML generated via validate_data(mode="setup", ...) and edited
-- [ ] User confirmed the final workflow YAML and validation toggles
+- [ ] Validation workflow YAML generated via validate_data(mode="setup", ...) (or existing file reviewed at Step 2)
+- [ ] User saw workflow YAML and was offered optional field updates (Step 2)
+- [ ] User confirmed the final workflow YAML and validation toggles before run
 - [ ] validate_data(mode="run") started
 - [ ] Polled until job terminal and progress.output.isFinished (when progress present)
 - [ ] Finished-but-pending anomaly checked (Step 4.B — do not report passed if tables still Pending)
