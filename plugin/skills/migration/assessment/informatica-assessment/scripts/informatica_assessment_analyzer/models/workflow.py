@@ -42,6 +42,7 @@ class WorkflowAnalysis:
     mappings: Dict[str, Mapping] = field(default_factory=dict)
     source_definitions: List[Component] = field(default_factory=list)
     target_definitions: List[Component] = field(default_factory=list)
+    has_workflow_declaration: bool = False
     workflow_dag_file: Optional[str] = None
 
     @property

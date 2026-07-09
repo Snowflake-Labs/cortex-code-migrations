@@ -30,6 +30,16 @@ snow stage list-files @<DATABASE>.VALIDATION.BASELINES \
   -c <SNOWFLAKE_CONNECTION_NAME>
 ```
 
+## Step 3 (BTEQ scripts only): mark capture complete
+
+For BTEQ scripts the baseline is uploaded to the stage and nothing is written to the test YAML, so the state machine cannot infer capture from the file — stamp the task explicitly:
+
+```
+transition_status status=advance task=captureBaseline --where "id = '<unit_id>'"
+```
+
+Procedures/functions skip this — their `captureBaseline` completes from the per-object test YAML.
+
 ## CHECKPOINT
 
 Confirm:

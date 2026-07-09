@@ -88,6 +88,6 @@ class InformaticaAssessmentAnalyzer:
     def _organize_by_workflows(self, components_by_key):
         return self.organizer_service.organize_by_workflows(components_by_key)
 
-    def export_to_json(self, output_path: str) -> None:
+    def export_to_json(self, output_path: str, conversion_mode: str = "dbt") -> None:
         """Export analysis results to JSON."""
-        self.analysis_service.export_to_json(self.workflows, output_path)
+        self.analysis_service.export_to_json(self.workflows, output_path, conversion_mode)

@@ -101,6 +101,19 @@ Map the answer to `etl.review_mode`:
 
 Capture `etl_replatform_sources_path` from `migration_status` if available (otherwise leave blank for sub-agent auto-detection).
 
+### 5.3b Informatica PowerCenter target (when Informatica is in scope)
+
+When Informatica PowerCenter sources are detected (use MCP `migration_status` to check project config), ask **once**:
+
+> "Which conversion target for Informatica PowerCenter?
+> 1. **dbt** — mappings convert to dbt models orchestrated by Snowflake Tasks
+> 2. **scripting** — mappings convert to Snowflake stored procedures (Snowflake Scripting)
+>
+> Choose 1 or 2:"
+
+This prompt is **MANDATORY** — do not skip or default. Record `informatica.target` as `"dbt"` or `"scripting"`.
+
+
 ### 5.4 Object exclusion (no inputs)
 
 No prompts. Note the sub-skill is in scope.
@@ -126,6 +139,8 @@ assessment_inputs:
     review_mode: generate-only | auto-review-all | skip
     output_dir: <project_dir>/assessment/ssis
     etl_replatform_sources_path: <abs or empty>
+  informatica:
+    target: dbt | scripting
 ```
 
 After Step 4 completes, do **not** prompt the user again until Step 8.
@@ -266,6 +281,40 @@ Report back JSON only:
 }
 ```
 
+### 6.4b informatica-runner prompt
+
+```
+Read and follow plugin/skills/migration/assessment/informatica-assessment/SKILL.md.
+You are running in sub-agent mode — do NOT ask the user any questions.
+
+Context (from parent):
+- project_dir: <abs_path>
+- output_dir: <project_dir>/assessment/informatica
+- informatica_target: dbt | scripting
+- review_mode: generate-only | auto-review-all
+
+Steps:
+1. Call configure() with project_dir above and etl_informatica_target=<informatica_target>.
+   Snowflake credentials are not needed for Informatica analysis.
+2. Locate ETL.Elements.*.csv and ETL.Issues.*.csv under
+   <project_dir>/reports/SnowConvert/.
+3. Run the skill's Step 2 (generate JSON) and Step 3 (analyze workflows)
+   following informatica-assessment/SKILL.md instructions.
+   Use informatica_target to frame all analysis in the correct mode.
+4. If review_mode = auto-review-all, analyze each workflow per Step 3
+   and produce the AI summary per Step 4.
+5. Locate informatica_assessment_analysis_<timestamp>.json under <output_dir>.
+
+Report back JSON only:
+{
+  "sub_skill": "informatica-assessment",
+  "status": "ok" | "error",
+  "output_json": "<abs_path>" | null,
+  "summary": "<one-line: total workflows, classified, pending, target=dbt|scripting>",
+  "error": "<message>" | null
+}
+```
+
 ### 6.5 Common rules for every dispatch
 
 1. **One message, multiple Task calls.** Send all in-scope dispatches in a single tool-use turn so the framework can run them in parallel.
@@ -291,7 +340,7 @@ For every dispatched sub-skill, validate:
 
 For sub-skills excluded by the Step 3 scope (or set to `review_mode: skip` in Step 4), synthesize `{status: "skipped", output_json: null, summary: "<reason>"}` so Step 8 has a complete row for every sub-skill.
 
-Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `analyzing-sql-dynamic-patterns`, `etl-assessment`). Carry it into Step 7 and Step 8.
+Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `analyzing-sql-dynamic-patterns`, `etl-assessment`, `informatica-assessment`). Carry it into Step 7 and Step 8.
 
 ## Step 7: Generate Unified HTML Report
 

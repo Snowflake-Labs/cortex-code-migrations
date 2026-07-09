@@ -358,3 +358,14 @@ See [`synthetic-seeder/platforms/oracle.md`](../baseline-capture/synthetic-seede
 - **Schema reference.** See [`step-based-yaml.md`](../references/step-based-yaml.md).
 
 If a YAML edit is needed but no recipe above matches, prefer to read the [upstream schema doc](https://github.com/snowflakedb/migrations-snowconvert-desktop/blob/main/testing-infrastructure/docs/step-based-test-yaml-configuration.md) directly before guessing.
+
+---
+
+## BTEQ script tests
+
+BTEQ YAML uses `validation.steps[].script` with `bindings` + `files.reads/writes`, not `CALL` steps or `validate:` return lists. Common fixes:
+- A read had no/empty input → correct the `files.reads[].fixture` file.
+- A binding resolved wrong (schema/db mismatch) → fix the `bindings.<NAME>` value or its `source`/`target`.
+- A declared output wasn't compared → ensure it's listed under `files.writes`.
+
+Full shape: [../references/BTEQ_TEST_YAML.md](../references/BTEQ_TEST_YAML.md). After editing, re-run `scai test capture --where "id IN (...)"` then `scai test validate ...` (same as procs).

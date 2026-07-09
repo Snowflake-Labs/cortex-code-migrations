@@ -41,6 +41,15 @@ license: Proprietary. See License-Skills for complete terms
 
 ## Workflow
 
+### Conversion Target Context
+
+The parent assessment skill collects `informatica.target` ("dbt" or "scripting") from the user at Step 4. This value is persisted to `.scai/config/plugin.yml` as `etl_informatica_target` and determines how this skill frames its analysis:
+
+- **dbt**: Mappings convert to dbt models. References to dbt project structure, `ref()`, and Snowflake Tasks calling dbt are appropriate.
+- **scripting**: Mappings convert to Snowflake stored procedures (Snowflake Scripting). Zero dbt references allowed — use stored procedure calls, inline SQL, and `CALL` statements instead.
+
+The sub-agent prompt from the parent includes `informatica_target: <value>`. Use this to select the appropriate analysis framing in Step 3 and the AI summary guide in Step 4.
+
 Copy this checklist and track your progress:
 
 ```
@@ -73,10 +82,11 @@ Analysis Progress:
 Run with the auto-detected paths from Step 1:
 
 ```bash
-uv run python -m informatica_assessment_analyzer <ETL.Elements> <ETL.Issues> <OUTPUT> [--source-dir <XML_SOURCE_DIR>]
+uv run python -m informatica_assessment_analyzer <ETL.Elements> <ETL.Issues> <OUTPUT> [--source-dir <XML_SOURCE_DIR>] [--conversion-mode dbt|scripting]
 ```
 
-The `--source-dir` flag enables CONNECTOR extraction from the Informatica XML, enriching the analysis with data flow edge details.
+- `--source-dir` enables CONNECTOR extraction from the Informatica XML, enriching the analysis with data flow edge details.
+- `--conversion-mode` records the target conversion mode in the output JSON (`dbt` by default). Pass `scripting` when the user selected Snowflake Scripting. The HTML report uses this value to render mode-specific content.
 
 ## Step 3: Analyze Informatica Workflows
 

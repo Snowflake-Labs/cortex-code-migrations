@@ -19,7 +19,7 @@ The platform of an ETL code unit is recorded on its registry entry as `source.pl
 
 **Stabilization** for this version means: run `etl-stabilization` until its Final Validation phase reports clean. That covers everything `etl-stabilization` does — scan, ROADMAP, phased TDD across orchestration elements and dbt sub-projects, EWI fixes, etc.
 
-**Out of scope here:** ETL deployment to Snowflake is currently not supported by scai or the migration skill yet.
+**After stabilization:** the unit advances to `deploy`, the terminal step for ETL units. Deploying the stabilized ETL to Snowflake is handled by `scai code deploy` through the `deploy` tool (see Step 4), not by this skill and not by hand-running `snow`.
 
 This skill is the **orchestrated (registry-backed) entry point** for ETL stabilization. It claims the unit and records the result on the registry, then delegates the actual fixing to `etl-stabilization`.
 
@@ -74,9 +74,43 @@ When `etl-stabilization` finishes its Final Validation cleanly, advance the stat
 transition_status(status="advance", task="etlStabilization", outcome="completed", where="id = '<etl_id>'")
 ```
 
-Stabilization is **terminal** for ETL in the current state machine — there is no `extractRules` step after it, and deploy is out of scope.
+`etlStabilization` is not terminal: on `completed` the machine advances the unit to `deploy` (which deploys the converted ETL via `scai code deploy`). Continue to Step 4 to deploy.
 
-## Step 4: Failures
+## Step 4: Deploy
+
+Once `etlStabilization` is `completed`, the unit sits at the `deploy` task. Deploy it with the `deploy` MCP tool, selecting the ETL by `where = "kind = 'etl'"` (the canonical ETL selector) or by `object_name` / `where = "id = '<etl_id>'"`. The tool runs `scai code deploy`, which understands ETL code units end to end.
+
+**Select the ETL by `kind`, not `objectType`.** ETL units are matched by `kind = 'etl'` (lowercase, case-sensitive). They are NOT matched by `source.objectType` / `target.objectType`, which report `other` for ETL, so `source.objectType = 'etl'` matches nothing. If the `deploy` tool is unavailable (e.g. deferred, reachable only via `tool_search` / `python_repl`) or a `configure` call stalls, do not keep fighting it: run the equivalent command directly. It is self-contained (takes the connection with `-c`, needs no prior `configure`): `scai code deploy -c <connection> -d <database> --where "kind = 'etl'"` (never `source.objectType = 'etl'`, and still no hand-rolling).
+
+**Do NOT hand-roll the deployment, and do NOT run the pipeline by hand.** No manual `snow dbt deploy`; no executing the orchestration SQL or helper DDL by hand; no building or recreating the task graph yourself (`CREATE OR REPLACE TASK`); no seeding tables or running models (`EXECUTE DBT PROJECT`); no `EXECUTE TASK`. Deploy only **creates** the objects (the task graph is left suspended) - running it is a separate, later step (see Activation), and only when the user asks. `scai code deploy` already does the deploy, in order:
+
+- **Supporting helpers first:** the `control_variables` transient table and any shared `etl_configuration` functions/procedures and `file_formats` the packages depend on.
+- **The dbt project(s):** each converted data flow registered as a dbt project.
+- **The orchestration task graph:** created **suspended**, so nothing runs until you choose to activate it. These are Snowflake Task Graphs (Snowflake owns the scheduling); the converted SQL only defines the tasks.
+- **Telemetry:** a `COMMENT` is set on each deployed object to record that it came from this tool.
+
+After a successful deploy with the graph left suspended, the tool reports the suspended tasks so the user knows the graph will not run on its own.
+
+**Tell the user WHERE it deployed (proactively, and never guess the account).** Right after a successful deploy, print a short "Deployed to" summary so the user does not have to ask, and so no connection detail is ever invented:
+
+- **Connection / account:** the connection you deployed with (the `-c` value). Read its `account` and `host` from `snow connection list` or `~/.snowflake/connections.toml`. NEVER guess or assume the account, account locator, region, or Snowsight server. If you cannot read it from the connection, say so. Do not fabricate one (a wrong link is worse than none).
+- **Database / schema:** the `-d` database and the schema the package deployed into (schema defaults to the connection's schema, else `PUBLIC`).
+- **Deployed objects:** list each by fully-qualified name `DATABASE.SCHEMA.NAME` - the task-graph root task, its child tasks, and each dbt project - from the deploy result.
+- **Snowsight link:** when the account is in `ORG-ACCOUNT` form, the base is `https://app.snowflake.com/<ORG>/<ACCOUNT>/`; link to the schema's object browser by appending `#/data/databases/<DATABASE>/schemas/<SCHEMA>`. If the account is a bare locator (no `ORG-ACCOUNT`), give the account, the FQNs, and the Snowsight home only, and note the deep path may need adjusting. Still never invent a locator or region.
+
+The task graph is suspended, so this link is for inspecting the created objects, not a running pipeline.
+
+**Activation (only when the user asks to run or activate the tasks).** Pass `snowflake_task_activate = true` to the `deploy` tool. It resumes each task graph's child tasks. The converted root tasks have no SCHEDULE or AFTER clause, so Snowflake will not resume the root itself; that is expected and is reported as a note, not an error. Run a suspended-root graph on demand with `EXECUTE TASK`.
+
+When the deploy returns success, advance the machine:
+
+```
+transition_status(status="advance", task="deploy", outcome="completed", where="id = '<etl_id>'")
+```
+
+If the deploy fails and you cannot resolve it, call the same transition with `outcome="failed"` and a short `error=` summary, then surface it to the user.
+
+## Step 5: Failures
 
 If `etl-stabilization` halts because of an issue it cannot resolve on its own, mark the task as failed:
 
@@ -88,7 +122,7 @@ Then surface the issue to the user for resolution. When resolved, retry from Ste
 
 Anything that is **not** resolvable within `etl-stabilization` (corrupt converted output, missing source file, Snowflake-side infrastructure problem) should be handled as an Error Recovery case within that skill before retrying.
 
-## Step 5: Exclusion
+## Step 6: Exclusion
 
 If the user decides this ETL unit is out of scope (deprecated, replaced, manual migration), mark it out of scope:
 

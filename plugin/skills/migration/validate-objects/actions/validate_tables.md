@@ -58,7 +58,7 @@ The setup response contains:
 > 1. **No — proceed**
 > 2. **Yes — I want to change something** (tell me which table, section, or field names)
 
-5. **If Yes:** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (e.g. `column_mappings`, `index_column_list`, `where_clause`, `target_database` / `target_schema` / `target_name`). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **No — proceed** or says they are done editing.
+5. **If Yes:** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (e.g. `column_mappings`, `index_column_list`, `source_where_clause` (+ its pair `target_where_clause`), `target_database` / `target_schema` / `target_name`). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **No — proceed** or says they are done editing.
 6. **If No:** skip discretionary edits unless agent-only blockers remain (step 7).
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
    - When `row_validation` is on: ensure each table has usable `index_column_list` (and `target_index_column_list` when names differ) per `edit_hints`.

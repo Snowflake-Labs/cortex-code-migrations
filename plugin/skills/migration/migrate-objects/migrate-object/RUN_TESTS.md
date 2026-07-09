@@ -1,6 +1,6 @@
 # Run Tests
 
-Guide for the `runTests` task. The machine invokes this after deployment succeeds for procedures and functions.
+Guide for the `runTests` task. The machine invokes this after deployment succeeds for procedures and functions, and after baseline capture for BTEQ scripts (which are not deployed).
 
 ## Run validation
 
@@ -12,7 +12,7 @@ Read the results file:
 <project_dir>/test-results/results.json
 ```
 
-Each entry has `code_unit_name`, `status`, `match_type`, `error`, and `differences`. Focus on entries where `status` is not `PASS`.
+Each entry has `code_unit_name`, `status`, `match_type`, `error`, and `differences`. Focus on entries where `status` is not `PASS`. BTEQ result rows carry `metadata.kind: "bteq"` and compare file I/O + table deltas rather than a return value.
 
 ## Test statuses
 

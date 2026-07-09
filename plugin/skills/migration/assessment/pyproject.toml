@@ -1,16 +1,12 @@
 # Dependency manifest for assessment skill scripts that are run via
 # `uv run --project ai/plugin/skills/migration/assessment python .../scripts/...`
-# (see SKILL.md). Most scripts are stdlib-only; the lineage gap tool
-# (scripts/snowconvert_reports/lineage) needs sqlglot for Teradata SQL AST
-# parsing (sql_tables.get_dml_write_target has no non-sqlglot fallback).
+# (see SKILL.md). Scripts are stdlib-only — no external deps needed at runtime.
 [project]
 name = "snowconvert-assessment-scripts"
 version = "0.1.0"
 description = "Runtime dependencies for SnowConvert migration assessment scripts"
 requires-python = ">=3.11"
-dependencies = [
-    "sqlglot>=30,<31",
-]
+dependencies = []
 
 [dependency-groups]
 dev = [

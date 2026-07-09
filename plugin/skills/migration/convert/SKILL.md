@@ -62,6 +62,12 @@ Ask the user via `ask_user_question` (`multiSelect = false`):
     On "re-export first", stop and wait for the user to return with the path. On either "proceed" option, continue to the filesystem path prompt below.
   - **If SSIS**, no extraction-guide prompt is needed, proceed directly to the filesystem path prompt below.
   - **After platform handling**, ask for the filesystem path where the ETL code is located. Store this path for Step 4.
+  - **If Informatica**, after storing the ETL path, ask with `ask_user_question` (`multiSelect = false`):
+    > "Which conversion target for Informatica PowerCenter?
+    > 1. **dbt** — mappings convert to dbt models orchestrated by Snowflake Tasks
+    > 2. **scripting** — mappings convert to Snowflake stored procedures (Snowflake Scripting)"
+
+    Call the MCP `configure` tool with `etl_informatica_target` set to `"dbt"` or `"scripting"` so it persists to `.scai/config/plugin.yml` for downstream use by the conversion CLI and assessment output.
 - If **no**, proceed to Step 3; no `<ETL_PATH>` will be set.
 
 ### Step 3: Check for Power BI Reports

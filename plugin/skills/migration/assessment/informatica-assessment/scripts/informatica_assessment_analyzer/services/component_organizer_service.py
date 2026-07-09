@@ -31,18 +31,54 @@ class ComponentOrganizerService:
         Routing rules:
         - Category='Folder', Subtype='Source Definition' → source_definitions
         - Category='Folder', Subtype='Target Definition' → target_definitions
-        - Category='Folder', other subtypes → metadata (Mapping/Workflow/Session declarations)
+        - Category='Folder', Subtype='Workflow'/'Session' → sets has_workflow_declaration
+        - Category='Folder', other subtypes → metadata (Mapping declarations)
         - Category='Workflow' → workflow_tasks
         - Category='Mapping', EntryKind='Instance' → mapping components
         - Category='Mapping', EntryKind='Declaration' → mapping component declarations
+
+        Post-processing (two-tier filter):
+        - Files with workflow_tasks or has_workflow_declaration are always included.
+        - Files with only source/target defs are included ONLY if no file in the
+          dataset has primary workflow signals (i.e. pre-Arrange legacy export).
         """
-        workflows: Dict[str, WorkflowAnalysis] = {}
+        all_entries: Dict[str, WorkflowAnalysis] = {}
 
         for component in components_by_key.values():
-            workflow = self._get_or_create_workflow(workflows, component)
+            workflow = self._get_or_create_workflow(all_entries, component)
             self._add_component_to_workflow(workflow, component)
 
+        dataset_has_workflow_signals = any(
+            wa.workflow_tasks or wa.has_workflow_declaration
+            for wa in all_entries.values()
+        )
+
+        workflows = {
+            path: wa
+            for path, wa in all_entries.items()
+            if self._is_workflow_file(wa, dataset_has_workflow_signals)
+        }
+
         return workflows
+
+    @staticmethod
+    def _is_workflow_file(wa: WorkflowAnalysis, dataset_has_workflow_signals: bool) -> bool:
+        """Determine if a file represents a real workflow.
+
+        Primary signals (definitive):
+          - workflow_tasks: Category=Workflow instances (Session, Command, Start)
+          - has_workflow_declaration: Folder-level Workflow/Session declaration
+
+        Fallback (legacy datasets only):
+          - source/target defs are accepted ONLY when no file in the dataset
+            has primary workflow signals — indicating a pre-Arrange legacy export
+            where mapping files with Folder defs are the top-level units.
+        """
+        if wa.workflow_tasks or wa.has_workflow_declaration:
+            return True
+        if not dataset_has_workflow_signals:
+            return bool(wa.source_definitions or wa.target_definitions)
+        return False
 
     def _get_or_create_workflow(
         self, workflows: Dict[str, WorkflowAnalysis], component: Component
@@ -83,9 +119,8 @@ class ComponentOrganizerService:
             workflow.source_definitions.append(component)
         elif subtype == "Target Definition":
             workflow.target_definitions.append(component)
-        # Other folder-level entries (Mapping declarations, Workflow declarations,
-        # Session declarations) are metadata — we don't need them in the output
-        # since the instances carry the execution data.
+        elif subtype in ("Workflow", "Session"):
+            workflow.has_workflow_declaration = True
 
     def _add_to_mapping(
         self, workflow: WorkflowAnalysis, component: Component

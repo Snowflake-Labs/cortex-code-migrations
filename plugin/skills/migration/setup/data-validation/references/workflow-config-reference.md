@@ -37,8 +37,8 @@ The four bool fields can be set directly via setup-mode params (`schema_validati
 
 | Field                                  | Description                                             |
 | -------------------------------------- | ------------------------------------------------------- |
-| `where_clause`                         | Filter source rows for validation                       |
-| `target_where_clause`                  | Filter target rows for validation                       |
+| `source_where_clause` (alias: `where_clause`) | Filter **source** rows for validation. Pairs with `target_where_clause` — set **both** so the same subset of rows is compared on each side. Setting only one filters source and target independently and usually reports mismatches. |
+| `target_where_clause`                  | Filter **target** rows for validation. Pairs with `source_where_clause`. |
 | `column_selection_list`                | Columns to include (or exclude)                         |
 | `use_column_selection_as_exclude_list` | If true, `column_selection_list` is an exclusion list   |
 | `column_mappings`                      | `{"source_col": "TARGET_COL"}` for renamed columns      |

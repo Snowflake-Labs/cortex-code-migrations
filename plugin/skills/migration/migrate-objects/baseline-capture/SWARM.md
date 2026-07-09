@@ -13,6 +13,8 @@ State-machine entry point for `testing_data_source = "source_database"`. Handles
 
 > **SCOPE: One object only.** Triggered per-object by the `seedSourceDb` state-machine task. Do not loop here — the state machine handles the next object after `captureBaseline` completes.
 
+> **Not for BTEQ scripts.** Units with `kind: "script"` (BTEQ) are seeded by [seed-script/SKILL.md](seed-script/SKILL.md) from user-provided bindings + import fixtures — not here. Do not generate `test_cases:` rows or synthesize fixtures for them.
+
 ---
 
 ## On entry

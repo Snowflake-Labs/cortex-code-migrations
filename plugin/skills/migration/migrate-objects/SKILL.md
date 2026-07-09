@@ -154,7 +154,7 @@ Then ask the user to pick a next action. **Only list actions you are actually of
 migration_status(mode="my_objects_details", group=<group.id>)
 ```
 
-When `object_type == "etl"`, the group is an ETL stabilization batch — load [migrate-etl/SKILL.md](migrate-etl/SKILL.md) and follow it. SQL object types (`table`, `view`, `procedure`, `function`) follow the deploy → test → fix loop already described by `instructions`.
+When `object_type == "etl"`, the group is an ETL stabilization batch — load [migrate-etl/SKILL.md](migrate-etl/SKILL.md) and follow it. SQL object types (`table`, `view`, `procedure`, `function`, `bteq`) follow the loop already described by `instructions` (BTEQ scripts skip deploy).
 
 VERY IMPORTANT: **Wait for user input before acting.** Once the user confirms which objects to operate on, follow the `instructions` field on the response.
 

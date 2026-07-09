@@ -28,7 +28,9 @@ class AnalysisService:
 
     @staticmethod
     def export_to_json(
-        workflows: Dict[str, WorkflowAnalysis], output_path: str
+        workflows: Dict[str, WorkflowAnalysis],
+        output_path: str,
+        conversion_mode: str = "dbt",
     ) -> None:
         """Export all workflow analyses to a single JSON file.
 
@@ -65,6 +67,7 @@ class AnalysisService:
             "summary": {
                 "generated_at": datetime.now().isoformat(),
                 "technology": "InformaticaPowerCenter",
+                "conversion_mode": conversion_mode,
                 "total_workflows": total_workflows,
                 "total_mappings": total_mappings,
                 "total_components": total_components,

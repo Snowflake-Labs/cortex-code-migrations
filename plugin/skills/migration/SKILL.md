@@ -42,9 +42,15 @@ Also add the checklist based on the status JSON. Use `✅` (all done), `◐` (pa
    - Views:       <view.deployed>/<view.total> deployed
    - Functions:   <function.deployed>/<function.total> deployed, <function.tested>/<function.total> tested
    - Procedures:  <procedure.deployed>/<procedure.total> deployed, <procedure.tested>/<procedure.total> tested
+   - ETL:         <etl.deployed>/<etl.total> deployed
+   - BTEQ scripts: <bteq.tested>/<bteq.total> tested
 ```
 
-If an object type has zero objects in scope (e.g. no functions in the project), omit that bullet. The placeholders read directly from `by_type.<type>` in the `migration_status` response — counts that never incremented are absent from the JSON and should be treated as `0`.
+Use `by_type.<type>.total` to decide what to show:
+- **Type not in the project** (`total` absent or 0): omit that bullet (e.g. no functions in the project).
+- **Type present but none in the current wave** (`total` > 0, but the wave-scoped counts like `deployed` are absent or 0 for this wave): keep it visible and acknowledge it in the narrative. For example, "You also have 1 Informatica ETL workflow staged, scheduled in a later wave and ready to deploy." Do not let the current wave hide work that exists elsewhere in the project.
+
+Never describe the project as "<type>-only" (e.g. "table-only") when `by_type` lists any other type with `total` > 0. The placeholders read directly from `by_type.<type>` in the `migration_status` response; counts that never incremented are absent from the JSON and should be treated as `0`. **BTEQ scripts have no deploy step** — they run their converted SQL inside the test itself, so report them only by `tested` (never "deployed"); `by_type.bteq` carries no `deployed` count.
 
 Follow the summary with the progress checklist (see below), then go to Step 2.
 

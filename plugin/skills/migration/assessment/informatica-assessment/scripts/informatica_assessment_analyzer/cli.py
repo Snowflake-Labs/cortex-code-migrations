@@ -149,7 +149,8 @@ def main():
     if len(sys.argv) < 4:
         print(
             "Usage: python -m informatica_assessment_analyzer "
-            "<elements_csv> <issues_csv> <output_folder> [--source-dir <path>]"
+            "<elements_csv> <issues_csv> <output_folder> "
+            "[--source-dir <path>] [--conversion-mode dbt|scripting]"
         )
         print(
             "       python -m informatica_assessment_analyzer "
@@ -198,6 +199,20 @@ def main():
         if idx + 1 < len(sys.argv):
             source_dir = sys.argv[idx + 1]
 
+    # Optional conversion mode (dbt or scripting)
+    conversion_mode = "dbt"
+    if "--conversion-mode" in sys.argv:
+        idx = sys.argv.index("--conversion-mode")
+        if idx + 1 < len(sys.argv):
+            val = sys.argv[idx + 1]
+            if val not in ("dbt", "scripting"):
+                print(
+                    f"Error: --conversion-mode must be 'dbt' or 'scripting', got '{val}'",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            conversion_mode = val
+
     output_json = Path(f"{output_folder}/informatica_assessment_analysis.json")
 
     try:
@@ -205,7 +220,7 @@ def main():
             elements_file, issues_file, source_dir
         )
         analyzer.analyze()
-        analyzer.export_to_json(str(output_json))
+        analyzer.export_to_json(str(output_json), conversion_mode)
 
         print(f"\nInformatica assessment analysis saved to: {output_json}")
 

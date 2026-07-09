@@ -62,7 +62,8 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `etlStabilization` | Stabilizes a converted ETL code unit (SSIS, Informatica, ...) and validates the functionality. |
 | `seedSourceDb` | Captures test inputs from the source database. |
 | `seedSynthetic` | Generates synthetic test inputs. |
-| `captureBaseline` | Captures a source proc/function's output as a test baseline. |
+| `seedScript` | Writes a BTEQ script's test YAML, resolving binding values and staging .IMPORT fixtures from the shell script that runs it via `scai test seed --bindings-from`; values that can't be resolved statically become `{ eval }` recipes or stay `__REPLACE_ME__` for manual fill, and bindings shared across scripts are hoisted to the global test_config.yaml. Requires the bteq binary on PATH. |
+| `captureBaseline` | Captures a source object's output as a test baseline (procedures, functions, and BTEQ scripts). |
 | `deploy` | Deploys one object to Snowflake. |
 | `validateView` | Validates a deployed view against its source. |
 | `migrateData` | Migrates data into a deployed table. |
@@ -130,9 +131,13 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Inputs:** Object that needs test inputs (no source connection required).
 - **Done when:** Per-object YAML exists at `<project_dir>/artifacts/<id>/test/<name>.yml`.
 
+#### `seedScript`
+- **Inputs:** A converted BTEQ script unit; the shell script(s) that set its variables and run bteq (plus any invocation args); configured source connection; bteq binary installed.
+- **Done when:** Per-object YAML exists at `<project_dir>/artifacts/<id>/test/<name>.yml`.
+
 #### `captureBaseline`
 - **Inputs:** Object with seed data; configured source connection.
-- **Done when:** Per-object YAML exists at `<project_dir>/artifacts/<id>/test/<name>.yml`.
+- **Done when:** Procedures/functions: the per-object YAML exists (proc seeding captures the baseline into it). BTEQ: `extensions.tasks.captureBaseline` is set — `scai test capture` uploads the baseline to the Snowflake stage and writes no local artifact, so the YAML (which `seedScript` already wrote) cannot signal capture; the agent stamps this after running capture.
 
 #### `deploy`
 - **Inputs:** Converted SQL for the object.
@@ -151,7 +156,7 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Done when:** Registry field `extensions.dataValidation` reads completed.
 
 #### `runTests`
-- **Inputs:** Deployed proc/function + captured baseline.
+- **Inputs:** Object with a captured baseline; procedures and functions are also deployed first (BTEQ scripts are not).
 - **Done when:** Registry field `codeStatus.testing` reads completed.
 
 #### `extractRules`

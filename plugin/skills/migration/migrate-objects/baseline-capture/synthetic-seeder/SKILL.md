@@ -39,6 +39,7 @@ converted code. Each test is a step-based YAML artifact directly consumable by
 - Repair the migrated object — delegate failures caused by object bugs to `migrate-object`
 - Run `uv run migrate` or `run_migration_tests` — test execution is handled by `scai test capture` + `scai test validate`
 - Generate tests for TABLEs or VIEWs (procedures and functions only)
+- **Generate tests for BTEQ scripts.** Units with `kind: "script"` (BTEQ) author a `validation.steps[].script` block per [../seed-script/SKILL.md](../seed-script/SKILL.md) from user-provided bindings + import fixtures — they are not synthesized here. Do not invent `test_cases:` for them.
 
 ---
 

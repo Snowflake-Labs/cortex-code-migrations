@@ -1,6 +1,6 @@
 ---
 name: migrate-object
-description: Core migration loop for a single stored procedure or function. Iterates deploy -> test -> diagnose -> fix until Snowflake output matches source.
+description: Core migration loop for a single stored procedure, function, or BTEQ script. Iterates deploy -> test -> diagnose -> fix until Snowflake output matches source.
 parent_skill: migrate-objects
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -16,12 +16,13 @@ Each object goes through a pipeline managed by the state machine:
 1. **Claim** — `claimObject` reserves the object for this user.
 2. **Checkout** — `checkoutBranch` creates or switches to a git branch.
 3. **Convert** — `convert` runs SnowConvert to produce initial Snowflake SQL.
-4. **Test prep** (procedures/functions only) — `createTests` + `captureBaseline` generate test YAML and capture source-side baselines.
+4. **Test prep** — procedures/functions: `createTests` + `captureBaseline` generate test YAML and capture source-side baselines. BTEQ scripts: `seedScript` (binding values + import fixtures resolved from the shell script that runs it via `scai test seed --bindings-from`, hand-filled otherwise — see [../baseline-capture/seed-script/SKILL.md](../baseline-capture/seed-script/SKILL.md)) then `captureBaseline`.
 5. **Deploy** — `deploy` pushes the SQL to Snowflake. See [DEPLOY.md](DEPLOY.md).
 6. **Validate** — depending on object type:
    - Tables: `migrateData` → `validateData`
    - Views: `validateView`
    - Procedures/functions: `runTests`. See [RUN_TESTS.md](RUN_TESTS.md).
+   - BTEQ scripts: `runTests` (deploy is skipped — the converted script is run by the test). See [RUN_TESTS.md](RUN_TESTS.md).
 7. **Fix loop** — if deployment or validation fails, the machine enters a cycle:
    - `applyRules` — apply known migration rules from the rule engine.
    - `fixCode` — diagnose the failure and make targeted fixes. See [DIAGNOSE_FIX.md](DIAGNOSE_FIX.md).
