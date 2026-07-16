@@ -10,7 +10,7 @@ SnowConvert AI processes SSIS packages and converts them to Snowflake-native com
 
 | SSIS Component | Snowflake Target | Technology |
 |----------------|------------------|------------|
-| **Control Flow** | [Snowflake Tasks](https://docs.snowflake.com/en/user-guide/tasks-intro) | Snowflake Scripting SQL |
+| **Control Flow** | [Snowflake Tasks](https://docs.snowflake.com/en/user-guide/tasks-intro) | Snowflake Scripting |
 | **Data Flow** | dbt Projects | dbt models running on Snowflake |
 
 ### Critical Understanding
@@ -135,7 +135,7 @@ This classification applies when you observe in the package analysis (Control Fl
 6. **Script-heavy logic:** Script Tasks with C#/VB.NET code for complex orchestration logic, error handling, or integration with external systems.
 
 **SnowConvert Outcome:**
-- Control Flow → Snowflake Tasks with procedural Scripting SQL
+- Control Flow → Snowflake Tasks with procedural Snowflake Scripting
 - May require Snowflake stored procedures for complex conditional logic
 - Script Tasks need manual rewrite (Python UDFs or external orchestration)
 - File/FTP operations need external orchestration (Airflow) or pre/post processing

@@ -6,18 +6,33 @@ This guide defines how to write comprehensive, actionable AI analysis for Inform
 
 ## Context: SnowConvert AI Migration
 
-SnowConvert AI processes Informatica PowerCenter workflows and converts them to Snowflake-native components:
+SnowConvert AI processes Informatica PowerCenter workflows and converts them to Snowflake-native components. The conversion target depends on `informatica_target` (set by the parent skill):
+
+### dbt mode (`informatica_target: dbt`)
 
 | Informatica Component | Snowflake Target | Technology |
 |----------------------|------------------|------------|
-| **Workflow (Control Flow)** | [Snowflake Tasks](https://docs.snowflake.com/en/user-guide/tasks-intro) | Snowflake Scripting SQL |
+| **Workflow (Control Flow)** | [Snowflake Tasks](https://docs.snowflake.com/en/user-guide/tasks-intro) | Snowflake Scripting |
 | **Mappings (Data Flow)** | dbt Projects | dbt models running on Snowflake |
 | **Sessions** | Snowflake Tasks calling dbt | Orchestration layer |
 
+### scripting mode (`informatica_target: scripting`)
+
+| Informatica Component | Snowflake Target | Technology |
+|----------------------|------------------|------------|
+| **Workflow (Control Flow)** | [Snowflake Tasks](https://docs.snowflake.com/en/user-guide/tasks-intro) | Snowflake Scripting |
+| **Mappings (Data Flow)** | Snowflake Stored Procedures | Snowflake Scripting (inline SQL) |
+| **Sessions** | Snowflake Tasks with CALL statements | Orchestration layer |
+
 ### Critical Understanding
 
-**SnowConvert will process all workflows**, but the analysis must identify external connectivity requirements. dbt projects on Snowflake cannot directly connect to external sources - data must already exist in Snowflake. This means:
+**SnowConvert will process all workflows**, but the analysis must identify external connectivity requirements.
 
+**dbt mode:** dbt projects on Snowflake cannot directly connect to external sources — data must already exist in Snowflake.
+
+**scripting mode:** Stored procedures operate on data already in Snowflake — external sources still require ingestion solutions.
+
+In both modes:
 - **Ingestion workflows** require attention to identify external connector solutions
 - **Workflows with transformations on internal sources** have straightforward conversion paths
 - **Mixed workflows** require analysis to separate what converts directly vs. what needs connector solutions
@@ -113,8 +128,8 @@ This classification applies when you observe in the workflow analysis (mapping l
 
 **SnowConvert Outcome:**
 - Workflow → Snowflake Tasks
-- Mappings → dbt models
-- **Excellent conversion candidate**
+- Mappings → dbt models (dbt mode) / Stored procedures (scripting mode)
+- **Excellent conversion candidate** in both modes
 
 ---
 
@@ -140,9 +155,9 @@ This classification applies when you observe in the workflow analysis (mapping l
 
 **SnowConvert Outcome:**
 - Workflow → Snowflake Tasks
-- Mappings → dbt projects (but external sources need connector alternatives)
+- Mappings → dbt projects (dbt mode) / Stored procedures (scripting mode) — but external sources need connector alternatives
 - **Requires external connector solution** — identify source type and recommend approach
-- Pure ingestion workflows (minimal transformation) may be better served by dedicated connector solutions rather than converted dbt models
+- Pure ingestion workflows (minimal transformation) may be better served by dedicated connector solutions rather than converted output
 
 ---
 
@@ -169,7 +184,7 @@ This classification applies when you observe in the workflow analysis (workflow 
 5. **Email tasks:** Notification workflows.
 
 **SnowConvert Outcome:**
-- Workflow → Snowflake Tasks with procedural Scripting SQL
+- Workflow → Snowflake Tasks with procedural Snowflake Scripting
 - Command tasks → Stored procedures or external orchestration
 - **May require Airflow** for complex orchestration patterns
 
@@ -195,7 +210,8 @@ This classification applies when you observe in the workflow analysis (mapping l
 
 **SnowConvert Outcome:**
 - **Partial candidate** — transformation portions can convert, ingestion cannot
-- Recommend architectural separation: ingestion via Fivetran/Airflow, transformation via dbt
+- **dbt mode:** Recommend architectural separation: ingestion via Fivetran/Airflow, transformation via dbt models
+- **scripting mode:** Recommend architectural separation: ingestion via Fivetran/Airflow, transformation via stored procedures
 - Analysis should clearly identify which components are convertible vs. which need alternatives
 
 ---
@@ -211,7 +227,7 @@ Sources & Destinations: [List the actual SOURCE and TARGET definitions found in 
 
 Purpose: [Business purpose — what does this workflow accomplish, what business domain does it serve, who depends on it.]
 
-Conversion: [Assessment of conversion readiness — what converts directly, what needs alternatives, specific risks from custom transformations or SQL overrides.]
+Conversion: [Assessment of conversion readiness — what converts directly, what needs alternatives, specific risks from custom transformations or SQL overrides. Frame in terms of the active conversion target: use "dbt models" if dbt mode, "stored procedures" if scripting mode.]
 ```
 
 **Format Requirements:**
@@ -272,7 +288,7 @@ Before submitting analysis, verify:
 - [ ] Sources explicitly state DATABASETYPE and whether INTERNAL or EXTERNAL
 - [ ] Custom transformations are called out specifically
 - [ ] SQL Overrides are mentioned if present
-- [ ] Conversion assessment identifies what converts vs what needs alternatives
+- [ ] Conversion section identifies what converts vs what needs alternatives
 - [ ] Analysis is 150-300 words
 
 ---

@@ -10,6 +10,7 @@ The SnowConvert Assessment Skill analyzes your database migration workload using
 
 - **Plan deployment waves** - Organize objects into deployment sequences that respect dependencies
 - **Identify exclusions** - Find temporary, staging, and deprecated objects that may not need migration
+- **Surface migration anti-patterns** - Group SnowConvert findings into performance, architecture/security, and behavior/semantic risk buckets (SQL Server)
 - **Analyze complexity** - Assess Dynamic SQL patterns and SSIS packages for migration effort
 - **Generate reports** - Create interactive HTML reports for stakeholders
 
@@ -175,6 +176,11 @@ Identify temporary and staging objects
 Find deprecated objects that can be excluded
 ```
 
+**Anti-Patterns (SQL Server):**
+```
+Show me the migration anti-patterns in my workload
+```
+
 **Dynamic SQL:**
 ```
 Analyze Dynamic SQL patterns in my codebase
@@ -249,6 +255,7 @@ The generated HTML report includes:
 |-----|----------|
 | **Waves** | Deployment sequence with objects per wave, dependencies |
 | **Object Exclusion** | Temporary, staging, deprecated objects identified |
+| **Anti-Patterns** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |
 | **Dynamic SQL** | Patterns found with complexity scores |
 | **SSIS** | Package classifications and migration effort |
 

@@ -43,6 +43,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from .informatica_dag_service import InformaticaDagService
 
 
+
+
 def generate_informatica_html_content(
     informatica_json_path: Path, output_html_path: Path = None, source_dir: Optional[Path] = None
 ) -> Tuple[str, str, str]:
@@ -62,6 +64,7 @@ def generate_informatica_html_content(
 
         summary = data.get("summary", {})
         workflows = data.get("workflows", [])
+        conversion_mode = summary.get("conversion_mode", "dbt")
 
         # Generate detail pages if output_html_path is provided
         if output_html_path:
@@ -74,13 +77,15 @@ def generate_informatica_html_content(
         # Build the main content sections (matching SSIS order)
         ai_summary_html = _generate_ai_summary_section(data, informatica_json_path)
         metrics_html = _generate_metrics_section(summary, workflows)
-        classification_html = _generate_workflow_classification(workflows, output_html_path)
+        classification_html = _generate_workflow_classification(workflows, output_html_path, conversion_mode)
         breakdown_html = _generate_component_breakdown(workflows)
+
+        mode_badge = _generate_mode_badge(conversion_mode)
 
         html_content = f"""
         <div id="informatica-report">
             <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 0.5rem;">
-                Informatica Power Center Assessment
+                Informatica Power Center Assessment {mode_badge}
             </h1>
             <p style="color: #64748B; font-size: 1rem; margin-bottom: 2rem;">
                 Comprehensive analysis of Informatica PowerCenter workflows and mappings
@@ -149,11 +154,28 @@ def _strip_document_wrapper(html_content: str) -> str:
     # Remove <body> and </body> tags (keep content between them)
     content = _re.sub(r'</?body[^>]*>', '', content, flags=_re.IGNORECASE)
 
-    # Remove ALL heading tags (h1-h3) — the report provides its own headings
-    content = _re.sub(r'<h[1-3][^>]*>.*?</h[1-3]>', '', content,
+    # Remove ALL heading tags (h1-h2) — the report provides its own headings
+    content = _re.sub(r'<h[1-2][^>]*>.*?</h[1-2]>', '', content,
                       flags=_re.IGNORECASE | _re.DOTALL)
 
     return content.strip()
+
+
+def _generate_mode_badge(conversion_mode: str) -> str:
+    """Generate an inline badge showing the conversion target mode."""
+    if conversion_mode == "scripting":
+        return (
+            '<span style="display: inline-block; vertical-align: middle; '
+            'background: #F3E8FF; color: #7C3AED; padding: 0.25rem 0.75rem; '
+            'border-radius: 9999px; font-size: 0.8rem; font-weight: 600; '
+            'margin-left: 0.75rem;">Target: Snowflake Scripting (Stored Procedures)</span>'
+        )
+    return (
+        '<span style="display: inline-block; vertical-align: middle; '
+        'background: #DBEAFE; color: #1D4ED8; padding: 0.25rem 0.75rem; '
+        'border-radius: 9999px; font-size: 0.8rem; font-weight: 600; '
+        'margin-left: 0.75rem;">Target: Snowflake dbt</span>'
+    )
 
 
 def _generate_ai_summary_section(data: Dict, json_path: Path) -> str:
@@ -182,9 +204,15 @@ def _generate_ai_summary_section(data: Dict, json_path: Path) -> str:
             except Exception:
                 pass  # Fall through to auto-generated fallback
 
-    # --- Fallback: auto-generated summary from JSON data ---
+    # --- Fallback: rich auto-generated summary from JSON data ---
+    return _build_rich_summary_fallback(data)
+
+
+def _build_rich_summary_fallback(data: Dict) -> str:
+    """Build a full 7-section AI Summary from JSON data alone."""
     summary = data.get("summary", {})
     workflows = data.get("workflows", [])
+    conversion_mode = summary.get("conversion_mode", "dbt")
 
     total_workflows = summary.get("total_workflows", 0)
     total_mappings = summary.get("total_mappings", 0)
@@ -192,85 +220,377 @@ def _generate_ai_summary_section(data: Dict, json_path: Path) -> str:
     total_ewis = summary.get("total_ewis", 0)
     total_fdms = summary.get("total_fdms", 0)
 
-    # Count classifications
+    # --- Compute derived data ---
     classification_counts: Dict[str, int] = {}
-    analyzed_count = 0
-    total_effort = 0
+    complexity_counts: Dict[str, int] = {}
     custom_transform_count = 0
+    source_db_types: Dict[str, int] = {}
+    target_db_types: Dict[str, int] = {}
+    total_not_supported = 0
+    not_supported_types: List[str] = []
+    largest_wf_name = ""
+    largest_wf_components = 0
+
     for wf in workflows:
         ai = wf.get("ai_analysis") or {}
-        if ai.get("status") == "DONE":
-            analyzed_count += 1
         c = ai.get("classification", "Unclassified") or "Unclassified"
         classification_counts[c] = classification_counts.get(c, 0) + 1
-        total_effort += ai.get("estimated_effort_hours", 0) or 0
+
+        metrics = wf.get("metrics", {})
+        cx = metrics.get("workflow_complexity", {}).get("complexity", "Unknown")
+        complexity_counts[cx] = complexity_counts.get(cx, 0) + 1
+
         if wf.get("flags", {}).get("has_custom_transforms"):
             custom_transform_count += 1
 
-    # Build classification text
-    class_parts = []
-    for label, count in sorted(classification_counts.items(), key=lambda x: -x[1]):
-        if label != "Unclassified":
-            pct = round((count / total_workflows) * 100) if total_workflows else 0
-            class_parts.append(f"{count} {label} ({pct}%)")
-    classification_text = ", ".join(class_parts) if class_parts else "not yet classified"
+        wf_components = metrics.get("total_components", 0)
+        if wf_components > largest_wf_components:
+            largest_wf_components = wf_components
+            largest_wf_name = wf.get("name", "Unknown")
 
-    # Determine conversion readiness
+        ns = metrics.get("not_supported_elements", {})
+        ns_count = ns.get("total_count", 0)
+        total_not_supported += ns_count
+        for ct in ns.get("component_types", []):
+            if ct not in not_supported_types:
+                not_supported_types.append(ct)
+
+        for src in wf.get("source_definitions", []):
+            _acc_db_type(src, source_db_types)
+        for tgt in wf.get("target_definitions", []):
+            _acc_db_type(tgt, target_db_types)
+
+    # Success rate
     status_totals = summary.get("status_totals", {})
-    success = status_totals.get("Success", 0)
     total_status = sum(status_totals.values()) if status_totals else 0
-    success_rate = round((success / total_status) * 100) if total_status > 0 else 0
+    success_count = status_totals.get("Success", 0)
+    success_rate = round((success_count / total_status) * 100, 1) if total_status > 0 else 0
 
-    # Build Key Findings from data
-    findings = []
-    if analyzed_count == total_workflows and total_workflows > 0:
-        findings.append(f"All {total_workflows} workflows have been analyzed with AI classification")
-    elif analyzed_count > 0:
-        findings.append(f"{analyzed_count} of {total_workflows} workflows analyzed with AI")
-    if total_mappings > 0:
-        avg_mappings = round(total_mappings / total_workflows, 1) if total_workflows else 0
-        findings.append(f"Average of {avg_mappings} mappings per workflow ({total_mappings} total)")
+    # Mode-specific labels
+    if conversion_mode == "scripting":
+        target_label = "Snowflake Scripting (Stored Procedures)"
+        target_short = "stored procedures"
+        target_tasks = "Snowflake Tasks with CALL statements"
+        target_transform = "Stored procedures + Snowflake Tasks"
+        target_config = "Snowflake Tasks with inline SQL"
+    else:
+        target_label = "Snowflake dbt"
+        target_short = "dbt models"
+        target_tasks = "Snowflake Tasks calling dbt"
+        target_transform = "dbt models + Snowflake Tasks"
+        target_config = "Snowflake Tasks orchestrating dbt runs"
+
+    # --- Section 1: Workload Overview ---
+    complexity_desc_parts = []
+    easy_total = complexity_counts.get("Very Easy", 0) + complexity_counts.get("Easy", 0)
+    if easy_total > 0 and total_workflows > 0:
+        complexity_desc_parts.append(
+            f"{round(easy_total / total_workflows * 100)}% Easy/Very Easy"
+        )
+    medium = complexity_counts.get("Medium", 0)
+    if medium > 0 and total_workflows > 0:
+        complexity_desc_parts.append(
+            f"{round(medium / total_workflows * 100)}% Medium"
+        )
+    hard_total = complexity_counts.get("Complex", 0) + complexity_counts.get("Very Complex", 0)
+    if hard_total > 0 and total_workflows > 0:
+        complexity_desc_parts.append(
+            f"{round(hard_total / total_workflows * 100)}% Complex"
+        )
+    complexity_desc = ", ".join(complexity_desc_parts) if complexity_desc_parts else "not assessed"
+
+    sec1 = f"""
+  <div style="background: #f0f9ff; border-left: 4px solid #29B5E8; border-radius: 8px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;">
+    <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Workload Overview</h3>
+    <p style="font-size: 0.9rem; color: #334155; line-height: 1.7; margin: 0;">
+      This Informatica PowerCenter workload comprises <strong>{total_workflows} workflows</strong> containing <strong>{total_mappings} mappings</strong> and <strong>{total_components:,} total components</strong>. Complexity distribution: {complexity_desc}. Conversion success rate: <strong>{success_rate}%</strong> ({success_count:,} of {total_status:,} components).
+    </p>
+  </div>"""
+
+    # --- Section 2: Classification Breakdown ---
+    class_rows = ""
+    ordered_classes = sorted(classification_counts.items(), key=lambda x: -x[1])
+    class_colors = {
+        "Data Transformation": "#F59E0B",
+        "Configuration & Control": "#22C55E",
+        "Ingestion": "#29B5E8",
+        "Mixed: Ingestion + Transformation": "#8B5CF6",
+        "Unclassified": "#9CA3AF",
+    }
+    class_targets = {
+        "Data Transformation": target_transform,
+        "Configuration & Control": target_config,
+        "Ingestion": "External stages, COPY INTO, Snowpipe",
+        "Mixed: Ingestion + Transformation": f"Ingestion layer + {target_short}",
+        "Unclassified": "Pending AI classification",
+    }
+    row_bg = False
+    for label, count in ordered_classes:
+        pct = round((count / total_workflows) * 100, 1) if total_workflows else 0
+        color = class_colors.get(label, "#9CA3AF")
+        target = class_targets.get(label, target_transform)
+        bg = ' background: #fafafa;' if row_bg else ''
+        class_rows += f"""
+        <tr style="border-bottom: 1px solid #e2e8f0;{bg}">
+          <td style="padding: 10px 14px;"><span style="display: inline-block; width: 10px; height: 10px; background: {color}; border-radius: 3px; margin-right: 8px;"></span>{html.escape(label)}</td>
+          <td style="text-align: center; padding: 10px 14px; font-weight: 600;">{count}</td>
+          <td style="text-align: center; padding: 10px 14px;">{pct}%</td>
+          <td style="padding: 10px 14px; color: #475569;">{html.escape(target)}</td>
+        </tr>"""
+        row_bg = not row_bg
+
+    sec2 = f"""
+  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Workflow Classification Breakdown</h3>
+  <div style="overflow-x: auto; margin-bottom: 1.5rem;">
+    <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+      <thead>
+        <tr style="background: #f1f5f9;">
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #29B5E8;">Classification</th>
+          <th style="text-align: center; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #29B5E8;">Workflows</th>
+          <th style="text-align: center; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #29B5E8;">% of Total</th>
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #29B5E8;">Snowflake Target</th>
+        </tr>
+      </thead>
+      <tbody>{class_rows}
+      </tbody>
+    </table>
+  </div>"""
+
+    # --- Section 3: Sources & Destinations ---
+    src_rows = ""
+    for db, count in sorted(source_db_types.items(), key=lambda x: -x[1]):
+        locality = "External" if db in ("Flat File", "ODBC", "FTP") else "Internal"
+        src_rows += f"""
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 6px 0; color: #334155; font-weight: 500;">{html.escape(db)} ({locality})</td>
+          <td style="padding: 6px 0; text-align: right; color: #64748b;">{count:,} references</td>
+        </tr>"""
+
+    tgt_rows = ""
+    for db, count in sorted(target_db_types.items(), key=lambda x: -x[1]):
+        locality = "External" if db in ("Flat File", "ODBC", "FTP") else "Internal"
+        tgt_rows += f"""
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 6px 0; color: #334155; font-weight: 500;">{html.escape(db)} ({locality})</td>
+          <td style="padding: 6px 0; text-align: right; color: #64748b;">{count:,} references</td>
+        </tr>"""
+
+    sec3 = f"""
+  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Sources &amp; Destinations</h3>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem;">
+      <h4 style="font-size: 0.85rem; font-weight: 600; color: #11567F; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.03em;">Sources</h4>
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.8125rem;">{src_rows}
+      </table>
+    </div>
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem;">
+      <h4 style="font-size: 0.85rem; font-weight: 600; color: #11567F; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.03em;">Destinations</h4>
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.8125rem;">{tgt_rows}
+      </table>
+    </div>
+  </div>"""
+
+    # --- Section 4: Connector Types ---
+    pill_colors = {
+        "Teradata": "#29B5E8", "Oracle": "#11567F", "Flat File": "#22C55E",
+        "DB2": "#8A999E", "ODBC": "#6366F1", "Sybase": "#EC4899",
+        "Informix": "#F97316", "SQL Server": "#3B82F6",
+    }
+    all_db_types = set(source_db_types.keys()) | set(target_db_types.keys())
+    pills_html = ""
+    for db in sorted(all_db_types, key=lambda d: -(source_db_types.get(d, 0) + target_db_types.get(d, 0))):
+        color = pill_colors.get(db, "#64748b")
+        pills_html += f'    <span style="display: inline-block; background: {color}; color: white; padding: 0.3rem 0.75rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">{html.escape(db)}</span>\n'
+
+    dominant = sorted(all_db_types, key=lambda d: -(source_db_types.get(d, 0) + target_db_types.get(d, 0)))
+    dominant_name = dominant[0] if dominant else "Unknown"
+    dominant_count = source_db_types.get(dominant_name, 0) + target_db_types.get(dominant_name, 0)
+    connector_desc = f"{dominant_name} dominates with {dominant_count:,} total connection references."
+    if "Flat File" in all_db_types:
+        ff_count = source_db_types.get("Flat File", 0) + target_db_types.get("Flat File", 0)
+        connector_desc += f" Flat file connections ({ff_count:,} refs) handle file-based data exchange."
+    connector_desc += f" Migration requires replacing source connections with Snowflake native tables and {target_short}."
+
+    sec4 = f"""
+  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Connector &amp; Session Types</h3>
+  <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem;">
+{pills_html}  </div>
+  <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 1.5rem; line-height: 1.6;">
+    {connector_desc}
+  </p>"""
+
+    # --- Section 5: Complexity Drivers ---
+    if success_rate >= 95:
+        rate_color, rate_bg = "#16a34a", "#f0fdf4"
+    elif success_rate >= 80:
+        rate_color, rate_bg = "#c2410c", "#fff7ed"
+    else:
+        rate_color, rate_bg = "#dc2626", "#fef2f2"
+
+    ns_detail = ", ".join(not_supported_types) if not_supported_types else "None"
+
+    sec5 = f"""
+  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Complexity Drivers</h3>
+  <div style="overflow-x: auto; margin-bottom: 1.5rem;">
+    <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+      <thead>
+        <tr style="background: #f1f5f9;">
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #FF9F36;">Complexity Factor</th>
+          <th style="text-align: center; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #FF9F36;">Impact</th>
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #FF9F36;">Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 10px 14px; font-weight: 500;">EWI Issues</td>
+          <td style="text-align: center; padding: 10px 14px;"><span style="background: #fef2f2; color: #dc2626; padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.8rem;">{total_ewis}</span></td>
+          <td style="padding: 10px 14px; color: #475569;">Conversion warnings requiring manual review</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #e2e8f0; background: #fafafa;">
+          <td style="padding: 10px 14px; font-weight: 500;">FDM Differences</td>
+          <td style="text-align: center; padding: 10px 14px;"><span style="background: #fff7ed; color: #c2410c; padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.8rem;">{total_fdms}</span></td>
+          <td style="padding: 10px 14px; color: #475569;">Functional differences between Informatica and Snowflake behavior requiring UAT validation</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 10px 14px; font-weight: 500;">Not Supported Components</td>
+          <td style="text-align: center; padding: 10px 14px;"><span style="background: #fef2f2; color: #dc2626; padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.8rem;">{total_not_supported}</span></td>
+          <td style="padding: 10px 14px; color: #475569;">{html.escape(ns_detail)} — requires manual rewrite</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #e2e8f0; background: #fafafa;">
+          <td style="padding: 10px 14px; font-weight: 500;">Conversion Success Rate</td>
+          <td style="text-align: center; padding: 10px 14px;"><span style="background: {rate_bg}; color: {rate_color}; padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.8rem;">{success_rate}%</span></td>
+          <td style="padding: 10px 14px; color: #475569;">{success_count:,} of {total_status:,} components converted successfully</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 10px 14px; font-weight: 500;">Largest Workflow</td>
+          <td style="text-align: center; padding: 10px 14px;"><span style="background: #fff7ed; color: #c2410c; padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.8rem;">{largest_wf_components} components</span></td>
+          <td style="padding: 10px 14px; color: #475569;">{html.escape(largest_wf_name)}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>"""
+
+    # --- Section 6: Recommended Migration Approach ---
+    approach_rows = ""
+    row_bg = False
+    for label, count in ordered_classes:
+        if label == "Unclassified":
+            strategy = "Pending classification"
+            considerations = "Run AI analysis (Step 3) to classify workflows"
+        elif label == "Data Transformation":
+            strategy = f"<strong>{target_transform}</strong>"
+            considerations = f"{success_rate}% auto-conversion rate; mappings convert to {target_short}"
+        elif label == "Configuration & Control":
+            strategy = f"<strong>{target_config}</strong>"
+            considerations = f"Lightweight orchestration; replace with Snowflake Task DAGs"
+        elif label == "Ingestion":
+            strategy = "<strong>External stages + COPY INTO</strong>"
+            considerations = "Replace external source connections with Snowflake ingestion patterns"
+        else:
+            strategy = f"<strong>Ingestion + {target_short}</strong>"
+            considerations = "Decompose into separate ingestion and transformation layers"
+        bg = ' background: #fafafa;' if row_bg else ''
+        approach_rows += f"""
+        <tr style="border-bottom: 1px solid #e2e8f0;{bg}">
+          <td style="padding: 10px 14px; font-weight: 500;">{html.escape(label)}</td>
+          <td style="text-align: center; padding: 10px 14px; font-weight: 600;">{count}</td>
+          <td style="padding: 10px 14px; color: #475569;">{strategy}</td>
+          <td style="padding: 10px 14px; color: #475569;">{considerations}</td>
+        </tr>"""
+        row_bg = not row_bg
+
+    sec6 = f"""
+  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Recommended Migration Approach</h3>
+  <div style="overflow-x: auto; margin-bottom: 1.5rem;">
+    <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+      <thead>
+        <tr style="background: #f1f5f9;">
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #22C55E;">Classification</th>
+          <th style="text-align: center; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #22C55E;">Count</th>
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #22C55E;">Migration Strategy</th>
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #22C55E;">Key Considerations</th>
+        </tr>
+      </thead>
+      <tbody>{approach_rows}
+      </tbody>
+    </table>
+  </div>"""
+
+    # --- Section 7: Key Risks ---
+    risk_cards = []
+    if total_not_supported > 0:
+        risk_cards.append(("red", "Not Supported Components",
+                           f"{total_not_supported} component(s) not supported in {target_label} mode ({ns_detail}). Requires manual rewrite."))
     if custom_transform_count > 0:
-        findings.append(f"{custom_transform_count} workflow(s) contain Custom Transformations requiring manual rewrite")
-    if success_rate > 0:
-        findings.append(f"{success_rate}% component conversion success rate across {total_components:,} components")
+        risk_cards.append(("red", "Custom Transformations",
+                           f"{custom_transform_count} workflow(s) contain Java/C++ Custom Transformations requiring complete manual rewrite to {target_short}."))
+    if total_fdms > 50:
+        risk_cards.append(("amber", f"FDM Validation ({total_fdms} instances)",
+                           f"Functional Difference Markers indicate behavioral gaps between Informatica and Snowflake. Each FDM requires validation during UAT to ensure business logic equivalence in the migrated {target_short}."))
+    if "Flat File" in all_db_types:
+        ff_total = source_db_types.get("Flat File", 0) + target_db_types.get("Flat File", 0)
+        if ff_total > 0:
+            risk_cards.append(("amber", "Flat File Ingestion Replacement",
+                               f"{ff_total:,} flat file connection references require redesigning ingestion to use Snowflake external stages and COPY INTO."))
+    if total_ewis > 0 and len(risk_cards) < 4:
+        risk_cards.append(("amber", f"EWI Conversion Issues ({total_ewis})",
+                           f"{total_ewis} Early Warning Issues identified during conversion requiring manual review and resolution."))
+    if success_rate >= 95 and len(risk_cards) < 4:
+        risk_cards.append(("green", "High Conversion Confidence",
+                           f"{success_rate}% success rate with only {total_ewis} EWIs across {total_workflows} workflows. Single-mapping workflows simplify migration — each maps cleanly to one {target_short.rstrip('s') if target_short.endswith('s') else target_short}."))
+    elif success_rate < 80 and len(risk_cards) < 4:
+        risk_cards.append(("red", "Low Conversion Rate",
+                           f"Only {success_rate}% conversion success rate indicates significant manual effort needed for migration."))
 
-    # Build Conversion Risks from data
-    risks = []
-    if total_ewis > 0:
-        risks.append(f"{total_ewis:,} Early Warning Issues (EWIs) identified requiring review")
-    if total_fdms > 0:
-        risks.append(f"{total_fdms:,} Functional Dependency Mappings (FDMs) need manual validation")
-    if custom_transform_count > 0:
-        risks.append("Custom Transformations (Java/C++) require complete manual rewrite to Snowflake SQL")
-    if success_rate < 70 and total_status > 0:
-        risks.append(f"Low conversion success rate ({success_rate}%) indicates significant manual effort needed")
+    risk_cards = risk_cards[:4]
+    card_styles = {
+        "red": ("background: #fef2f2; border-left: 4px solid #ef4444;", "#991b1b", "#7f1d1d"),
+        "amber": ("background: #fff7ed; border-left: 4px solid #f59e0b;", "#92400e", "#78350f"),
+        "green": ("background: #f0fdf4; border-left: 4px solid #22c55e;", "#166534", "#14532d"),
+    }
+    cards_html = ""
+    for severity, title, desc in risk_cards:
+        style, title_color, desc_color = card_styles[severity]
+        cards_html += f"""
+    <div style="{style} border-radius: 8px; padding: 1rem 1.25rem;">
+      <div style="font-weight: 600; color: {title_color}; font-size: 0.9rem; margin-bottom: 0.4rem;">{html.escape(title)}</div>
+      <div style="font-size: 0.825rem; color: {desc_color}; line-height: 1.6;">{html.escape(desc)}</div>
+    </div>"""
 
-    # Build HTML
-    findings_html = ""
-    if findings:
-        items = "".join(f"<li>{f}</li>" for f in findings)
-        findings_html = f'<p style="margin-top: 1rem;"><strong>Key Findings:</strong></p><ul style="margin: 0.5rem 0 0 1.5rem; color: #334155;">{items}</ul>'
-
-    risks_html = ""
-    if risks:
-        items = "".join(f"<li>{f}</li>" for f in risks)
-        risks_html = f'<p style="margin-top: 1rem;"><strong>Conversion Risks:</strong></p><ul style="margin: 0.5rem 0 0 1.5rem; color: #334155;">{items}</ul>'
-
-    effort_text = f" Estimated total migration effort: {round(total_effort):,} hours." if total_effort > 0 else ""
+    sec7 = f"""
+  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Key Risks</h3>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0.5rem;">{cards_html}
+  </div>"""
 
     return f"""
         <section id="informatica-executive-summary">
             <h2>AI Summary</h2>
-            <div style="line-height: 1.7; color: #334155;">
-                <p>This assessment analyzes {total_workflows} Informatica PowerCenter workflows
-                containing {total_mappings} mappings and {total_components:,} components
-                identified for migration to Snowflake. Classification breakdown: {classification_text}.{effort_text}</p>
-                {findings_html}
-                {risks_html}
-            </div>
+            <section id="ai-summary" class="section">
+  <p style="color: #64748b; font-size: 0.875rem; margin-bottom: 1.5rem;">High-level, decision-ready overview of the Informatica PowerCenter workload for data engineers and solution architects preparing a migration to Snowflake.</p>
+{sec1}
+{sec2}
+{sec3}
+{sec4}
+{sec5}
+{sec6}
+{sec7}
+</section>
         </section>
         """
+
+
+def _acc_db_type(definition: Dict, accumulator: Dict[str, int]) -> None:
+    """Accumulate databaseType from a source/target definition's additional_info."""
+    info = definition.get("additional_info", "")
+    if not info:
+        return
+    try:
+        parsed = json.loads(info)
+        db_type = parsed.get("databaseType", "")
+        if db_type:
+            accumulator[db_type] = accumulator.get(db_type, 0) + 1
+    except (json.JSONDecodeError, TypeError):
+        pass
 
 
 def _generate_metrics_section(summary: Dict, workflows: List[Dict]) -> str:
@@ -498,7 +818,7 @@ def _generate_classification_and_complexity_charts(classification_counts: Dict[s
     """
 
 
-def _generate_workflow_classification(workflows: List[Dict], output_html_path: Path = None) -> str:
+def _generate_workflow_classification(workflows: List[Dict], output_html_path: Path = None, conversion_mode: str = "dbt") -> str:
     """Generate Workflow Classification section (equivalent to SSIS Package Classification).
 
     Shows workflow classification distribution, analysis status, and a filterable
@@ -534,6 +854,10 @@ def _generate_workflow_classification(workflows: List[Dict], output_html_path: P
             complexity = "\u2014"
 
         analysis_text = ai_analysis.get("analysis", "").strip()
+        if analysis_text and conversion_mode == "scripting":
+            analysis_text = analysis_text.replace("(dbt)", "(scripting)")
+        elif analysis_text and conversion_mode == "dbt":
+            analysis_text = analysis_text.replace("(scripting)", "(dbt)")
         if analysis_text:
             analyzed_count += 1
         else:
@@ -572,7 +896,7 @@ def _generate_workflow_classification(workflows: List[Dict], output_html_path: P
         if analysis_text:
             tooltip_text = html.escape(analysis_text)
             if len(tooltip_text) > 500:
-                tooltip_text = tooltip_text[:497] + "..."
+                tooltip_text = tooltip_text[:497] + '...'
             tooltip_html = f'''<div class="ai-tooltip">
                     <div class="ai-tooltip-header">\U0001f916 AI Analysis</div>
                     <div class="ai-tooltip-content">{tooltip_text}</div>
@@ -607,15 +931,22 @@ def _generate_workflow_classification(workflows: List[Dict], output_html_path: P
             </div>
             """
 
-    # Classification guide
-    classification_guide_html = """
+    # Classification guide — adapt target references based on conversion_mode
+    if conversion_mode == "scripting":
+        data_transform_target = "stored procedures on Snowflake, with sessions converting to Snowflake Tasks using CALL statements"
+        mixed_target = "Snowflake ingestion and stored procedure transformation layers"
+    else:
+        data_transform_target = "dbt projects on Snowflake, with sessions converting to Snowflake Tasks"
+        mixed_target = "Snowflake ingestion and dbt transformation layers"
+
+    classification_guide_html = f"""
             <div class="info-box">
                 <strong>Classification Guide:</strong>
                 <ul style="margin: 0.5rem 0 0 1.25rem; line-height: 1.6;">
                     <li><strong>Ingestion:</strong> Workflows that extract data from external sources (flat files, APIs, external databases) into the data platform. Consider Snowflake Openflow, Snowpipe, or Fivetran as alternatives.</li>
-                    <li><strong>Data Transformation:</strong> Workflows that transform data between internal layers. Good candidates to migrate with SnowConvert AI to dbt projects on Snowflake, with sessions converting to Snowflake Tasks.</li>
-                    <li><strong>Mixed: Ingestion + Transformation:</strong> Workflows combining external data ingestion with internal transformations. Decompose into separate Snowflake ingestion and dbt transformation layers.</li>
-                    <li><strong>Configuration &amp; Control:</strong> Workflows focused on orchestration, timer-based scheduling, or system operations. Migrate to Snowflake Tasks and Scripting SQL.</li>
+                    <li><strong>Data Transformation:</strong> Workflows that transform data between internal layers. Good candidates to migrate with SnowConvert AI to {data_transform_target}.</li>
+                    <li><strong>Mixed: Ingestion + Transformation:</strong> Workflows combining external data ingestion with internal transformations. Decompose into separate {mixed_target}.</li>
+                    <li><strong>Configuration &amp; Control:</strong> Workflows focused on orchestration, timer-based scheduling, or system operations. Migrate to Snowflake Tasks and Snowflake Scripting.</li>
                     <li><strong>Unclassified:</strong> Pending AI analysis.</li>
                 </ul>
             </div>
@@ -1705,7 +2036,6 @@ def _generate_css() -> str:
         box-shadow: 0 10px 25px rgba(0,0,0,0.3);
         transition: opacity 0.2s ease, visibility 0.2s ease;
         pointer-events: none;
-        white-space: pre-wrap;
         text-align: left;
     }
 

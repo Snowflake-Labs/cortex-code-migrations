@@ -806,9 +806,9 @@ class HTMLReportGenerator:
                 <strong>Classification Guide:</strong>
                 <ul style="margin: 0.5rem 0 0 1.25rem; line-height: 1.6;">
                     <li><strong>Ingestion:</strong> Packages that extract data from external sources (files, APIs, FTP, external databases) into the data platform. These packages are not candidates for dbt on Snowflake since dbt cannot connect to external sources; use alternatives like Snowflake Openflow, Snowpipe, or Fivetran.</li>
-                    <li><strong>Data Transformation:</strong> Packages that transform data between internal database layers. Good candidates to migrate with SnowConvert AI to dbt projects on Snowflake, with control flow elements converting to Snowflake Tasks and Snowflake Scripting SQL.</li>
+                    <li><strong>Data Transformation:</strong> Packages that transform data between internal database layers. Good candidates to migrate with SnowConvert AI to dbt projects on Snowflake, with control flow elements converting to Snowflake Tasks and Snowflake Scripting.</li>
                     <li><strong>Mixed: Ingestion + Transformation:</strong> Packages that both ingest data from external sources and apply transformations within the same workflow. Decompose into separate Snowflake ingestion (Snowpipe/Tasks) and dbt transformation layers.</li>
-                    <li><strong>Configuration &amp; Control:</strong> Packages focused on orchestration, metadata management, or system operations rather than moving business data. Often contain foreach loops, file tasks, script tasks, and execute package tasks. Migrate to Snowflake Tasks and Scripting SQL, or re-architect based on use case.</li>
+                    <li><strong>Configuration &amp; Control:</strong> Packages focused on orchestration, metadata management, or system operations rather than moving business data. Often contain foreach loops, file tasks, script tasks, and execute package tasks. Migrate to Snowflake Tasks and Snowflake Scripting, or re-architect based on use case.</li>
                     <li><strong>Unclassified:</strong> Pending AI analysis.</li>
                 </ul>
             </div>

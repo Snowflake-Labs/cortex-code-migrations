@@ -79,6 +79,14 @@ except ImportError as e:
     print(f"Warning: Informatica report generator not available: {e}", file=sys.stderr)
     INFORMATICA_SUPPORT = False
 
+# Anti-Patterns report generator (optional)
+try:
+    from anti_patterns_report import generate_anti_patterns_html_content
+    ANTI_PATTERNS_SUPPORT = True
+except ImportError as e:
+    print(f"Warning: Anti-patterns report generator not available: {e}", file=sys.stderr)
+    ANTI_PATTERNS_SUPPORT = False
+
 
 def generate_ai_summary(summary: Dict, temp_staging: List, deprecated: List, testing: List) -> str:
     """Generate AI summary of the exclusion analysis"""
@@ -966,6 +974,7 @@ def generate_multi_report(
     snowconvert_reports_dir: Path = None,
     registry_dir: Path = None,
     ssis_json: Path = None,
+    anti_patterns_json: Path = None,
     informatica_json: Path = None,
     informatica_source_dir: Path = None
 ) -> None:
@@ -997,7 +1006,7 @@ def generate_multi_report(
         else:
             print(f"ERROR: Waves data failed to load from {waves_json}. The Waves tab will be missing from the report.", file=sys.stderr)
             # If waves was the only requested data source, this is a hard failure
-            if not exclusion_json and not dynamic_sql_json and not ssis_json and not informatica_json:
+            if not exclusion_json and not dynamic_sql_json and not ssis_json and not informatica_json and not anti_patterns_json:
                 raise ValueError(f"Failed to load waves data and no other data sources were provided")
     
     # Load SSIS data
@@ -1009,10 +1018,10 @@ def generate_multi_report(
             ssis_data = load_json_data(ssis_json)
             has_ssis = True
             if not exclusion_json and not dynamic_sql_json and not waves_info:
-                default_tab = 'ssis'
+                default_tab = 'etl'
         except Exception as e:
             print(f"Warning: Could not load SSIS data: {e}", file=sys.stderr)
-    
+
     # Load Informatica data
     informatica_data = None
     has_informatica = False
@@ -1022,12 +1031,24 @@ def generate_multi_report(
             informatica_data = load_json_data(informatica_json)
             has_informatica = True
             if not exclusion_json and not dynamic_sql_json and not waves_info and not ssis_data:
-                default_tab = 'informatica'
+                default_tab = 'etl'
         except Exception as e:
             print(f"Warning: Could not load Informatica data: {e}", file=sys.stderr)
-    
-    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data:
-        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, or Informatica) must be provided")
+
+    # Load Anti-Patterns data
+    has_anti_patterns = False
+    if anti_patterns_json and ANTI_PATTERNS_SUPPORT:
+        print(f"Loading anti-patterns data from {anti_patterns_json}...")
+        try:
+            has_anti_patterns = Path(anti_patterns_json).is_file()
+            if has_anti_patterns and not exclusion_json and not dynamic_sql_json and not waves_info and not ssis_data and not informatica_data:
+                default_tab = 'risks'
+        except Exception as e:
+            print(f"Warning: Could not load anti-patterns data: {e}", file=sys.stderr)
+            has_anti_patterns = False
+
+    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns:
+        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, or anti-patterns) must be provided")
     
     # Process exclusion data — schema produced by `scai assessment object-exclusion`
     # is the single source of truth; field names below match that schema directly.
@@ -1137,6 +1158,8 @@ def generate_multi_report(
         waves_info=waves_info,
         has_ssis=has_ssis,
         ssis_json=ssis_json if has_ssis else None,
+        has_anti_patterns=has_anti_patterns,
+        anti_patterns_json=anti_patterns_json if has_anti_patterns else None,
         has_informatica=has_informatica,
         informatica_json=informatica_json if has_informatica else None,
         informatica_source_dir=informatica_source_dir,
@@ -1208,7 +1231,9 @@ def generate_html_template(
     json_data_exclusion: str,
     json_data_dynamic: str,
     overview_stats: Dict = None,
-    missing_objects_data: Dict = None
+    missing_objects_data: Dict = None,
+    has_anti_patterns: bool = False,
+    anti_patterns_json: Path = None
 ) -> str:
     """Generate the complete HTML template"""
     dynamic_sql_meta_json = json.dumps(dynamic_sql_meta or {}, ensure_ascii=False)
@@ -1518,37 +1543,20 @@ def generate_html_template(
                     </div>
                 </div>
 
-                <div style="background: white; padding: 24px; border-radius: 12px; border: 1px solid #E2E8F0; transition: transform 0.2s; cursor: pointer;" 
-                     onclick="document.querySelector('.nav-link[data-tab=\\'ssis\\']').click()"
-                     onmouseover="this.style.borderColor='#29B5E8'; this.style.transform='translateY(-2px)'" 
+                <div style="background: white; padding: 24px; border-radius: 12px; border: 1px solid #E2E8F0; transition: transform 0.2s; cursor: pointer;"
+                     onclick="document.querySelector('.nav-link[data-tab=\\'etl\\']').click()"
+                     onmouseover="this.style.borderColor='#29B5E8'; this.style.transform='translateY(-2px)'"
                      onmouseout="this.style.borderColor='#E2E8F0'; this.style.transform='translateY(0)'">
                     <div style="width: 40px; height: 40px; background: #F0F9FF; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; font-size: 1.25rem;">
                         4
                     </div>
-                    <h3 style="margin: 0 0 8px 0; color: #102E46; font-size: 1.1rem;">SSIS Report</h3>
+                    <h3 style="margin: 0 0 8px 0; color: #102E46; font-size: 1.1rem;">ETL Report</h3>
                     <p style="color: #64748B; font-size: 0.9rem; line-height: 1.5; margin-bottom: 16px;">
                         <strong>Goal:</strong> Assess ETL pipelines. <br>
-                        Analyze SSIS packages to understand data flow complexity, identify unsupported components, and plan ETL migration.
+                        Analyze ETL packages (SSIS / Informatica PowerCenter) for migration complexity, conversion readiness, and transformation patterns.
                     </p>
                     <div style="background: #F8FAFC; padding: 10px; border-radius: 6px; font-size: 0.85rem; color: #475569;">
-                        <strong>Key Insight:</strong> Review SSIS packages for migration readiness.
-                    </div>
-                </div>
-
-                <div style="background: white; padding: 24px; border-radius: 12px; border: 1px solid #E2E8F0; transition: transform 0.2s; cursor: pointer;" 
-                     onclick="document.querySelector('.nav-link[data-tab=\\'informatica\\']').click()"
-                     onmouseover="this.style.borderColor='#29B5E8'; this.style.transform='translateY(-2px)'" 
-                     onmouseout="this.style.borderColor='#E2E8F0'; this.style.transform='translateY(0)'">
-                    <div style="width: 40px; height: 40px; background: #F0F9FF; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin-bottom: 16px; font-size: 1.25rem;">
-                        5
-                    </div>
-                    <h3 style="margin: 0 0 8px 0; color: #102E46; font-size: 1.1rem;">Informatica Report</h3>
-                    <p style="color: #64748B; font-size: 0.9rem; line-height: 1.5; margin-bottom: 16px;">
-                        <strong>Goal:</strong> Assess ETL pipelines. <br>
-                        Analyze Informatica PowerCenter workflows and mappings for migration complexity, conversion readiness, and transformation patterns.
-                    </p>
-                    <div style="background: #F8FAFC; padding: 10px; border-radius: 6px; font-size: 0.85rem; color: #475569;">
-                        <strong>Key Insight:</strong> Review Informatica workflows for migration readiness.
+                        <strong>Key Insight:</strong> Review ETL workflows and packages for migration readiness.
                     </div>
                 </div>
 
@@ -1597,60 +1605,81 @@ def generate_html_template(
     if has_ssis and SSIS_SUPPORT and ssis_json:
         # Pass output_file so package pages can be generated in packages/ folder alongside it
         ssis_content, ssis_js, ssis_css = generate_ssis_html_content(ssis_json, output_html_path=output_file)
-        ssis_html = f"""
-            <!-- SSIS Report Tab -->
-            <div class="tab-content" :class="{{active: activeTab === 'ssis'}}">
-                {ssis_content}
-            </div>
-        """
+        ssis_html = ssis_content
     else:
-        ssis_html = """
-            <div class="tab-content" :class="{active: activeTab === 'ssis'}">
-                <div style="margin-bottom: 32px;">
-                    <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
-                        SSIS Assessment Report
-                    </h1>
-                    <p style="color: #64748B; font-size: 1.1rem;">
-                        Comprehensive analysis of SSIS packages identified for migration including component analysis and conversion readiness metrics.
-                    </p>
-                </div>
-                <div class="empty-state">
-                    <h3>No Data Available</h3>
-                    <p>SSIS assessment data was not provided. Please provide the SSIS JSON file using --ssis-json parameter.</p>
-                </div>
-            </div>
-        """
-    
+        ssis_html = ""
+
     # Generate Informatica HTML content
     informatica_html = ""
     informatica_js = ""
     informatica_css = ""
     if has_informatica and INFORMATICA_SUPPORT and informatica_json:
         informatica_content, informatica_js, informatica_css = generate_informatica_html_content(informatica_json, output_html_path=output_file, source_dir=informatica_source_dir)
-        informatica_html = f"""
-            <!-- Informatica Report Tab -->
-            <div class="tab-content" :class="{{active: activeTab === 'informatica'}}">
-                {informatica_content}
+        informatica_html = informatica_content
+    else:
+        informatica_html = ""
+
+    # Combine into single ETL tab
+    etl_tab_content = ""
+    if ssis_html or informatica_html:
+        etl_tab_content = f"""
+            <!-- ETL Report Tab -->
+            <div class="tab-content" :class="{{active: activeTab === 'etl'}}">
+                {ssis_html}
+                {informatica_html}
             </div>
         """
     else:
-        informatica_html = """
-            <div class="tab-content" :class="{active: activeTab === 'informatica'}">
+        etl_tab_content = """
+            <div class="tab-content" :class="{active: activeTab === 'etl'}">
                 <div style="margin-bottom: 32px;">
                     <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
-                        Informatica Power Center Assessment
+                        ETL Assessment Report
                     </h1>
                     <p style="color: #64748B; font-size: 1.1rem;">
-                        Comprehensive analysis of Informatica PowerCenter workflows and mappings for migration planning.
+                        Comprehensive analysis of ETL packages (SSIS / Informatica) identified for migration.
                     </p>
                 </div>
                 <div class="empty-state">
                     <h3>No Data Available</h3>
-                    <p>Informatica assessment data was not provided. Please provide the JSON file using --informatica-json parameter.</p>
+                    <p>ETL assessment data was not provided. Please provide SSIS (--ssis-json) or Informatica (--informatica-json) data.</p>
                 </div>
             </div>
         """
-    
+
+
+    # Generate Anti-Patterns HTML content
+    anti_patterns_html = ""
+    anti_patterns_js = ""
+    anti_patterns_css = ""
+    if has_anti_patterns and ANTI_PATTERNS_SUPPORT and anti_patterns_json:
+        ap_content, anti_patterns_js, anti_patterns_css = generate_anti_patterns_html_content(anti_patterns_json)
+        anti_patterns_html = f"""
+            <!-- Anti-Patterns Report Tab -->
+            <div class="tab-content" :class="{{active: activeTab === 'risks'}}">
+                {ap_content}
+            </div>
+        """
+    else:
+        anti_patterns_html = """
+            <div class="tab-content" :class="{active: activeTab === 'risks'}">
+                <div style="margin-bottom: 32px;">
+                    <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
+                        Anti-Patterns
+                    </h1>
+                    <p style="color: #64748B; font-size: 1.1rem;">
+                        Identifies migration anti-patterns (performance, architecture &amp; security, and behavior &amp; semantic) that require manual review before migration.
+                    </p>
+                </div>
+                <div class="empty-state">
+                    <h3>No Data Available</h3>
+                    <p>Anti-patterns assessment data was not provided. Please provide the JSON file using --anti-patterns-json parameter.</p>
+                </div>
+            </div>
+        """
+
+
+
     exclusion_html = ""
     if has_exclusion:
         exclusion_html = f"""
@@ -2257,6 +2286,23 @@ def generate_html_template(
     </script>
     <style>
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+
+        /* Shared assessment cards + tables — Conversion Issues / Effort Estimates style */
+        .effort-cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 1.5rem; }}
+        .effort-card {{ background: white; border: 1px solid #E2E8F0; border-radius: 12px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); transition: all 0.2s; }}
+        .effort-card:hover {{ transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); }}
+        .effort-card-num {{ font-size: 28px; font-weight: 800; color: #1E252F; }}
+        .effort-card-lbl {{ font-size: 14px; font-weight: 400; color: #5D6A85; line-height: 1.25rem; margin-top: 4px; }}
+        .effort-table-wrap {{ overflow-x: auto; margin-bottom: 24px; }}
+        .effort-table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; border: 1px solid #E2E8F0; }}
+        .effort-table th, .effort-table td {{ padding: 0.75rem; text-align: left; border-bottom: 1px solid #E2E8F0; font-size: 0.85rem; color: #1E252F; }}
+        .effort-table th {{ background: #F8FAFC; font-weight: 600; text-transform: none; letter-spacing: 0; }}
+        .effort-table tbody tr:hover {{ background: #F1F5F9; }}
+        .effort-table td.num, .effort-table th.num {{ text-align: right; }}
+        .effort-table td.ctr, .effort-table th.ctr {{ text-align: center; }}
+        .effort-table.compact th, .effort-table.compact td {{ padding: 0.5rem 0.6rem; font-size: 0.8rem; }}
+        .effort-table.sticky thead th {{ position: sticky; top: 0; z-index: 1; }}
+        .effort-table tr.effort-total td {{ background: #F8FAFC; font-weight: 700; color: #1E252F; }}
         
         :root {{
             /* Snowflake color palette - aligned with waves-generator */
@@ -3746,6 +3792,9 @@ def generate_html_template(
 
         /* Informatica report styles (scoped to #informatica-report) */
 {informatica_css}
+
+        /* Anti-patterns report styles (scoped to #anti-patterns-report) */
+{anti_patterns_css}
         .empty-state {{
             text-align: center;
             padding: 60px 20px;
@@ -4714,24 +4763,18 @@ def generate_html_template(
                 <a @click="activeTab = 'dynamic-sql'" class="nav-link" data-tab="dynamic-sql" :class="{{active: activeTab === 'dynamic-sql'}}">
                     Dynamic SQL Report
                 </a>
-                <a @click="activeTab = 'ssis'" class="nav-link" data-tab="ssis" :class="{{active: activeTab === 'ssis'}}">
-                    SSIS Report
+                <a @click="activeTab = 'etl'" class="nav-link" data-tab="etl" :class="{{active: activeTab === 'etl'}}">
+                    ETL Report
                 </a>
-                <div v-if="activeTab === 'ssis'" class="nav-sublist">
-                    <a @click="scrollToSection('#executive-summary')" class="nav-sublink">AI Summary</a>
-                    <a @click="scrollToSection('#metrics')" class="nav-sublink">Key Metrics</a>
-                    <a @click="scrollToSection('#package-summary')" class="nav-sublink">Package Classification</a>
-                    <a @click="scrollToSection('#not-supported')" class="nav-sublink">Component Breakdown</a>
+                <div v-if="activeTab === 'etl'" class="nav-sublist">
+                    <a @click="scrollToSection('#informatica-executive-summary', 'etl')" class="nav-sublink">AI Summary</a>
+                    <a @click="scrollToSection('#informatica-metrics', 'etl')" class="nav-sublink">Key Metrics</a>
+                    <a @click="scrollToSection('#informatica-workflow-classification', 'etl')" class="nav-sublink">Workflow Classification</a>
+                    <a @click="scrollToSection('#informatica-component-breakdown', 'etl')" class="nav-sublink">Component Breakdown</a>
                 </div>
-                <a @click="activeTab = 'informatica'" class="nav-link" data-tab="informatica" :class="{{active: activeTab === 'informatica'}}">
-                    Informatica Report
+                <a @click="activeTab = 'risks'" class="nav-link" data-tab="risks" :class="{{active: activeTab === 'risks'}}">
+                    Anti-Patterns
                 </a>
-                <div v-if="activeTab === 'informatica'" class="nav-sublist">
-                    <a @click="scrollToSection('#informatica-executive-summary', 'informatica')" class="nav-sublink">AI Summary</a>
-                    <a @click="scrollToSection('#informatica-metrics', 'informatica')" class="nav-sublink">Key Metrics</a>
-                    <a @click="scrollToSection('#informatica-workflow-classification', 'informatica')" class="nav-sublink">Workflow Classification</a>
-                    <a @click="scrollToSection('#informatica-component-breakdown', 'informatica')" class="nav-sublink">Component Breakdown</a>
-                </div>
             </nav>
         </div>
 
@@ -4740,8 +4783,9 @@ def generate_html_template(
             {exclusion_html}
             {dynamic_sql_html}
             {waves_html}
-            {ssis_html}
-            {informatica_html}
+            {etl_tab_content}
+            {anti_patterns_html}
+
         </div>
     </div>
 
@@ -5247,7 +5291,7 @@ def generate_html_template(
                     this.sqlClassificationFilter = 'all';
                     // Selection will be set by watcher once filtered list updates
                 }},
-                scrollToSection(selector, tab = 'ssis') {{
+                scrollToSection(selector, tab = 'etl') {{
                     // Ensure the correct tab is active, then scroll to the section
                     this.activeTab = tab;
                     this.$nextTick(() => {{
@@ -5814,6 +5858,11 @@ def generate_html_template(
         {informatica_js}
     </script>
 
+    <!-- Anti-Patterns Report JavaScript -->
+    <script>
+        {anti_patterns_js}
+    </script>
+
     <!-- Dependencies Report JavaScript (separate script block for global scope) -->
     <script>
         {waves_js}
@@ -5960,6 +6009,12 @@ def main():
     )
 
     parser.add_argument(
+        '--anti-patterns-json',
+        type=Path,
+        help='Path to anti-patterns assessment JSON file'
+    )
+
+    parser.add_argument(
         '--informatica-json',
         type=Path,
         help='Path to Informatica Power Center assessment JSON file'
@@ -6036,6 +6091,13 @@ def main():
                     args.ssis_json = candidate
                     print(f"Using SSIS JSON: {args.ssis_json}", file=sys.stderr)
                     break
+        if not args.anti_patterns_json:
+            ap_dir = args.project_dir / "artifacts" / "assessment"
+            if ap_dir.is_dir():
+                ap_candidates = sorted(ap_dir.glob("anti-patterns-*.json"))
+                if ap_candidates:
+                    args.anti_patterns_json = ap_candidates[-1]
+                    print(f"Using anti-patterns JSON: {args.anti_patterns_json}", file=sys.stderr)
         if not args.informatica_json:
             # Check common locations for Informatica analysis output
             candidates = [
@@ -6048,8 +6110,8 @@ def main():
                     print(f"Using Informatica JSON: {args.informatica_json}", file=sys.stderr)
                     break
 
-    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.registry_dir:
-        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
+    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.registry_dir:
+        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
         print_usage()
         sys.exit(1)
 
@@ -6067,6 +6129,10 @@ def main():
 
     if args.ssis_json and not args.ssis_json.exists():
         print(f"Error: SSIS JSON file not found: {args.ssis_json}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.anti_patterns_json and not args.anti_patterns_json.exists():
+        print(f"Error: Anti-Patterns JSON file not found: {args.anti_patterns_json}", file=sys.stderr)
         sys.exit(1)
 
     # Registry-driven waves data. Two modes:
@@ -6124,6 +6190,7 @@ def main():
                 snowconvert_reports_dir=args.snowconvert_reports_dir,
                 registry_dir=args.registry_dir,
                 ssis_json=args.ssis_json,
+                anti_patterns_json=args.anti_patterns_json,
                 informatica_json=args.informatica_json,
                 informatica_source_dir=getattr(args, 'informatica_source_dir', None)
             )

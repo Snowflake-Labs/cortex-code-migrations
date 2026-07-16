@@ -81,6 +81,15 @@ If `progress_setup()` returns an unexpected `next_task` not listed above,
 surface the raw response to the user and stop — do not invent a skill
 path.
 
+## Skipping an optional step
+
+To skip an optional setup step for this run, call
+`progress_setup(mode="setup", skip="runAssessment")`. The response
+resolves the next step exactly as a normal call would (for the last step,
+`completed: true`) — act on it directly. Nothing is persisted, so the step
+is offered again later; for a permanent opt-out use
+`configure(tasks={"runAssessment": {"enabled": false}})`.
+
 ## Sub-Skills Reference
 
 | Stage | Sub-skill | Location |

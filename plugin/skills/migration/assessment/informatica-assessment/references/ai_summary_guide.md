@@ -2,6 +2,15 @@
 
 Use this guide to **draft** an AI summary that gives a high-level, decision-ready overview of the Informatica PowerCenter workload before readers dive into individual workflows. The audience is data engineers and solution architects preparing a migration to Snowflake.
 
+### Conversion Mode Awareness
+
+The assessment output JSON includes `metadata.conversion_mode` ("dbt" or "scripting"). **You MUST adapt all target references based on this mode:**
+
+- **dbt mode:** Use "dbt models", "dbt project", "ref()", "Snowflake Tasks calling dbt"
+- **scripting mode:** Use "stored procedures", "CALL statements", "Snowflake Scripting", "Snowflake Tasks with inline SQL". **Zero dbt references allowed.**
+
+When filling the HTML template below, choose the appropriate target terminology for the active mode. Do NOT include both — pick one based on `conversion_mode`.
+
 ### Summary Command (single source of truth)
 Use this command to extract all signals in one place. It returns a well‑formatted text summary with:
 1) AI analysis text per workflow
@@ -55,10 +64,20 @@ Focus on the most impactful signals from the summary command output:
 - **Most Complex Workflow:** Name, mapping count, key complexity factors
 
 **6) Recommended Migration Approach**
+
+Adapt recommendations based on `informatica_target`:
+
+**dbt mode:**
 - **Data Transformation workflows:** Mappings → dbt models, Workflow → Snowflake Tasks
 - **Mixed workflows:** Decompose into ingestion (Snowpipe/Fivetran) + transformation (dbt) layers
 - **Ingestion workflows:** Replace with External stages, COPY INTO, Snowpipe, or Fivetran connectors
 - **Configuration & Control:** Re-architect using Snowflake Tasks, stored procedures, notification integrations
+
+**scripting mode:**
+- **Data Transformation workflows:** Mappings → Snowflake stored procedures, Workflow → Snowflake Tasks with CALL statements
+- **Mixed workflows:** Decompose into ingestion (Snowpipe/Fivetran) + transformation (stored procedures) layers
+- **Ingestion workflows:** Replace with External stages, COPY INTO, Snowpipe, or Fivetran connectors
+- **Configuration & Control:** Re-architect using Snowflake Tasks with inline SQL, stored procedures, notification integrations
 
 **7) Key Risks and Dependencies**
 - Pick the top 4 risks based on impact (2 high-severity red, 2 medium-severity amber)
@@ -112,13 +131,13 @@ Use this structure with visual sections so it can be embedded into the HTML repo
           <td style="padding: 10px 14px;"><span style="display: inline-block; width: 10px; height: 10px; background: #F59E0B; border-radius: 3px; margin-right: 8px;"></span>Data Transformation</td>
           <td style="text-align: center; padding: 10px 14px; font-weight: 600;">[COUNT]</td>
           <td style="text-align: center; padding: 10px 14px;">[%]</td>
-          <td style="padding: 10px 14px; color: #475569;">dbt models + Snowflake Tasks</td>
+          <td style="padding: 10px 14px; color: #475569;">dbt models + Snowflake Tasks (dbt) / Stored procedures + Tasks (scripting)</td>
         </tr>
         <tr style="border-bottom: 1px solid #e2e8f0; background: #fafafa;">
           <td style="padding: 10px 14px;"><span style="display: inline-block; width: 10px; height: 10px; background: #8B5CF6; border-radius: 3px; margin-right: 8px;"></span>Mixed: Ingestion + Transformation</td>
           <td style="text-align: center; padding: 10px 14px; font-weight: 600;">[COUNT]</td>
           <td style="text-align: center; padding: 10px 14px;">[%]</td>
-          <td style="padding: 10px 14px; color: #475569;">Snowpipe/Fivetran + dbt layers</td>
+          <td style="padding: 10px 14px; color: #475569;">Snowpipe/Fivetran + dbt layers (dbt) / Snowpipe/Fivetran + stored procs (scripting)</td>
         </tr>
         <tr style="border-bottom: 1px solid #e2e8f0;">
           <td style="padding: 10px 14px;"><span style="display: inline-block; width: 10px; height: 10px; background: #29B5E8; border-radius: 3px; margin-right: 8px;"></span>Ingestion</td>
@@ -219,13 +238,13 @@ Use this structure with visual sections so it can be embedded into the HTML repo
         <tr style="border-bottom: 1px solid #e2e8f0;">
           <td style="padding: 10px 14px; font-weight: 500;">Data Transformation</td>
           <td style="text-align: center; padding: 10px 14px; font-weight: 600;">[COUNT]</td>
-          <td style="padding: 10px 14px; color: #475569;"><strong>dbt models + Snowflake Tasks</strong></td>
+          <td style="padding: 10px 14px; color: #475569;"><strong>dbt models + Snowflake Tasks</strong> (dbt) / <strong>Stored procedures + Tasks with CALL</strong> (scripting)</td>
           <td style="padding: 10px 14px; color: #475569;">[Key considerations for this classification]</td>
         </tr>
         <tr style="border-bottom: 1px solid #e2e8f0; background: #fafafa;">
           <td style="padding: 10px 14px; font-weight: 500;">Mixed: Ingestion + Transform</td>
           <td style="text-align: center; padding: 10px 14px; font-weight: 600;">[COUNT]</td>
-          <td style="padding: 10px 14px; color: #475569;"><strong>Snowpipe/Fivetran + dbt</strong></td>
+          <td style="padding: 10px 14px; color: #475569;"><strong>Snowpipe/Fivetran + dbt</strong> (dbt) / <strong>Snowpipe/Fivetran + stored procs</strong> (scripting)</td>
           <td style="padding: 10px 14px; color: #475569;">[Key considerations]</td>
         </tr>
         <tr style="border-bottom: 1px solid #e2e8f0;">
