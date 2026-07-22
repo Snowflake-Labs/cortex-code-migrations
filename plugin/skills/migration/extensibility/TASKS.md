@@ -52,6 +52,7 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `registerCode` | Pulls source SQL into the project. |
 | `convertCode` | Runs the source → Snowflake conversion. |
 | `runAssessment` | Generates a migration assessment report. |
+| `generateTestbed` | Builds the synthetic testbed for the workload (mine → validate → compile → generate). |
 
 ### `main` (per-object migration)
 
@@ -108,6 +109,10 @@ Every entry below names the task id, what your override needs as input, and the 
 #### `runAssessment`
 - **Inputs:** A converted project from the `convertCode` task.
 - **Done when:** At least one file exists at `<project_dir>/**/multi_report*.html`.
+
+#### `generateTestbed`
+- **Inputs:** A converted, assessed workload with testbed mining artifacts under `artifacts/**/testbed/*.testbed.json`. A source connection is still required downstream.
+- **Done when:** The generate deliverable exists at `testbed/generate/summary-view.json` (synthetic-data summary; CSVs + `manifest.json` land under `testbed/generate/data/`).
 
 ### `main` (per-object migration)
 

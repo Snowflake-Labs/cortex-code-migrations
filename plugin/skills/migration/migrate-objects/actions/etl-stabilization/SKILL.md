@@ -60,6 +60,7 @@ Do not attempt to call `agent_output` — it may not be available and failed att
 
 On every invocation:
 
+0. **Snowflake Scripting guard.** If this is an Informatica Snowflake Scripting conversion - the code unit's `extensions.conversionMode` is `snowflakeScripting`, or the unit folder holds standalone mapping stored procedures (`CREATE OR REPLACE PROCEDURE`) with no dbt projects (no `dbt_project.yml`) - stop immediately and tell the user: "ETL Stabilization is not supported for Snowflake Scripting conversions (dbt only)." Do not scan, back up, or write any files. (In the guided flow these units never reach this skill: the migration state machine terminates them right after convert. This guard only fires on direct invocation.)
 1. Check if `{UNIT}/stabilization/tracking/STATE.md` exists
 2. **If no STATE.md** → new unit → run **Planning Workflow**
 3. **If STATE.md exists** → read it → run **Execution Workflow** for next pending phase

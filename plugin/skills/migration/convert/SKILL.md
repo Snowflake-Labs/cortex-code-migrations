@@ -41,33 +41,17 @@ Ask the user via `ask_user_question` (`multiSelect = false`):
 > 1. **Yes**
 > 2. **No**
 
-- If **Yes**, ask which platform (SSIS or Informatica).
-  - **If Informatica**, present this recommendation before asking for the path:
-    > For the smoothest Informatica migration, we recommend exporting your workflows using Snowflake's official DDL Export Script. This produces one XML file per workflow in a consistent format that SnowConvert and the downstream `stabilization` skill are designed to read.
-    >
-    > **Extraction guide:** https://github.com/Snowflake-Labs/SC.DDLExportScripts/blob/main/ETL/Informatica%20PowerCenter/README.md
-    >
-    > Summary:
-    > 1. `pmrep connect -r <repo> -d <domain> -n <user> -x <password>`
-    > 2. `python export_all_workflows.py --folder-name "<folder_name>"`
-    > 3. `pmrep cleanup`
-    >
-    > Output: `./exports/<workflow_name>.xml`, one file per workflow.
+- If **Yes**, ask which platform (SSIS or Informatica), then ask for the filesystem path where the ETL code is located. Store it as `<ETL_PATH>` for Step 4.
+  - **If Informatica**, ask the remaining ETL questions up front, in one sequence, before running the conversion:
+    1. Conversion target, via `ask_user_question` (`multiSelect = false`):
+       > "How should Informatica mappings be converted?
+       > 1. **dbt** (default): each mapping becomes a dbt model orchestrated by Snowflake Tasks. Supports ETL stabilization and deploy.
+       > 2. **Snowflake Scripting** (preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Stabilization and deploy are skipped for this preview flavor."
+    2. If the answer is **dbt**, also ask (`multiSelect = false`): "Consolidate dbt model chains to reduce the number of generated model files?". On yes, set `CONSOLIDATE_DBT = true` for Step 4.
+    3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 4.
 
-    Then ask with `ask_user_question`:
-    - "I already exported using this guide; proceed"
-    - "I exported another way, but I'd like to proceed anyway"
-    - "Let me re-export first; I'll provide the path when ready"
-
-    On "re-export first", stop and wait for the user to return with the path. On either "proceed" option, continue to the filesystem path prompt below.
-  - **If SSIS**, no extraction-guide prompt is needed, proceed directly to the filesystem path prompt below.
-  - **After platform handling**, ask for the filesystem path where the ETL code is located. Store this path for Step 4.
-  - **If Informatica**, after storing the ETL path, ask with `ask_user_question` (`multiSelect = false`):
-    > "Which conversion target for Informatica PowerCenter?
-    > 1. **dbt** — mappings convert to dbt models orchestrated by Snowflake Tasks
-    > 2. **scripting** — mappings convert to Snowflake stored procedures (Snowflake Scripting)"
-
-    Call the MCP `configure` tool with `etl_informatica_target` set to `"dbt"` or `"scripting"` so it persists to `.scai/config/plugin.yml` for downstream use by the conversion CLI and assessment output.
+    Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`. When the target is Snowflake Scripting, the `--informatica-to-snowflake-scripting` convert flag in Step 4 additionally records the project-level `etl_target` in `project.yml` that gates the scripting-preview routing.
+  - **If SSIS**, no conversion-target prompt is needed.
 - If **no**, proceed to Step 3; no `<ETL_PATH>` will be set.
 
 ### Step 3: Check for Power BI Reports
@@ -84,7 +68,7 @@ If **no**, proceed to Step 4. `PBIT_PATH` remains unset; do not pass `--powerbi-
 
 Before running, tell the user what the conversion will cover: mention ETL if `ETL_PATH` was set, and Power BI repointing if `PBIT_PATH` was set.
 
-Always include `--json` so the agent can parse the result envelope. Append `--etl-replatform-sources-path <ETL_PATH>` and/or `--powerbi-repointing <PBIT_PATH>` only if those paths were set.
+Always include `--json` so the agent can parse the result envelope. Append `--etl-replatform-sources-path <ETL_PATH>` and/or `--powerbi-repointing <PBIT_PATH>` only if those paths were set. If `SCRIPTING_MODE` was set (Informatica to Snowflake Scripting), also append `--informatica-to-snowflake-scripting`. If `CONSOLIDATE_DBT` was set (Informatica to dbt), also append `--consolidate-dbt-model-chains`.
 
 **No ETL:**
 ```bash
@@ -94,6 +78,11 @@ scai code convert --json
 **With ETL:**
 ```bash
 scai code convert --etl-replatform-sources-path <ETL_PATH> --json
+```
+
+**With ETL, Snowflake Scripting (Informatica preview):**
+```bash
+scai code convert --etl-replatform-sources-path <ETL_PATH> --informatica-to-snowflake-scripting --json
 ```
 
 Substitute the bracketed tokens with the actual paths you stored. Do not emit literal `<ETL_PATH>` or `<PBIT_PATH>` to the shell.
@@ -118,6 +107,7 @@ Conversion produces:
 | `-x, --show-ewis` | Show detailed EWI breakdown |
 | `--overwrite-working-directory` | Overwrite output files in `snowflake/` and registry |
 | `--etl-replatform-sources-path <PATH>` | Path to ETL code (SSIS or Informatica) for conversion |
+| `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; ETL stabilization and deploy are skipped for these units. |
 
 For Power BI options, see `../powerbi-repointing/SKILL.md`.
 
@@ -152,12 +142,11 @@ snowflake/
 │       ├── view/
 │       ├── procedure/
 │       └── function/
-artifacts/
-├── ETL/                               # Converted ETL code (tasks, dbt models, etc.)
-│   └── <package_name>/
-│       ├── <package_name>.sql         # Snowflake tasks
-│       └── <data_pipeline>/
-│           └── models/                # dbt models (staging, intermediate, marts)
+└── _etl/                              # Converted ETL code (Task graph + stored procedures for scripting; dbt models for dbt)
+    └── <package_name>/
+        ├── <package_name>.sql         # Snowflake Task graph
+        └── <data_pipeline>/
+            └── models/                # dbt models (staging, intermediate, marts) when target is dbt
 reports/
 ├── SnowConvert/
 │   ├── TopLevelCodeUnits.*.csv
@@ -179,7 +168,7 @@ Confirm with user:
 - [ ] Conversion completed without errors
 - [ ] Review EWI summary (especially high/critical count)
 - [ ] Converted files appear in `snowflake/`
-- [ ] If ETL code was included: ETL packages processed successfully, ETL issues reviewed, and converted ETL code appears in `artifacts/ETL/`
+- [ ] If ETL code was included: ETL packages processed successfully, ETL issues reviewed, and converted ETL code appears under `snowflake/_etl/`
 - [ ] If Power BI reports were included, follow the CHECKPOINT addendum in `../powerbi-repointing/SKILL.md`
 
 ## On Completion
@@ -198,5 +187,8 @@ After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON enve
 > Critical EWIs require manual fix before deploy. Reports in `reports/SnowConvert/`.
 >
 > Next, we'll run an assessment to plan your migration: dependency waves, object categorization, and a deployment plan.
+
+*If `SCRIPTING_MODE` was set*, also tell the user:
+> Informatica mappings were converted to Snowflake Scripting stored procedures (preview). **ETL Stabilization is not supported for Snowflake Scripting conversions (dbt only)**, and deploy is not part of this preview flow - both are skipped for these ETL units. The generated procedures and Task graph are under `snowflake/_etl/` for review.
 
 Then return to the calling skill.

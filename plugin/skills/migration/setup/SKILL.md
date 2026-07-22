@@ -64,7 +64,8 @@ Tasks the machine routes through, in order:
 
 | Task id                          | How the agent handles it                                          |
 |----------------------------------|-------------------------------------------------------------------|
-| `configureProjectDir`            | sub-skill: `setup/configure-project.md`                           |
+| `validateEmptyDir`               | sub-skill: `setup/validate-empty-dir.md`                          |
+| `confirmProjectDir`              | sub-skill: `setup/confirm-project-dir.md`                         |
 | `enableDashboard`                | inline prompt (`next_prompt`) — no sub-skill load                 |
 | `recommendSafeTools`             | inline prompt (`next_prompt`) — no sub-skill load                 |
 | `chooseSourceDialect`            | inline prompt (`next_prompt`) — no sub-skill load                 |
@@ -76,6 +77,7 @@ Tasks the machine routes through, in order:
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
 | `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
+| `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (opt-in; excluded unless enabled) |
 
 If `progress_setup()` returns an unexpected `next_task` not listed above,
 surface the raw response to the user and stop — do not invent a skill

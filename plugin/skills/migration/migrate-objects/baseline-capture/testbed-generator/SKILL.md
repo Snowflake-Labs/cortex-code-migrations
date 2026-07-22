@@ -1,0 +1,160 @@
+---
+name: testbed-generator
+description: >
+  Drive the workload-scoped Synthetic Testbed Generator through its MINE →
+  VALIDATE → ENRICH → COMPILE → GENERATE phases for a migration. Sequences `scai
+  testbed init` → `list-unsolved` (mine) and surfaces the categorized
+  unsolved-constraint view; `scai testbed validate` and surfaces the readiness view
+  (fk gaps / type conflicts / unsatisfied constraints); `scai testbed compile` and
+  surfaces the cluster summary; runs the two-pass ENRICH reasoning (structural then
+  value prompts) that turns unsolved constraints into enrichment JSON; `scai testbed
+  generate` (readiness-gated) and surfaces the row counts + CSV/manifest deliverable.
+  Resumes each phase after a kill by recomputing from on-disk state. Reads
+  machine-readable JSON views; mutates state only through scai testbed subcommands,
+  never the opaque state.bin. Triggers: generate testbed, mine testbed, validate
+  testbed, compile testbed, enrich testbed, run testbed phases, resume testbed,
+  inspect unsolved constraints, testbed data source. Runs the two-pass ENRICH phase then the ORCHESTRATE phase between mine and compile
+  (assemble the 6-array envelope, drive propose-enrichments/validate with bounded
+  retries + observability). Does NOT generate CSVs or seed test YAML.
+parent_skill: baseline-capture
+license: Proprietary. See License-Skills for complete terms
+---
+
+# Testbed generator — mine + validate + enrich + compile + generate
+
+Drives the deterministic `scai testbed` mine, validate, enrich, compile, and
+generate phases for the whole workload. The data lives in the CLI's opaque state; this
+skill only sequences subcommands and surfaces their JSON. It replaces production
+*data*, not source *access* — a source connection is still required downstream to
+capture the baseline.
+
+The core phases are independent and resumable: **mine** (`init` → `list-unsolved`
+→ per-object branch drill-down) inventories the constraint/branch coverage;
+**validate** reads the mined state and reports readiness (fk gaps / type conflicts
+/ unsatisfied constraints) — `ready: false` is a report, not a failure; **enrich**
+is the reasoning + propose/validate loop that turns unsolved constraints into
+enrichment JSON (see the Orchestrate phase below); **compile** materializes the
+data-coupling clusters + coordination spec that data generation consumes;
+**generate** (readiness-gated) writes the CSV pool + manifest deliverable. Each
+phase is deterministic — re-running it is safe and cheap.
+
+## On Entry
+
+Tell the user:
+
+> "Running the testbed mine → validate → enrich → compile → generate phases: I'll inventory
+> the branch/constraint coverage your converted workload needs and show the
+> categorized unsolved-constraint view, report readiness (fk gaps / type conflicts /
+> unsatisfied constraints), run the enrichment loop that turns the unsolved constraints
+> into enrichment JSON (assemble → propose → validate, with a bounded retry/iterate budget),
+> compile the data-coupling / coordination spec and show its cluster summary, then —
+> readiness permitting — generate the CSV pool + manifest and show the row counts. This
+> reads the conversion artifacts and the testbed state; the enrich phase mutates that state
+> (through `propose-enrichments`) and only the generate phase writes data files."
+
+## Scope
+
+- In scope: `init` → `list-unsolved` (mine) → surface the categorized view; `validate` → surface the readiness view; `compile` → surface the cluster summary; the two-pass ENRICH reasoning (structural then value prompts) that turns unsolved constraints into enrichment JSON (§enrich below); `generate` (readiness-gated) → surface row counts + CSV/manifest deliverable; resume each phase; classify failures.
+- In scope (orchestrate): assemble the per-type fragments into the 6-array envelope, drive `propose-enrichments`/`validate` with a bounded retry/iterate budget, emit observability counts (SNOW-3782435).
+- Out of scope: `generate`'s CSV internals; the per-object test-YAML bridge.
+- Phase-scoped runs: each driver subcommand (`mine`, `validate`, `enrich`, `compile`, `generate`) can be run and stopped independently — e.g. run `validate` to inspect readiness without generating data.
+
+## Steps
+
+1. Ensure the MCP session is configured: if you were spawned as a sub-agent, call `configure(project_dir=<abs_path>)` first (session state is not inherited).
+2. **Mine phase.** Run the driver:
+
+   ```
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/run_pipeline.py mine --project-dir {PROJECT_DIR}
+   ```
+
+3. **On mine exit code 0:** the driver wrote `testbed/mine/unsolved-view.json` and printed a one-line summary. Present the summary, then read `testbed/mine/unsolved-view.json` and show the per-`kind` counts (`fk`, `check`, `branch_predicate`, `join_edge`, `enum_domain`) and the `branches` drill-down (per object: `branch_count`, `unsolved_branches`). Do not paraphrase the counts — read them from the file. A table with `branch_count: 0` is normal — tables have no branches; do not report it as a gap.
+4. **On mine non-zero exit:** the driver printed `"<station> failed [<code>] <message> (<class>)"`. Act on the class, then stop (do not proceed to compile):
+   - `input_config` (e.g. `PRJ0003`, `TBD0007`): the project dir or artifacts path is wrong. Fix it and re-run step 2.
+   - `data_isolable` / `data_quarantine`: the driver recorded the offending object as PENDING in `.scai/testbed/run.json` and continued where it could. Tell the user which objects are PENDING and why.
+   - `escalate`: stop and surface the full error; do not retry.
+5. **Validate phase (after mine exit 0).** Run the driver:
+
+   ```
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/run_pipeline.py validate --project-dir {PROJECT_DIR}
+   ```
+
+6. **On validate exit code 0:** the driver wrote `testbed/validate/readiness-view.json` and printed a one-line summary. Read the view and present `ready`, `counts` (`blocking`, `advisory`, `fk_gaps`, `type_conflicts`, `unsatisfied_constraints`), and the `fk_gaps` / `type_conflicts` / `unsatisfied_constraints` arrays. **`ready: false` is not an error** — it is a successful report of gaps carried in the view. If not ready, tell the user the blocking issues must be fixed (or explicitly overridden at generate) before data will generate.
+7. **On validate non-zero exit:** act on the class (`input_config` `TBD0002`: state missing — re-run mine; `escalate` `TBD0003/4/5`: surface the CLI `suggestion` and stop).
+8. **Enrich phase (after validate exit 0, before compile).** Run the enrichment orchestration — assemble the prompt fragments into one envelope, propose it, and re-validate readiness in a bounded retry/iterate loop:
+
+   ```
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/run_pipeline.py enrich --project-dir {PROJECT_DIR}
+   ```
+
+   On **exit 0** the driver wrote `testbed/enrich/enrichment-view.json` and the workload is ready — proceed to compile. On **non-zero exit** read `testbed/enrich/enrichment-report.json` and act on its `stop_kind` (`reject` / `iterate` / `documented-stop` / `budget-exhausted`); the full loop and each stop's remediation are in the **Orchestrate phase** below. **Enrich MUST precede compile** — it mutates the mined state that compile materializes into clusters, and its terminal `validate ready` is the readiness precondition the generate gate checks.
+9. **Compile phase (only after enrich exit 0).** Run the driver:
+
+   ```
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/run_pipeline.py compile --project-dir {PROJECT_DIR}
+   ```
+
+10. **On compile exit code 0:** the driver wrote `testbed/compile/clusters-view.json` and printed a one-line summary. Present the summary, then read `testbed/compile/clusters-view.json` and show `clusters`, `coupled_objects`, `singleton_objects`, `largest_cluster`. Note for the user: per-cluster membership is not surfaced yet — that arrives with the (later) generate phase.
+11. **On compile non-zero exit:** the driver printed `"compile failed [<code>] <message> (<class>)"`. Act on the class:
+    - `input_config` (`TBD0002`): the testbed state (`.scai/testbed/state.bin`) is missing — the mine phase's `init` didn't run or was cleared. Re-run step 2, then step 9.
+    - `escalate` (`TBD0003`/`TBD0004`/`TBD0005`): the state is unreadable, version-mismatched, or corrupt. Surface the CLI's `suggestion` verbatim (typically: re-run `init`, or remove a duplicate source object then re-mine). Do not retry blindly.
+12. **Generate phase (after compile exit 0 and validate ready — or an explicit override).** Run the driver:
+
+    ```
+    uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/run_pipeline.py generate --project-dir {PROJECT_DIR}
+    ```
+
+    - If the workspace was **not ready** at validate, the driver blocks with `"generate blocked: N blocking issue(s); re-run with --ignore-readiness to override"`. Only re-run with `--ignore-readiness` after telling the user which blocking issues will be bypassed.
+    - If validate never ran, the driver blocks with `"generate blocked: run validate first"` — run Step 5 first.
+13. **On generate exit code 0:** the driver wrote `testbed/generate/summary-view.json` and printed a one-line summary. Read the view and present `tables`, `rows_written`, `csv_files`, `out_path`, `manifest_path`, and `readiness_overridden`. An empty workspace is a success with `csv_files: 0` and a `note` — surface the note. The CSV pool + `manifest.json` land flat under `testbed/generate/data/`.
+14. **On generate non-zero exit:** act on the class (`input_config` `TBD0012`: state not compiled — run Step 9 first; `escalate`: surface the error and stop).
+15. Do **not** call `transition_status`. The `generateTestbed` task completes when `testbed/generate/summary-view.json` exists (a `filesystemProxy` status source) — the resolver detects it. Calling `advance` for a filesystem-backed task returns an error. If generate is blocked or escalates and never writes the summary view, the task stays incomplete by design; surface the error and stop rather than looping.
+
+## Enrich phase (two-pass)
+
+After mine, once `list-unsolved` has emitted the gaps, run the enrichment reasoning. The prompt files live under `prompts/{structural,value}/`. Assembling the envelope and calling `scai testbed propose-enrichments` / `validate` is the Orchestrate phase below (SNOW-3782435) — this phase produces the reasoning inputs and the per-type outputs.
+
+**Map each unsolved `kind` to its prompt:**
+
+| unsolved `kind` | prompt(s) |
+|---|---|
+| `fk`, `join_edge` | `structural/fk_chains.md`; peer-attribute joins → `structural/correlated_groups.md` |
+| compound `branch_predicate` (cross-table) | `structural/correlated_groups.md` |
+| anti-join `branch_predicate` (`NOT EXISTS` / `LEFT JOIN … IS NULL`) | `structural/anti_join_tables.md` |
+| date-column pairs | `structural/temporal_alignment.md` |
+| `branch_predicate` (value arm) | `value/branch_values.md` |
+| `enum_domain` (undeclared) | `value/inferred_enum.md`; unclassifiable residue → `value/flag_for_llm.md` |
+| `check` / lookup floors | `value/must_include.md` |
+| column null semantics | `value/null_fraction_override.md` |
+
+**Order:** run the **structural pass first** (`fk_chains` → `correlated_groups` → `temporal_alignment` → `anti_join_tables`) because its outputs feed the value pass; within a pass, independent types are order-free. Then the **value pass** (`branch_values`, `inferred_enum`, `must_include`, `null_fraction_override`; `flag_for_llm` is a router resolved skill-side into one of the other types — never emitted). This phase stops at the per-type outputs; the Orchestrate phase below (SNOW-3782435) assembles them into the 6-array wire envelope (`column_enrichments`, `branch_values`, `fk_chains`, `temporal_alignment`, `correlated_groups`, `anti_join_tables`) and drives `propose-enrichments`/`validate`.
+
+## Orchestrate phase (assemble + propose/validate loop)
+
+Runs after the enrich pass and **before compile** (`mine → enrich → compile → generate`). The enrich pass writes per-type fragments to `testbed/enrich/fragments/<prompt_type>.json` — **one file per prompt-type, overwrite-in-place** (a re-prompt MUST replace the same file, never add a sibling; v1 keys fragments by prompt-type only). Run the structural pass first, then the value pass (same discipline as the Enrich phase), then close the loop:
+
+1. **Assemble + propose + validate (one attempt).** Run the driver:
+
+   ```
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/run_pipeline.py enrich --project-dir {PROJECT_DIR}
+   ```
+
+2. **On exit 0:** the driver wrote `testbed/enrich/enrichment-view.json` and the workload is ready — proceed to compile.
+3. **On non-zero exit:** read `testbed/enrich/enrichment-report.json` and act on `stop_kind`:
+   - `reject` — a fragment was malformed. Re-run the prompt named by `prompt_type`, overwrite its fragment file, and re-invoke step 1. Bounded by the per-prompt-type budget.
+   - `iterate` — `validate` is not ready. For each `blocking` issue whose `remediation.enrichment_fixable` is true, re-run the prompt for its `remediation.enrichment_type` (using the `hint`), overwrite the fragment, re-invoke. Bounded by the global iteration budget.
+   - `documented-stop` — a structural gap (e.g. an FK cycle, surfaced at propose-time as `TBD0015`) or CAS-retry exhaustion. Surface the `detail` to the user and stop; do not re-prompt the same edge.
+   - `budget-exhausted` — the retry/iterate budget is spent. Surface the report and stop; a human fixes the fragment and re-runs with `--reset-budget`.
+4. **Only after enrich exit 0**, run compile (enrich MUST precede compile). Enrich's terminal `validate ready` is the readiness precondition the downstream `generate` gate checks; the standalone `validate` step above remains a cheap idempotent re-check.
+
+Note: `fk_cycle` and `parent_missing_key` gaps are **advisory** (never blocking), so a `validate`-ready workspace that still lists those is legitimately ready — a not-null FK *cycle* instead surfaces at propose-time as `TBD0015` (a `documented-stop`).
+
+## Persistent files
+
+- `.scai/testbed/state.bin` — opaque CLI state (mining spec + materialized clusters). Never read or edit it; treat it as a black box owned by `scai testbed`.
+- `testbed/mine/unsolved-view.json` — the mine deliverable (written by the driver).
+- `testbed/validate/readiness-view.json` — the validate deliverable: readiness + fk gaps / type conflicts / unsatisfied constraints (written by the driver).
+- `testbed/compile/clusters-view.json` — the compile deliverable: cluster summary (written by the driver).
+- `testbed/generate/summary-view.json` — the generate deliverable and **task completion predicate**: row counts + CSV/manifest paths (written by the driver).
+- `testbed/generate/data/` — the flat CSV pool + `manifest.json` emitted by `scai testbed generate --out`.
+- `.scai/testbed/run.json` — derived progress ledger (mine/validate/compile/generate status, PENDING records).

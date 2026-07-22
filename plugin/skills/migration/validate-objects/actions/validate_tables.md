@@ -255,7 +255,44 @@ Do **not** prompt before presenting the Step 5 summary. **After** the error-firs
 
 Use [Validation levels reference](./references/validation-levels-reference.md) for report-category definitions; focus on categories that actually appeared in `### Errors`. Skip this offer if you already explained levels at Step 2 and the user did not ask.
 
-After the summary (and optional follow-up), continue to Step 6 (teardown) when wave data work is done.
+### 5.G — Offer re-validation when data mismatches remain
+
+**After** the Step 5 summary (and optional 5.F follow-up), **before Step 6 (teardown)**, offer a retry menu when **all** of the following hold:
+
+| Condition | Required? |
+|-----------|-----------|
+| `progress.output.isFinished == true` | Yes |
+| `failedTables > 0` **or** Schema / Row / Metrics errors in `### Errors` | Yes |
+| Step 4.B pending-tables anomaly | **No** — investigate first; do not offer re-validation |
+| **Execution** failures only (infra, worker, orchestrator, connectivity) | **No** — fix via `../../data-infrastructure/SKILL.md` first |
+
+Re-validation retries **failed partitions only** from the finished parent workflow — it is **not** a full re-run of every table. Chain resolution is automatic: pass the workflow name from the run that just finished (`progress.output.workflowName`).
+
+Ask verbatim when eligible:
+
+> Some tables still have validation failures. How would you like to proceed?
+>
+> 1. **Retry failed partitions only** (recommended when data fixes are done) — re-validation from workflow `<workflowName>`
+> 2. **Apply fixes first** — edit workflow YAML / fix source data / re-migrate, then retry
+> 3. **Re-run full validation** — `validate_data(mode="setup", where=...)` then `mode="run"` (new workflow, all tables in scope)
+> 4. **Investigate further** — TASK_QUEUE, worker/orchestrator health (`../../data-infrastructure/SKILL.md`)
+> 5. **Stop** — proceed to Step 6 (teardown)
+
+**If the user picks option 1:**
+
+```
+validate_data(mode="revalidate", workflow_name="<progress.output.workflowName>")
+```
+
+Then repeat **Steps 4–5** (poll with `validate_data_status()`, present a new error-first report). Skip Step 6 teardown until the user picks **Stop** or all tables pass. Relay the `cost_reminder` from the revalidate response when infrastructure starts.
+
+**If the user picks option 2:** guide fixes from `### Suggested fixes`, then offer this menu again when ready.
+
+**If the user picks option 3:** return to Step 1 (setup) with a `where` filter scoped to failed tables when possible.
+
+**If the user picks option 4 or 5:** continue to Step 6 when wave data work is done for this pass.
+
+When all tables passed on the first run, skip 5.G and continue to Step 6.
 
 ---
 
@@ -282,6 +319,7 @@ If the user picks **Yes** (or doesn't respond), load the teardown sub-skill, the
 - [ ] Polled until job terminal and progress.output.isFinished (when progress present)
 - [ ] Finished-but-pending anomaly checked (Step 4.B — do not report passed if tables still Pending)
 - [ ] Error-first data validation summary presented (Step 5 — Result + Workflow, Errors, Suggested fixes)
+- [ ] Re-validation menu offered when eligible (Step 5.G — before teardown, not on Step 4.B or execution-only failures)
 - [ ] Teardown offered when wave data work is done (Step 6)
 ```
 
