@@ -19,7 +19,7 @@ The platform of an ETL code unit is recorded on its registry entry as `source.pl
 
 **Stabilization** for this version means: run `etl-stabilization` until its Final Validation phase reports clean. That covers everything `etl-stabilization` does — scan, ROADMAP, phased TDD across orchestration elements and dbt sub-projects, EWI fixes, etc.
 
-**After stabilization:** the unit advances to `deploy`, the terminal step for ETL units. Deploying the stabilized ETL to Snowflake is handled by `scai code deploy` through the `deploy` tool (see Step 4), not by this skill and not by hand-running `snow`.
+**After stabilization:** the unit advances to `deploy`. Deploying the stabilized ETL to Snowflake is handled by `scai code deploy` through the `deploy` tool (see Step 4), not by this skill and not by hand-running `snow`. Deploy is no longer terminal for ETL — once deployed, the unit advances to `etlSeed` and `etlValidate` to compare the live source package against the Snowflake output.
 
 This skill is the **orchestrated (registry-backed) entry point** for ETL stabilization. It claims the unit and records the result on the registry, then delegates the actual fixing to `etl-stabilization`.
 
@@ -47,14 +47,15 @@ Read the unit (the executor passes `object_id`, or call `migration_status(mode="
 | `source.platform` | `{PLATFORM_ID}` for `etl-stabilization` (skip its Step 1b auto-detect prompt) |
 | `parts[]` → derived converted folder | `{PACKAGE_FOLDER}` for `etl-stabilization` |
 
-**Deriving the converted folder.** Converted output is recorded per part in `parts[].target`:
+**Deriving the converted folder.** Where the converted output lives depends on the conversion flavor:
 
+**dbt / SSIS ETL** — recorded per part in `parts[].target`:
 - Data-flow parts (e.g. `partType: "Microsoft.Pipeline"` for SSIS) → `target.format: "dbt"`, `target.path` points to a **dbt project folder** (one per data flow).
 - Other part types (e.g. `Microsoft.ExecuteSQLTask` for SSIS) → `target.format: "snowflakeSQL"`, `target.path` points to a single **orchestration `.sql` file** shared by every non-dbt part of this code unit.
 
-Resolve `{PACKAGE_FOLDER}` as the parent directory of any part whose `target.format == "snowflakeSQL"`. The dbt sub-project folders should sit alongside that orchestration file under the same parent — verify before handing off.
+Resolve `{PACKAGE_FOLDER}` as the parent directory of any part whose `target.format == "snowflakeSQL"`. The dbt sub-project folders should sit alongside that orchestration file under the same parent — verify before handing off. If `parts[]` is empty or no part has a `target` yet, the converted output has not been produced — the `convert` task should have run first. Surface that to the user and stop; do not try to stabilize an unconverted ETL unit.
 
-If `parts[]` is empty or no part has a `target` yet, the converted output has not been produced — the `convert` task should have run first. Surface that to the user and stop; do not try to stabilize an unconverted ETL unit.
+**Snowflake Scripting ETL** (project `etl_target = snowflake_scripting`) — each converted mapping is its own `kind=etl` unit with an **empty `parts[]`**; the converted stored procedure is on the code-unit root at `files.converted.path` (`target.format: "snowflakeSQL"`), and there are **no dbt sub-project folders**. Resolve `{PACKAGE_FOLDER}` as the parent directory of `files.converted.path`. An empty `parts[]` here is **expected** — not a sign of missing conversion; only treat the unit as unconverted if `files.converted.path` is also absent.
 
 ## Step 2: Hand Off to `etl-stabilization`
 
@@ -74,7 +75,7 @@ When `etl-stabilization` finishes its Final Validation cleanly, advance the stat
 transition_status(status="advance", task="etlStabilization", outcome="completed", where="id = '<etl_id>'")
 ```
 
-`etlStabilization` is not terminal: on `completed` the machine advances the unit to `deploy` (which deploys the converted ETL via `scai code deploy`). Continue to Step 4 to deploy.
+`etlStabilization` is not terminal: on `completed` the machine advances the unit to `deploy` (which deploys the converted ETL via `scai code deploy`). Continue to Step 4 to deploy. After a successful deploy the unit advances to `etlSeed` and then `etlValidate` for the live source-vs-Snowflake comparison (see `etl-seed/SKILL.md` and `etl-validate/SKILL.md`, loaded automatically by the executor).
 
 ## Step 4: Deploy
 
@@ -107,6 +108,8 @@ When the deploy returns success, advance the machine:
 ```
 transition_status(status="advance", task="deploy", outcome="completed", where="id = '<etl_id>'")
 ```
+
+On `completed` the machine routes the ETL unit to `etlSeed` (scaffold the test YAML), then `etlValidate` (live comparison). The executor loads those skills automatically.
 
 If the deploy fails and you cannot resolve it, call the same transition with `outcome="failed"` and a short `error=` summary, then surface it to the user.
 

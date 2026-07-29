@@ -61,6 +61,8 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `registration` | Register (or update) one object's source DDL (per-object). |
 | `convert` | Converts one object via SnowConvert (per-object). |
 | `etlStabilization` | Stabilizes a converted ETL code unit (SSIS, Informatica, ...) and validates the functionality. |
+| `etlSeed` | Runs `scai test seed` to generate the per-unit ETL test YAML (pipeline + validation.tables) with the source/target table pairs filled from the Code Unit Registry write-dependencies; the agent fills index_columns and the user confirms before validation runs. |
+| `etlValidate` | Runs `scai test etl-validate --platform <platform>` to compare source package output with the converted Snowflake output. |
 | `seedSourceDb` | Captures test inputs from the source database. |
 | `seedSynthetic` | Generates synthetic test inputs. |
 | `seedScript` | Writes a BTEQ script's test YAML, resolving binding values and staging .IMPORT fixtures from the shell script that runs it via `scai test seed --bindings-from`; values that can't be resolved statically become `{ eval }` recipes or stay `__REPLACE_ME__` for manual fill, and bindings shared across scripts are hoisted to the global test_config.yaml. Requires the bteq binary on PATH. |
@@ -127,6 +129,14 @@ Every entry below names the task id, what your override needs as input, and the 
 #### `etlStabilization`
 - **Inputs:** A converted ETL code unit (converted artifacts + source definition resolved from its registry entry); its dependency tables deployed.
 - **Done when:** Registry field `codeStatus.stabilization` reads completed.
+
+#### `etlSeed`
+- **Inputs:** Stabilized ETL unit deployed to Snowflake (deploy enforced via precondition).
+- **Done when:** Registry field `codeStatus.etlSeed` reads completed.
+
+#### `etlValidate`
+- **Inputs:** ETL test YAML present (from etlSeed or hand-authored); ETL unit deployed to Snowflake and source/Snowflake connections configured — all enforced via preconditions.
+- **Done when:** Registry field `codeStatus.etlValidate` reads completed.
 
 #### `seedSourceDb`
 - **Inputs:** Object that needs test inputs; configured source connection.

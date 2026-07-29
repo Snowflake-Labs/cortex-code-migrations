@@ -76,18 +76,22 @@ validation:
 
 **IMPORTANT:** Every YAML **must** include `test_cases: [[]]` (a list containing one empty list). This is required by `test-runner` discovery. Step-based tests embed all data inline in the steps, so the test case list contains a single empty-parameter entry.
 
-**File layout (CUR-style):**
+**File layout:** The object's test directory is whatever `files.artifacts.path`
+returns from the registry (Phase 0.4) with `/test/` appended — read it, do not
+construct it. It may use a placeholder database segment (e.g.
+`database_unspecified`) and lowercased names for some dialects; that is correct
+and must be preserved. `files.artifacts.path` is PROJECT-RELATIVE, so prefix it
+with `<project_dir>/` for all filesystem writes/reads (capture resolves it as
+`project_root / files.artifacts.path / test`).
 
 ```
-artifacts/<database>/<schema>/<object_type_lower>/
-  <sanitized_object_name>/
-    test/
-      <sanitized_object_name>.0.yml   ← one data arrangement
-      <sanitized_object_name>.1.yml   ← another data arrangement
-      ...
+<project_dir>/<files.artifacts.path>/test/
+  <sanitized_object_name>.0.yml   ← one data arrangement
+  <sanitized_object_name>.1.yml   ← another data arrangement
 ```
 
-Where `<database>` is the target Snowflake database (from `configure()`), `<schema>` is the object's schema (e.g. `dbo`), `<object_type_lower>` is `procedure` or `function`, and `<sanitized_name>` replaces non-alphanumeric characters (except `.` and `-`) with `_`.
+`<sanitized_object_name>` (for the FILE name only) replaces non-alphanumeric
+characters (except `.` and `-`) with `_`.
 
 **YAML granularity rule:**
 - **One YAML per data arrangement** — scenarios that require distinct INSERT data get their own file
@@ -127,13 +131,9 @@ This skill expects an `<object_name>`.
 
 ### 0.3 — Check skip condition
 
-Check whether a test YAML already exists:
-
-```bash
-find <project_dir>/artifacts -path "*/<sanitized_name>/test/*.yml" -type f
-```
-
-If any `.yml` file is found: **skip this object**, report it as already tested, and (if looping) call `next_object()` for the next candidate.
+We skip objects that already have a seeded test YAML. The test directory is whatever
+`files.artifacts.path` reports (fetched in 0.4) — do not reconstruct it from the object
+name — so this check runs in 0.4 (Step 1.2), once that value is known.
 
 ### 0.4 — Locate SQL files
 
@@ -150,6 +150,7 @@ From the response, read both SQL files (resolve paths relative to
 `<project_dir>`):
 - `files.source.path` — original source SQL
 - `files.converted.path` — converted Snowflake SQL
+- `files.artifacts.path` — base directory for this object's test artifacts (used in Phase 4)
 
 Collect every `dependencies.dependsOn[*].id` for Step 2.
 
@@ -160,6 +161,16 @@ registry entry, this is a package member. Record:
 - `target_schema` = value of `target.schema` (e.g. `"TEST_ITEM_MGMT"` — SnowConvert convention: `{source_schema}_{PACKAGE_NAME}`)
 
 These three values are used in Phase 3 to construct the correct call syntax.
+
+**Step 1.2 — Skip if already tested (the 0.3 check).** Now that `files.artifacts.path`
+is known, check whether this object already has a seeded test YAML:
+
+```bash
+find <project_dir>/<files.artifacts.path>/test -name "*.yml" -type f
+```
+
+If any `.yml` is found: **skip this object**, report it as already tested, and (if
+looping) call `next_object()` for the next candidate — no need to fetch dependencies.
 
 **Step 2 — Get the dependency files in one call.** Call `query_registry`
 again with:
@@ -263,13 +274,15 @@ Rules:
 
 ### 4.1 — Write YAML files
 
-For each successfully validated YAML (index 0, 1, 2, ...):
+For each successfully validated YAML (index 0, 1, 2, ...), write to:
 
 ```
-artifacts/<snowflake_database>/<schema>/<object_type_lower>/<sanitized_name>/test/<sanitized_name>.<idx>.yml
+<project_dir>/<files.artifacts.path>/test/<sanitized_name>.<idx>.yml
 ```
 
-Where `<snowflake_database>` comes from `configure()`, `<schema>` is the object's schema (e.g. `dbo`), `<sanitized_name>` replaces non-alphanumeric characters (except `.` and `-`) with `_`, and `<object_type_lower>` is `procedure` or `function`.
+`files.artifacts.path` is the value fetched from `query_registry` in Phase 0.4, Step 1 — use it as-is rather than reconstructing it. `<sanitized_name>` (for the FILE name only) replaces non-alphanumeric characters (except `.` and `-`) with `_`. Write each file under `<project_dir>/<files.artifacts.path>/test/`.
+
+> **Fail fast when the CUR has no artifacts path.** If `files.artifacts.path` is missing or empty, stop and report a CUR/dependency bug. A `database_unspecified` database segment is NOT a bug — it is the legitimate source-DB placeholder emitted by the arranger; use it as-is.
 
 **Oracle package members:** see [`./platforms/oracle.md`](./platforms/oracle.md) — the CUR `files.artifacts.path` already includes the package subdirectory; always read it from `query_registry`.
 
@@ -281,29 +294,6 @@ validation:
   steps:
   - ...
 ```
-
-### 4.2 — Update manifest
-
-Read the existing `artifacts/unit_tests/test_manifest.yaml` if it exists, or start a new one. Add or update the entry for this object:
-
-```yaml
-exported_at: '<UTC ISO 8601 timestamp>'
-source_dialect: '<source_dialect>'
-target_dialect: Snowflake
-object_count: <total count>
-tests:
-  - object_name: <fully_qualified_object_name>
-    object_type: <PROCEDURE|FUNCTION>
-    source_path: <relative path under source/>
-    converted_path: <relative path under snowflake/>
-    source_dialect: <source_dialect>
-    test_files:
-      - <absolute path to .0.yml>
-      - <absolute path to .1.yml>
-    test_count: <count>
-```
-
-Note: `test_files` paths must be **absolute**.
 
 ---
 
@@ -354,15 +344,17 @@ The script:
 
 ## Phase 6: Self-Check and Report
 
+### 6.1 — Self-check
+
 Before returning, verify every committed YAML exists on disk and contains isolation metadata:
 
 ```bash
-find <project_dir>/artifacts/<snowflake_database>/<schema>/<type>/<sanitized_name>/test -name "*.yml" -type f
+find <project_dir>/<files.artifacts.path>/test -name "*.yml" -type f
 ```
 
-Count must equal the number of YAMLs in the coverage matrix that passed validation.
+Count must equal the number of YAMLs in the coverage matrix that passed validation. If any file is missing: generate it before returning.
 
-If any file is missing: generate it before returning.
+### 6.2 — Report
 
 Report to the user (or `send_message` to `main` in autonomous mode):
 
@@ -380,7 +372,7 @@ Test generation complete for <object_name>:
     1: <scenario description>
     ...
 
-  Artifacts: artifacts/<snowflake_database>/<schema>/<type>/<sanitized_name>/test/
+  Artifacts: <project_dir>/<files.artifacts.path>/test/
 
   Next: run `scai test capture` and `scai test validate` to execute the tests.
 ```

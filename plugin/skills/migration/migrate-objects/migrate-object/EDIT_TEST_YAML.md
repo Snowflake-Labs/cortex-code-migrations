@@ -6,7 +6,7 @@ Always load the [`step-based-yaml.md` cheat sheet](../references/step-based-yaml
 
 ## Routine
 
-1. Read the existing YAML at `artifacts/<db>/<schema>/<type>/<sanitized_name>/test/*.yml`.
+1. Read the existing YAML at `<project_dir>/<files.artifacts.path>/test/*.yml` (from `query_registry`; use verbatim — do not reconstruct).
 2. Identify which recipe matches the failure (table below).
 3. Apply the recipe — keep `test_cases:` untouched unless the recipe says otherwise.
 4. Re-run `scai test capture --where "source.canonicalName ILIKE '%<obj>%'"` to refresh the baseline.

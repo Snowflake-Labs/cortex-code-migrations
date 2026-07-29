@@ -52,9 +52,10 @@ query_registry(
 From the response, hold onto:
 
 - `files.source.path` — used by the swarm in Step 4.
-- `target.canonicalName` — `<database>.<schema>.<name>` of the proc on Snowflake. The YAML's path on disk uses these segments.
+- `files.artifacts.path` — PROJECT-RELATIVE directory where seed writes YAMLs. Use it verbatim; do not reconstruct from `target.canonicalName` or `configure().snowflake_database`. It may contain a placeholder database segment (e.g. `database_unspecified`) and lowercased names — that is correct.
+- `target.canonicalName` — `<database>.<schema>.<name>` of the proc on Snowflake. For CALL/SQL only — **not** the YAML path on disk.
 
-The expected YAML path is `artifacts/<database>/<schema>/<object_type>/<sanitized_name>/test/<sanitized_name>.yml` (single file per object; `scai test seed` writes here).
+The YAML lives under `<project_dir>/<files.artifacts.path>/test/` — discover it with a glob (`*.yml`) rather than assuming the filename. `scai test seed` derives the filename from the object's scope name and writes one file per object here.
 
 ## Step 3: Run `scai test seed`
 
@@ -87,7 +88,7 @@ If `scai test seed` returns a non-zero exit:
 
 ## Step 4: Inspect the resulting YAML
 
-Read the file at `artifacts/<database>/<schema>/<object_type>/<sanitized_name>/test/<sanitized_name>.yml`. Look at `validation.test_cases`:
+Read the YAML under `<project_dir>/<files.artifacts.path>/test/` (glob `*.yml`; `scai test seed` writes one file per object). Look at `validation.test_cases`:
 
 - **Populated** (`test_cases:` contains one or more rows) → the seed (probably via `--execution-log`) covered this proc. **Skip to Step 6 (report).**
 - **Empty** (`test_cases: []`, or commented `# TODO`) → continue to Step 5.
@@ -165,7 +166,7 @@ Test cases for <object_name>: <N> cases (<source>).
   source ∈ { "from scai test seed --execution-log",
              "from AI swarm fill",
              "from scai test seed + AI swarm fill" }
-  Path:   artifacts/<database>/<schema>/<object_type>/<sanitized_name>/test/<sanitized_name>.yml
+  Path:   <project_dir>/<files.artifacts.path>/test/*.yml
 ```
 
 Don't load `CAPTURE.md` — the state machine transitions to `captureBaseline` next, which loads it.

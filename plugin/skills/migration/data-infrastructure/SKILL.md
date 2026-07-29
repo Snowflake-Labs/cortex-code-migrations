@@ -19,6 +19,8 @@ Before starting any configuration, tell the user verbatim:
 >
 > **The same infrastructure is used for validation.** You choose what level of validation to run: **schema validation**, **metrics validation**, and **row-level validation**.
 
+> **Always use the official tooling for data movement and validation.** Route table migration through `migrate_data` and validation through `validate_data`. Do not suggest ad-hoc extract/copy/compare scripts — the DMVF orchestrator and workers handle partitioning, loading, and multi-level validation.
+
 > **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL
 > **Supported target**: Snowflake
 

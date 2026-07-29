@@ -363,6 +363,8 @@ See [reference/templates/batch-artifacts.md](reference/templates/batch-artifacts
 - **[orchestration-fixer](orchestration-fixer/SKILL.md)** — Fix orchestration elements using test-file workbench
 - **[dbt-test-gen](dbt-test-gen/SKILL.md)** — Generate dbt tests (seeds, schema tests, singular assertions)
 - **[dbt-fixer](dbt-fixer/SKILL.md)** — Fix dbt models via iterative compile-fix loop
+- **[proc-test-gen](proc-test-gen/SKILL.md)** — Generate source-derived AAA tests for a scripting-flavor mapping procedure (data-flow); target-only, grade-hardened
+- **[proc-fixer](proc-fixer/SKILL.md)** — Repair a scripting-flavor mapping procedure by reconstructing each defective block from its source transformation, then deploy+CALL and grade until it passes
 
 ## Reference Files
 
@@ -372,6 +374,8 @@ Sub-skill guides:
 - **[orchestration-test-gen/assertion-patterns.md](orchestration-test-gen/assertion-patterns.md)** — SQL assertion templates
 - **[orchestration-test-gen/stored-procedure-wrapping.md](orchestration-test-gen/stored-procedure-wrapping.md)** — SP template and Snowflake quirks
 - **[orchestration-test-gen/test-categorization.md](orchestration-test-gen/test-categorization.md)** — Isolated vs grouped test strategy
+- **[proc-test-gen/proc-assertion-patterns.md](proc-test-gen/proc-assertion-patterns.md)** — Target-only batched assertion shape + grade-hardening rules (scripting mapping procs)
+- **[proc-fixer/block-reconstruction-patterns.md](proc-fixer/block-reconstruction-patterns.md)** — Per-transform source→block reconstruction recipes + minimal-change rules (scripting mapping procs)
 
 Platform-specific guides (loaded from `{PLATFORM_DIR}/`, filenames defined in the platform profile):
 - **`{PLATFORM_DIR}/{orchestration_guide}`** — Source file navigation for orchestration structure

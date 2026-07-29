@@ -1,12 +1,18 @@
 # Workflow YAML Configuration Reference
 
+> **Field naming:** Use **camelCase** for all workflow YAML keys (for example `targetPartitionSizeMb`, `whereClauseCriteria`, `trackDeletions`). The orchestrator accepts snake_case as a fallback for migration configs, but generated files and this reference use camelCase only.
+
 ## Top-Level Properties
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
+| `schemaVersion` | String | No | Semantic version of this config shape (for example `"1"`, `"1.2"`). Omit for current defaults. |
 | `tables` | `TableConfiguration[]` | Yes | Tables to migrate |
 | `defaultTableConfiguration` | `TableConfiguration` | No | Shared defaults inherited by all tables |
 | `affinity` | String | No | Only orchestrator and worker instances with a matching affinity will process this workflow. If the SPCS orchestrator was started with a specific affinity (visible in service logs as `Orchestrator affinity: <value>`), the workflow **must** set the same value or it will be silently skipped. The worker's `[application].affinity` must also match. Omit from all sides for fresh setups. |
+| `preflight` | Boolean | No | When `true`, cap each table to one partition and run against a transient `PREFLIGHT_<workflowId>` schema (bounded dry-run). Default `false`. |
+| `preflightKeepSchema` | Boolean | No | When `preflight` is `true`, skip cleanup so the transient schema remains for manual inspection. Default `false`. |
+| `intervalHandling` | `"interval"` \| `"varchar"` | No | How PostgreSQL/BigQuery mixed-family interval columns are mapped. Default `"interval"`. Can be overridden per table. |
 
 ## TableConfiguration
 
@@ -19,8 +25,14 @@
 | `synchronization` | `SynchronizationStrategy` | No | Incremental sync settings. **Does not apply to Iceberg migrations.** |
 | `columnTypeMappings` | `ColumnTypeMapping[]` | No | Type conversions during migration |
 | `columnNameMappings` | `ColumnNameMapping[]` | No | Column renaming mappings |
-| `primaryKeyColumns` | `String[]` | No | Required for `watermark` sync with `trackModifications` |
+| `primaryKeyColumns` | `String[]` | No | Required for `watermark` sync with `trackModifications`; also used for incremental key tracking |
 | `whereClauseCriteria` | String | No | SQL filter appended after `WHERE` in the extraction query (e.g., `"is_deleted = 0"`, `"c_custkey <= 1000"`). **Do not use** `TOP` (SQL Server) or `LIMIT` (Redshift/Oracle) here — they are not valid WHERE clause syntax and cause extraction errors. Teradata: use normal predicates (e.g. `"id <= 1000"`). |
+| `targetPartitionSizeMb` | Integer | No | Target partition size in MB. Mutually exclusive with `targetPartitionSizeRows`. Omit both for auto sizing. |
+| `targetPartitionSizeRows` | Integer | No | Target partition size in rows. Mutually exclusive with `targetPartitionSizeMb`. Omit both for auto sizing. |
+| `loadSegmentation` | Object | No | Post-upload load segmentation — splits a single `COPY INTO` into multiple statements grouped by `targetSegmentSizeMb`. |
+| `loading` | Object | No | Loading strategy: `warehouse` (default, `COPY INTO`) or `snowpipe`. |
+| `queryModifiers` | Object | No | SQL hints to reduce locking on busy source tables during extraction (see [Query modifiers](#query-modifiers)). |
+| `intervalHandling` | `"interval"` \| `"varchar"` | No | Per-table override of top-level `intervalHandling`. |
 
 ## SourceTargetIdentifier
 
@@ -113,6 +125,14 @@ extraction:
 
 ## SynchronizationStrategy
 
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `strategy` | `"none"` \| `"checksum"` \| `"watermark"` | Yes | Sync strategy (default `none`) |
+| `checksumExpression` | String | When `strategy` is `checksum` | Source SQL expression used to detect changed partitions (for example `MAX(ORA_ROWSCN)`). Must not contain `;`. |
+| `watermarkColumn` | String | When `strategy` is `watermark` | Monotonic column used for incremental filtering |
+| `trackModifications` | Boolean | No | When `true` with `watermark`, detect updated rows (requires `primaryKeyColumns`) |
+| `trackDeletions` | Boolean | No | When `true` with `watermark`, detect deleted rows (requires `primaryKeyColumns`) |
+
 | Strategy | Description | Best for |
 |----------|-------------|----------|
 | `none` (default) | Full extraction every run | Small tables or unpredictable changes |
@@ -125,6 +145,7 @@ synchronization:
 
 synchronization:
   strategy: checksum
+  checksumExpression: MAX(ORA_ROWSCN)
 
 synchronization:
   strategy: watermark
@@ -134,9 +155,44 @@ synchronization:
   strategy: watermark
   watermarkColumn: UPDATED_AT
   trackModifications: true
+  trackDeletions: true
+  primaryKeyColumns:
+    - CUSTOMER_ID
 ```
 
-> **Note**: Watermark cannot currently track deletions.
+## LoadSegmentation
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `targetSegmentSizeMb` | Integer | Yes | Maximum staged-file group size (MB) per `COPY INTO` statement |
+
+## Loading
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `strategy` | `"warehouse"` \| `"snowpipe"` | No | `warehouse` uses `COPY INTO` (default). `snowpipe` uses Snowpipe auto-ingest. |
+
+## Query modifiers
+
+Reduce locking on busy source tables during extraction. Can be set at workflow default, per table, or in worker TOML.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `objectModifier` | String | Hint applied to the table object in `FROM` (for example `WITH (NOLOCK)` on SQL Server) |
+| `selectModifier` | String | Hint after `SELECT` (for example `WITH UR` on Db2). Use `"NONE"` to disable inherited modifiers. |
+
+```yaml
+queryModifiers:
+  objectModifier: "WITH (NOLOCK)"
+  selectModifier: "WITH UR"
+```
+
+## Partition sizing and key selection
+
+- **Auto mode:** omit both `targetPartitionSizeMb` and `targetPartitionSizeRows`. The orchestrator picks platform-appropriate defaults.
+- **Explicit sizing:** set exactly one of `targetPartitionSizeMb` or `targetPartitionSizeRows`.
+- **`columnNamesToPartitionBy`:** required by the CLI validator. Use a monotonic integer/timestamp column for large tables, or `[]` only for very small tables (single full-table partition). When omitted from user input, scai may infer keys from registry metadata — review `partition_key_findings` from setup.
+- **Deprecated:** do not use legacy `partitionSize: auto` — use the flat `targetPartitionSizeMb` / `targetPartitionSizeRows` fields instead.
 
 ## ColumnTypeMapping
 
@@ -260,7 +316,7 @@ defaultTableConfiguration:
   extraction:
     strategy: unload
     externalStage: TARGET_DB.PUBLIC.S3_EXTERNAL_STAGE
-  partitionSize: auto
+  targetPartitionSizeMb: 512
 
 tables:
   - source:
@@ -312,7 +368,7 @@ defaultTableConfiguration:
       externalVolume: my_iceberg_ext_vol
       baseLocationPrefix: migrations/redshift
       sourceDataStage: "@TARGET_DB.PUBLIC.ICEBERG_SOURCE_STAGE"
-  partitionSize: auto
+  targetPartitionSizeMb: 512
 
 tables:
   # copy_files — inherits default icebergConfig (catalog=SNOWFLAKE)

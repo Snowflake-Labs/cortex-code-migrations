@@ -1,0 +1,84 @@
+---
+name: etl-seed
+description: Seed the per-unit ETL test YAML for a deployed ETL code unit by running `scai test seed` (which fills pipeline + validation.tables from the CUR), then fill index_columns and have the user confirm before the live comparison runs.
+parent_skill: migrate-etl
+license: Proprietary. See License-Skills for complete terms
+---
+
+# ETL Seed
+
+Generates the `kind: etl` test YAML for a single, already-deployed ETL code unit at `artifacts/<id>/etl-test/<name>.yml`. The YAML declares the `pipeline` (how to launch the source package and which converted target to run) and a `validation.tables` list of source→target table pairs to compare.
+
+**`scai test seed` seeds ETL units — you do not hand-author the file.** For an ETL unit (`kind = 'etl'`, SSIS or Informatica) `scai test seed` walks the Code Unit Registry, takes the unit's **write** dependencies (`INSERT` / `UPDATE` / `MERGE` / `DELETE`), and emits a `validation.tables` entry per written table — pairing the source table (`source.canonicalName`) with its Snowflake target (`target.canonicalName`). It leaves `index_columns` blank for you to fill. Your job is to run the seeder, fill in the join keys, handle any skipped units, and confirm with the user — not to invent table pairs.
+
+## Step 0: Resolve Unit
+
+Read the registry entry (the executor passes `object_id`; if entered by name, locate via `migration_status(mode="my_objects_summary")`):
+
+| Field | Used as |
+|---|---|
+| `id` | `{ETL_ID}` for the `--where` filter and the `artifacts/<id>/etl-test/` path |
+| `source.platform` | source kind (`ssis`, `informatica`, …) |
+| `files.source.path` | source definition file (`.dtsx`, `.xml`, …); its stem is the YAML file name |
+
+The `etlSeed` task has a `taskCompleted` precondition on `deploy`, so the executor only dispatches this skill once the unit is deployed — you do not need to re-check deployment here.
+
+## Step 1: Run `scai test seed`
+
+```bash
+scai test seed --where "id = '{ETL_ID}'"
+```
+
+Add `--append` when a YAML already exists for the unit — it re-emits the table pairs from the current CUR while **preserving** your edited `index_columns` / `test_cases` (matched per source→target pair):
+
+```bash
+scai test seed --where "id = '{ETL_ID}'" --append
+```
+
+Platform (SSIS vs Informatica) is auto-detected per unit from the registry — no `--platform` flag. On success the file is written to `artifacts/{ETL_ID}/etl-test/<name>.yml` with `pipeline` and `validation.tables` filled from the CUR.
+
+## Step 2: Handle a Skipped Unit
+
+If `scai test seed` reports the unit was **skipped**, it names a reason. Do not paper over it by hand-writing tables — fix the cause:
+
+| Skip reason | Meaning / action |
+|---|---|
+| `NoWriteDependencies` | The CUR records no write (`INSERT`/`UPDATE`/`MERGE`/`DELETE`) deps — nothing to validate. Re-check the unit was fully converted/assessed; confirm with the user whether it actually writes tables. |
+| `MissingDependency` | A write-dep is flagged `isMissing` in the CUR — register/resolve that dependency first. |
+| `MissingCanonicalName` | A resolved write-dep has no source/target canonical name — fix the registry entry. |
+| `UnknownFormat` / `PendingFormat` / `MixedFormat` | The converted part(s) aren't in a seedable target format yet — finish stabilization/deploy for the routable parts. |
+| `NoArtifactsPath` | The CUR has no artifacts path — the unit isn't converted/deployed as expected. |
+| `UnsupportedPlatform` | Source platform is neither SSIS nor Informatica — out of scope for ETL validation. |
+
+Only after the underlying issue is understood should you add a missing pair by hand (with the user), and only if genuinely necessary.
+
+## Step 3: Fill `index_columns` and Confirm
+
+`scai test seed` leaves `index_columns` blank. Open `artifacts/{ETL_ID}/etl-test/<name>.yml` and, for each `validation.tables[]` entry, set the join key used to align rows between source and target:
+
+- `comparison.index_columns` — the column(s) that uniquely key a row (usually the natural / primary key).
+- `comparison.target_index_columns` — only when the target's key column names differ from the source's.
+
+Then show the user the seeded table pairs and the keys you chose, and ask them to confirm or correct — the CUR can miss dynamically-named or conditionally-written tables. Adjust per their feedback. This is the one stopping point.
+
+## Step 4: Record Completion
+
+Once the YAML has a non-empty `validation.tables` with `index_columns` filled and the user has confirmed:
+
+```
+transition_status(status="advance", task="etlSeed", outcome="completed", where="id = '{ETL_ID}'")
+```
+
+The state machine routes to `etlValidate`.
+
+## Step 5: Exclusion
+
+To skip seeding (no live source system, or the packages are deprecated), disable the task at the project level in `.scai/config/plugin.yml`:
+
+```yaml
+tasks:
+  etlSeed:
+    enabled: false
+```
+
+A disabled task reads as **excluded** by the state machine: `etlValidate`'s `artifactExists` gate then treats `etlSeed` as a producer that will never run and is itself excluded rather than blocked (a hand-authored test YAML still readies `etlValidate`). This is **project-wide** — it disables `etlSeed` for every ETL unit. Per-unit exclusion is not supported: writing `codeStatus.etlSeed=excluded` on a single entry reads back as *completed*, not excluded.

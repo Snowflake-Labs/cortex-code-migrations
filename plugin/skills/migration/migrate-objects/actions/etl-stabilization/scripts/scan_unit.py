@@ -50,6 +50,10 @@ RE_START_TAG = re.compile(
     r"^----\s+Start(?:\s+block)?\s+'([^']+)'",
     re.IGNORECASE,
 )
+RE_END_TAG = re.compile(
+    r"^----\s+End(?:\s+block)?\s+'([^']+)'",
+    re.IGNORECASE,
+)
 RE_EWI = re.compile(
     r"!!!RESOLVE EWI!!!\s*/\*\*\*\s*(SSC-\S+)\s*-\s*(.*?)\s*\*\*\*/!!!",
 )
@@ -58,6 +62,12 @@ RE_FDM = re.compile(
 )
 RE_DBT = re.compile(r"\bEXECUTE\s+DBT\s+PROJECT\b", re.IGNORECASE)
 RE_DBT_PROJECT_NAME = re.compile(r"\bEXECUTE\s+DBT\s+PROJECT\s+'([^']+)'", re.IGNORECASE)
+# Scripting data-flow linkage: a workflow task invokes a mapping procedure with
+# `CALL [schema.]m_<mapping>(:scope)`, the scripting analog of EXECUTE DBT PROJECT.
+RE_MAPPING_CALL = re.compile(
+    r"\bCALL\s+((?:[A-Za-z0-9_\"]+\.)?m_[A-Za-z0-9_]+)\s*\(",
+    re.IGNORECASE,
+)
 
 
 def find_orchestration_file(unit_path: Path) -> Path | None:
@@ -163,6 +173,101 @@ def find_dbt_projects(unit_path: Path) -> list[dict]:
     return sorted(projects, key=lambda p: p["path"])
 
 
+def assess_proc_health(proc_path: Path) -> dict:
+    """Health signals for a converted mapping procedure (scripting flavor), the
+    stored-procedure analog of assess_dbt_health.
+
+    Uses the marker-aware block/EWI scan (locate_blocks / extract_ewis):
+      - proc_name: the CREATE OR REPLACE PROCEDURE target, or None
+      - block_count: materialized transformation blocks (0 until R6 markers land)
+      - ewi_count / ewi_codes: unresolved ``!!!RESOLVE EWI!!!`` markers (these
+        break CREATE); FDM annotations are not counted here
+      - create_blocking_ewis: bool — any unresolved EWI is present
+      - health_issues: human-readable signals
+    """
+    health: dict = {
+        "proc_name": None,
+        "block_count": 0,
+        "ewi_count": 0,
+        "ewi_codes": [],
+        "create_blocking_ewis": False,
+        "health_issues": [],
+    }
+
+    with open(proc_path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = RE_CREATE.match(line.strip())
+            if m and m.group(1).upper() == "PROCEDURE":
+                health["proc_name"] = m.group(2)
+                break
+
+    health["block_count"] = len(locate_blocks(proc_path))
+
+    resolve_codes: set[str] = set()
+    for marker in extract_ewis(proc_path):
+        if marker["kind"] == "EWI":
+            health["ewi_count"] += 1
+            resolve_codes.add(marker["code"])
+    health["ewi_codes"] = sorted(resolve_codes)
+    health["create_blocking_ewis"] = health["ewi_count"] > 0
+    if health["create_blocking_ewis"]:
+        health["health_issues"].append(
+            f"{health['ewi_count']} unresolved EWI marker(s) block CREATE"
+        )
+    return health
+
+
+def is_mapping_proc_file(sql_path: Path) -> bool:
+    """True if ``sql_path`` is a converted mapping-procedure (data-flow) file:
+    it defines at least one CREATE OR REPLACE PROCEDURE and no
+    CREATE OR REPLACE TASK (a TASK marks the orchestration/workflow file)."""
+    has_proc = False
+    with open(sql_path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = RE_CREATE.match(line.strip())
+            if m:
+                kind = m.group(1).upper()
+                if kind == "TASK":
+                    return False
+                if kind == "PROCEDURE":
+                    has_proc = True
+    return has_proc
+
+
+def find_mapping_procs(unit_path: Path, orch_file: Path | None = None) -> list[dict]:
+    """Discover converted mapping procedures in a scripting ETL unit, the
+    stored-procedure analog of find_dbt_projects.
+
+    A mapping procedure is a standalone ``.sql`` file holding a
+    ``CREATE OR REPLACE PROCEDURE public.m_<mapping>(...)`` data-flow body; the
+    orchestration/workflow file (CREATE TASK) is excluded. Returns ``[]`` for a
+    dbt unit (which has no such files), so the dbt path is unaffected.
+    """
+    orch_resolved = orch_file.resolve() if orch_file else None
+    procs: list[dict] = []
+    for root, _dirs, files in os.walk(unit_path):
+        for fn in sorted(files):
+            if not fn.endswith(".sql"):
+                continue
+            sql_path = Path(root) / fn
+            if orch_resolved and sql_path.resolve() == orch_resolved:
+                continue
+            if not is_mapping_proc_file(sql_path):
+                continue
+            health = assess_proc_health(sql_path)
+            procs.append({
+                "name": sql_path.stem,
+                "path": os.path.relpath(sql_path, unit_path),
+                "proc_name": health["proc_name"],
+                "block_count": health["block_count"],
+                "ewi_count": health["ewi_count"],
+                "ewi_codes": health["ewi_codes"],
+                "create_blocking_ewis": health["create_blocking_ewis"],
+                "health_issues": health["health_issues"],
+            })
+    return sorted(procs, key=lambda p: p["path"])
+
+
 def find_reports_dir(unit_path: Path) -> Path | None:
     """Walk upward from unit folder looking for Reports/SnowConvert/."""
     current = unit_path.resolve()
@@ -237,6 +342,22 @@ def extract_dbt_project_name(lines: list[str]) -> str | None:
     return None
 
 
+def has_mapping_call(lines: list[str]) -> bool:
+    """True if any line CALLs a mapping procedure (scripting data-flow linkage,
+    the analog of has_dbt_project's EXECUTE DBT PROJECT)."""
+    return any(RE_MAPPING_CALL.search(line) for line in lines)
+
+
+def linked_mapping_proc(lines: list[str]) -> str | None:
+    """The mapping procedure a workflow task CALLs (e.g. ``public.m_load``), or
+    None. The scripting analog of extract_dbt_project_name."""
+    for line in lines:
+        m = RE_MAPPING_CALL.search(line)
+        if m:
+            return m.group(1)
+    return None
+
+
 def parse_orchestration(sql_path: Path) -> list[dict]:
     """Parse the orchestration SQL into statements and elements."""
     with open(sql_path, encoding="utf-8") as f:
@@ -282,9 +403,12 @@ def parse_orchestration(sql_path: Path) -> list[dict]:
                     "name": el["name"],
                     "issues": el["issues"],
                     "has_dbt_project": el["has_dbt_project"],
+                    "has_mapping_call": el.get("has_mapping_call", False),
                 }
                 if el.get("linked_dbt_project"):
                     entry["linked_dbt_project"] = el["linked_dbt_project"]
+                if el.get("linked_mapping_proc"):
+                    entry["linked_mapping_proc"] = el["linked_mapping_proc"]
                 enriched_elements.append(entry)
 
             stmt = {
@@ -293,8 +417,12 @@ def parse_orchestration(sql_path: Path) -> list[dict]:
                 "line": stmt_start + 1,
                 "issues": stmt_issues,
                 "has_dbt_project": has_dbt_project(non_element_lines),
+                "has_mapping_call": has_mapping_call(non_element_lines),
                 "elements": enriched_elements,
             }
+            stmt_linked_proc = linked_mapping_proc(non_element_lines)
+            if stmt_linked_proc:
+                stmt["linked_mapping_proc"] = stmt_linked_proc
             statements.append(stmt)
             pending_prefix_lines = []
         else:
@@ -317,6 +445,8 @@ def parse_elements(stmt_lines: list[str]) -> list[dict]:
                 current_el["issues"] = collect_issues(current_el["_lines"])
                 current_el["has_dbt_project"] = has_dbt_project(current_el["_lines"])
                 current_el["linked_dbt_project"] = extract_dbt_project_name(current_el["_lines"])
+                current_el["has_mapping_call"] = has_mapping_call(current_el["_lines"])
+                current_el["linked_mapping_proc"] = linked_mapping_proc(current_el["_lines"])
                 elements.append(current_el)
 
             current_el = {
@@ -333,9 +463,138 @@ def parse_elements(stmt_lines: list[str]) -> list[dict]:
         current_el["issues"] = collect_issues(current_el["_lines"])
         current_el["has_dbt_project"] = has_dbt_project(current_el["_lines"])
         current_el["linked_dbt_project"] = extract_dbt_project_name(current_el["_lines"])
+        current_el["has_mapping_call"] = has_mapping_call(current_el["_lines"])
+        current_el["linked_mapping_proc"] = linked_mapping_proc(current_el["_lines"])
         elements.append(current_el)
 
     return elements
+
+
+# --------------------------------------------------------------------------- #
+# Block location — expose the per-block offsets parse_elements already
+# computes as absolute file positions, so downstream tools can locate a
+# materialized block by its marker instead of by line number. Purely additive:
+# the scan.json output and every existing function are unchanged.
+# --------------------------------------------------------------------------- #
+def locate_blocks(sql_path: Path) -> list[dict]:
+    """Return every ``---- Start [block] '<FullName>'`` block with its absolute
+    location in ``sql_path``.
+
+    Each block dict has:
+      - ``statement`` / ``statement_type``: the enclosing CREATE OR REPLACE unit
+      - ``name``: the block FullName from the Start marker
+      - ``start_line`` / ``end_line``: 1-based, inclusive line range
+      - ``line_count``: number of lines in the block
+      - ``byte_start`` / ``byte_end``: UTF-8 byte range (end exclusive)
+      - ``body``: the exact block text (== ``file_bytes[byte_start:byte_end]``)
+
+    Boundaries are faithful to scan_unit's element model: a block spans from its
+    Start marker up to (but not including) the next Start marker, or the end of
+    its enclosing statement — so a trailing ``---- End block`` line is part of the
+    span, and the last block of a statement absorbs its remaining lines.
+
+    The file is read with ``newline=""`` so original line endings are preserved
+    and the byte offsets slice the raw file byte-for-byte (LF, CRLF, or mixed).
+    """
+    with open(sql_path, encoding="utf-8", newline="") as f:
+        lines = f.readlines()
+
+    # byte_at[i] = number of UTF-8 bytes before line i (byte offset of line i's start)
+    byte_at = [0] * (len(lines) + 1)
+    for idx, ln in enumerate(lines):
+        byte_at[idx + 1] = byte_at[idx] + len(ln.encode("utf-8"))
+
+    blocks: list[dict] = []
+    i = 0
+    line_count = len(lines)
+    while i < line_count:
+        m = RE_CREATE.match(lines[i].strip())
+        if not m:
+            i += 1
+            continue
+        # Statement split mirrors parse_orchestration; block detection reuses
+        # parse_elements so the marker contract stays single-sourced.
+        stmt_type = m.group(1).upper()
+        stmt_name = m.group(2)
+        stmt_start = i
+        stmt_lines = [lines[i]]
+        i += 1
+        while i < line_count and not RE_CREATE.match(lines[i].strip()):
+            stmt_lines.append(lines[i])
+            i += 1
+
+        for el in parse_elements(stmt_lines):
+            start_idx = stmt_start + el["_start_offset"]
+            end_idx = stmt_start + el["_end_offset"]  # exclusive line index
+            blocks.append({
+                "statement": stmt_name,
+                "statement_type": stmt_type,
+                "name": el["name"],
+                "start_line": start_idx + 1,
+                "end_line": end_idx,
+                "line_count": end_idx - start_idx,
+                "byte_start": byte_at[start_idx],
+                "byte_end": byte_at[end_idx],
+                "body": "".join(lines[start_idx:end_idx]),
+            })
+    return blocks
+
+
+def extract_ewis(sql_path: Path) -> list[dict]:
+    """Return every EWI/FDM marker in ``sql_path`` with its code, description,
+    kind, absolute location, and containing block (ewi-extract).
+
+    Each marker dict has:
+      - ``code`` / ``description``: parsed from the marker
+      - ``kind``: ``"EWI"`` (``!!!RESOLVE EWI!!! /*** <code> - <desc> ***/!!!``,
+        compilation-breaking) or ``"FDM"`` (``--** <code> - <desc> **`` annotation)
+      - ``line``: 1-based line number
+      - ``col``: 0-based character offset of the marker start within the line
+      - ``byte_offset``: UTF-8 byte offset of the marker start in the file
+      - ``block`` / ``statement``: the enclosing block FullName and its statement
+        (via locate_blocks), or None for markers outside any block (e.g. preamble)
+
+    Markers are returned in file order and are NOT de-duplicated — each occurrence
+    is a distinct location a fixer must resolve (unlike collect_issues, which
+    de-dupes by code+description for the scan summary).
+    """
+    with open(sql_path, encoding="utf-8", newline="") as f:
+        lines = f.readlines()
+
+    byte_at = [0] * (len(lines) + 1)
+    for idx, ln in enumerate(lines):
+        byte_at[idx + 1] = byte_at[idx] + len(ln.encode("utf-8"))
+
+    blocks = locate_blocks(sql_path)
+
+    def containing(line_no: int) -> dict | None:
+        for b in blocks:
+            if b["start_line"] <= line_no <= b["end_line"]:
+                return b
+        return None
+
+    markers: list[dict] = []
+    for idx, line in enumerate(lines):
+        line_no = idx + 1
+        matches = [("EWI", m.group(1), m.group(2), m.start()) for m in RE_EWI.finditer(line)]
+        fm = RE_FDM.match(line.strip())
+        if fm:
+            # RE_FDM matched the stripped line, so "--**" is always present on it
+            matches.append(("FDM", fm.group(1), fm.group(2), line.find("--**")))
+        for kind, code, desc, col in matches:
+            b = containing(line_no)
+            markers.append({
+                "code": code,
+                "description": desc,
+                "kind": kind,
+                "line": line_no,
+                "col": col,
+                "byte_offset": byte_at[idx] + len(line[:col].encode("utf-8")),
+                "block": b["name"] if b else None,
+                "statement": b["statement"] if b else None,
+            })
+    markers.sort(key=lambda m: (m["line"], m["col"]))
+    return markers
 
 
 def enrich_with_assessment(
@@ -372,6 +631,13 @@ def print_summary(result: dict) -> None:
     for dp in dbt_projects:
         src_tag = " [sources.yml]" if dp.get("has_sources_yml") else ""
         print(f"    - {dp['name']} ({dp.get('model_count', '?')} models){src_tag}  [{dp['path']}]")
+    mapping_procs = result.get("mapping_procs", [])
+    if mapping_procs:
+        print(f"  mapping procs : {len(mapping_procs)}")
+        for mp in mapping_procs:
+            blk = mp.get("block_count", 0)
+            ewi_tag = f" [{mp['ewi_count']} EWI]" if mp.get("ewi_count") else ""
+            print(f"    - {mp['name']} ({blk} block{'s' if blk != 1 else ''}){ewi_tag}  [{mp['path']}]")
     if result["reports_dir"]:
         print(f"  Reports dir   : {result['reports_dir']}")
     else:
@@ -475,9 +741,10 @@ def main() -> None:
 
     orch_file = find_orchestration_file(unit_path)
     dbt_projects = find_dbt_projects(unit_path)
+    mapping_procs = find_mapping_procs(unit_path, orch_file)
 
-    if not orch_file and not dbt_projects:
-        print(f"Error: no orchestration SQL and no dbt projects found in '{unit_path}'", file=sys.stderr)
+    if not orch_file and not dbt_projects and not mapping_procs:
+        print(f"Error: no orchestration SQL, dbt projects, or mapping procedures found in '{unit_path}'", file=sys.stderr)
         sys.exit(1)
 
     reports_dir = find_reports_dir(unit_path)
@@ -508,6 +775,7 @@ def main() -> None:
         "scanned_at": datetime.now(timezone.utc).isoformat(),
         "statements": statements,
         "dbt_projects": dbt_projects,
+        "mapping_procs": mapping_procs,
         "reports_dir": str(reports_dir) if reports_dir else None,
     }
 

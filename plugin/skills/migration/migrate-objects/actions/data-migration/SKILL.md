@@ -9,6 +9,8 @@ license: Proprietary. See License-Skills for complete terms
 
 One-time configuration for migrating data from a source database into Snowflake via the **scai CLI**, plus **run → poll → report** after `migrate_data(mode="run")`.
 
+> **Always use the official tooling.** Run data migration through `migrate_data(mode="setup")` / `migrate_data(mode="run")` (backed by `scai data migrate`). **Never** suggest writing ad-hoc scripts to extract, copy, or load data outside the DMVF task pipeline — the orchestrator handles partitioning, retries, incremental sync, and load orchestration.
+
 > **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL
 > **Supported targets**: Native Snowflake tables (default). **Iceberg** targets are **Redshift-only** (partial support) — see [Extraction strategies reference](./references/extraction-strategies-reference.md#iceberg-target-redshift-only--partial-support).
 
@@ -132,6 +134,21 @@ Notes:
 > 2. **Yes — I want to change something** (tell me which table, section, or field names)
 
 5. **If Yes:** apply the user's requested edits using `./references/workflow-config-reference.md` and [extraction-strategies-reference.md](./references/extraction-strategies-reference.md). Use `edit_hints` as a guide when the user is unsure what can be changed. Re-display the sections you changed. Repeat the question in step 4 until the user chooses **No — proceed** or says they are done editing.
+
+   **Common scenarios → fields to edit:**
+
+   | User goal | Workflow fields |
+   |-----------|-----------------|
+   | Incremental sync | `synchronization.strategy`, `watermarkColumn`, `trackModifications`, `trackDeletions`, `primaryKeyColumns` |
+   | Limit rows (preliminary) | `whereClauseCriteria` |
+   | Reduce source locking | `queryModifiers` (or worker TOML `query_modifiers`) |
+   | Large table performance | `columnNamesToPartitionBy`, `targetPartitionSizeMb` / `targetPartitionSizeRows` |
+   | Column rename/type map | `columnNameMappings`, `columnTypeMappings` |
+   | Server-side export | `extraction.strategy`, `externalStage` + worker TOML (UNLOAD/WRITE_NOS/DBMS_CLOUD) |
+   | Iceberg target | `target.tableType`, `target.icebergConfig`, `migrationStrategy` |
+
+   For stalled or partially finished runs, see [Task model reference](./references/task-model-reference.md) and [Troubleshooting reference](./references/troubleshooting-reference.md).
+
 6. **If No:** skip discretionary edits unless agent-only blockers remain (step 7).
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
    - Resolve `partition_key_findings` and required `columnNamesToPartitionBy` per `edit_hints` (empty `[]` finishes the workflow without moving data; SQL Server / Redshift need an explicit PK or partition column; Oracle defaults to `ROWID`; PostgreSQL: monotonic integer PK or timestamp — avoid `ctid`).
@@ -168,11 +185,16 @@ CREATE SCHEMA IF NOT EXISTS <target_db>.<target_schema>;
 migrate_data(mode="run", workflow_path="<path from setup>")
 ```
 
-Returns immediately with `job_id` — migration runs in the background: orchestrator setup, local worker when configured, then `scai data migrate create-workflow`.
+Returns immediately with `job_id` — migration runs in the background via `scai data migrate create-workflow`. The compute pool is **optional**:
 
-**When run succeeds**, show the user the `cost_reminder` from the response (or this note if absent):
+- **No compute pool configured (default for small migrations):** runs **locally** (`--start-orchestrator --start-worker`) — a local orchestrator and worker run in-process, no SPCS service or compute pool. The response `execution` field is `"local"`. Prefer this unless the user wants SPCS.
+- **`compute_pool` configured:** runs on the **cloud** SPCS orchestrator (`--start-service --compute-pool`), starting the persistent local worker when a worker config exists. `execution` is `"cloud"`.
 
-> **Cost note:** The orchestrator and local worker are running. They can keep using Snowflake credits while idle (the worker polls the warehouse on an interval). When this wave is done, suspend the orchestrator, compute pool, and stop all workers — accept teardown when offered at the end. The local worker started via MCP stops when this Coco session ends; the orchestrator does not.
+The response `cost_reminder` differs per path — **relay it to the user verbatim**. If absent, use the note that matches the `execution` field:
+
+> **Cost note (cloud):** The SPCS orchestrator and local worker are running and can keep using Snowflake credits while idle (the worker polls the warehouse on an interval). When this wave is done, suspend the orchestrator, compute pool, and stop all workers — accept teardown when offered at the end. The local worker started via MCP stops when this Coco session ends; the orchestrator does not.
+>
+> **Cost note (local):** A local orchestrator and worker run in-process for this wave and stop when it finishes — nothing is left running to suspend. Source extraction still runs SQL against your warehouse while active.
 
 Retain `workflow_path` for the report in Step 6.
 
@@ -451,6 +473,7 @@ Return control to the parent skill.
 ## Reference
 
 - [Workflow Config Reference](./references/workflow-config-reference.md)
+- [Task Model Reference](./references/task-model-reference.md)
 - [Extraction Strategies Reference](./references/extraction-strategies-reference.md)
 - [Iceberg Setup Reference](./references/iceberg-setup-reference.md)
 - [Troubleshooting Reference](./references/troubleshooting-reference.md)

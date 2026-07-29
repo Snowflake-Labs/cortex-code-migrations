@@ -2,11 +2,37 @@
 
 Validate migrated table data between source and Snowflake using cloud validation — **setup → run → poll → report**.
 
+> **Always use the official tooling.** Run validation through `validate_data(mode="setup")` / `validate_data(mode="run")` (backed by `scai data validate`). **Never** suggest ad-hoc scripts to compare source and target data outside the DMVF validation pipeline.
+
 > **Scope is set per call.** `validate_data(mode="run")` validates **every** table listed in the workflow file produced by setup. Pass a `where` filter to setup that matches exactly the tables you intend to validate.
 
 > **Run-only entry:** If you were routed here only to execute `validateData` (registry task) and the workflow YAML already exists, skip Step 1 and complete **Step 2** (display the existing `workflow_path` and offer optional updates) before **Step 3**. You **must** complete **Steps 4–6** (poll, error-first validation report, teardown offer) before returning to the parent skill — even when the state machine invoked `validate_data(mode="run")` without walking setup.
 
-## Step 1: Generate the validation workflow
+## Step 1: Choose validation approach + generate workflow
+
+### 1.A — Validation mode and sync (state machine)
+
+Validation mode (full vs incremental) and sync strategy are driven by the **`data-validation-setup` state machine**. Call `progress_setup(mode="data_validation")` in a loop until `completed` is true — follow each response's `next_prompt` (persist answers with `configure(<write_to>=value)`) the same way as project setup / data-migration setup.
+
+| Choice | Meaning |
+|--------|---------|
+| **Full** | Validate all partitions every run (`synchronization.strategy: none`) |
+| **Incremental** | Re-validate only partitions that changed since the prior baseline |
+| Sync **Checksum** | Hash partitions; re-validate changed ones (not offered for Oracle) |
+| Sync **Watermark** | Track a monotonic column; re-validate partitions with newer values |
+
+After the machine completes, confirm with the user:
+
+```
+Validation approach:
+  Tables (where): <registry filter or "all in scope">
+  Mode:           <full | incremental>
+  Sync:           <none | checksum | watermark>
+```
+
+For **watermark**, ask which column to use (`watermarkColumn`, e.g. `UPDATED_AT` / `SignupDate` / `SIGNATURE`) before editing YAML. Remind the user that the **first** incremental run still validates everything (establishes the sync baseline); later unchanged runs skip validation.
+
+### 1.B — Generate the validation workflow
 
 Translate the user's choices into a `validate_data(mode="setup", ...)` call.
 
@@ -23,6 +49,8 @@ If you're unsure of the registry filter columns, run `scai code where` for the s
 validate_data(
   mode="setup",
   where="<registry filter>",
+  validation_type="full" | "incremental",   # from state machine; persisted
+  sync_strategy="none" | "checksum" | "watermark",  # from state machine; persisted
   schema_validation=true | false,    # optional; persisted as a session default
   metrics_validation=true | false,   # optional; scai default is false — pass true only if user wants metrics
   row_validation=true | false,       # optional; scai default is true
@@ -32,6 +60,8 @@ validate_data(
 
 Do **not** prompt for `metrics_validation` unless the user asks for aggregate-statistics comparison. Omit the param to keep scai's default (`false`).
 
+Setup patches known `validation_configuration` toggles and, when mode/sync are known, `defaultTableConfiguration.synchronization.strategy`. For watermark, still edit `watermarkColumn` (and ensure partition columns) per `edit_hints` before run.
+
 If setup returns `status: "error"` with a message about validation not being configured, load `../../setup/data-validation/SKILL.md` to complete the one-time infrastructure setup, then retry.
 
 ## Step 2: Display, optional edits, confirm
@@ -40,16 +70,17 @@ The setup response contains:
 
 - `workflow_path` — `artifacts/data_validation/workflows/<hash>.yaml`. Same `where` always maps to the same file; distinct filters produce distinct files.
 - `regenerated` — `false` means scai re-used an existing file.
-- `defaults` — the merged session defaults applied to this call.
-- `applied_overrides` — toggle values that were patched into `validation_configuration`.
+- `defaults` — the merged session defaults applied to this call (includes `validation_type` / `sync_strategy`).
+- `applied_overrides` — toggle values that were patched into `validationConfiguration`.
+- `applied_synchronization` — sync strategy patched into `defaultTableConfiguration.synchronization` when known.
 - `edit_hints` — use as a guide when the user is unsure what can be changed.
 
 1. Read `workflow_path`.
 2. **Display** the workflow file to the user:
    - **Small/medium files** — show the full YAML in chat.
-   - **Large files** — show the path, `validation_configuration`, `tables:` count, and table names; offer to show the full file or specific tables on request.
+   - **Large files** — show the path, `validationConfiguration`, sync block, `tables:` count, and table names; offer to show the full file or specific tables on request.
    - Note whether setup **reused** an existing file (`regenerated: false`).
-3. **Summarize:** table count, effective validation toggles (`schema_validation`, `metrics_validation`, `row_validation`, `continue_on_failure`), and which levels will run (e.g. schema + row; metrics off unless enabled).
+3. **Summarize:** table count, validation mode/sync, effective validation toggles (`schema_validation`, `metrics_validation`, `row_validation`, `continue_on_failure`), and which levels will run (e.g. schema + row; metrics off unless enabled).
 4. Ask verbatim:
 
 > Here is the validation workflow at `<workflow_path>`.
@@ -58,11 +89,28 @@ The setup response contains:
 > 1. **No — proceed**
 > 2. **Yes — I want to change something** (tell me which table, section, or field names)
 
-5. **If Yes:** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (e.g. `column_mappings`, `index_column_list`, `source_where_clause` (+ its pair `target_where_clause`), `target_database` / `target_schema` / `target_name`). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **No — proceed** or says they are done editing.
+5. **If Yes:** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (camelCase field names — for example `columnMappings`, `indexColumnList`, `sourceWhereClause` + `targetWhereClause`, `targetDatabase` / `targetSchema` / `targetName`, `synchronization.watermarkColumn`). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **No — proceed** or says they are done editing.
+
+   **Common scenarios → fields to edit:**
+
+   | User goal | Workflow fields |
+   |-----------|-----------------|
+   | Limit compared rows | `sourceWhereClause` + `targetWhereClause` (both required) |
+   | Skip L2 on wide tables | `excludeMetrics` or disable `metricsValidation` |
+   | Whitelist known diffs | `acceptedTransformations` |
+   | Rename / remap columns | `columnMappings`, `indexColumnList`, `targetIndexColumnList` |
+   | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber` |
+   | Reduce source locking | `queryModifiers` |
+   | Incremental watermark | `synchronization.watermarkColumn` (+ `columnNamesToPartitionBy`) |
+
+   For stalled or partially finished runs, see [Task model reference](../../migrate-objects/actions/data-migration/references/task-model-reference.md) and [Troubleshooting reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md).
+
 6. **If No:** skip discretionary edits unless agent-only blockers remain (step 7).
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
-   - When `row_validation` is on: ensure each table has usable `index_column_list` (and `target_index_column_list` when names differ) per `edit_hints`.
-   - Verify `target_database` / per-table targets match the deployed Snowflake objects.
+   - When `row_validation` is on: ensure each table has usable `indexColumnList` (and `targetIndexColumnList` when names differ) per `edit_hints`.
+   - When incremental **watermark**: ensure `watermarkColumn` is set on `defaultTableConfiguration.synchronization` (or per table).
+   - When incremental: ensure partition columns (`columnNamesToPartitionBy`) are present.
+   - Verify `targetDatabase` / per-table targets match the deployed Snowflake objects.
    - Tell the user what you changed and why before confirming.
 8. Get **explicit confirmation** to run with the final workflow, then continue to Step 3.
 
@@ -140,12 +188,12 @@ After the terminal poll, if `progress.output.isFinished == true` **and** any of:
 
 ### 5.A — Read inputs
 
-Read **`validation_configuration`** from the workflow YAML (or `defaults` / `applied_overrides` from setup) to know which levels ran: `schema_validation`, `metrics_validation`, `row_validation`.
+Read **`validationConfiguration`** from the workflow YAML (or `defaults` / `applied_overrides` from setup) to know which levels ran: `schemaValidation`, `metricsValidation`, `rowValidation`.
 
 | Source | Fields |
 |--------|--------|
 | Status response (top level) | `status`, `error` (if failed before progress) |
-| Workflow toggles | `validation_configuration.metrics_validation` — when **false**, metrics were **not executed**; do not discuss or report them |
+| Workflow toggles | `validationConfiguration.metricsValidation` — when **false**, metrics were **not executed**; do not discuss or report them |
 | `progress.output` | `workflowName`, `isFinished`, `totalTables`, `validatedTables`, `failedTables`, `tableStates` (`schemaValidated`, `metricsValidated`, `rowsValidated`, `status`, `errorMessage`) |
 | **`reports.files`** | `schema_validation_results`, `metrics_validation_results` (only when metrics enabled), `row_validation_summary`, `row_validation_results`, `data_validation_errors`, `results` — PascalCase CSV columns |
 

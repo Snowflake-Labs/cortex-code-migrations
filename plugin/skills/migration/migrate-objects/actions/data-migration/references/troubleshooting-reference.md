@@ -4,6 +4,43 @@ Common failure modes and their solutions when running data migration via `scai`.
 
 ---
 
+## `cryptography` / `_rust.abi3.so` symbol not found in flat namespace
+
+**Symptom:** `migrate_data`/`validate_data` fail (often `Error [DMG0011]: Data exchange agent failed: Could not parse orchestrator workflow config validation output`) with a Python traceback like:
+
+```
+ImportError: dlopen(.../data-migration-orchestrator/lib/pythonX.Y/site-packages/cryptography/hazmat/bindings/_rust.abi3.so, 0x0002):
+  symbol not found in flat namespace '_OSSL_get_max_threads'
+```
+
+(`_DTLS_get_data_mtu` is the same class of error.) It also shows up as `scai data doctor` **DEW doctor** / **Orchestrator doctor** warnings. The MCP run gate now treats this signature as a **blocking** failure instead of a warning, so `migrate_data(mode="run")` returns it in `doctor_failures` with this remediation rather than dying mid-workflow.
+
+**Cause:** The orchestrator/DEA run in bundled Python venvs under `~/.config/Snowflake Inc/SnowConvertDesktop/{data-migration-orchestrator,data-exchange-agent}/`, created by SnowConvert Desktop via `pip install`. `cryptography` is a transitive dependency. When pip installs it as a **source build (sdist)** instead of the self-contained binary wheel, `_rust.abi3.so` is linked to resolve OpenSSL symbols from an **external** OpenSSL at load time. If a different/older OpenSSL resolves first at runtime, the symbol lookup fails. The official `cryptography` wheels (maturin, e.g. `cp311-abi3-macosx_11_0_arm64`) instead **statically bundle** OpenSSL and link only `libSystem`/`libiconv` — those never hit this error. This is environment nondeterminism (Python version, available wheels), **not** an Apple-Silicon limitation: an arm64 machine that resolved the bundled wheel works fine.
+
+**Diagnose:**
+```bash
+CFG="$HOME/.config/Snowflake Inc/SnowConvertDesktop"
+PY="$CFG/data-migration-orchestrator/bin/python"
+# Does it import?
+"$PY" -c "import cryptography; from cryptography.hazmat.bindings._rust import openssl; print(cryptography.__version__)"
+# Healthy: links only libSystem/libiconv (OpenSSL bundled). Broken: references an external libssl/libcrypto.
+otool -L "$(find "$CFG/data-migration-orchestrator" -name _rust.abi3.so | head -1)"
+```
+
+**Fix (repair the venvs — force the binary wheel):**
+```bash
+CFG="$HOME/.config/Snowflake Inc/SnowConvertDesktop"
+for env in data-migration-orchestrator data-exchange-agent; do
+  "$CFG/$env/bin/python" -m pip install --force-reinstall --no-cache-dir \
+    --only-binary=cryptography cryptography
+done
+```
+Then re-run `scai data doctor` (or `migrate_data(mode="run")`). If pip reports no wheel is available for that platform/Python, that is the real problem — upgrade pip or use a Python version with a published `cryptography` wheel. Alternatively, delete the two venv directories and let SnowConvert Desktop recreate them, or reinstall SnowConvert Desktop.
+
+**Durable fix:** SnowConvert Desktop pins `--only-binary=cryptography` when bootstrapping these venvs (`PythonPackageEnvironmentManager.BuildInstallArgs`), so pip can no longer source-build cryptography.
+
+---
+
 ## "Found 0 pending workflows" in orchestrator logs
 
 **Symptom:** You submitted a workflow via `scai data migrate create-workflow`, but the orchestrator service logs (`CALL SYSTEM$GET_SERVICE_LOGS(...)`) repeatedly show `Found 0 pending workflows`.
@@ -136,6 +173,65 @@ Then wait 30-60 seconds for the container to start and re-check the status.
 
 ---
 
+## Task dependency and ordering anomalies
+
+**Symptoms:** Tasks stuck in `blocked` while earlier phases appear done; extraction never starts; load tasks wait indefinitely.
+
+**Diagnosis:**
+
+```sql
+-- Find blocked tasks and their scopes
+SELECT ID, NAME, STATUS, SCOPE, SUCCESSOR_TASK_ID
+FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+WHERE WORKFLOW_ID = <id> AND STATUS = 'blocked'
+ORDER BY ID;
+
+-- Find failed predecessors in the same table scope
+SELECT ID, NAME, STATUS, LAST_ERROR_MESSAGE, SCOPE
+FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+WHERE WORKFLOW_ID = <id>
+  AND SCOPE LIKE 'Table[MY_DB.MY_SCHEMA.MY_TABLE]::%'
+ORDER BY ID;
+```
+
+**Common causes:**
+- A failed preprocessing or extraction task left successors permanently blocked
+- Snowpipe setup raced ahead of target table creation (new-table migrations — orchestrator normally queues setup after DDL)
+- Stale tasks from a previous workflow with the same affinity blocking worker capacity
+
+**Fix:** Identify the earliest non-`completed` task in the scope chain, read `LAST_ERROR_MESSAGE`, fix the root cause, then cancel/re-run the workflow. See [Task model reference](./task-model-reference.md) for scope grammar and pause/cancel procedures.
+
+---
+
+## Per-task failure classification
+
+When MCP `reports` are insufficient, query failed tasks directly:
+
+```sql
+SELECT NAME, EXECUTOR_TYPE, LAST_ERROR_MESSAGE, SCOPE, FAILURES
+FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+WHERE WORKFLOW_ID = <id> AND STATUS = 'failed'
+ORDER BY ID;
+```
+
+| `EXECUTOR_TYPE` | Typical failure categories |
+|-----------------|----------------------------|
+| `data-exchange-agent` | Source connectivity, ODBC/driver, invalid SQL, permission denied |
+| `orchestrator` | Config validation, partition strategy, staged-data processing |
+| `warehouse` | Snowflake DDL/DML errors, stage/path issues |
+
+### Source-connectivity quick check
+
+If metadata/schema extraction completes with **zero rows** but no worker error, compare worker TOML `[connections.source.*].database` against workflow `source.databaseName` (Oracle: service name; Teradata: database name). This is the most common silent failure mode.
+
+---
+
+## `POSSIBLE_MISMATCH` after validation completes
+
+Hybrid L3 validation may stop early when `earlyStoppingForRowHashing` or `maxFailedRowsNumber` is reached. A workflow can finish with `POSSIBLE_MISMATCH` result codes — **do not treat as a clean pass**. Review L3 result tables and consider re-running with adjusted early-stop settings or narrower `sourceWhereClause`/`targetWhereClause` filters.
+
+---
+
 ## Workflow finished but tables incomplete
 
 **Symptom:** `progress.output.isFinished` is `true` (workflow status `Finished`) but work did not complete for every table:
@@ -193,5 +289,7 @@ WHERE STATUS NOT IN ('completed', 'failed', 'cancelled')
 GROUP BY WORKFLOW_ID, STATUS
 ORDER BY WORKFLOW_ID;
 ```
+
+> **Task model:** For scope grammar, dependency chains, and pause/resume/cancel procedures, see [Task model reference](./task-model-reference.md).
 
 > **Stopping the service when done:** to suspend the orchestrator, suspend the compute pool, and stop the local worker after a wave completes, follow [../../../../data-infrastructure/teardown/SKILL.md](../../../../data-infrastructure/teardown/SKILL.md). Don't run `ALTER SERVICE ... SUSPEND` ad-hoc — the teardown sub-skill verifies no in-flight workflows first.
