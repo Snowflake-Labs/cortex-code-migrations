@@ -1,20 +1,20 @@
 ---
 name: data-migration-setup
-description: Setup, run, and report on cloud data migration — workflow YAML, migrate_data run, poll, and end-of-run summary for the user.
+description: Setup, run, and report on cloud data migration — workflow YAML, migrate_data run, background Monitor+/loop (or poll fallback), and end-of-run summary for the user.
 parent_skill: migration
 license: Proprietary. See License-Skills for complete terms
 ---
 
 # Data Migration Setup
 
-One-time configuration for migrating data from a source database into Snowflake via the **scai CLI**, plus **run → poll → report** after `migrate_data(mode="run")`.
+One-time configuration for migrating data from a source database into Snowflake via the **scai CLI**, plus **run → monitor → report** after `migrate_data(mode="run")` (passive Monitor + `/loop` when available; active poll fallback otherwise).
 
 > **Always use the official tooling.** Run data migration through `migrate_data(mode="setup")` / `migrate_data(mode="run")` (backed by `scai data migrate`). **Never** suggest writing ad-hoc scripts to extract, copy, or load data outside the DMVF task pipeline — the orchestrator handles partitioning, retries, incremental sync, and load orchestration.
 
 > **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL
 > **Supported targets**: Native Snowflake tables (default). **Iceberg** targets are **Redshift-only** (partial support) — see [Extraction strategies reference](./references/extraction-strategies-reference.md#iceberg-target-redshift-only--partial-support).
 
-> **Run-only entry:** If you were routed here only to execute `migrateData` (registry task) and the workflow YAML already exists, skip Steps 1–2 and complete **Step 2a** (display the existing `workflow_path` and offer optional updates) before **Step 4**. You **must** complete **Steps 5–7** (poll, error-first migration report, teardown offer) before returning to the parent skill — even when the state machine invoked `migrate_data(mode="run")` without walking setup.
+> **Run-only entry:** If you were routed here only to execute `migrateData` (registry task) and the workflow YAML already exists, skip Steps 1–2 and complete **Step 2a** (display the existing `workflow_path` and offer optional updates) before **Step 4**. You **must** complete **Steps 5–7** (background monitor or poll fallback, error-first migration report, teardown offer) before returning to the parent skill — even when the state machine invoked `migrate_data(mode="run")` without walking setup.
 
 ## Prerequisite
 
@@ -31,11 +31,37 @@ the generated workflow**. Same syntax as `scai code deploy --where` (e.g.
 `source.objectType = 'table' AND source.schema = 'sales'`,
 `source.canonicalName IN ('dbo.customers', 'dbo.orders')`).
 
+#### Exact table selection (required when the user lists specific tables)
+
+When the user names specific tables, **always** use an exact filter — never
+substring / `ILIKE '%…%'`:
+
+```
+source.objectType = 'table' AND source.canonicalName IN (
+  'dbo.CURR_EDB_MODEL_AUCTION_HISTORY',
+  'dbo.SNAPM_EDB_MODEL_GROUPING'
+)
+```
+
+**Why:** Substring filters (and the old `ILIKE '%name%'` pattern) can silently
+include sibling tables whose names share a prefix — for example selecting
+`SNAPM_EDB_MODEL_GROUPING` would also match `SNAPM_EDB_MODEL_GROUPING_SWTCH`
+(a customer SWITCH staging table). That is unexpected for change-control
+workflows. Prefer `IN (...)` or equality (`source.canonicalName = '…'` /
+`source.name = '…'`).
+
+After generating the workflow YAML, **read the `tables:` list** and confirm the
+count and names with the user before running. If the YAML has more tables than
+requested, stop and fix the `where` (or pass `force_regenerate=true` after
+correcting it) — do not invent explanations like “partition switch auto-include”
+(SnowConvert does not auto-add SWITCH siblings).
+
 Decide the value in this order:
 
 1. **You already know the tables.** If the parent skill or the current wave has
-   already identified the tables, construct the `where` from that. For a wave's batch,
-   the batch's `where` filter is typically reusable verbatim.
+   already identified the tables, construct an **exact** `where` from that
+   (`source.canonicalName IN (...)`). For a wave's batch, the batch's `where`
+   filter is typically reusable verbatim **only if** it is already exact.
 2. **Otherwise, ask the user.** Suggest options like "all tables in schema X"
    (`source.schema = 'X'`), "specific tables"
    (`source.canonicalName IN (...)`), or "all tables in scope" (omit `where`).
@@ -44,7 +70,8 @@ Decide the value in this order:
    construct the filter from the listed columns (`source.objectType`,
    `source.schema`, `source.canonicalName`, etc.).
 
-Show the proposed `where` to the user and get confirmation before continuing.
+Show the proposed `where` **and the resulting table names** to the user and get
+confirmation before continuing.
 
 ### 1.B — Extraction mechanism and migration approach (state machine)
 
@@ -198,13 +225,15 @@ The response `cost_reminder` differs per path — **relay it to the user verbati
 
 Retain `workflow_path` for the report in Step 6.
 
-Track progress with `migration_status(mode="data_migration")`.
+After run starts, go to **Step 5** (do not busy-poll every 30–60s unless you are on the fallback path).
 
 ---
 
-## Step 5: Poll for completion
+## Step 5: Wait for completion (Monitor + `/loop`, or poll fallback)
 
-Poll until the job is terminal:
+Load [Background monitoring](./references/background-monitoring.md) and follow it. Summary below; the reference is authoritative for capability checks, watch command shape, and crash fallback.
+
+**Status tool** (both paths):
 
 ```
 migrate_data_status()
@@ -212,31 +241,69 @@ migrate_data_status()
 
 (or `migration_status(mode="data_migration")` — same JSON shape)
 
-**While `status` is `"running"`:**
+`progress` may be absent until `create-workflow` returns a workflow name; that is normal early in the run.
 
-- Poll every 30–60 seconds, or when the user asks for an update.
-- `progress` may be absent until `create-workflow` returns a workflow name; that is normal early in the run.
+### 5.A — Choose path
+
+| Condition | Path |
+|-----------|------|
+| Interactive session **and** Monitor tool available **and** `/loop` (or session cron) available | **Background** — Phases A–E in the reference |
+| Otherwise (older CoCo, non-interactive, Monitor/`/loop` disabled/unavailable, or unsure) | **Fallback** — active poll below |
+
+**One completion owner:** only the background Monitor path **or** the fallback poll may present Step 6 — never both.
+
+### 5.A.1 — Background path (preferred)
+
+1. **Phase A — workflow name:** Call `migrate_data_status()` every **5–15s** until `progress.output.workflowName` is set, or the job is already terminal (then skip to final status → 5.C → Step 6).
+2. **Phase B — Monitor:** Start the **Monitor** tool (`persistent: true`) with:
+
+   ```bash
+   scai data migrate status <WORKFLOW_NAME> --json --watch --connection <SNOWFLAKE_CONNECTION>
+   ```
+
+   Use the Snowflake connection from `configure()`. Omit `--connection …` only if none is configured. Run from the project root. **Do not** watch `create-workflow`. **Do not** use plugin `monitors/`.
+3. **Phase C — progress loop:** Start `/loop 30m` (or equivalent cron) that calls `migrate_data_status()`, reports a short progress update, and runs Step 5.B health checks. **Do not** present Step 6 on a loop tick.
+4. **Phase D — Monitor fire:** Cancel the loop → call `migrate_data_status()` once → Step 5.C if needed → **Step 6**.
+5. **Phase E — loop sees terminal first:** Cancel Monitor if still running → `migrate_data_status()` once → Step 5.C → Step 6 (crash fallback).
+
+Tell the user once that you will report progress about every 30 minutes and notify immediately when the job finishes.
+
+### 5.A.2 — Fallback path (active poll)
+
+Poll until the job is terminal:
+
+- Poll every **30–60 seconds**, or when the user asks for an update.
 - On polls where you are **not** running a health check (Step 5.B), optionally share a one-line update from `progress.output` when present (e.g. `preprocessedTables`/`totalTables`, `aggregatedCounts.loadedPartitions`/`totalPartitions`).
 
-### 5.B — Health monitoring (while polling)
+**Stop when:**
+
+- `status` is `"completed"` or `"failed"`, **and**
+- `progress.output.isFinished` is `true` when `progress` is present.
+
+Then Step 5.C → Step 6.
+
+### 5.B — Health monitoring (while waiting)
 
 No extra tools — derive health from consecutive `migrate_data_status()` responses. Keep the previous response in memory (at least `progress.output.aggregatedCounts`, `preprocessedTables`, `totalTables`, and `tablePartitions`).
 
-**When to run:** every **2nd or 3rd** poll, or when the user asks for a health update. Skip until `progress.output` exists.
+**When to run:**
 
-**Progress key:** `loadedPartitions` from `progress.output.aggregatedCounts` (fallback: sum of `tablePartitions[].loadedPartitions`). Record the poll time when this key last increased.
+- **Background path:** every `/loop` tick (and when the user asks). Skip until `progress.output` exists.
+- **Fallback path:** every **2nd or 3rd** poll, or when the user asks. Skip until `progress.output` exists.
 
-| Signal | Condition | Severity |
-|--------|-----------|----------|
-| Stall | `loadedPartitions` unchanged for **≥10 minutes** while `status` is `"running"` and `isFinished` is false | **Warning** |
-| Stuck | Same unchanged for **≥20 minutes** | **Critical** |
-| Partition failures | `aggregatedCounts.failedPartitions > 0` | **Warning** (immediate) |
-| Preprocessing lag | `preprocessedTables < totalTables` and job has been running **≥15 minutes** | **Warning** |
-| Partial table failure | Any `tablePartitions[]` with `failedPartitions > 0` or `hasBeenPreprocessed == false` while still running | **Warning** |
+**Progress key:** `loadedPartitions` from `progress.output.aggregatedCounts` (fallback: sum of `tablePartitions[].loadedPartitions`). Record the poll/tick time when this key last increased.
+
+| Signal | Background (`/loop` ~30m) | Fallback (30–60s poll) | Severity |
+|--------|---------------------------|-------------------------|----------|
+| Stall | `loadedPartitions` unchanged across **≥1** progress tick while running and `isFinished` is false | unchanged **≥10 minutes** | **Warning** |
+| Stuck | unchanged across **≥2** ticks | unchanged **≥20 minutes** | **Critical** |
+| Partition failures | `aggregatedCounts.failedPartitions > 0` | same | **Warning** (immediate) |
+| Preprocessing lag | `preprocessedTables < totalTables` and running **≥30 minutes** | running **≥15 minutes** | **Warning** |
+| Partial table failure | Any `tablePartitions[]` with `failedPartitions > 0` or `hasBeenPreprocessed == false` while still running | same | **Warning** |
 
 When **`reports`** is present, also scan `reports.files.errors` — any rows mean at least one task/partition has failed even if aggregate counters look healthy.
 
-**What to tell the user** (short; do not block polling unless they ask to stop):
+**What to tell the user** (short; do not block waiting unless they ask to stop):
 
 ```markdown
 **Migration health** — `<workflowName or "starting…">`
@@ -249,20 +316,15 @@ When **`reports`** is present, also scan `reports.files.errors` — any rows mea
 
 On **Warning** or **Critical**, point to [Troubleshooting Reference](./references/troubleshooting-reference.md) (stale `TASK_QUEUE` tasks, worker DB mismatch, affinity). Do **not** auto-cancel the workflow — offer: keep waiting, open troubleshooting, or pause/teardown if the user wants to stop cost.
 
-Fold the worst severity seen during polling into Step 6 **Infrastructure** or **Load** only if it was never surfaced to the user.
+Fold the worst severity seen while waiting into Step 6 **Infrastructure** or **Load** only if it was never surfaced to the user.
 
-**Stop polling when:**
-
-- `status` is `"completed"` or `"failed"`, **and**
-- `progress.output.isFinished` is `true` when `progress` is present.
-
-A stall or stuck warning does **not** end the poll loop — only terminal `status` plus `isFinished` does.
+A stall or stuck warning does **not** end monitoring — only terminal `status` plus `isFinished` (or Monitor fire + confirmed terminal status) does.
 
 If `status` is `"failed"` and top-level `error` is set, surface it under **Infrastructure** in `### Errors`.
 
 ### 5.C — Finished workflow with incomplete tables (anomaly)
 
-After the terminal poll, if `progress.output.isFinished == true` **and** any of:
+After the terminal status (Monitor fire + confirm, loop crash fallback, or fallback poll), if `progress.output.isFinished == true` **and** any of:
 
 - `preprocessedTables < totalTables`
 - any `tablePartitions[].hasBeenPreprocessed == false`
@@ -459,9 +521,10 @@ Shared infrastructure checklist is owned by `../../../data-infrastructure/SKILL.
 - [ ] Target database and schema exist
 - [ ] Iceberg prerequisites validated — if Redshift + `target_table_type=iceberg`
 - [ ] migrate_data(mode="run") started
-- [ ] Polled until job terminal and progress.output.isFinished (when progress present)
+- [ ] Background Monitor+/loop used when available; otherwise active poll fallback (Step 5)
+- [ ] Waited until job terminal and progress.output.isFinished (when progress present)
 - [ ] Finished-but-incomplete anomaly checked (Step 5.C — do not report success if tables never preprocessed)
-- [ ] Health monitoring run during poll when triggered (Step 5.B — stall/failure signals surfaced)
+- [ ] Health monitoring run while waiting when triggered (Step 5.B — stall/failure signals surfaced)
 - [ ] Error-first data migration summary presented (Step 6 — Result + Workflow, Errors, Suggested fixes)
 - [ ] Teardown offered when wave data work is done (Step 7)
 ```
@@ -472,6 +535,7 @@ Return control to the parent skill.
 
 ## Reference
 
+- [Background monitoring](./references/background-monitoring.md)
 - [Workflow Config Reference](./references/workflow-config-reference.md)
 - [Task Model Reference](./references/task-model-reference.md)
 - [Extraction Strategies Reference](./references/extraction-strategies-reference.md)

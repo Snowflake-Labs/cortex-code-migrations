@@ -1,6 +1,6 @@
 ---
 name: validate-objects
-description: Validate migrated data between source and Snowflake using cloud validation (SPCS). Setup, run, poll, and end-of-run summary. Triggers: validate data, validate tables, data validation, check data.
+description: Validate migrated data between source and Snowflake using cloud validation (SPCS). Setup, run, background Monitor+/loop (or poll fallback), and end-of-run summary. Triggers: validate data, validate tables, data validation, check data.
 parent_skill: migration
 ---
 
@@ -24,7 +24,7 @@ Verify a `compute_pool` is configured (shown in the configure output under "Clou
 
 ## Step 2: Validate
 
-Load [actions/validate_tables.md](actions/validate_tables.md).
+Load [actions/validate_tables.md](actions/validate_tables.md) (Steps 4–6: background Monitor+/loop or poll fallback, error-first report, teardown).
 
 ## Step 3: Wave progress
 

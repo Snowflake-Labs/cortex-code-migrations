@@ -9,6 +9,7 @@
   - full-tdd: Test generation + fixing from scratch
   - lightweight: Apply known fix patterns from a prior phase + verify
   - dbt: dbt project test/fix cycle
+  - dataflow-proc: mapping-procedure test/fix cycle (Snowflake Scripting flavor)
   - final-validation: Artifact review and sanity check
 
   Design rationale and justification: write to a separate file if needed for auditing
@@ -64,9 +65,9 @@
 
 | Field | Value |
 |-------|-------|
-| Type | {full-tdd / lightweight / dbt / final-validation} |
+| Type | {full-tdd / lightweight / dbt / dataflow-proc / final-validation} |
 | Procedure(s) | {procedure_name(s)} |
-| Scope | {orchestration / dbt} |
+| Scope | {orchestration / dbt / dataflow-proc} |
 | Depends on | {Phase M / none} |
 | Pattern source | {Phase M fix_log (lightweight only) / —} |
 | dbt projects | {project_name_1, project_name_2 (dbt phases only)} |
@@ -205,7 +206,8 @@ Read this ROADMAP's § Phase {NEXT_P} — extract phase name and step count.
 Create cortex task for Phase {NEXT_P}:
   `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME}"`
   `cortex ctx task start <task_id>`
-  Add one `cortex ctx step add` per ROADMAP step ({NEXT_P}.1 through {NEXT_P}.{LAST}).
+  Add ALL ROADMAP steps ({NEXT_P}.1 through {NEXT_P}.{LAST}) in ONE call:
+  `cortex ctx step add -t <task_id> "{NEXT_P}.1 ..." "{NEXT_P}.2 ..." ...` (it accepts multiple step texts).
 Verify: `cortex ctx show tasks` — confirm "Phase {NEXT_P}:" task exists.
 Mark Step {NEXT_P}.0 as [x] in ROADMAP.
 Mark this step [x] and continue with Step {NEXT_P}.1.
@@ -279,7 +281,8 @@ Read this ROADMAP's § Phase {NEXT_P} — extract phase name and step count.
 Create cortex task for Phase {NEXT_P}:
   `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME}"`
   `cortex ctx task start <task_id>`
-  Add one `cortex ctx step add` per ROADMAP step ({NEXT_P}.1 through {NEXT_P}.{LAST}).
+  Add ALL ROADMAP steps ({NEXT_P}.1 through {NEXT_P}.{LAST}) in ONE call:
+  `cortex ctx step add -t <task_id> "{NEXT_P}.1 ..." "{NEXT_P}.2 ..." ...` (it accepts multiple step texts).
 Verify: `cortex ctx show tasks` — confirm "Phase {NEXT_P}:" task exists.
 Mark Step {NEXT_P}.0 as [x] in ROADMAP.
 Mark this step [x] and continue with Step {NEXT_P}.1.
@@ -352,6 +355,84 @@ Validation gate (MANDATORY — do NOT proceed to complete-phase until this passe
   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
     validate-phase {SESSION_JSON} {P} --list-test-files
   If validation fails (exit code 1): review failing elements before proceeding.
+Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
+  complete-phase {SESSION_JSON} {P}
+Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
+  update-state {SESSION_JSON} --current-phase {NEXT_P} --phase-status "Phase {P} completed" --next-action "Execute Phase {NEXT_P}"
+Mark Phase {P} as [x] Complete in this ROADMAP.
+Shutdown team: use `send_message` with `type: "shutdown_request"` to each agent → wait for `shutdown_response` notifications → use `team_delete` tool.
+
+- [ ] **Step {P}.5: Phase Transition**
+Read this ROADMAP's § Phase {NEXT_P} — extract phase name and step count.
+Create cortex task for Phase {NEXT_P}:
+  `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME}"`
+  `cortex ctx task start <task_id>`
+  Add ALL ROADMAP steps ({NEXT_P}.1 through {NEXT_P}.{LAST}) in ONE call:
+  `cortex ctx step add -t <task_id> "{NEXT_P}.1 ..." "{NEXT_P}.2 ..." ...` (it accepts multiple step texts).
+Verify: `cortex ctx show tasks` — confirm "Phase {NEXT_P}:" task exists.
+Mark Step {NEXT_P}.0 as [x] in ROADMAP.
+Mark this step [x] and continue with Step {NEXT_P}.1.
+
+<!-- ═══════════════════════════════════════════════════════════
+     TEMPLATE: dataflow-proc (6 steps: 0-5) — use for phases with type=dataflow-proc
+     (Snowflake Scripting flavor: one item per converted mapping procedure)
+     ═══════════════════════════════════════════════════════════ -->
+
+- [ ] **Step {P}.0: Initialize Phase Tracking** *(gate — see Execution Workflow § Step 2)*
+  Cortex task "Phase {P}: {PHASE_NAME}" must exist before proceeding.
+  Steps to register: {P}.1 (Setup), {P}.2 (Proc-Test-Gen Wave), {P}.3 (Proc-Fix Wave), {P}.4 (Phase Completion), {P}.5 (Phase Transition).
+  If no task exists, the Execution Workflow creates it automatically.
+
+- [ ] **Step {P}.1: Setup**
+Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
+  start-phase {SESSION_JSON} {P}
+Create test schema(s) in {DATABASE}: {schema_list}.
+Use `team_create` tool: team_name="etl-fix-{package_name}-p{P}".
+
+- [ ] **Step {P}.2: Proc-Test-Gen Wave**
+Resume guard: if test_report.md already exists for ALL mapping procs
+  (from a prior partial run), skip agent spawning and proceed to tracking update below.
+Spawn proc-test-gen agents (MANDATORY — UNCONDITIONAL — do NOT skip):
+{for each mapping_proc:}
+  - proc-test-gen-{proc_name}:
+    Instruction: Read {SKILL_DIR}/proc-test-gen/SKILL.md
+    Context: proc_file={CONVERTED_SQL_PATH}, source_file={SOURCE_FILE}, database={DATABASE},
+      test_schema={SCHEMA}, block FullName(s), ROADMAP_path, SESSION_JSON
+{end for}
+Max 5 agents per wave. If more, spawn first 5, wait, then remaining.
+Wait for all agents: end your turn and wait for automatic task notifications.
+  NEVER use `bash sleep`, `bash_output`, or `cortex agent output` CLI.
+Validate for EACH mapping proc — ALL must exist under stabilization/tests/proc/{proc_name}/:
+  - {proc_name}.seed.sql, {proc_name}.assert.sql, test_report.md
+If ANY missing: respawn (max 2 retries), then mark the proc `failed` reason `test-gen-exhaustion`.
+  For partial-completion recovery: see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+Update tracking (SEQUENTIAL):
+  uv run ... track_status.py update {SESSION_JSON} {PROC} --status proc-tested
+
+- [ ] **Step {P}.3: Proc-Fix Wave**
+Resume guard: if a fix record already exists for ALL procs (from a prior partial run),
+  skip agent spawning and proceed to tracking update below.
+Spawn fix agents ONLY for procs whose baseline did not create-clean or has failing assertions:
+{for each proc_needing_fix:}
+  - proc-fixer-{proc_name}:
+    Instruction: Read {SKILL_DIR}/proc-fixer/SKILL.md
+    Context: same as test-gen + the proc-test-gen artifacts (seed/assert/test_report) path
+{end for}
+Procs whose baseline already creates clean and passes all assertions: no agent needed.
+  Write a minimal fix record with Outcome no-fix-needed, then set the proc's status:
+  uv run ... track_status.py update {SESSION_JSON} {PROC} --status no-fix-needed
+Wait for all agents via task notifications. Validate: a fix record exists for every proc.
+  Re-read session_status.json — confirm all fixed procs have terminal status.
+  Same retry logic as Step {P}.2 (max 2, then mark failed).
+Update tracking (SEQUENTIAL):
+  uv run ... track_status.py update {SESSION_JSON} {PROC} --status {status_from_artifact}
+
+- [ ] **Step {P}.4: Phase Completion**
+Merge learnings: read all proc fix records, append NEW patterns to fix_log.md.
+Validation gate (MANDATORY — do NOT proceed to complete-phase until this passes):
+  uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
+    validate-phase {SESSION_JSON} {P} --list-test-files
+  If validation fails (exit code 1): review failing procs before proceeding.
 Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
   complete-phase {SESSION_JSON} {P}
 Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \

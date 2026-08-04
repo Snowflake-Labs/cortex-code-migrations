@@ -60,10 +60,44 @@ Do not attempt to call `agent_output` — it may not be available and failed att
 
 On every invocation:
 
-0. **Snowflake Scripting guard.** If this is an Informatica Snowflake Scripting conversion - the code unit's `extensions.conversionMode` is `snowflakeScripting`, or the unit folder holds standalone mapping stored procedures (`CREATE OR REPLACE PROCEDURE`) with no dbt projects (no `dbt_project.yml`) - stop immediately and tell the user: "ETL Stabilization is not supported for Snowflake Scripting conversions (dbt only)." Do not scan, back up, or write any files. (In the guided flow these units never reach this skill: the migration state machine terminates them right after convert. This guard only fires on direct invocation.)
+0. **Detect the conversion flavor.** Before anything else, determine whether this unit is a **Snowflake Scripting** conversion or a **dbt** conversion:
+   - **Scripting** — the code unit's `extensions.conversionMode` is `snowflakeScripting`, or the unit folder holds standalone mapping stored procedures (`CREATE OR REPLACE PROCEDURE`) with no dbt projects (no `dbt_project.yml`).
+   - **dbt** — otherwise (dbt sub-projects present).
+
+   Store the flavor in session. **dbt flavor** runs the standard path below unchanged. **Scripting flavor** replaces the data-flow half of stabilization with the mapping-procedure pair (proc-test-gen → proc-fixer) while keeping the orchestration half identical — see [Scripting Flavor Routing](#scripting-flavor-routing). In the guided flow, whether a scripting unit reaches this skill is controlled upstream by the migration state machine; when it does — or on direct invocation — proceed with the scripting path.
 1. Check if `{UNIT}/stabilization/tracking/STATE.md` exists
 2. **If no STATE.md** → new unit → run **Planning Workflow**
 3. **If STATE.md exists** → read it → run **Execution Workflow** for next pending phase
+
+---
+
+## Scripting Flavor Routing
+
+For a **Snowflake Scripting** unit (detected in Entry Point Step 0), each converted Informatica mapping is a
+standalone stored procedure (a `kind=etl` unit) whose transformation blocks are delimited by boundary markers
+(`---- Start block '<FullName>'` / `---- End block …`) and may carry `!!!RESOLVE EWI!!!` stubs. The **data-flow
+half** of stabilization operates on these mapping procedures instead of dbt models; the **orchestration half**
+(the workflow task graph) is handled by the orchestration pair exactly as in the dbt path.
+
+**Cut and rebuild — only the data-flow half changes. The dbt and orchestration paths are untouched:**
+
+| Step | dbt flavor | Scripting flavor |
+|------|-----------|------------------|
+| Context mapping (Step 6) | dbt context mapper over dbt projects | mapping-procedure discovery: each converted mapping proc, its source mapping, and its defective blocks |
+| Readiness (Step 6b) | dbt project readiness | per mapping proc: defective-block inventory (from block-locate / ewi-extract) |
+| ROADMAP phases (Step 7) | `dbt` phases (scope `dbt`) | `dataflow-proc` phases (scope `dataflow-proc`) — one item per mapping procedure |
+| Per-phase dispatch (Execution) | dbt-test-gen → dbt-fixer | proc-test-gen → proc-fixer |
+| Orchestration half | orchestration pair (unchanged) | orchestration pair (unchanged) |
+
+A `dataflow-proc` phase runs the mapping-procedure pair exactly as a `dbt` phase runs the dbt pair:
+[proc-test-gen](proc-test-gen/SKILL.md) derives the source-of-truth assertions for a mapping procedure, then
+[proc-fixer](proc-fixer/SKILL.md) reconstructs its defective blocks and grades against those assertions until
+the procedure creates clean and passes. Use the `dataflow-proc` phase-type template in the ROADMAP template.
+
+> **Discovery input.** Identifying which procedures are converted mappings and enumerating their defective
+> blocks comes from the unit scan plus the boundary markers. Where the scan does not classify a procedure as a
+> mapping unit, fall back to the source mapping `.xml` + the boundary markers to identify each mapping procedure
+> and its blocks.
 
 ---
 
@@ -71,22 +105,41 @@ On every invocation:
 
 ### Step 0: Create Progress Task
 
+Create the task and register all its steps in **two calls** — `cortex ctx step add` accepts
+multiple step texts at once, so do not issue one call per step:
+
 ```bash
 cortex ctx task add "Planning: {unit_name}"
 cortex ctx task start <task_id>
-cortex ctx step add "Step 1: Gather inputs" -t <task_id>
-cortex ctx step add "Step 2: Scan unit" -t <task_id>
-cortex ctx step add "Step 3: Initialize tracking" -t <task_id>
-cortex ctx step add "Step 4: Configure test environment" -t <task_id>
-cortex ctx step add "Step 5: Backup and strip dead code" -t <task_id>
-cortex ctx step add "Step 6: Context mapping — spawn parallel agents, wait for notifications" -t <task_id>
-cortex ctx step add "Step 6b: Classify dbt project readiness" -t <task_id>
-cortex ctx step add "Step 7: Create ROADMAP (7a-7c)" -t <task_id>
-cortex ctx step add "Step 8: Create STATE.md" -t <task_id>
-cortex ctx step add "Step 9: Present ROADMAP for approval" -t <task_id>
+cortex ctx step add -t <task_id> \
+  "Step 1: Gather inputs" \
+  "Step 2: Scan unit" \
+  "Step 3: Initialize tracking" \
+  "Step 4: Configure test environment" \
+  "Step 5: Backup and strip dead code" \
+  "Step 6: Context mapping — spawn parallel agents, wait for notifications" \
+  "Step 6b: Classify dbt project readiness" \
+  "Step 7: Create ROADMAP (7a-7c)" \
+  "Step 8: Create STATE.md" \
+  "Step 9: Present ROADMAP for approval"
 ```
 
-Mark each step done via `cortex ctx step done <id>` **immediately** upon completion — do not batch. Mark the task done after Step 9 approval.
+**Marking steps done — group them.** `cortex ctx step done` accepts multiple step IDs
+(`cortex ctx step done <id> <id> ...`), so mark completed steps in groups rather than one
+call per step. Every such call is a separate agent round-trip that does not change any
+file, so grouping them is measurably faster with no effect on the work performed.
+
+Flush the pending group (mark everything completed so far as done) at these points, so
+externally-persisted progress is never stale when it matters:
+- before spawning any agent wave, and before ending a turn to wait for notifications
+- at each phase transition, and before any stopping point that asks the user a question
+
+The authoritative resumption state is on disk regardless: the ROADMAP's `[x]` step
+checkboxes plus `STATE.md`. Cortex progress is the live display and the auto-compact
+re-injection channel, not the source of truth — which is why grouping is safe and why the
+task itself must still exist (see the Execution Workflow gate).
+
+Mark the task done after Step 9 approval.
 
 ### Step 1: Gather Inputs
 
@@ -164,10 +217,15 @@ Spawn a teammate with `name="context-mapper"`, `run_in_background=false`, and th
 
 Output: `orchestration-context.md` — element inventory, duplicate groups, behavioral patterns, container hierarchy.
 
-**dbt context mapper** (conditional — only if dbt_projects exist):
+**dbt context mapper** (conditional — dbt flavor only, when dbt_projects exist):
 Spawn a teammate with `name="dbt-context-mapper"`, `run_in_background=false`, and the prompt template at `{SKILL_DIR}/reference/agent-prompts/dbt-context-mapper.md` (substitute `{UNIT}`, `{SOURCE_FILE_PATH}`, `{TRANSFORMATION_GUIDE}` placeholders).
 
 Output: `dbt-context.md` — project health, model inventory, macro inventory, source mapping, bootstrap blockers.
+
+**Scripting flavor:** skip the dbt context mapper. Instead, discover the mapping procedures per
+[Scripting Flavor Routing](#scripting-flavor-routing) — for each converted mapping proc, record its source
+mapping and its defective blocks (block-locate / ewi-extract). The orchestration context mapper still runs for
+the workflow task graph.
 
 **Spawn both agents in a single message** (parallel tool calls), then follow the **Agent Wait Protocol**: end your turn and wait for task notifications. When both notifications arrive, verify both output files exist and are non-empty before continuing.
 
@@ -194,7 +252,7 @@ Using orchestration-context.md, dbt-context.md (if dbt projects exist), and scan
 
 **Phase design principles:**
 - Phases align with CREATE TASK/PROCEDURE boundaries
-- Phase types: `full-tdd`, `lightweight`, `dbt`, `final-validation`
+- Phase types: `full-tdd`, `lightweight`, `dbt`, `dataflow-proc`, `final-validation` (`dataflow-proc` is the scripting-flavor data-flow phase; see [Scripting Flavor Routing](#scripting-flavor-routing))
 - **Item sizing caps** (an "item" is one orchestration element or one dbt project — caps apply to both):
   - **Small-medium item**: a dbt project with ≤20 models (from `scan.json` `health.model_count`); OR any orchestration element (elements are atomic — 1 element = 1 item against the phase cap, regardless of internal complexity)
   - **Large item**: a dbt project with >20 models. **Only dbt projects can be classified as large** — orchestration elements are always small-medium
@@ -210,6 +268,7 @@ Using orchestration-context.md, dbt-context.md (if dbt projects exist), and scan
 - dbt phases receive the SAME rigor as orchestration phases: health assessment, explicit batch assignments, completion criteria
 - dbt projects with `has_placeholder_config=true` or `has_valid_config=false` need a bootstrap sub-step (the dbt-test-gen agent handles this internally — document the blocker in the ROADMAP phase metadata)
 - Every dbt project MUST be assigned to a dbt phase — no project may be omitted or deferred to "manual" resolution
+- **Scripting flavor:** every mapping procedure MUST be assigned to a `dataflow-proc` phase — one mapping proc is one small-medium item (atomic, like an orchestration element). Do NOT create dbt phases for a scripting unit
 - The ROADMAP must include dbt project health summaries in the phase metadata (from scan.json health fields and dbt-context.md)
 
 **Phase sizing factors** (refine assignment within the caps above — not a substitute for the caps):
@@ -312,23 +371,26 @@ instructions from disk before executing.
 
 1. Read `ROADMAP.md` § Phase {P} → extract phase name, type, and step list
 2. Create the cortex task and steps — execute these bash commands directly
-   (substitute actual values for all placeholders):
+   (substitute actual values for all placeholders). `cortex ctx step add` takes
+   multiple step texts, so register every step in ONE call, not one call per step:
    ```bash
    cortex ctx task add "Phase {P}: {PHASE_NAME}"
    cortex ctx task start <task_id>
-   # Add one cortex step per ROADMAP execution step (Steps {P}.1 through {P}.{LAST}):
-   cortex ctx step add "Step {P}.1: {step_description} (see ROADMAP.md § Phase {P})" -t <task_id>
-   cortex ctx step add "Step {P}.2: {step_description} (see ROADMAP.md § Phase {P})" -t <task_id>
-   # ... continue for every remaining ROADMAP step
+   # One call, one text per ROADMAP execution step (Steps {P}.1 through {P}.{LAST}):
+   cortex ctx step add -t <task_id> \
+     "Step {P}.1: {step_description} (see ROADMAP.md § Phase {P})" \
+     "Step {P}.2: {step_description} (see ROADMAP.md § Phase {P})" \
+     "... one text per remaining ROADMAP step"
    ```
 3. **Verify creation:** Run `cortex ctx show tasks` again — confirm a task
    matching "Phase {P}:" exists. If not, STOP and repeat this step.
 4. Mark Step {P}.0 as `[x]` in the ROADMAP
 5. If some later steps are already `[x]` in the ROADMAP (session restart),
-   mark those cortex steps done immediately. Also check disk artifacts for
+   mark those cortex steps done — in a single grouped call
+   (`cortex ctx step done <id> <id> ...`). Also check disk artifacts for
    the current phase: if step outputs exist (e.g., `baseline_batch_*.md`
    for test-gen, `batch_*.md` for fix wave) but the ROADMAP checkbox was
-   not marked, mark those cortex steps done too.
+   not marked, include those steps in the same grouped call.
 
 **GATE CHECK:** Do NOT proceed to Step 3 until `cortex ctx show tasks`
 confirms a task for "Phase {P}:" exists with at least one unchecked step.
@@ -337,8 +399,27 @@ confirms a task for "Phase {P}:" exists with at least one unchecked step.
 For each pending cortex step:
 1. Read the step's instructions from ROADMAP.md
 2. Execute them
-3. Mark `[x]` next to the step in the ROADMAP
-4. Mark the cortex step done
+3. Mark `[x]` next to the step in the ROADMAP — this is the authoritative
+   resumption record and is always written per step
+4. Accumulate the cortex step ID as pending-done; do NOT issue a separate
+   `cortex ctx step done` call per step
+5. **Multi-unit / package runs — track per unit as you go, never batch to the end.** After each unit or phase completes, mark the ROADMAP `[x]` (item 3) immediately, flush the pending cortex step-done group (item 4 — a unit or phase boundary is a mandatory flush point, see below), AND run `track_status.py update <element> --status <fixed|test-passed|...>` for the element plus `track_status.py update-state --current-phase <N> ...`. Also confirm the unit's `proc-test-gen` seed + assertion files were written under `{UNIT}/stabilization/tests/proc/<unit>/`. Deferring ROADMAP ticks or state updates to the end leaves `STATE.md` and the generated `report.html` under-reporting progress mid-run (element count and percent both stale).
+
+**Flush pending cortex step-done calls in one grouped call**
+(`cortex ctx step done <id> <id> ...`) at these points:
+- **after each unit or phase completes** (item 5 above — never carry pending
+  step-dones across a unit boundary)
+- before spawning an agent wave, and before ending a turn to await notifications
+- at the Phase Transition step, and before any stopping point that asks the user
+
+Rationale: each `cortex ctx step done` call is a separate agent round-trip that
+writes no file and cannot change the outcome of the work. Grouping them is
+measurably faster and leaves the on-disk record unchanged — ROADMAP checkboxes,
+`track_status.py` element/state updates and `STATE.md` are all still written per
+step and per unit as item 5 requires, so `report.html` progress never goes stale.
+Flushing at unit boundaries, before waves, turn ends and stopping points keeps the
+externally-persisted cortex progress current whenever auto-compact or a session
+restart could intervene.
 
 The last step of each phase (except Final Validation) is a **Phase Transition**
 that creates the next phase's cortex task inline (see ROADMAP step instructions)

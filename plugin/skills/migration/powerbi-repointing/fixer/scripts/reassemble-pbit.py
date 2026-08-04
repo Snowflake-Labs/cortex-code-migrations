@@ -11,6 +11,8 @@ import sys
 import tempfile
 import zipfile
 
+from _console import OK
+
 _BASE_DIR = os.path.join(
     os.environ.get("SCAI_PROJECT_DIR", tempfile.gettempdir()),
     "artifacts", "pbit",
@@ -37,7 +39,7 @@ def reassemble_pbit(original_path, work_dir):
                 arcname = os.path.relpath(file_path, work_dir)
                 zipf.write(file_path, arcname)
     
-    print(f"\u2713 Updated: {original_path}")
+    print(f"{OK} Updated: {original_path}")
     
     return backup_path
 

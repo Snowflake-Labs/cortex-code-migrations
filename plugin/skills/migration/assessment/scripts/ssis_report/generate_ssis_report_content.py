@@ -26,6 +26,12 @@ import json
 from pathlib import Path
 from typing import Tuple
 
+_scripts_dir = str(Path(__file__).resolve().parent.parent)
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+
+from snowconvert_reports.console_utils import DONE  # noqa: E402
+
 # Import the local SSIS HTML report generator
 from .ssis_html_report_generator import HTMLReportGenerator, sanitize_filename
 
@@ -100,7 +106,7 @@ def generate_ssis_html_content(ssis_json_path: Path, output_html_path: Path = No
                 
                 package_count += 1
             
-            print(f"✅ Generated {package_count} SSIS package detail pages in: {packages_dir}")
+            print(f"{DONE} Generated {package_count} SSIS package detail pages in: {packages_dir}")
             output_folder = str(output_dir)
         else:
             output_folder = None

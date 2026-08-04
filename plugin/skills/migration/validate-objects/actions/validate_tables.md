@@ -1,12 +1,12 @@
 # Action: Validate Tables
 
-Validate migrated table data between source and Snowflake using cloud validation — **setup → run → poll → report**.
+Validate migrated table data between source and Snowflake using cloud validation — **setup → run → monitor → report** (passive Monitor + `/loop` when available; active poll fallback otherwise).
 
 > **Always use the official tooling.** Run validation through `validate_data(mode="setup")` / `validate_data(mode="run")` (backed by `scai data validate`). **Never** suggest ad-hoc scripts to compare source and target data outside the DMVF validation pipeline.
 
 > **Scope is set per call.** `validate_data(mode="run")` validates **every** table listed in the workflow file produced by setup. Pass a `where` filter to setup that matches exactly the tables you intend to validate.
 
-> **Run-only entry:** If you were routed here only to execute `validateData` (registry task) and the workflow YAML already exists, skip Step 1 and complete **Step 2** (display the existing `workflow_path` and offer optional updates) before **Step 3**. You **must** complete **Steps 4–6** (poll, error-first validation report, teardown offer) before returning to the parent skill — even when the state machine invoked `validate_data(mode="run")` without walking setup.
+> **Run-only entry:** If you were routed here only to execute `validateData` (registry task) and the workflow YAML already exists, skip Step 1 and complete **Step 2** (display the existing `workflow_path` and offer optional updates) before **Step 3**. You **must** complete **Steps 4–6** (background monitor or poll fallback, error-first validation report, teardown offer) before returning to the parent skill — even when the state machine invoked `validate_data(mode="run")` without walking setup.
 
 ## Step 1: Choose validation approach + generate workflow
 
@@ -141,11 +141,15 @@ On success, returns a `job_id` immediately — validation runs in the background
 
 Retain `workflow_path` for the report in Step 5.
 
+After run starts, go to **Step 4** (do not busy-poll every 30–60s unless you are on the fallback path).
+
 ---
 
-## Step 4: Poll for completion
+## Step 4: Wait for completion (Monitor + `/loop`, or poll fallback)
 
-Poll until the job is terminal:
+Load [Background monitoring](./references/background-monitoring.md) and follow it. Summary below; the reference is authoritative for capability checks, watch command shape, and crash fallback.
+
+**Status tool** (both paths):
 
 ```
 validate_data_status()
@@ -153,22 +157,83 @@ validate_data_status()
 
 (or `migration_status(mode="summary")` for wave-level progress — per-table detail always comes from `validate_data_status`)
 
-**While `status` is `"running"`:**
+`progress` may be absent until `create-workflow` returns a workflow name; that is normal early in the run.
 
-- Poll every 30–60 seconds, or when the user asks for an update.
-- `progress` may be absent until `create-workflow` returns a workflow name; that is normal early in the run.
-- Optionally share a one-line update from `progress.output` when present (e.g. `validatedTables`/`totalTables`, `failedTables`).
+### 4.A — Choose path
 
-**Stop polling when:**
+| Condition | Path |
+|-----------|------|
+| Interactive session **and** Monitor tool available **and** `/loop` (or session cron) available | **Background** — Phases A–E in the reference |
+| Otherwise (older CoCo, non-interactive, Monitor/`/loop` disabled/unavailable, or unsure) | **Fallback** — active poll below |
+
+**One completion owner:** only the background Monitor path **or** the fallback poll may present Step 5 — never both.
+
+### 4.A.1 — Background path (preferred)
+
+1. **Phase A — workflow name:** Call `validate_data_status()` every **5–15s** until `progress.output.workflowName` is set, or the job is already terminal (then skip to final status → 4.B → Step 5).
+2. **Phase B — Monitor:** Start the **Monitor** tool (`persistent: true`) with:
+
+   ```bash
+   scai data validate status <WORKFLOW_NAME> --json --watch --connection <SNOWFLAKE_CONNECTION>
+   ```
+
+   Use the Snowflake connection from `configure()`. Omit `--connection …` only if none is configured. Run from the project root. **Do not** watch `create-workflow`. **Do not** use plugin `monitors/`.
+3. **Phase C — progress loop:** Start `/loop 30m` (or equivalent cron) that calls `validate_data_status()`, reports a short progress update that **names the tables currently validating and any that just finished** (from `progress.output.tableStates`, not just counts — see [background-monitoring](./references/background-monitoring.md#per-table-progress-narration-all-paths)), and runs Step 4 health checks. **Do not** present Step 5 on a loop tick.
+4. **Phase D — Monitor fire:** Cancel the loop → call `validate_data_status()` once → Step 4.B if needed → **Step 5**.
+5. **Phase E — loop sees terminal first:** Cancel Monitor if still running → `validate_data_status()` once → Step 4.B → Step 5 (crash fallback).
+
+Tell the user once (plain language) that you will report progress about every 30 minutes and notify immediately when validation finishes. Do not require the user to understand Monitor/`/loop` tool chrome.
+
+### 4.A.2 — Fallback path (active poll)
+
+Poll until the job is terminal:
+
+- Poll every **30–60 seconds**, or when the user asks for an update.
+- When `progress.output` is present, share a one-line update that **names the tables** currently validating and any that just finished (from `progress.output.tableStates`), alongside counts (`validatedTables`/`totalTables`, `failedTables`) — see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths). Don't emit silent, identical-looking repeat calls.
+
+**Stop when:**
 
 - `status` is `"completed"` or `"failed"`, **and**
 - `progress.output.isFinished` is `true` when `progress` is present.
 
-If `status` is `"failed"` and top-level `error` is set, surface it under **Execution** (or **Infrastructure** when no table progress exists).
+Then Step 4.B → Step 5.
+
+### 4.A.3 — Health monitoring (while waiting)
+
+No extra tools — derive health from consecutive `validate_data_status()` responses. Keep the previous response in memory (at least `progress.output.validatedTables`, `failedTables`, `totalTables`, and `tableStates`).
+
+**When to run:**
+
+- **Background path:** every `/loop` tick (and when the user asks). Skip until `progress.output` exists.
+- **Fallback path:** every **2nd or 3rd** poll, or when the user asks. Skip until `progress.output` exists.
+
+**Progress key:** `validatedTables + failedTables`. Record the poll/tick time when this key last increased.
+
+| Signal | Background (`/loop` ~30m) | Fallback (30–60s poll) | Severity |
+|--------|---------------------------|-------------------------|----------|
+| Stall | Progress key unchanged across **≥1** tick while running and `isFinished` is false | unchanged **≥10 minutes** | **Warning** |
+| Stuck | unchanged across **≥2** ticks | unchanged **≥20 minutes** | **Critical** |
+| Table failures | `failedTables > 0` or failed `tableStates` / `reports.files.data_validation_errors` | same | **Warning** (immediate) |
+| Slow start | Progress key still `0` and running **≥30 minutes** | running **≥15 minutes** | **Warning** |
+
+**What to tell the user** (short; do not block waiting unless they ask to stop):
+
+```markdown
+**Validation health** — `<workflowName or "starting…">`
+- Tables: <validated+failed>/<total> resolved (<validated> OK, <failed> failed)
+- **Warning:** No table progress in <N> minutes.  <!-- stall -->
+- **Critical:** No table progress in <N> minutes.  <!-- stuck -->
+```
+
+On **Warning** or **Critical**, point to [Troubleshooting Reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md) (stale `TASK_QUEUE` tasks, worker DB mismatch, affinity). Do **not** auto-cancel the workflow — offer: keep waiting, open troubleshooting, or pause/teardown if the user wants to stop cost.
+
+A stall or stuck warning does **not** end monitoring — only terminal `status` plus `isFinished` (or Monitor fire + confirmed terminal status) does.
+
+If `status` is `"failed"` and top-level `error` is set, surface it under **Execution** (or **Infrastructure** when no table progress exists) in Step 5.
 
 ### 4.B — Finished workflow with pending tables (anomaly)
 
-After the terminal poll, if `progress.output.isFinished == true` **and** any of:
+After the terminal status (Monitor fire + confirm, loop crash fallback, or fallback poll), if `progress.output.isFinished == true` **and** any of:
 
 - `validatedTables + failedTables < totalTables`
 - any `tableStates[].status == "Pending"`
@@ -332,7 +397,7 @@ Ask verbatim when eligible:
 validate_data(mode="revalidate", workflow_name="<progress.output.workflowName>")
 ```
 
-Then repeat **Steps 4–5** (poll with `validate_data_status()`, present a new error-first report). Skip Step 6 teardown until the user picks **Stop** or all tables pass. Relay the `cost_reminder` from the revalidate response when infrastructure starts.
+Then repeat **Steps 4–5** (background Monitor+/loop or poll fallback with `validate_data_status()`, present a new error-first report). Skip Step 6 teardown until the user picks **Stop** or all tables pass. Relay the `cost_reminder` from the revalidate response when infrastructure starts.
 
 **If the user picks option 2:** guide fixes from `### Suggested fixes`, then offer this menu again when ready.
 
@@ -364,8 +429,10 @@ If the user picks **Yes** (or doesn't respond), load the teardown sub-skill, the
 - [ ] User saw workflow YAML and was offered optional field updates (Step 2)
 - [ ] User confirmed the final workflow YAML and validation toggles before run
 - [ ] validate_data(mode="run") started
-- [ ] Polled until job terminal and progress.output.isFinished (when progress present)
+- [ ] Background Monitor+/loop used when available; otherwise active poll fallback (Step 4)
+- [ ] Waited until job terminal and progress.output.isFinished (when progress present)
 - [ ] Finished-but-pending anomaly checked (Step 4.B — do not report passed if tables still Pending)
+- [ ] Health monitoring run while waiting when triggered (Step 4.A.3)
 - [ ] Error-first data validation summary presented (Step 5 — Result + Workflow, Errors, Suggested fixes)
 - [ ] Re-validation menu offered when eligible (Step 5.G — before teardown, not on Step 4.B or execution-only failures)
 - [ ] Teardown offered when wave data work is done (Step 6)
@@ -375,6 +442,7 @@ Return control to the parent skill (../SKILL.md).
 
 ## Reference
 
+- [Background monitoring](./references/background-monitoring.md)
 - [Validation levels reference](./references/validation-levels-reference.md) — what schema, metrics, row, and execution mean (setup + report)
 - [Workflow Config Reference](../../setup/data-validation/references/workflow-config-reference.md)
 - [Data validation setup](../../setup/data-validation/SKILL.md)

@@ -18,7 +18,7 @@ Tell the user:
 > 3. Run `scai code sync` to initialize the project, populate `source/` and `snowflake/`, build the registry, and auto-pair source files with their converted counterparts.
 > 4. Review anything sync couldn't auto-pair with you, and finalize the pairings.
 > 5. Apply the resolutions with `scai code sync --continue`.
-> 6. Verify the project state and hand off to assessment.
+> 6. Verify the project state, then return to setup so Snowflake/source/git can run before assessment.
 
 ## When To Use This Skill
 
@@ -44,14 +44,20 @@ Ask the user for each input separately.
 
 **1.1: Target project directory.** Default to the current working directory. Must be empty. If not empty, offer to create a subdirectory (e.g. `<cwd>/<name>-migration`).
 
-**1.2: Source dialect.** Ask via `ask_user_question` (`multiSelect = false`):
+**1.2: Source dialect.** Do **not** re-ask if setup already persisted one.
+
+1. Call `configure()` / read project state (or reuse the dialect from `chooseSourceDialect` / `.scai/config/project.yml`).
+2. If the dialect is **SQL Server** or **Redshift**, continue with that value.
+3. If it is missing, ask via `ask_user_question` (`multiSelect = false`):
 
 > "Which source dialect?"
 >
 > 1. **SQL Server**
 > 2. **Redshift**
 
-(Oracle/Teradata are not supported for midway entry; fall back to the normal setup path.)
+4. If it is any other dialect (Oracle, Teradata, PostgreSQL, …), stop midway: tell the user midway supports only SQL Server / Redshift, call `configure(entry_mode="fresh")`, then return to the parent setup skill so `progress_setup()` can continue on the fresh path.
+
+(Oracle/Teradata/PostgreSQL are not supported for midway entry; fall back to the normal setup path.)
 
 **1.3: Path to source SQL files.** The customer's source directory. Layout does **not** need to match the converted side.
 
@@ -183,7 +189,7 @@ This reads `remaining-mappings.yml` and applies the outcomes. Read its output:
 
 Confirm the project scaffolding exists (`.scai`, `source`, `snowflake`, `artifacts` directories) and count `.sql` files in each side. Use whichever portable command fits the host: `ls -la` + `find ... | wc -l` on POSIX, `Get-ChildItem` on PowerShell, or `Path.iterdir()` from a Python helper.
 
-Then call `migration_status`. Expect:
+Then call `migration_status(mode="summary")`. Expect:
 - `routing.project_exists = true`
 - `routing.registered = true`
 - `routing.converted = true`
@@ -212,9 +218,11 @@ Confirm with the user:
 
 After the CHECKPOINT passes, tell the user. Fill placeholders from `scai code sync --json` (and `scai code sync --continue --json`) outputs.
 
+The setup machine treats midway as done only when the project is initialized **and** both `source/**/*.sql` and `snowflake/**/*.sql` exist (`allOf`). Do not return until the CHECKPOINT confirms that.
+
 > **Midway entry complete** in `<duration>`. Your project is initialized with `<N>` source files and `<M>` converted files paired (`<X>` auto-resolved, `<Y>` reviewed and applied).
 > *If `ignored > 0`:* `<Z>` ignored.
 > *If `adopted > 0`:* `<W>` adopted.
-> Registration and conversion were skipped because pre-converted code was already present. Next, we'll run an assessment to plan your migration.
+> Registration and conversion were skipped because pre-converted code was already present. Next, setup will configure Snowflake (and optional source/git) before assessment.
 
-Then load `../assessment/SKILL.md`.
+Return to the parent setup skill and call `progress_setup()` so the state machine picks the next task.

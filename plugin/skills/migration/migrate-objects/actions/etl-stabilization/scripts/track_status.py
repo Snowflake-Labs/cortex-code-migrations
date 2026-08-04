@@ -49,7 +49,7 @@ from pathlib import Path
 
 from path_resolver import phase_dir, report_path, stabilization_root, tests_dir
 
-VALID_STATUSES = {"pending", "in_progress", "fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "test-passed", "test-failed", "auto-fixed-needs-review"}
+VALID_STATUSES = {"pending", "in_progress", "fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review"}
 
 TERMINAL_STATUSES = {
     "fixed", "test-passed", "test-failed", "no-fix-needed",
@@ -60,12 +60,16 @@ VALID_SKIP_REASONS = {"disabled-in-source", "container-only", "file-io-noop", "d
 
 VALID_DBT_STATUSES = {"pending", "in_progress", "dbt-fixed", "dbt-failed", "dbt-tested", "skipped", "test-passed", "test-failed"}
 
-VALID_DBT_NODE_STATUSES = {"pending", "passing", "fixed", "failed", "skipped", "test-passed", "test-failed"}
+# "unverified": the node compiled but its source-derived semantic tests could not be run
+# (no warehouse available). Deliberately distinct from "fixed" -- a compile-only pass is not
+# evidence of correctness. See dbt-fixer/SKILL.md Step 2.3.
+VALID_DBT_NODE_STATUSES = {"pending", "passing", "fixed", "failed", "skipped", "test-passed", "test-failed", "unverified"}
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"in_progress", "fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "test-passed", "test-failed", "auto-fixed-needs-review"},
-    "in_progress": {"fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "test-passed", "test-failed", "auto-fixed-needs-review"},
+    "pending": {"in_progress", "fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review"},
+    "in_progress": {"fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review"},
     "orch-tested": {"fixed", "failed", "needs-user", "no-fix-needed", "test-passed", "test-failed", "auto-fixed-needs-review", "in_progress"},
+    "proc-tested": {"fixed", "failed", "needs-user", "no-fix-needed", "test-passed", "test-failed", "auto-fixed-needs-review", "in_progress"},
     "fixed": {"test-passed", "test-failed", "in_progress"},
     "test-passed": {"in_progress"},
     "test-failed": {"in_progress", "fixed", "needs-user"},
@@ -402,12 +406,47 @@ def _validate_dbt_artifacts(session: dict, phase_num: int, pkg_path: str) -> lis
     return errors
 
 
+def _validate_dataflow_proc_artifacts(session: dict, phase_num: int, pkg_path: str) -> list[str]:
+    """Return a list of validation errors for a dataflow-proc (Snowflake Scripting) phase.
+
+    A converted mapping procedure assigned to this phase is tracked as an element.
+    Checks per procedure:
+    - stabilization/tests/proc/{PROC}/test_report.md exists
+    - All procedures assigned to this phase have terminal status
+    """
+    errors: list[str] = []
+
+    phase_elements = [el for el in session["elements"] if el.get("phase") == phase_num]
+    if not phase_elements:
+        errors.append(f"No mapping procedures found assigned to phase {phase_num}")
+        return errors
+
+    if pkg_path:
+        stab_tests_dir = tests_dir(pkg_path)
+        for el in phase_elements:
+            report_file = stab_tests_dir / "proc" / el["name"] / "test_report.md"
+            if not report_file.is_file():
+                errors.append(f"Missing proc artifact: {report_file} not found")
+    else:
+        errors.append("Missing artifact: migration_object_path not set in session; cannot locate proc test artifacts")
+
+    non_terminal = [el["name"] for el in phase_elements if el["status"] not in TERMINAL_STATUSES]
+    if non_terminal:
+        errors.append(
+            f"Mapping procedures not in terminal status ({', '.join(non_terminal)}): "
+            f"all procedures must be resolved before completing phase"
+        )
+
+    return errors
+
+
 def _validate_phase_artifacts(session: dict, phase_num: int) -> list[str]:
     """Return validation errors for a phase based on its scope.
 
     Dispatches to the appropriate validator:
     - orchestration (default) → _validate_orch_artifacts
     - dbt → _validate_dbt_artifacts
+    - dataflow-proc → _validate_dataflow_proc_artifacts
     - final-validation → checks all elements terminal + artifacts/report.html
     """
     phases = session.get("roadmap", {}).get("phases", [])
@@ -417,6 +456,9 @@ def _validate_phase_artifacts(session: dict, phase_num: int) -> list[str]:
 
     if scope == "dbt":
         return _validate_dbt_artifacts(session, phase_num, pkg_path)
+
+    if scope == "dataflow-proc":
+        return _validate_dataflow_proc_artifacts(session, phase_num, pkg_path)
 
     if scope in ("final-validation", "validation"):
         errors: list[str] = []
@@ -909,7 +951,7 @@ def cmd_update_dbt_node(status_path: Path, project_name: str, node_name: str, st
     found["status"] = status
     if reason is not None:
         found["reason"] = reason
-    elif "reason" in found and status not in ("failed", "skipped"):
+    elif "reason" in found and status not in ("failed", "skipped", "unverified"):
         del found["reason"]
 
     session["last_updated"] = now_iso()

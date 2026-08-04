@@ -47,6 +47,7 @@ from .loaders import (
     load_code_units_from_registry,
     load_object_references_from_registry,
     load_missing_references_from_registry,
+    load_exclusion_findings_from_registry,
     # Unified (auto-dispatch) loaders
     load_code_units_auto,
     load_object_references_auto,
@@ -55,6 +56,29 @@ from .loaders import (
 from .services import (
     IssueEffortService,
     ReportFinder,
+)
+from .conversion_status import (
+    STATUS_MISSING,
+    STATUS_NOT_SUPPORTED,
+    STATUS_PENDING,
+    STATUS_REQUIRE_ATTENTION,
+    STATUS_SUCCESS,
+    aggregate_etl_issues,
+    is_etl,
+    map_conversion_status,
+)
+from .testing_readiness import (
+    TestingReadiness,
+    UnitBuckets,
+    load_testing_readiness,
+    normalize_dialect,
+)
+from .data_types_scan import TypeUsage, aggregate_usage, scan_ddl
+from .type_coverage import TypeCoverage, coverage_for
+from .data_migration_readiness import (
+    DataMigrationReadiness,
+    TypeFinding,
+    load_data_migration_readiness,
 )
 from .repositories import (
     ElementRepository,
@@ -94,9 +118,11 @@ __all__ = [
     # Registry loaders
     "load_registry_entries",
     "build_id_to_name_map",
+    "iter_in_scope_non_missing",
     "load_code_units_from_registry",
     "load_object_references_from_registry",
     "load_missing_references_from_registry",
+    "load_exclusion_findings_from_registry",
     # Unified (auto-dispatch) loaders
     "load_code_units_auto",
     "load_object_references_auto",
@@ -107,4 +133,27 @@ __all__ = [
     # Repositories
     "ElementRepository",
     "IssueRepository",
+    # Registry conversion status
+    "STATUS_MISSING",
+    "STATUS_NOT_SUPPORTED",
+    "STATUS_PENDING",
+    "STATUS_REQUIRE_ATTENTION",
+    "STATUS_SUCCESS",
+    "aggregate_etl_issues",
+    "is_etl",
+    "map_conversion_status",
+    # Testing readiness
+    "TestingReadiness",
+    "UnitBuckets",
+    "load_testing_readiness",
+    "normalize_dialect",
+    # Data migration readiness
+    "DataMigrationReadiness",
+    "TypeCoverage",
+    "TypeFinding",
+    "TypeUsage",
+    "aggregate_usage",
+    "coverage_for",
+    "load_data_migration_readiness",
+    "scan_ddl",
 ]

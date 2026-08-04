@@ -24,13 +24,24 @@ scripts/snowconvert_reports/
 │   ├── code_units_loader.py         # load_code_units()
 │   ├── object_references_loader.py  # load_object_references(), load_missing_references()
 │   ├── partition_loader.py          # load_partition_membership()
+│   ├── registry_loader.py           # Code Unit Registry entries
 │   └── estimation_loader.py         # load_issues_estimation_json(), load_object_estimations()
 ├── services/
 │   ├── issue_effort_service.py      # IssueEffortService (unified effort/severity lookup)
 │   └── report_finder.py             # ReportFinder (glob-based file discovery)
+├── conversion_status.py             # Per-unit conversion status vocabulary
+├── data_migration_readiness.py      # Registry → per-table data-migration readiness
+├── data_types_scan.py               # Column types extracted from captured DDL
+├── type_coverage.py                 # Per-dialect type coverage + drift guard
+├── testing_readiness.py             # Registry → testing readiness; owns normalize_dialect
 └── data/
     └── issues_ref.json              # Bundled issue reference (for offline/ETL use)
 ```
+
+The five modules at package root differ from `loaders/` and `models/` in kind: they are **readiness
+computation** for the multi-report's journey tabs, not raw-file parsing. They read the Code Unit
+Registry rather than SnowConvert CSVs, and each returns a frozen dataclass the render layer in
+`scripts/data_migration_report/` or `scripts/testing_report/` consumes without further computation.
 
 ---
 
@@ -275,6 +286,9 @@ ETL doesn't subclass `Element`. It composes a richer domain model:
 | Wave generation algo | External — `scai assessment waves` | Owned by SCAI; emits `waves_analysis_*.json` that the HTML generators consume via `WavesJsonAdapter` |
 | Dynamic SQL detection (occurrence extraction, tracking) | External — `scai assessment sql-dynamic` | Owned by SCAI; the sub-skill is a thin wrapper that drives the CLI and applies pattern classification |
 | Object exclusion (naming patterns, duplicates, version conflicts) | External — `scai assessment object-exclusion` | Owned by SCAI; the sub-skill is a thin wrapper that consumes the resulting JSON |
+| Data-migration readiness, DDL type scan, type coverage | `snowconvert_reports/{data_migration_readiness,data_types_scan,type_coverage}.py` | Reads the Code Unit Registry, not CSVs; no CLI command or artifact of its own |
+| Testing readiness, dialect normalization | `snowconvert_reports/testing_readiness.py` | Same; `normalize_dialect` lives here and is imported by `data_migration_readiness.py` |
+| Journey-tab copy and markup | `scripts/data_migration_report/`, `scripts/testing_report/` | `content.py` holds reviewable copy with no markup; `generate_*_content()` renders it |
 | HTML report rendering | `scripts/generate_multi_report.py` | Presentation layer (Vue.js, Chart.js) |
 
 ---
@@ -300,3 +314,9 @@ tests/assessment/snowconvert_reports/
                                    ──────
                                    45 tests total (0.08s)
 ```
+
+The five readiness modules are tested outside this mirrored package, in
+`tests/assessment/data_migration_readiness/` (readiness, DDL type scan, type-coverage drift) and
+`tests/assessment/testing_readiness/`. That placement diverges from the
+"test structure mirrors source" convention in `ai/CLAUDE.md` and is tracked for cleanup — look in
+both places when changing a readiness module.

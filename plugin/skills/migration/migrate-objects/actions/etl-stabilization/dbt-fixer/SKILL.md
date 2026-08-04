@@ -29,8 +29,8 @@ This sub-skill expects:
 
 - **MUST be called AFTER dbt-test-gen** — tests must exist before fixing begins. The parent skill (stabilization/SKILL.md) enforces this via the phase workflow. If the project status is `pending` instead of `dbt-tested`, STOP and return to the parent skill to run test generation first.
 - `dbt-snowflake` installed and available on PATH
-- For compilation-only validation: `dbt compile` works without a warehouse
-- For full validation: active Snowflake connection with a warehouse configured in `~/.dbt/profiles.yml`
+- `dbt compile` needs no warehouse, but it is only a syntactic pre-filter — it cannot tell a correct fix from a wrong one (see Step 2.3)
+- **A warehouse is required to actually verify a fix.** The convergence gate is the source-derived semantic tests, which must execute. Without a warehouse, nodes can only be recorded with status `unverified` (plus a reason), never as fixed.
 
 ### Phase 1: Analyze and Plan
 
@@ -108,27 +108,71 @@ Analyze the error and apply a fix directly to the model file. Follow these rules
 
 ### Step 2.3: Verify the Fix
 
-After applying the fix, re-run compilation:
+**Compilation is a pre-filter, not the verdict.** `dbt compile` only renders Jinja and checks that the
+project parses — it does not execute the SQL and does not check what the model returns. A fix can compile
+cleanly and still produce wrong data (a lookup turned into an inner join that silently drops no-match
+rows, de-duplication that keeps the wrong row, a blank test that changes which rows survive). Those
+defects are invisible to compilation and are exactly what the source-derived tests exist to catch.
+
+So verify in two stages:
+
+**Stage 1 — compile (cheap, no warehouse).** Fast syntactic check; if it fails, fix and retry without
+spending a warehouse round-trip.
 
 ```bash
 dbt compile --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
 ```
 
-Or, if a Snowflake warehouse is available and the user confirmed full validation:
+**Stage 2 — source-derived semantic tests (the actual gate).** When a warehouse is configured, build the
+node and run the tests `dbt-test-gen` generated from the source definition. **This is what decides whether
+the node is fixed.**
 
 ```bash
-dbt run --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
+# Drop the node's target objects first - see the stale-state warning below
+dbt build --select <node_name> --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
+dbt test --select <node_name> --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
 ```
+
+⚠️ **Drop and recreate the node's target objects before each attempt.** If a build FAILS, the previous
+attempt's relation is still in place, and the tests will then pass against stale rows — reporting a fix
+that did not happen. Always drop (or `--full-refresh`) so a failed build cannot inherit an earlier pass.
+
+⚠️ **An assertion that ERRORS is not an assertion that FAILS.** A test whose SQL is itself invalid (for
+example a scalar subquery that returns multiple rows once a fix produces duplicates) errors rather than
+returning a clean fail. Treat an erroring test as a defective test, not as a failed fix: simplify or
+regenerate that test (up to 2 regenerations) and re-run before counting the attempt against the node.
+Otherwise the node burns its attempt budget on a test bug.
+
+**If no warehouse is available**, Stage 2 cannot run. Converge on compilation, but record the node as status `unverified`
+with reason `no semantic grade (no warehouse available)` in your learnings artifact — never as fixed.
+(`unverified` is a valid dbt node status the orchestrator can record via `track_status.py update-dbt-node`.) A compile-only pass is a
+partial result and must never be reported as a validated fix.
 
 ### Step 2.4: Handle Results
 
-- **Node passes** → record as fixed in your learnings artifact and move to next node
+- **Node compiles AND its source-derived tests pass** → record as fixed in your learnings artifact and
+  move to the next node. This is the only outcome that counts as fixed when a warehouse is available.
 
-- **Node still fails with a new error** → read the new error, retry the fix (up to 5 attempts per node)
+- **Node compiles but a source-derived test FAILS** → the fix is wrong, not done. Read the failing
+  assertion, which states the expected behaviour traced from the source definition, and revise the fix
+  (counts toward the 5-attempt budget). Do **not** weaken, narrow or delete the assertion to make it
+  pass — the assertion is the specification.
 
-- **Node still fails after 5 attempts** → revert the file to its original content from `<UNIT>/stabilization/original/`, record as failed in your learnings artifact with the error summary
+- **A source-derived test ERRORS (rather than fails)** → treat it as a defective test per Step 2.3;
+  regenerate it and re-run without consuming an attempt.
 
-After all nodes in a project are processed, record the project-level outcome (all-fixed or N-failed) in your learnings artifact.
+- **Node still fails to compile with a new error** → read the new error, retry the fix (up to 5 attempts
+  per node)
+
+- **Node still fails after 5 attempts** → revert the file to its original content from
+  `<UNIT>/stabilization/original/`, record as failed in your learnings artifact with the error summary
+  and the failing assertions
+
+- **No warehouse available** → record status `unverified` with a reason (see Step 2.3), not as fixed
+
+After all nodes in a project are processed, record the project-level outcome (all-fixed or N-failed) in
+your learnings artifact, and state explicitly whether the outcomes were semantically verified or
+compile-only.
 
 > **Do NOT call `track_status.py` directly.** The orchestrator reads your learnings artifact and updates `session_status.json` after all dbt agents complete.
 

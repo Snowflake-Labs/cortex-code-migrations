@@ -235,7 +235,7 @@ For common issues and their solutions, also consult [../references/troubleshooti
    find <project_dir>/snowflake -iname "*<object_name>*" -type f
    ```
 
-2. **Make the minimal change** to fix the root cause. **Preserve all original source code comments** (synopsis, metadata, author, archive, change log, examples) — do not strip them during fixes or rewrites.
+2. **Make the minimal change** to fix the root cause. **Preserve all original source code comments** (synopsis, metadata, author, archive, change log, examples) — do not strip them during fixes or rewrites. Don't stub or delete logic to silence an error (no `NULL`/empty `… WHERE FALSE` bodies), and don't reuse another object or invent a new one for a missing reference — comment the original out with a `-- NEEDS-USER:` note instead.
 
    Also verify these common conversion issues before redeploying:
    - `USE DATABASE <source_db>` at the top referencing the source database — remove it.

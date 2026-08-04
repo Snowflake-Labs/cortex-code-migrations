@@ -33,6 +33,7 @@
 | `loading` | Object | No | Loading strategy: `warehouse` (default, `COPY INTO`) or `snowpipe`. |
 | `queryModifiers` | Object | No | SQL hints to reduce locking on busy source tables during extraction (see [Query modifiers](#query-modifiers)). |
 | `intervalHandling` | `"interval"` \| `"varchar"` | No | Per-table override of top-level `intervalHandling`. |
+| `executionTimeoutMinutes` | Integer | No | Wall-clock timeout in minutes for the **Analyze boundaries** DEA task only (orchestrator default is **20** when omitted). Does **not** apply to extraction or load. Use per table for large/slow boundary queries, or under `defaultTableConfiguration` to apply to all tables. |
 
 ## SourceTargetIdentifier
 
@@ -192,6 +193,7 @@ queryModifiers:
 - **Auto mode:** omit both `targetPartitionSizeMb` and `targetPartitionSizeRows`. The orchestrator picks platform-appropriate defaults.
 - **Explicit sizing:** set exactly one of `targetPartitionSizeMb` or `targetPartitionSizeRows`.
 - **`columnNamesToPartitionBy`:** required by the CLI validator. Use a monotonic integer/timestamp column for large tables, or `[]` only for very small tables (single full-table partition). When omitted from user input, scai may infer keys from registry metadata — review `partition_key_findings` from setup.
+- **`executionTimeoutMinutes`:** optional wall-clock limit for **Analyze boundaries** only (default 20). Raise it when NTILE/boundary analysis on large tables exceeds 20 minutes; prefer a cheaper partition key when possible.
 - **Deprecated:** do not use legacy `partitionSize: auto` — use the flat `targetPartitionSizeMb` / `targetPartitionSizeRows` fields instead.
 
 ## ColumnTypeMapping

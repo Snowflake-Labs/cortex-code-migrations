@@ -41,9 +41,16 @@ Ask the user via `ask_user_question` (`multiSelect = false`):
 > 1. **All objects** - Extract everything from the source database
 > 2. **Specific object types** - e.g. just tables and views, or just procedures
 > 3. **Specific schemas** - Limit to one or more schemas
-> 4. **Name pattern** - Match objects by name (e.g. `Get*Data`)
+> 4. **Name filter** - Exact object name, or a wildcard with `*` (e.g. `Employees` or `Get*Data`)
 
 Allow combining options (e.g. specific types within a specific schema).
+
+> **Name matching:** `-n` / `--name` is an **exact** case-insensitive match unless the
+> pattern contains `*`. Do **not** pass a bare prefix expecting substring match —
+> that used to pull sibling objects (e.g. `FOO` matching `FOO_SWTCH`). For partial
+> matches use wildcards: `FOO*`, `*Employee*`. When the user lists specific table
+> names, pass each exact name or extract by schema/type and let them confirm the
+> catalog count.
 
 ### Step 2: Run Extraction
 
@@ -56,7 +63,7 @@ scai code extract -s <CONNECTION_NAME> --json
 # Add flags based on user choices:
 #   --schema <SCHEMA>        filter by schema
 #   -t TYPE1,TYPE2           filter by object type
-#   -n "pattern"             filter by name pattern
+#   -n "Name"                exact name (case-insensitive); use * for wildcards
 #   --driver-path <PATH>     path to driver .nupkg (Oracle only, first use)
 ```
 
@@ -70,7 +77,10 @@ scai code extract -s <CONNECTION_NAME> --json
 # Only tables and views in the dbo schema
 scai code extract -s <CONNECTION_NAME> --schema dbo -t TABLE,VIEW --json
 
-# Procedures matching a pattern
+# Exact table name
+scai code extract -s <CONNECTION_NAME> -t TABLE -n "SNAPM_EDB_MODEL_GROUPING" --json
+
+# Procedures matching a wildcard pattern
 scai code extract -s <CONNECTION_NAME> -t PROCEDURE -n "Get*Data" --json
 
 # Oracle: first extraction with driver path

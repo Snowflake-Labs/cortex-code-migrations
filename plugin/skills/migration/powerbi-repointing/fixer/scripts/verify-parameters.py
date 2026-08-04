@@ -9,6 +9,8 @@ import json
 import os
 import sys
 
+from _console import OK
+
 
 # SF_ROLE parameter definition for DataModelSchema (model.expressions[])
 # NOTE: Uses null default (not empty string) so the parameter is null when not provided.
@@ -93,7 +95,7 @@ def verify_parameters_in_datamodel(datamodel_path):
         json_str = json.dumps(data, indent=2, ensure_ascii=False)
         with open(datamodel_path, 'wb') as f:
             f.write(json_str.encode('utf-16-le'))
-        print(f"  \u2713 SF_ROLE parameter injected into DataModelSchema")
+        print(f"  {OK} SF_ROLE parameter injected into DataModelSchema")
     
     return True, sf_role_injected
 
@@ -141,7 +143,7 @@ def verify_parameters_in_unapplied_changes(work_dir):
                 print(f"    SF_ROLE parameter found in UnappliedChanges")
     
     if sf_server_link_exists or sf_warehouse_name_exists or sf_db_name_exists:
-        print(f"  \u2713 SF_* parameters found in UnappliedChanges (will remain unchanged)")
+        print(f"  {OK} SF_* parameters found in UnappliedChanges (will remain unchanged)")
     
     # Auto-inject SF_ROLE if not present
     sf_role_injected = False
@@ -156,7 +158,7 @@ def verify_parameters_in_unapplied_changes(work_dir):
         json_str = json.dumps(data, indent=2, ensure_ascii=False)
         with open(unapplied_changes_path, 'wb') as f:
             f.write(json_str.encode('utf-16-le'))
-        print(f"  \u2713 SF_ROLE parameter injected into UnappliedChanges")
+        print(f"  {OK} SF_ROLE parameter injected into UnappliedChanges")
     
     return True, sf_role_injected
 
@@ -179,7 +181,7 @@ def main():
     if not unapplied_ok:
         sys.exit(1)
     
-    print("\n\u2713 All SF_* parameters exist in PBIT")
+    print(f"\n{OK} All SF_* parameters exist in PBIT")
     if datamodel_role_injected or unapplied_role_injected:
         print("  SF_ROLE parameter was auto-injected (defaults to null - uses user's default Snowflake role)")
     print("Note: Empty parameter values are intentional - users will fill them when opening the report")

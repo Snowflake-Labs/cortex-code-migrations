@@ -23,10 +23,12 @@ from .estimation_loader import load_issues_estimation_json, load_object_estimati
 from .registry_loader import (
     load_registry_entries,
     build_id_to_name_map,
+    iter_in_scope_non_missing,
     load_code_units_from_registry,
     load_object_references_from_registry,
     load_missing_references_from_registry,
     load_missing_dependencies_by_object,
+    load_exclusion_findings_from_registry,
 )
 from .waves_from_registry import (
     synthesize_waves_json,
@@ -54,10 +56,12 @@ __all__ = [
     # Registry loaders
     "load_registry_entries",
     "build_id_to_name_map",
+    "iter_in_scope_non_missing",
     "load_code_units_from_registry",
     "load_object_references_from_registry",
     "load_missing_references_from_registry",
     "load_missing_dependencies_by_object",
+    "load_exclusion_findings_from_registry",
     # Registry → waves JSON synthesizer
     "synthesize_waves_json",
     "write_synthesized_waves_json",

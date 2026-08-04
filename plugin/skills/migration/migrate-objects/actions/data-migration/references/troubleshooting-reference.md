@@ -73,6 +73,39 @@ ORDER BY ID DESC LIMIT 5;
 
 ---
 
+## "Execution timeout exceeded (task ran for longer than N min)"
+
+**Symptom:** A task fails (or is abandoned then fails after retries) with:
+```text
+Execution timeout exceeded (task ran for longer than 20 min).
+```
+Typically the task name is `Analyze boundaries: <table>`.
+
+**Cause:** The orchestrator sets a wall-clock `EXECUTION_TIMEOUT_MINUTES` on **Analyze boundaries** DEA tasks (default **20**). `EXPIRE_LEASES` abandons the task when that limit is exceeded — even if the worker (local or SPCS) is still alive and refreshing its lease. This is **not** an SPCS container timeout.
+
+**Diagnosis:**
+```sql
+SELECT ID, NAME, STATUS, EXECUTION_TIMEOUT_MINUTES, LAST_ERROR_MESSAGE, ABANDONMENTS
+FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+WHERE WORKFLOW_ID = <id>
+  AND (NAME ILIKE 'Analyze boundaries%' OR LAST_ERROR_MESSAGE ILIKE '%Execution timeout%')
+ORDER BY ID;
+```
+
+**Fix:** Raise the timeout in workflow YAML (per table or under `defaultTableConfiguration`), then resubmit:
+```yaml
+tables:
+  - source: { ... }
+    target: { ... }
+    columnNamesToPartitionBy: [ ... ]
+    executionTimeoutMinutes: 90   # > observed boundary-analysis duration
+```
+Also consider a cheaper partition key / larger partitions so NTILE boundary analysis finishes sooner. See [workflow-config-reference.md](./workflow-config-reference.md).
+
+**Operational workaround** (in-flight workflow without resubmitting YAML): update `EXECUTION_TIMEOUT_MINUTES` on the `TASK_QUEUE` row and re-queue if already `failed`.
+
+---
+
 ## Worker claims tasks from old/wrong workflows
 
 **Symptom:** The worker picks up tasks from a previous migration (e.g., Teradata data-validation tasks) and fails with errors like `Engine 'teradata' not found in source connections`.
@@ -291,5 +324,31 @@ ORDER BY WORKFLOW_ID;
 ```
 
 > **Task model:** For scope grammar, dependency chains, and pause/resume/cancel procedures, see [Task model reference](./task-model-reference.md).
+
+---
+
+## Extra / unexpected tables in the migration workflow
+
+**Symptom:** The user asked to migrate N specific tables, but the workflow YAML
+(or Snowflake `TABLE_METADATA` / `TABLE_PROGRESS`) shows additional tables —
+often a name that shares a prefix with a requested table (e.g.
+`SNAPM_EDB_MODEL_GROUPING_SWTCH` alongside `SNAPM_EDB_MODEL_GROUPING`).
+
+**Cause (usual):** The registry `where` used substring / `ILIKE '%…%'` matching,
+or setup **reused** an older broader workflow YAML. SnowConvert does **not**
+auto-include SQL Server SWITCH / partition staging siblings.
+
+**Diagnosis:**
+1. Open `artifacts/data_migration/workflows/<hash>.yaml` and list every
+   `tables[].source.tableName`.
+2. Check the `where` shown at setup / stored under plugin config.
+3. Note whether setup reported `workflow_reused`.
+
+**Fix:**
+1. Rebuild with an **exact** filter, e.g.
+   `source.objectType = 'table' AND source.canonicalName IN ('dbo.T1', 'dbo.T2')`.
+2. Pass `force_regenerate=true` on `migrate_data(mode="setup")` so a stale YAML
+   is not reused.
+3. Re-confirm the `tables:` list with the user before `mode="run"`.
 
 > **Stopping the service when done:** to suspend the orchestrator, suspend the compute pool, and stop the local worker after a wave completes, follow [../../../../data-infrastructure/teardown/SKILL.md](../../../../data-infrastructure/teardown/SKILL.md). Don't run `ALTER SERVICE ... SUSPEND` ad-hoc — the teardown sub-skill verifies no in-flight workflows first.

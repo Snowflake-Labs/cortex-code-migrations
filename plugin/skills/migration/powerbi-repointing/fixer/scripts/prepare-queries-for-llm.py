@@ -12,6 +12,8 @@ import os
 import sys
 import tempfile
 
+from _console import OK, FAIL
+
 _BASE_DIR = os.path.join(
     os.environ.get("SCAI_PROJECT_DIR", tempfile.gettempdir()),
     "artifacts", "pbit",
@@ -46,13 +48,13 @@ def prepare_queries_from_datamodel(datamodel_path, pbit_info):
                 break
         
         if not query_table:
-            print(f"  \u2717 ERROR: Query '{query_name}' not found in DataModelSchema")
+            print(f"  {FAIL} ERROR: Query '{query_name}' not found in DataModelSchema")
             continue
 
         # Get current expression
         partitions = query_table.get('partitions', [])
         if not partitions or 'source' not in partitions[0] or 'expression' not in partitions[0]['source']:
-            print(f"  \u2717 ERROR: Query '{query_name}' has no valid partition/source/expression")
+            print(f"  {FAIL} ERROR: Query '{query_name}' has no valid partition/source/expression")
             continue
         expression = partitions[0]['source']['expression']
         query_text = ''.join(expression) if isinstance(expression, list) else expression
@@ -75,7 +77,7 @@ def prepare_queries_from_datamodel(datamodel_path, pbit_info):
         }
         
         queries_for_translation.append(query_for_llm)
-        print(f"  \u2713 Query prepared: {query_name} ({len(column_names)} columns) [DataModelSchema]")
+        print(f"  {OK} Query prepared: {query_name} ({len(column_names)} columns) [DataModelSchema]")
     
     return queries_for_translation
 
@@ -125,7 +127,7 @@ def prepare_queries_from_unapplied_changes(work_dir, pbit_info):
             }
             
             queries_for_translation.append(query_for_llm)
-            print(f"  \u2713 Query prepared: {query_name} [UnappliedChanges]")
+            print(f"  {OK} Query prepared: {query_name} [UnappliedChanges]")
     
     return queries_for_translation
 
@@ -156,7 +158,7 @@ def prepare_queries_for_llm(datamodel_path, pbit_info_json):
     datamodel_count = len(queries_from_datamodel)
     unapplied_count = len(queries_from_unapplied)
     
-    print(f"\n\u2713 Prepared {len(queries_for_translation)} queries for LLM translation")
+    print(f"\n{OK} Prepared {len(queries_for_translation)} queries for LLM translation")
     print(f"  - DataModelSchema: {datamodel_count} queries")
     print(f"  - UnappliedChanges: {unapplied_count} queries")
     print(f"  Output: {QUERIES_FOR_TRANSLATION_JSON}")
@@ -183,7 +185,7 @@ def main():
     if count > 0:
         sys.exit(0)
     else:
-        print("\n\u2717 No queries to prepare")
+        print(f"\n{FAIL} No queries to prepare")
         sys.exit(1)
 
 

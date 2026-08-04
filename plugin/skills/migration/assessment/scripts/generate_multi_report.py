@@ -41,6 +41,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+_scripts_dir = str(Path(__file__).resolve().parent)
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+
+from snowconvert_reports.console_utils import DONE  # noqa: E402
+
 # Waves-generator modules (optional)
 try:
     _waves_scripts = str(Path(__file__).parent.parent / 'waves-generator' / 'scripts')
@@ -56,7 +62,7 @@ try:
         load_missing_refs,
     )
     from generate_html_report import generate_html_report as generate_full_waves_report
-    from snowconvert_reports import load_registry_entries
+    from snowconvert_reports import load_registry_entries, load_exclusion_findings_from_registry
     from snowconvert_reports.loaders.waves_json import WavesJsonAdapter
     WAVES_SUPPORT = True
 except ImportError as e:
@@ -86,6 +92,45 @@ try:
 except ImportError as e:
     print(f"Warning: Anti-patterns report generator not available: {e}", file=sys.stderr)
     ANTI_PATTERNS_SUPPORT = False
+
+# Effort estimation (dialect-gated calculator tab: SQL Server, Redshift)
+try:
+    from effort_estimation import (
+        build_effort_assessment,
+        is_effort_estimation_supported,
+        render_effort_tab_html,
+        render_overview_section_b_html,
+    )
+    EFFORT_SUPPORT = True
+except ImportError as e:
+    print(f"Warning: Effort estimation module not available: {e}", file=sys.stderr)
+    EFFORT_SUPPORT = False
+
+# Testing phase tab (optional)
+try:
+    from snowconvert_reports.testing_readiness import load_testing_readiness
+    from testing_report import generate_testing_html_content
+    TESTING_SUPPORT = True
+except ImportError as e:
+    print(f"Warning: Testing phase generator not available: {e}", file=sys.stderr)
+    TESTING_SUPPORT = False
+
+# Data Migration & Validation phase tab (optional)
+try:
+    from snowconvert_reports.data_migration_readiness import (
+        load_data_migration_readiness,
+    )
+    from data_migration_report import generate_data_migration_html_content
+    DATA_MIGRATION_SUPPORT = True
+except ImportError as e:
+    print(f"Warning: Data migration phase generator not available: {e}", file=sys.stderr)
+    DATA_MIGRATION_SUPPORT = False
+
+# The Virtualization phase is built but withheld from every report: its panel has
+# no authored guidance yet, and a phase that only names itself is worse than one
+# the reader never sees. Flip to True once the copy is reviewed — the Teradata
+# gate behind it stays exercised by test_multi_report_nav.py meanwhile.
+VIRTUALIZATION_ENABLED = False
 
 
 def generate_ai_summary(summary: Dict, temp_staging: List, deprecated: List, testing: List) -> str:
@@ -976,7 +1021,9 @@ def generate_multi_report(
     ssis_json: Path = None,
     anti_patterns_json: Path = None,
     informatica_json: Path = None,
-    informatica_source_dir: Path = None
+    informatica_source_dir: Path = None,
+    base_estimates_csv: Path = None,
+    project_dir: Path = None,
 ) -> None:
     """Generate multi-tab HTML report"""
 
@@ -1053,19 +1100,44 @@ def generate_multi_report(
     # Process exclusion data — schema produced by `scai assessment object-exclusion`
     # is the single source of truth; field names below match that schema directly.
     exclusion_summary = exclusion_data.get('summary', {}) if exclusion_data else {}
-    temp_staging = exclusion_data.get('temp_staging_objects', []) if exclusion_data else []
-    deprecated = exclusion_data.get('deprecated_legacy_objects', []) if exclusion_data else []
-    testing = exclusion_data.get('testing_objects', []) if exclusion_data else []
-    duplicate_objects = exclusion_data.get('duplicates', []) if exclusion_data else []
-    version_analysis = exclusion_data.get('version_analysis', {}) if exclusion_data else {}
-    
+    # Once the registry write-back fully succeeds, `scai assessment object-exclusion`
+    # omits the per-category arrays below and sets detail_location: "registry" — the
+    # registry (not this JSON) is now the source of truth for that detail. Absent key
+    # means an older/pre-change JSON, which always carried full detail.
+    detail_location = exclusion_data.get('detail_location', 'json') if exclusion_data else 'json'
+
+    if exclusion_data and detail_location == 'registry' and registry_dir and WAVES_SUPPORT:
+        findings = load_exclusion_findings_from_registry(registry_dir)
+        temp_staging = findings['temp_staging']
+        deprecated = findings['deprecated']
+        testing = findings['testing']
+        duplicate_objects = findings['duplicates']
+        version_analysis = findings['version_analysis']
+    elif exclusion_data and detail_location == 'registry':
+        print(
+            "Warning: exclusion JSON indicates detail lives in the registry, but no "
+            "--registry-dir/--project-dir was provided (or registry loaders are "
+            "unavailable). Overview counts will still be correct (read from summary); "
+            "the Flagged Objects table will be empty.",
+            file=sys.stderr,
+        )
+        temp_staging, deprecated, testing, duplicate_objects, version_analysis = ([], [], [], [], {})
+    else:
+        temp_staging = exclusion_data.get('temp_staging_objects', []) if exclusion_data else []
+        deprecated = exclusion_data.get('deprecated_legacy_objects', []) if exclusion_data else []
+        testing = exclusion_data.get('testing_objects', []) if exclusion_data else []
+        duplicate_objects = exclusion_data.get('duplicates', []) if exclusion_data else []
+        version_analysis = exclusion_data.get('version_analysis', {}) if exclusion_data else {}
+
     # Adaptive mode flag
     is_adaptive = bool(exclusion_data and ('discovered_patterns' in exclusion_data or 'analysis_mode' in exclusion_data))
-    
+
     total_objects_excl = exclusion_summary.get('total_objects_found', 0)
-    temp_count = len(temp_staging)
-    deprec_count = len(deprecated)
-    testing_count = len(testing)
+    # Prefer summary's pre-computed counts over len() so Overview cards stay correct
+    # even in the degraded (registry detail_location, no registry_dir) fallback above.
+    temp_count = exclusion_summary.get('temp_staging_objects_count', len(temp_staging))
+    deprec_count = exclusion_summary.get('deprecated_legacy_objects_count', len(deprecated))
+    testing_count = exclusion_summary.get('testing_objects_count', len(testing))
     
     # Use pre-computed unique count from summary (number of unique objects with duplicates)
     duplicate_count = exclusion_summary.get('unique_duplicate_objects_count', 0)
@@ -1134,9 +1206,51 @@ def generate_multi_report(
             overview_stats['source_dialect'] = scai_lang
             print(f"  - Using source dialect from SQL Dynamic: {scai_lang}")
 
+    # Dialect-gated effort calculator (SQL Server, Redshift). The dialect is read from
+    # {project_dir}/.scai/config/project.yml only, so runs without --project-dir get no effort tab.
+    effort_assessment = None
+    if EFFORT_SUPPORT and snowconvert_reports_dir and project_dir:
+        reports_path = Path(snowconvert_reports_dir)
+        project_path = Path(project_dir)
+        if is_effort_estimation_supported(project_path):
+            effort_assessment = build_effort_assessment(
+                reports_path,
+                base_estimates_csv,  # None → per-dialect bundled CSV is resolved
+                project_dir=project_path,
+            )
+            if effort_assessment:
+                print(
+                    f"  - Effort estimates: {effort_assessment['summary']['total_fde_hours']:,.1f} "
+                    f"FDE hours ({effort_assessment['source_dialect']})"
+                )
+            else:
+                print(
+                    "  - Warning: supported dialect but effort assessment could not be built "
+                    "(missing TopLevelCodeUnits report?)",
+                    file=sys.stderr,
+                )
+
     # Set default tab to overview if available
     if waves_json:
         default_tab = 'overview'
+
+    # Testing readiness must be derived here, not in the template: the template
+    # is render-only and cannot reach the filesystem.
+    testing_readiness = None
+    if TESTING_SUPPORT:
+        testing_readiness = load_testing_readiness(
+            registry_dir,
+            (overview_stats or {}).get('source_dialect', ''),
+        )
+
+    # Same rule for the data migration phase, which additionally reads the DDL
+    # the registry points at.
+    data_migration_readiness = None
+    if DATA_MIGRATION_SUPPORT:
+        data_migration_readiness = load_data_migration_readiness(
+            registry_dir,
+            (overview_stats or {}).get('source_dialect', ''),
+        )
     
     print(f"Processed data:")
     if exclusion_data:
@@ -1185,13 +1299,16 @@ def generate_multi_report(
         json_data_exclusion=json_data_exclusion_str,
         json_data_dynamic=json_data_dynamic_str,
         overview_stats=overview_stats,
-        missing_objects_data=missing_objects_data
+        missing_objects_data=missing_objects_data,
+        effort_assessment=effort_assessment,
+        testing_readiness=testing_readiness,
+        data_migration_readiness=data_migration_readiness
     )
     
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(html_content)
     
-    print(f"\n✓ Multi-tab HTML report generated successfully!")
+    print(f"\n{DONE} Multi-tab HTML report generated successfully!")
     print(f"  Output: {output_file}")
     print(f"  Size: {output_file.stat().st_size:,} bytes")
     print(f"\nOpen the report in your browser:")
@@ -1233,7 +1350,10 @@ def generate_html_template(
     overview_stats: Dict = None,
     missing_objects_data: Dict = None,
     has_anti_patterns: bool = False,
-    anti_patterns_json: Path = None
+    anti_patterns_json: Path = None,
+    effort_assessment: Dict = None,
+    testing_readiness: Any = None,
+    data_migration_readiness: Any = None
 ) -> str:
     """Generate the complete HTML template"""
     dynamic_sql_meta_json = json.dumps(dynamic_sql_meta or {}, ensure_ascii=False)
@@ -1420,26 +1540,58 @@ def generate_html_template(
     temporal_tables_card_html = ''
     if temporal_tables_count > 0:
         temporal_tables_card_html = f'''
-                <div style="background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-top: 4px solid #F59E0B;">
-                    <div style="color: #64748B; font-size: 0.85rem; font-weight: 600; text-transform: uppercase;">Temporal Tables</div>
-                    <div style="font-size: 2rem; font-weight: 800; color: #102E46; margin-top: 4px;">{temporal_tables_count}</div>
+                <div class="effort-card">
+                    <div class="effort-card-num">{temporal_tables_count}</div>
+                    <div class="effort-card-lbl">Temporal Tables</div>
                 </div>
         '''
 
     # External tables (only render if present)
     external_tables_count = overview_stats.get('external_tables_count', 0) if overview_stats else 0
     source_dialect = (overview_stats.get('source_dialect', '') if overview_stats else '') or ''
-    safe_source_dialect = html_escape_module.escape(str(source_dialect)) if source_dialect else 'Unknown'
+    source_dialect_json = json.dumps(source_dialect)
+    source_dialect_display = 'SQL Server' if source_dialect == 'Transact' else source_dialect
+    safe_source_dialect = html_escape_module.escape(str(source_dialect_display)) if source_dialect_display else 'Unknown'
+    # An unresolved dialect must hide the phase, so this stays a positive check.
+    show_virtualization = VIRTUALIZATION_ENABLED and source_dialect == 'Teradata'
 
     external_tables_card_html = ''
     objects_by_type = overview_stats.get('objects_by_type', {}) if overview_stats else {}
     if external_tables_count > 0 and 'EXTERNAL TABLE' not in objects_by_type:
         external_tables_card_html = f'''
-                <div style="background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-top: 4px solid #E85D29;">
-                    <div style="color: #64748B; font-size: 0.85rem; font-weight: 600; text-transform: uppercase;">External Tables</div>
-                    <div style="font-size: 2rem; font-weight: 800; color: #102E46; margin-top: 4px;">{external_tables_count}</div>
+                <div class="effort-card">
+                    <div class="effort-card-num">{external_tables_count}</div>
+                    <div class="effort-card-lbl">External Tables</div>
                 </div>
         '''
+
+    has_effort_tab = bool(effort_assessment)
+    effort_section_b_html = (
+        render_overview_section_b_html(effort_assessment) if effort_assessment else ""
+    )
+    effort_tab_html = render_effort_tab_html(effort_assessment) if effort_assessment else ""
+    how_to_use_section_label = "Section C" if effort_assessment else "Section B"
+    missing_objects_section_label = "Section D" if effort_assessment else "Section C"
+    effort_nav_overview_sublink = ""
+    effort_nav_link = ""
+    effort_nav_sublist = ""
+    if has_effort_tab:
+        effort_nav_overview_sublink = (
+            '<a @click="scrollToSection(\'#effort-estimates\', \'overview\')" '
+            'class="nav-sublink">Estimated Effort to Migrate</a>'
+        )
+        effort_nav_link = (
+            '<a @click="activeTab = \'effort-estimates\'" class="nav-link" '
+            'data-tab="effort-estimates" :class="{active: activeTab === \'effort-estimates\'}">'
+            'Effort Estimates <span class="nav-preview-badge">Preview</span></a>'
+        )
+        effort_nav_sublist = (
+            '<div v-if="activeTab === \'effort-estimates\'" class="nav-sublist">'
+            '<a @click="scrollToSection(\'#effort-ddl-assessment\', \'effort-estimates\')" class="nav-sublink">DDL Assessment</a>'
+            '<a @click="scrollToSection(\'#effort-calculator\', \'effort-estimates\')" class="nav-sublink">Calculator</a>'
+            '<a @click="scrollToSection(\'#effort-top-issues\', \'effort-estimates\')" class="nav-sublink">Top Issues</a>'
+            '</div>'
+        )
 
     # Overview tab HTML
     overview_html = f"""
@@ -1470,23 +1622,25 @@ def generate_html_template(
                 Workload Inventory
             </h2>
             
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px; margin-bottom: 40px;">
-                <div style="background: #102E46; padding: 20px; border-radius: 12px; color: white;">
-                    <div style="font-size: 0.85rem; font-weight: 600; opacity: 0.8; text-transform: uppercase;">Total Objects</div>
-                    <div style="font-size: 2.5rem; font-weight: 800; margin-top: 4px;">{overview_stats.get('total_objects', total_objects_excl)}</div>
-                    <div style="font-size: 0.8rem; opacity: 0.8; margin-top: 4px;">In {overview_stats.get('total_waves', 'N/A')} Waves</div>
+            <div class="effort-cards" style="margin-bottom: 40px;">
+                <div class="effort-card">
+                    <div class="effort-card-num">{overview_stats.get('total_objects', total_objects_excl)}</div>
+                    <div class="effort-card-lbl">Total Objects</div>
+                    <div class="effort-card-lbl">In {overview_stats.get('total_waves', 'N/A')} Waves</div>
                 </div>
                 
                 {''.join([f'''
-                <div style="background: white; padding: 20px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-top: 4px solid {'#29B5E8' if i == 0 else '#7D44CF' if i == 1 else '#FF9F36' if i == 2 else '#64748B'};">
-                    <div style="color: #64748B; font-size: 0.85rem; font-weight: 600; text-transform: uppercase;">{obj_type}s</div>
-                    <div style="font-size: 2rem; font-weight: 800; color: #102E46; margin-top: 4px;">{count}</div>
+                <div class="effort-card">
+                    <div class="effort-card-num">{count}</div>
+                    <div class="effort-card-lbl">{obj_type}s</div>
                 </div>
-                ''' + (external_tables_card_html + temporal_tables_card_html if obj_type.upper() == 'TABLE' else '') for i, (obj_type, count) in enumerate(list(overview_stats.get('objects_by_type', {}).items())[:5])])}
+                ''' + (external_tables_card_html + temporal_tables_card_html if obj_type.upper() == 'TABLE' else '') for obj_type, count in overview_stats.get('objects_by_type', {}).items()])}
             </div>
 
+            {effort_section_b_html}
+
             <h2 id="how-to-use" style="font-size: 1.5rem; font-weight: 700; color: #102E46; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
-                <span style="background: #E0F2FE; color: #0284C7; padding: 4px 10px; border-radius: 6px; font-size: 0.9rem;">Section B</span>
+                <span style="background: #E0F2FE; color: #0284C7; padding: 4px 10px; border-radius: 6px; font-size: 0.9rem;">{how_to_use_section_label}</span>
                 How to Use This Report
             </h2>
 
@@ -1564,14 +1718,66 @@ def generate_html_template(
 
             <!-- Missing Objects Section -->
             <h2 id="missing-objects" style="font-size: 1.5rem; font-weight: 700; color: #102E46; margin-bottom: 20px; display: flex; align-items: center; gap: 10px;">
-                <span style="background: #FEF3C7; color: #D97706; padding: 4px 10px; border-radius: 6px; font-size: 0.9rem;">Section C</span>
+                <span style="background: #FEF3C7; color: #D97706; padding: 4px 10px; border-radius: 6px; font-size: 0.9rem;">{missing_objects_section_label}</span>
                 Missing Objects Analysis
             </h2>
             
             {missing_objects_section_html}
         </div>
     """
-    
+
+    journey_steps = [
+        ('overview', 'Code/ETL Conversion',
+         'Convert your database code and ETL pipelines to Snowflake. Review conversion readiness, dependencies, object exclusions, dynamic SQL, and anti-patterns.'),
+        ('data-migration', 'Data Migration &amp; Validation',
+         'Move your data into Snowflake and validate it row-for-row against the source, so nothing is lost in translation.'),
+        ('testing', 'Testing',
+         'Confirm converted objects behave exactly like the source. Providing your real workloads yields far more reliable results than synthetic data.'),
+        ('virtualization', 'Virtualization',
+         'For Teradata workloads, plan query virtualization and find help designing your Snowflake target.'),
+    ]
+    if not show_virtualization:
+        journey_steps = [step for step in journey_steps if step[0] != 'virtualization']
+    journey_cards_html = "".join(
+        f"""
+                <div class="journey-card" @click="activeTab = '{tab}'">
+                    <div class="journey-badge">{step}</div>
+                    <div class="journey-card-body">
+                        <h3>{title}</h3>
+                        <p>{desc}</p>
+                    </div>
+                    <span class="journey-cta">
+                        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                    </span>
+                </div>
+        """
+        for step, (tab, title, desc) in enumerate(journey_steps, start=1)
+    )
+    # Naming a phase the reader has no card or nav item for reads as a missing tab.
+    journey_phases_copy = (
+        'converting code and ETL, moving and validating data, testing, and virtualization'
+        if show_virtualization
+        else 'converting code and ETL, moving and validating data, and testing'
+    )
+    journey_overview_html = f"""
+        <!-- Migration Journey Overview (entry point) -->
+        <div class="tab-content" :class="{{active: activeTab === 'journey'}}">
+            <div class="journey-hero">
+                <h1>Your Migration Journey to Snowflake</h1>
+                <p>
+                    This report guides you through every phase of migrating your workload to Snowflake &mdash;
+                    {journey_phases_copy}. Choose any phase below to see what it involves and what to expect.
+                </p>
+                <span class="journey-pill">Source platform: {safe_source_dialect}</span>
+            </div>
+            <div class="journey-grid">
+                {journey_cards_html}
+            </div>
+        </div>
+    """
+
     # Generate waves HTML content
     waves_html = ""
     waves_js = ""
@@ -2249,7 +2455,55 @@ def generate_html_template(
                 </div>
             </div>
         """
-    
+
+    data_migration_html = ""
+    data_migration_css = ""
+    data_migration_js = ""
+    if DATA_MIGRATION_SUPPORT:
+        data_migration_html, data_migration_css, data_migration_js = (
+            generate_data_migration_html_content(data_migration_readiness)
+        )
+
+    testing_html = ""
+    testing_css = ""
+    testing_js = ""
+    if TESTING_SUPPORT:
+        testing_html, testing_css, testing_js = generate_testing_html_content(
+            testing_readiness
+        )
+
+    virtualization_html = ""
+    virtualization_nav_html = ""
+    if show_virtualization:
+        virtualization_html = """
+        <div class="tab-content" :class="{active: activeTab === 'virtualization'}">
+            <div style="margin-bottom: 32px;">
+                <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
+                    Virtualization
+                </h1>
+                <p style="color: #64748B; font-size: 1.1rem;">
+                    Some Teradata workloads rely on data virtualization to keep applications running
+                    against a Teradata-compatible interface while the underlying data lives
+                    elsewhere. This product doesn't yet produce an automatic, detailed virtualization
+                    plan for your workload.
+                </p>
+            </div>
+            <div style="margin-bottom: 24px;">
+                <h3 style="font-size: 1.1rem; font-weight: 700; color: #102E46; margin-bottom: 8px;">Get help with virtualization planning</h3>
+                <p style="color: #64748B; font-size: 1.1rem;">
+                    If your workload depends on virtualization and you'd like guidance on how it
+                    fits into your Snowflake migration, reach out to your Snowflake account team to
+                    get connected with the right specialists.
+                </p>
+            </div>
+        </div>
+    """
+        virtualization_nav_html = """
+                <a @click="activeTab = 'virtualization'" class="nav-section" data-tab="virtualization" :class="{active: activeTab === 'virtualization'}">
+                    <span>Virtualization</span>
+                </a>
+        """
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2303,7 +2557,19 @@ def generate_html_template(
         .effort-table.compact th, .effort-table.compact td {{ padding: 0.5rem 0.6rem; font-size: 0.8rem; }}
         .effort-table.sticky thead th {{ position: sticky; top: 0; z-index: 1; }}
         .effort-table tr.effort-total td {{ background: #F8FAFC; font-weight: 700; color: #1E252F; }}
-        
+        .nav-preview-badge {{
+            display: inline-block;
+            margin-left: 6px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            background: #E0F2FE;
+            color: #0284C7;
+            vertical-align: middle;
+            letter-spacing: 0.02em;
+        }}
+
         :root {{
             /* Snowflake color palette - aligned with waves-generator */
             --sf-blue: #29B5E8;
@@ -2398,7 +2664,131 @@ def generate_html_template(
             color: #2A3342;
             background: #D5DAE4;
         }}
-        
+        .nav-section {{
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            min-height: 34px;
+            padding: 0 16px;
+            margin: 2px 16px;
+            border-radius: 4px;
+            color: #2A3342;
+            font-size: 14px;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            transition: background 0.2s;
+        }}
+        .nav-section:hover {{
+            background: #D5DAE4;
+        }}
+        .nav-section.active {{
+            background: #D6E6FF;
+            color: #1A6CE7;
+        }}
+        .nav-group {{
+            padding: 2px 0 6px 8px;
+        }}
+
+        /* Migration Journey Overview (entry point) */
+        .journey-hero {{
+            background: linear-gradient(135deg, #F0F9FF 0%, #FFFFFF 65%);
+            border: 1px solid #E2E8F0;
+            border-radius: 16px;
+            padding: 36px 40px;
+            margin-bottom: 28px;
+        }}
+        .journey-hero h1 {{
+            color: #102E46;
+            font-size: 2rem;
+            font-weight: 800;
+            margin: 0 0 12px 0;
+        }}
+        .journey-hero p {{
+            color: #64748B;
+            font-size: 1.1rem;
+            line-height: 1.6;
+            margin: 0;
+            max-width: 760px;
+        }}
+        .journey-pill {{
+            display: inline-flex;
+            align-items: center;
+            margin-top: 20px;
+            background: #E0F2FE;
+            color: #0284C7;
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+        }}
+        .journey-grid {{
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }}
+        .journey-card {{
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            background: #FFFFFF;
+            border: 1px solid #E2E8F0;
+            border-radius: 12px;
+            padding: 20px 24px;
+            cursor: pointer;
+            transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
+        }}
+        .journey-card:hover {{
+            border-color: #29B5E8;
+            box-shadow: 0 4px 14px rgba(41, 181, 232, 0.12);
+            transform: translateX(4px);
+        }}
+        .journey-badge {{
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: #E0F2FE;
+            color: #0284C7;
+            font-size: 1.05rem;
+            font-weight: 800;
+        }}
+        .journey-card-body {{
+            flex: 1;
+            min-width: 0;
+        }}
+        .journey-card h3 {{
+            margin: 0 0 4px 0;
+            color: #102E46;
+            font-size: 1.1rem;
+            font-weight: 700;
+        }}
+        .journey-card p {{
+            color: #64748B;
+            font-size: 0.9rem;
+            line-height: 1.5;
+            margin: 0;
+        }}
+        .journey-cta {{
+            flex-shrink: 0;
+            display: inline-flex;
+            align-items: center;
+            color: #94A3B8;
+        }}
+        .journey-card:hover .journey-cta {{
+            color: #29B5E8;
+        }}
+        .journey-cta svg {{
+            transition: transform 0.2s;
+        }}
+        .journey-card:hover .journey-cta svg {{
+            transform: translateX(4px);
+        }}
+
         /* Exclusion Report Styles */
         .header {{
             background: #FFFFFF;
@@ -3795,6 +4185,8 @@ def generate_html_template(
 
         /* Anti-patterns report styles (scoped to #anti-patterns-report) */
 {anti_patterns_css}
+{testing_css}
+{data_migration_css}
         .empty-state {{
             text-align: center;
             padding: 60px 20px;
@@ -4738,54 +5130,76 @@ def generate_html_template(
                 </div>
                 <div style="border-bottom: 1px solid #D5DAE4; padding-bottom: 0.75rem; margin-bottom: 0.75rem;">
                 </div>
-                <p style="font-size: 1rem; color: #5D6A85; margin: 0; font-weight: 500;">AI Assessment</p>
+                <p style="font-size: 1rem; color: #5D6A85; margin: 0; font-weight: 500;">Assessment</p>
             </div>
             <nav style="padding: 16px 0;">
-                <a @click="activeTab = 'overview'" class="nav-link" data-tab="overview" :class="{{active: activeTab === 'overview'}}">
-                    Overview
+                <a @click="activeTab = 'journey'" class="nav-section" data-tab="journey" :class="{{active: activeTab === 'journey'}}">
+                    <span>Migration Journey</span>
                 </a>
-                <div v-if="activeTab === 'overview'" class="nav-sublist">
-                    <a @click="scrollToSection('#workload-inventory', 'overview')" class="nav-sublink">Workload Inventory</a>
-                    <a @click="scrollToSection('#how-to-use', 'overview')" class="nav-sublink">How to Use This Report</a>
-                    <a @click="scrollToSection('#missing-objects', 'overview')" class="nav-sublink">Missing Objects Analysis</a>
+                <a class="nav-section" @click="selectSection(codeEtlTabs, '{default_tab}')">
+                    <span>Code/ETL Conversion</span>
+                </a>
+                <div class="nav-group" v-show="codeEtlTabs.includes(activeTab)">
+                    <a @click="activeTab = 'overview'" class="nav-link" data-tab="overview" :class="{{active: activeTab === 'overview'}}">
+                        Overview
+                    </a>
+                    <div v-if="activeTab === 'overview'" class="nav-sublist">
+                        <a @click="scrollToSection('#workload-inventory', 'overview')" class="nav-sublink">Workload Inventory</a>
+                        {effort_nav_overview_sublink}
+                        <a @click="scrollToSection('#how-to-use', 'overview')" class="nav-sublink">How to Use This Report</a>
+                        <a @click="scrollToSection('#missing-objects', 'overview')" class="nav-sublink">Missing Objects Analysis</a>
+                    </div>
+                    {effort_nav_link}
+                    {effort_nav_sublist}
+                    <a @click="activeTab = 'waves'" class="nav-link" data-tab="waves" :class="{{active: activeTab === 'waves'}}">
+                        Dependencies Report
+                    </a>
+                    <div v-if="activeTab === 'waves'" class="nav-sublist">
+                        <a @click="scrollToSection('#overview', 'waves')" class="nav-sublink">Overview</a>
+                        <a @click="scrollToSection('#all-objects', 'waves')" class="nav-sublink">All Objects</a>
+                        <a @click="scrollToSection('#wave-recommendations', 'waves')" class="nav-sublink">Migration Waves</a>
+                    </div>
+                    <a @click="activeTab = 'exclusion'" class="nav-link" data-tab="exclusion" :class="{{active: activeTab === 'exclusion'}}">
+                        Exclusion Report
+                    </a>
+                    <a @click="activeTab = 'dynamic-sql'" class="nav-link" data-tab="dynamic-sql" :class="{{active: activeTab === 'dynamic-sql'}}">
+                        Dynamic SQL Report
+                    </a>
+                    <a @click="activeTab = 'etl'" class="nav-link" data-tab="etl" :class="{{active: activeTab === 'etl'}}">
+                        ETL Report
+                    </a>
+                    <div v-if="activeTab === 'etl'" class="nav-sublist">
+                        <a @click="scrollToSection('#informatica-executive-summary', 'etl')" class="nav-sublink">AI Summary</a>
+                        <a @click="scrollToSection('#informatica-metrics', 'etl')" class="nav-sublink">Key Metrics</a>
+                        <a @click="scrollToSection('#informatica-workflow-classification', 'etl')" class="nav-sublink">Workflow Classification</a>
+                        <a @click="scrollToSection('#informatica-component-breakdown', 'etl')" class="nav-sublink">Component Breakdown</a>
+                    </div>
+                    <a @click="activeTab = 'risks'" class="nav-link" data-tab="risks" :class="{{active: activeTab === 'risks'}}">
+                        Anti-Patterns
+                    </a>
                 </div>
-                <a @click="activeTab = 'waves'" class="nav-link" data-tab="waves" :class="{{active: activeTab === 'waves'}}">
-                    Dependencies Report
+                <a @click="activeTab = 'data-migration'" class="nav-section" data-tab="data-migration" :class="{{active: activeTab === 'data-migration'}}">
+                    <span>Data Migration &amp; Validation</span>
                 </a>
-                <div v-if="activeTab === 'waves'" class="nav-sublist">
-                    <a @click="scrollToSection('#overview', 'waves')" class="nav-sublink">Overview</a>
-                    <a @click="scrollToSection('#all-objects', 'waves')" class="nav-sublink">All Objects</a>
-                    <a @click="scrollToSection('#wave-recommendations', 'waves')" class="nav-sublink">Migration Waves</a>
-                </div>
-                <a @click="activeTab = 'exclusion'" class="nav-link" data-tab="exclusion" :class="{{active: activeTab === 'exclusion'}}">
-                    Exclusion Report
+                <a @click="activeTab = 'testing'" class="nav-section" data-tab="testing" :class="{{active: activeTab === 'testing'}}">
+                    <span>Testing</span>
                 </a>
-                <a @click="activeTab = 'dynamic-sql'" class="nav-link" data-tab="dynamic-sql" :class="{{active: activeTab === 'dynamic-sql'}}">
-                    Dynamic SQL Report
-                </a>
-                <a @click="activeTab = 'etl'" class="nav-link" data-tab="etl" :class="{{active: activeTab === 'etl'}}">
-                    ETL Report
-                </a>
-                <div v-if="activeTab === 'etl'" class="nav-sublist">
-                    <a @click="scrollToSection('#informatica-executive-summary', 'etl')" class="nav-sublink">AI Summary</a>
-                    <a @click="scrollToSection('#informatica-metrics', 'etl')" class="nav-sublink">Key Metrics</a>
-                    <a @click="scrollToSection('#informatica-workflow-classification', 'etl')" class="nav-sublink">Workflow Classification</a>
-                    <a @click="scrollToSection('#informatica-component-breakdown', 'etl')" class="nav-sublink">Component Breakdown</a>
-                </div>
-                <a @click="activeTab = 'risks'" class="nav-link" data-tab="risks" :class="{{active: activeTab === 'risks'}}">
-                    Anti-Patterns
-                </a>
+                {virtualization_nav_html}
             </nav>
         </div>
 
         <div class="content">
+            {journey_overview_html}
             {overview_html}
+            {effort_tab_html}
             {exclusion_html}
             {dynamic_sql_html}
             {waves_html}
             {etl_tab_content}
             {anti_patterns_html}
-
+            {data_migration_html}
+            {testing_html}
+            {virtualization_html}
         </div>
     </div>
 
@@ -4908,7 +5322,11 @@ def generate_html_template(
         createApp({{
             data() {{
                 return {{
-                    activeTab: '{default_tab}',
+                    activeTab: 'journey',
+                    sourceDialect: {source_dialect_json},
+                    // Must list every nav-link inside the group: the group is
+                    // v-show'd on membership, so an omitted tab hides its own sub-nav.
+                    codeEtlTabs: ['overview', 'effort-estimates', 'waves', 'exclusion', 'dynamic-sql', 'etl', 'risks'],
                     jsonData: dynamicSqlData,
                     searchQuery: '',
                     complexityFilter: 'all',
@@ -5214,6 +5632,11 @@ def generate_html_template(
                 }}
             }},
             methods: {{
+                selectSection(tabs, first) {{
+                    if (!tabs.includes(this.activeTab)) {{
+                        this.activeTab = first || tabs[0];
+                    }}
+                }},
                 isPendingStatus(status) {{
                     return isPendingStatus(status);
                 }},
@@ -5870,6 +6293,16 @@ def generate_html_template(
         console.log("typeof waveNames:", typeof waveNames);
     </script>
 
+    <!-- Data Migration & Validation tab JavaScript (runs after the Vue app mounts) -->
+    <script>
+        {data_migration_js}
+    </script>
+
+    <!-- Testing tab JavaScript (runs after the Vue app mounts) -->
+    <script>
+        {testing_js}
+    </script>
+
     <!-- Info-icon tooltip handler -->
     <script>
         // Info-icon tooltips — appended to <body> so they escape any overflow/transform
@@ -6039,6 +6472,14 @@ def main():
     )
 
     parser.add_argument(
+        '--base-estimates',
+        type=Path,
+        help='Path to Base_estimates CSV file with per-object-type hourly rates. '
+             'Defaults to the bundled CSV for the project source dialect '
+             '(Base_estimates.csv for SQL Server, Base_estimates.redshift.csv for Redshift).'
+    )
+
+    parser.add_argument(
         '--output',
         type=Path,
         required=True,
@@ -6066,7 +6507,7 @@ def main():
                 args.snowconvert_reports_dir = candidate
                 print(f"Using SnowConvert reports dir: {candidate}", file=sys.stderr)
         if not args.exclusion_json:
-            matches = sorted((args.project_dir / "assessment").glob("object_exclusion_analysis_*.json"))
+            matches = sorted((args.project_dir / "artifacts" / "assessment").glob("object_exclusion_analysis_*.json"))
             if matches:
                 args.exclusion_json = matches[-1]  # latest by timestamp
                 print(f"Using exclusion JSON: {args.exclusion_json}", file=sys.stderr)
@@ -6135,6 +6576,12 @@ def main():
         print(f"Error: Anti-Patterns JSON file not found: {args.anti_patterns_json}", file=sys.stderr)
         sys.exit(1)
 
+    # Validated here rather than at load time: load_effort_estimate_config() opens the
+    # path unguarded, so a typo reaching the render would abort the whole report.
+    if args.base_estimates and not args.base_estimates.exists():
+        print(f"Error: Base estimates CSV not found: {args.base_estimates}", file=sys.stderr)
+        sys.exit(1)
+
     # Registry-driven waves data. Two modes:
     # 1. --registry-dir + --waves-json: synthesize intrinsic data from registry,
     #    overlay algorithmic data (partitions, cycles, excluded_edges, is_picked_scc,
@@ -6192,7 +6639,9 @@ def main():
                 ssis_json=args.ssis_json,
                 anti_patterns_json=args.anti_patterns_json,
                 informatica_json=args.informatica_json,
-                informatica_source_dir=getattr(args, 'informatica_source_dir', None)
+                informatica_source_dir=getattr(args, 'informatica_source_dir', None),
+                base_estimates_csv=getattr(args, 'base_estimates', None),
+                project_dir=getattr(args, 'project_dir', None),
             )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

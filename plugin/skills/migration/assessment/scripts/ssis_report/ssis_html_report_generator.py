@@ -24,9 +24,16 @@ import html
 import json
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 from urllib.parse import unquote
+
+_scripts_dir = str(Path(__file__).resolve().parent.parent)
+if _scripts_dir not in sys.path:
+    sys.path.insert(0, _scripts_dir)
+
+from snowconvert_reports.console_utils import DONE, WARN  # noqa: E402
 
 
 def sanitize_filename(name: str) -> str:
@@ -1908,8 +1915,8 @@ class HTMLReportGenerator:
         with open(main_report_path, 'w', encoding='utf-8') as f:
             f.write(html_content)
         
-        print(f"✅ Main report generated: {main_report_path}")
-        print(f"📊 Analyzed {len(self.packages)} packages")
+        print(f"{DONE} Main report generated: {main_report_path}")
+        print(f"   Analyzed {len(self.packages)} packages")
         
         # Generate individual package pages
         if generate_package_pages:
@@ -1929,7 +1936,7 @@ class HTMLReportGenerator:
                 # Get package data from JSON
                 package_json_data = self.get_package_data_from_json(package_path)
                 if not package_json_data:
-                    print(f"⚠️  Warning: Package data not found in JSON: {package_path}")
+                    print(f"{WARN} Warning: Package data not found in JSON: {package_path}")
                     continue
                 
                 # Generate package detail page
@@ -1944,6 +1951,6 @@ class HTMLReportGenerator:
                 
                 package_count += 1
             
-            print(f"✅ Generated {package_count} package detail pages in: {packages_dir}")
-        
-        print(f"📄 Total report size: {len(html_content):,} characters")
+            print(f"{DONE} Generated {package_count} package detail pages in: {packages_dir}")
+
+        print(f"   Total report size: {len(html_content):,} characters")

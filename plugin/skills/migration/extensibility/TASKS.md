@@ -48,11 +48,12 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 |---|---|
 | `midwayEntry` | Imports an existing pre-converted Snowflake project to be compatible with AIM projects. |
 | `configureSourceConnection` | Configures the source database connection. |
-| `configureGit` | Configures git integration (main branch + remote). |
+| `configureGit` | Configures git integration (main branch; a remote is optional). |
 | `registerCode` | Pulls source SQL into the project. |
 | `convertCode` | Runs the source → Snowflake conversion. |
 | `runAssessment` | Generates a migration assessment report. |
-| `generateTestbed` | Builds the synthetic testbed for the workload (mine → validate → compile → generate). |
+| `configureTesting` | Picks the testing path (source data vs synthetic) and verifies the Snowflake side is ready for it. |
+| `generateTestbed` | Builds the synthetic testbed for the workload (mine → validate → compile → generate). Reached only on the synthetic testing path. |
 
 ### `main` (per-object migration)
 
@@ -91,8 +92,8 @@ Every entry below names the task id, what your override needs as input, and the 
 ### `setup` (one-time per project)
 
 #### `midwayEntry`
-- **Inputs:** An existing project tree containing pre-converted SQL.
-- **Done when:** At least one file exists at `<project_dir>/snowflake/**/*.sql`.
+- **Inputs:** An existing project tree containing source SQL and pre-converted Snowflake SQL.
+- **Done when:** Project is initialized (`.scai/config/project.yml`) and at least one file exists under both `source/**/*.sql` and `snowflake/**/*.sql` (produced by `scai code sync`).
 
 #### `configureSourceConnection`
 - **Done when:** Session config has `source_connection` set — call `configure(source_connection=...)`.
@@ -102,19 +103,23 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `registerCode`
 - **Inputs:** Either a configured source connection (extracted via scai) or a folder of `.sql` files to register as-is.
-- **Done when:** At least one file exists at `<project_dir>/source/**/*.sql`.
+- **Done when:** Project is initialized and at least one file exists at `<project_dir>/source/**/*.sql`.
 
 #### `convertCode`
 - **Inputs:** Registered source code from the `registerCode` task.
-- **Done when:** At least one file exists at `<project_dir>/snowflake/**/*.sql`.
+- **Done when:** Project is initialized and at least one file exists at `<project_dir>/snowflake/**/*.sql`.
 
 #### `runAssessment`
 - **Inputs:** A converted project from the `convertCode` task.
-- **Done when:** At least one file exists at `<project_dir>/**/multi_report*.html`.
+- **Done when:** At least one assessment report HTML exists under `<project_dir>/**/assessment/**/*report*.html`.
+
+#### `configureTesting`
+- **Inputs:** A Snowflake connection and target database from `configureSnowflakeTarget`; optionally a query-log CSV.
+- **Done when:** Session config has `testing_data_source` set — call `configure(testing_data_source=...)`.
 
 #### `generateTestbed`
 - **Inputs:** A converted, assessed workload with testbed mining artifacts under `artifacts/**/testbed/*.testbed.json`. A source connection is still required downstream.
-- **Done when:** The generate deliverable exists at `testbed/generate/summary-view.json` (synthetic-data summary; CSVs + `manifest.json` land under `testbed/generate/data/`).
+- **Done when:** The generate deliverable exists at `**/testbed/generate/summary-view.json` (synthetic-data summary; CSVs + `manifest.json` land under `testbed/generate/data/`).
 
 ### `main` (per-object migration)
 

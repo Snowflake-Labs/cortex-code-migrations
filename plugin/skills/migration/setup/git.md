@@ -10,22 +10,18 @@ license: Proprietary. See License-Skills for complete terms
 
 Tell the user:
 
-> **Git setup for collaboration.** This project will be shared via git
-> so that multiple people (or agents) can work on the migration in
-> parallel.
+> **Git is required for this migration.** Every object is converted on its
+> own branch and merged back into a main branch — that is how progress is
+> tracked and, if something goes wrong, how work is recovered. So the project
+> needs to live in a git repository.
 >
-> **How collaboration works:**
-> - **One person** creates the migration project and runs through setup
->   (that's you, right now).
-> - After setup, the project is pushed to a shared git remote (e.g.
->   GitHub, GitLab, Bitbucket).
-> - **Teammates** clone the repo and run `configure()` to join the
->   project. From there, each person claims objects and works on their
->   own feature branches.
-> - The plugin commits and pushes progress automatically at key
->   milestones (after extraction, conversion, and assessment).
+> A **remote is optional.** A purely local repository is fully supported. You
+> only need a remote (GitHub, GitLab, …) if you want an off-machine backup or
+> to let teammates clone the project and work in parallel. I will never push
+> anywhere on my own — set a remote and progress is pushed to it; leave it and
+> everything simply stays local.
 >
-> To set this up I need this folder to be a git repository with a remote.
+> To continue I need this folder to be a git repository.
 
 ## Step 1: Inspect current git state
 
@@ -46,17 +42,17 @@ git_status:
 ```
 
 Use this to drive the next step. **Do not run any `git` commands yourself**
-to inspect state — `configure(needs_git=true)` is the source of truth.
+to inspect state — `configure(needs_git=true)` is the source of truth. An
+empty `remote_url` is expected and needs no action.
 
 ## Step 2: Ensure the folder is a git repository
 
 **If `git_status.is_git_repo` is `true`:**
 
-Show the user the detected `current_branch` and `remote_url` and ask:
+Confirm the detected `current_branch` with the user:
 
-> "This folder is a git repository (current branch: `<current_branch>`, remote:
-> `<remote_url or 'none'>`). Is this the repo you want to use for the migration
-> project?"
+> "This folder is a git repository (current branch: `<current_branch>`). Is
+> this the repo you want to use for the migration project?"
 >
 > 1. **Yes** — continue to Step 3.
 > 2. **No** — ask the user to switch into the correct repository (or
@@ -73,23 +69,20 @@ Tell the user:
 >
 > 1. **I'll set it up myself** — wait for the user to confirm, then re-run
 >    `configure(needs_git=true)` and continue.
-> 2. **Help me set it up** — initialize a fresh repo on the user's behalf:
+> 2. **Help me set it up** — initialize a fresh local repo on the user's
+>    behalf:
 >    ```bash
 >    git init
 >    git add -A
 >    git commit -m "Initial migration project"
 >    ```
->    Then tell the user they will need to push it to a remote (e.g. GitHub).
->    Once the user creates the remote repository themselves and tells you
->    the URL, run:
->    ```bash
->    git remote add origin <url>
->    git push -u origin <current-branch>
->    ```
+>    That local repository is all the migration needs. A remote is optional —
+>    if the user wants one they can add it themselves later; don't set one up
+>    or push on their behalf.
 >
 > If any of these commands fails, surface the raw stderr to the user and wait
 > for them to resolve it. **Do not run any other `git` commands to "clean up"
-> state on your own** — limit yourself to the four commands above.
+> state on your own** — limit yourself to the three commands above.
 
 After the repo is in place, re-run `configure(needs_git=true)` so you have a
 fresh `git_status` snapshot before continuing.
@@ -112,3 +105,5 @@ user wants, you can skip the persist call. Otherwise, persist with:
 ```
 configure(git_main_branch="<branch>")
 ```
+
+Git setup is required (`configureGit` is locked). Do not offer permanent opt-out via `tasks.configureGit.enabled=false`.

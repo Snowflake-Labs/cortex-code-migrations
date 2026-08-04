@@ -36,11 +36,18 @@ connections for the configured dialect.
 
 ### If **Skip for now**
 
+Transient for this walk only:
+
 ```
-configure(tasks={"configureSourceConnection": {"skipped": true}})
+progress_setup(mode="setup", skip="configureSourceConnection")
 ```
 
+The next `progress_setup()` (or a later re-entry from `seedSourceDb` /
+`migrateData`) may offer source-connection setup again.
+
 ### If **Never**
+
+Permanent opt-out — persists to `.scai/config/plugin.yml`:
 
 ```
 configure(tasks={"configureSourceConnection": {"enabled": false}})

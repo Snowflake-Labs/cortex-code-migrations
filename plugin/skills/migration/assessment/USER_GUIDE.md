@@ -249,15 +249,21 @@ The skill maintains context, so you don't need to start over.
 
 ### HTML Report
 
-The generated HTML report includes:
+The generated HTML report opens on the **Migration Journey** page. Its sidebar groups the
+conversion tabs under a **Code/ETL Conversion** section, with the later migration phases as
+top-level entries below it. Tabs appear only when the report has the data to fill them.
 
 | Tab | Contents |
 |-----|----------|
+| **Migration Journey** | Landing page — what each phase of your migration involves, one card per phase |
 | **Waves** | Deployment sequence with objects per wave, dependencies |
 | **Object Exclusion** | Temporary, staging, deprecated objects identified |
 | **Anti-Patterns** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |
 | **Dynamic SQL** | Patterns found with complexity scores |
 | **SSIS** | Package classifications and migration effort |
+| **Effort Estimates** | Person-day/hour effort for DDL and code conversion, workload tier, and phase budgets (SQL Server) |
+| **Data Migration & Validation** | Data type coverage for your source platform, per-table readiness, topology and validation guidance, plus reviewed inventory SQL (SQL Server and Redshift) |
+| **Testing** | Procedure/function and ETL readiness ladders — what is testable now, and what each object still needs first |
 
 ### Key Metrics
 

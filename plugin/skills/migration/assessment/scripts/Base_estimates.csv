@@ -1,0 +1,19 @@
+Section,Key,Migration Component,Object Type,Quantity Rule,Baseline Hours,Small,Medium,Large,Comments
+meta,workload_small_max_objects,,,,,500,,,Inclusive maximum object count for a Small workload tier
+meta,workload_medium_max_objects,,,,,1500,,,Inclusive maximum object count for a Medium workload tier; Large is above this
+rate,tables_views_flat,,,,4,,,,Flat hours for all tables or all views when at least one object exists
+rate,code_conversion_per_object,,,,1,,,,Hours per function or stored procedure (conversion and unit testing)
+rate,data_migration_flat,,,,8,,,,Constant hours for DMVA setup and data refresh rows
+phase,optimization,Optimization,Refactoring & Optimization,flat_budget,,4,8,16,Fixed budget scaled by workload tier
+phase,integration_testing,Integration Testing,Integration Testing (Create And Execute Test Cases),flat_budget,,8,16,32,Fixed budget scaled by workload tier
+phase,integration_testing_bug_fix,Integration Testing Bug Fix,Stabilization & Bug Fixing,flat_budget,,4,8,16,Fixed budget scaled by workload tier
+phase,uat,UAT,UAT,flat_budget,,4,8,16,Fixed budget scaled by workload tier
+phase,delivery,Delivery,Stabilization & Bug Fixing,flat_budget,,4,8,16,Fixed budget scaled by workload tier
+calculator,data_migration_dmva,Data Migration,Data Migration and Validation using DMVA,constant,8,,,,Includes setup and not actual data movement time
+calculator,data_migration_refresh,Data Migration,Data Refresh and Validation,constant,8,,,,Includes setup and not actual data movement time
+calculator,code_tables,Code Conversion,Tables,ddl_table_count,4,,,,Flat 4h for all tables regardless of count
+calculator,code_views,Code Conversion,Views,ddl_view_count,4,,,,Flat 4h for all views regardless of count
+calculator,code_functions,Code Conversion,Functions,ddl_function_count,1,,,,1h per object
+calculator,code_procedures,Code Conversion,Stored Procedures,ddl_procedure_count,1,,,,1h per object
+calculator,test_functions,Code Conversion Testing,Unit Testing Functions,ddl_function_count,1,,,,1h per object
+calculator,test_procedures,Code Conversion Testing,Unit Testing Stored Procedures,ddl_procedure_count,1,,,,1h per object

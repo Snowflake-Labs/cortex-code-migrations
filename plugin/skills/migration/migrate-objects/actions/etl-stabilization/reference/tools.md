@@ -110,8 +110,8 @@ These provide **user-facing progress tracking**. They are the ONLY way to show t
 |---------|---------|
 | `cortex ctx task add "<name>"` | Create a progress task (visible to user) |
 | `cortex ctx task start <id>` | Mark task as started |
-| `cortex ctx step add "<text>" -t <id>` | Add a step to a task |
-| `cortex ctx step done <id>` | Mark a step as complete |
+| `cortex ctx step add -t <id> "<text>" ["<text>" ...]` | Add one or more steps to a task (pass every step in ONE call) |
+| `cortex ctx step done <id> [<id> ...]` | Mark one or more steps complete (group them; flush before agent waves, turn ends and phase transitions) |
 | `cortex ctx show tasks` | List active tasks and steps |
 
 **Do NOT use** `cortex ctx remember` or `cortex ctx forget` — these persist across sessions and pollute future sessions in the same project.

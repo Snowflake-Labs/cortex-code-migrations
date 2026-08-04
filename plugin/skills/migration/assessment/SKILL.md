@@ -18,11 +18,11 @@ End-to-end migration assessment. The user only needs to point at the source — 
 
 ## Step 0: Configure Session
 
-Call the `configure` MCP tool with `project_dir` (use the current directory, or ask the user if ambiguous). If `snowflake_connection` is not set, ask which Snowflake connection to use and call `configure` again. Other settings are filled in by sub-skills as the workflow progresses.
+Call the `configure` MCP tool with `project_dir` (use the current directory, or ask the user if ambiguous). Assessment needs no Snowflake connection — `scai assessment` runs entirely off the local project — so don't ask for one here; the setup machine asks after assessment, only if the user goes on to object migration. Other settings are filled in by sub-skills as the workflow progresses.
 
 ## Step 1: Verify Prerequisites
 
-If you arrived here directly (not through the setup state machine), call `migration_status(mode='next_setup_task')` first. If it returns anything other than `assess`, follow the engine's response (run init / register / convert first) and re-enter assessment when the engine routes here.
+If you arrived here directly (not through the setup state machine), call `progress_setup()` first. If it returns a `next_task` other than `runAssessment` (or `completed: true` with assessment already done), follow the engine — finish that setup step, then re-enter assessment when `progress_setup()` routes here.
 
 ## Step 2: Auto-Detect SnowConvert Outputs
 
@@ -200,13 +200,11 @@ You are running in sub-agent mode — do NOT ask the user any questions.
 
 Context (from parent):
 - project_dir: <abs_path>
-- output_dir: <project_dir>/assessment
 
 Steps:
 1. Call configure() with project_dir above. Snowflake credentials are not needed for object exclusion.
-2. Run:
-     scai assessment object-exclusion --project-dir <project_dir> -o <output_dir>
-3. Locate the timestamped object_exclusion_analysis_*.json the CLI wrote.
+2. Run `scai assessment object-exclusion` from <project_dir>.
+3. Locate the timestamped object_exclusion_analysis_*.json the CLI wrote under <project_dir>/artifacts/assessment.
 
 Report back JSON only:
 {
@@ -504,6 +502,16 @@ Detect user intent and load the appropriate sub-skill:
 - Triggers: "informatica", "power center", "powercenter", "informatica assessment", "informatica analysis"
 - Load: `informatica-assessment/SKILL.md`
 
+**Data Migration & Validation readiness** - Explain how the workload's data moves to Snowflake and how it gets validated:
+- Triggers: "data migration", "data validation", "move the data", "data type coverage", "unsupported types", "table inventory", "validation divergence", "topology"
+- No sub-skill to load and no `scai assessment` command: the multi-report's **Data Migration & Validation** tab already answers this. It is computed from the Code Unit Registry by `scripts/snowconvert_reports/data_migration_readiness.py` (with `data_types_scan.py` for types found in captured DDL and `type_coverage.py` for per-dialect coverage), and rendered by `scripts/data_migration_report/`.
+- Reviewed inventory SQL exists only for SQL Server and Redshift (`scripts/data_migration_report/sql/`). Other dialects get a gather checklist — do not invent queries for them.
+
+**Testing readiness** - Explain what can be tested today and what each object still needs first:
+- Triggers: "testing", "test readiness", "can I test", "output testing", "what's ready to test", "testing ladder"
+- No sub-skill to load and no `scai assessment` command: the multi-report's **Testing** tab already answers this. It is computed from the Code Unit Registry by `scripts/snowconvert_reports/testing_readiness.py` and rendered by `scripts/testing_report/`.
+- Both readiness ladders state a no-source-code precondition. ETL units terminate at `stabilization`, all other code units at `testing` — never read `testing.status` for an ETL unit.
+
 **Multiple Assessments** - Load all applicable sub-skills if request requires comprehensive analysis.
 
 ## Running Scripts
@@ -713,7 +721,7 @@ When `--project-dir` is provided, the script auto-discovers:
 
 - `<projectRoot>/registry/` — registry JSONs (REQUIRED for object enrichment: names, categories, files, status, missing-deps, direct dep counts)
 - `<projectRoot>/reports/` — SnowConvert CSVs (for EWI/FDM/PRF counts and severity)
-- `<projectRoot>/assessment/object_exclusion_analysis_*.json` — exclusion JSON (latest timestamp)
+- `<projectRoot>/artifacts/assessment/object_exclusion_analysis_*.json` — exclusion JSON (latest timestamp)
 - `<projectRoot>/assessment/json/sql_dynamic_analysis.json` — dynamic-SQL JSON
 - `<projectRoot>/assessment/waves_analysis_*.json` — waves JSON (latest timestamp)
 
@@ -760,10 +768,10 @@ When generating HTML reports, see `STYLES.md` for styling specifications.
 ## Success Criteria
 
 An assessment is complete when:
-- ✅ All requested analyses have completed without errors
-- ✅ For Dynamic SQL: All occurrences have status `REVIEWED` (no `PENDING` records)
-- ✅ Reports generated successfully with all requested data sources ** using `generate_multi_report.py` (NOT custom HTML) **
-- ✅ User has reviewed and approved findings
+- All requested analyses have completed without errors
+- For Dynamic SQL: All occurrences have status `REVIEWED` (no `PENDING` records)
+- Reports generated successfully with all requested data sources ** using `generate_multi_report.py` (NOT custom HTML) **
+- User has reviewed and approved findings
 
 ### Pre-Completion Checklist
 
@@ -785,6 +793,8 @@ If any answer is "No", go back and use the correct script.
 - `analyzing-sql-dynamic-patterns/SKILL.md` - Pattern classification, complexity scoring
 - `etl-assessment/SKILL.md` - SSIS package analysis, control flow, data flow pipelines
 
+The **Data Migration & Validation** and **Testing** tabs have no sub-skill and nothing to dispatch: both are computed inside the report generator from the `--registry-dir` it already requires, so they render in every report without a runner, a CLI command, or an artifact of their own. Their logic lives in `scripts/snowconvert_reports/{data_migration_readiness,data_types_scan,type_coverage,testing_readiness,conversion_status}.py`; their customer-facing copy lives in `scripts/data_migration_report/content.py` and `scripts/testing_report/content.py`, which are the files to read (or change) when answering a wording question.
+
 ## On Completion
 
 Present the closing message with: **opening line** (`migration_status.in_scope` objects in `wave_count` waves), **summary table** (Register, Convert, ETL conversion, Waves, Object exclusion, Dynamic SQL, SSIS/Informatica analysis, Missing objects — pull from `migration_status` and Code Unit Registry), **key findings** (2–4 bullets interpreting the data: heavy staging footprint ≥30%, unresolved external refs, conversion friction, ETL risk, circular dependencies — only when triggers fire), **report path** (platform-specific open command for `<project_dir>/assessment/multi_report.html`), and **next-steps menu**:
@@ -792,6 +802,8 @@ Present the closing message with: **opening line** (`migration_status.in_scope` 
 > What would you like to do?
 > 1. **Review the report** — open HTML or ask any questions
 > 2. **Modify the assessment** — re-run with changed parameters
-> 3. **Move on to migration** — start Phase 2 (loads `../migrate-objects/SKILL.md`)
+> 3. **Move on to migration** — set up the Snowflake target and start Phase 2
 
 Mark option **(1)** as `(recommended)` when `missing > 0`, otherwise **(3)**. Wait for response.
+
+On **(3)**, return to the parent setup skill and call `progress_setup()` — the machine asks the `continueToMigration` gate and then walks the Snowflake target and testing setup. Do not load `../migrate-objects/SKILL.md` directly from here; it has no Snowflake target configured yet.

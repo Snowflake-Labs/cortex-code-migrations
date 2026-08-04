@@ -30,7 +30,7 @@ Convert source code to Snowflake SQL using SnowConvert.
 
 Confirm `source/` contains `.sql` files (use whichever portable form fits the host).
 
-If no files are found, the setup state machine should have already routed back to `register-code-units` before you got here. If somehow you arrived with an empty `source/`, return to the parent setup skill so it can re-query `next_setup_task`.
+If no files are found, the setup state machine should have already routed back to `register-code-units` before you got here. If somehow you arrived with an empty `source/`, return to the parent setup skill so it can re-query `progress_setup()`.
 
 ### Step 2: Check for ETL Code
 

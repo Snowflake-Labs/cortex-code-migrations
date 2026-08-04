@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 # Database Migration to Snowflake
 
 Tell the user:
-> **Welcome to the Snowflake Migrations plugin.** Let me get started by configuring your session.
+> **Welcome to the Snowflake AIM Migration Agent.** Let me get started by configuring your session.
 
 ## IMPORTANT NOTE
 
@@ -29,7 +29,7 @@ Call the `migration_status` tool. It returns JSON with `project_exists`, `direct
 - **Mid-migration:** "Setup is complete — 147 objects registered and converted, assessment done. You're in the migration phase: 12 of 47 objects have been deployed so far (Wave 2). 8 tables deployed, 2 views deployed, 2 procedures passed testing."
 - **Near completion:** "Almost there — 45 of 47 objects are deployed and tested. 2 procedures are still failing tests."
 
-Also add the checklist based on the status JSON. Use `✅` (all done), `◐` (partial), `⬚` (not started).
+Also add the checklist based on the status JSON. On macOS/Linux use `✅` (all done), `◐` (partial), `⬚` (not started). On Windows use `[done]` (all done), `[in progress]` (partial), `[ ]` (not started) because the default Windows console encoding cannot render Unicode symbols.
 
 ```
 <symbol> 1. Connect                  - Connected to <source>
@@ -108,6 +108,8 @@ Match the user's request to the most relevant skill and load it.
 ### Setup & onboarding
 - **setup** — full setup, steps 1–5: connect, init, register, convert, assess → `./setup/SKILL.md`
   - **midway-entry** — existing project with source + pre-converted Snowflake SQL (SQL Server / Redshift only) → `./setup/midway-entry.md`
+  - **configure-snowflake-target** — set or change the Snowflake connection and target database for object migration. Triggers: "change the target database", "deploy to a different database", "switch Snowflake connection" → `./setup/configure-snowflake-target.md`
+  - **configure-testing** — pick or change the testing path (source-data vs synthetic) for procedure/function equivalence tests. Triggers: "change testing path", "switch to synthetic tests", "use query logs" → `./setup/configure-testing.md`
   - **data-validation-setup** — configure cloud data validation: schema, metrics, row-level checks → `./setup/data-validation/SKILL.md`
   - **data-infrastructure-teardown** — suspend SPCS service + compute pool, stop local worker (cost-saving) → `./data-infrastructure/teardown/SKILL.md`
 

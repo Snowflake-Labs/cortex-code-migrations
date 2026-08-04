@@ -13,6 +13,8 @@ import json
 import os
 import sys
 import tempfile
+
+from _console import OK
 from pathlib import Path
 
 _BASE_DIR = os.path.join(
@@ -65,7 +67,7 @@ def update_assessment_report(assessment_csv, translated_queries_json, output_fol
             row['PendingWork'] = 'No'
             row['Pending Work Description'] = 'Query successfully translated to Snowflake by SCAI PowerBI Fixer.'
             updated_count += 1
-            print(f"  \u2713 Updated: {query_name} -> AI Repointed")
+            print(f"  {OK} Updated: {query_name} -> AI Repointed")
     
     # Write updated report to output folder
     output_csv = os.path.join(output_folder, os.path.basename(assessment_csv))
@@ -75,7 +77,7 @@ def update_assessment_report(assessment_csv, translated_queries_json, output_fol
         writer.writeheader()
         writer.writerows(rows)
     
-    print(f"\n\u2713 Assessment report updated: {updated_count} queries marked as 'AI Repointed'")
+    print(f"\n{OK} Assessment report updated: {updated_count} queries marked as 'AI Repointed'")
     print(f"  Output: {output_csv}")
     
     # Save summary for reference

@@ -36,6 +36,7 @@ Located under `platforms/ssis/ewi/`. These guides are loaded when `platform_id` 
 
 | File | Code | Description |
 |------|------|-------------|
+| [SSC-EWI-SSIS0001.md](../platforms/ssis/ewi/SSC-EWI-SSIS0001.md) | SSC-EWI-SSIS0001 | Data flow component not supported (includes third-party connectors) |
 | [SSC-EWI-SSIS0002.md](../platforms/ssis/ewi/SSC-EWI-SSIS0002.md) | SSC-EWI-SSIS0002 | SSIS expression conversion issues |
 | [SSC-EWI-SSIS0003.md](../platforms/ssis/ewi/SSC-EWI-SSIS0003.md) | SSC-EWI-SSIS0003 | Execute SQL Task conversion |
 | [SSC-EWI-SSIS0004.md](../platforms/ssis/ewi/SSC-EWI-SSIS0004.md) | SSC-EWI-SSIS0004 | Script Task conversion |
@@ -46,6 +47,22 @@ Located under `platforms/ssis/ewi/`. These guides are loaded when `platform_id` 
 | [SSC-FDM-SSIS0004.md](../platforms/ssis/ewi/SSC-FDM-SSIS0004.md) | SSC-FDM-SSIS0004 | SSIS event handler |
 | [SSC-FDM-SSIS0005.md](../platforms/ssis/ewi/SSC-FDM-SSIS0005.md) | SSC-FDM-SSIS0005 | SSIS package configuration |
 | [SSC-FDM-SSIS0006.md](../platforms/ssis/ewi/SSC-FDM-SSIS0006.md) | SSC-FDM-SSIS0006 | SSIS logging provider |
+
+### Informatica-Specific EWI / FDM Fix Guides
+
+Located under `platforms/informatica/ewi/`. These guides are loaded when `platform_id` is `informatica`.
+
+| File | Code | Description |
+|------|------|-------------|
+| [SSC-EWI-INF0001.md](../platforms/informatica/ewi/SSC-EWI-INF0001.md) | SSC-EWI-INF0001 | PowerCenter transformation not supported |
+| [SSC-EWI-INF0003.md](../platforms/informatica/ewi/SSC-EWI-INF0003.md) | SSC-EWI-INF0003 | Workflow element cannot be converted |
+| [SSC-EWI-INF0038.md](../platforms/informatica/ewi/SSC-EWI-INF0038.md) | SSC-EWI-INF0038 | Informatica conversion issue |
+| [SSC-EWI-INF0039.md](../platforms/informatica/ewi/SSC-EWI-INF0039.md) | SSC-EWI-INF0039 | Informatica conversion issue |
+| [SSC-EWI-INF0040.md](../platforms/informatica/ewi/SSC-EWI-INF0040.md) | SSC-EWI-INF0040 | Informatica conversion issue |
+| [SSC-EWI-INF0050.md](../platforms/informatica/ewi/SSC-EWI-INF0050.md) | SSC-EWI-INF0050 | User-defined function call not converted |
+| [SSC-FDM-INF0002.md](../platforms/informatica/ewi/SSC-FDM-INF0002.md) | SSC-FDM-INF0002 | Informatica functional difference |
+| [SSC-FDM-INF0015.md](../platforms/informatica/ewi/SSC-FDM-INF0015.md) | SSC-FDM-INF0015 | Informatica functional difference |
+| [SSC-FDM-INF0016.md](../platforms/informatica/ewi/SSC-FDM-INF0016.md) | SSC-FDM-INF0016 | Informatica functional difference |
 
 ### Agent Prompts
 

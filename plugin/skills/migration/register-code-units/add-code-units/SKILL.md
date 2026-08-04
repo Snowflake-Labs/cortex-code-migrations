@@ -12,10 +12,7 @@ license: Proprietary. See License-Skills for complete terms
 Tell the user:
 > **Importing local SQL files.**
 >
-> Here's what I'll do:
-> 1. Copy the SQL files from your input path into `artifacts/source_raw/`.
-> 2. Run scai's arrange engine to organize them by type and track them in your project.
-> 3. Move the arranged output into `source/`, ready for conversion, deployment, and validation against Snowflake.
+> I'll handle this for you — importing your local SQL files and organizing them by type into `source/`, ready for conversion. It's a single automated step; you won't need to copy, arrange, or move anything yourself.
 
 ## Prerequisites
 

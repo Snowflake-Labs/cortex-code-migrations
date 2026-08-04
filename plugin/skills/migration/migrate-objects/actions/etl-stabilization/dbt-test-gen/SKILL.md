@@ -237,6 +237,70 @@ Generate the following test types as applicable:
 - **Similarity/score range assertions**: verify scores are in valid range (mandatory for JAROWINKLER_SIMILARITY or similar)
 - **Passthrough/identity model assertions**: verify staging/mart row counts match upstream
 
+### Step 3.2a: Assertion Hardening Rules (MANDATORY)
+
+These assertions are the fixer's convergence gate — `dbt-fixer` only accepts a node when they pass — so
+they must be **impossible to break by accident**. An assertion whose own SQL errors is worse than a missing
+assertion: it reads as a failed fix, and the fixer burns an attempt on a test bug instead of on the model.
+
+Every generated assertion MUST obey all of the following:
+
+1. **Reference only the model under test.** One `ref()`, to the target model. Do not join to upstream
+   models, seeds or sources inside an assertion.
+2. **Use only these shapes:**
+   - a row count compared to a literal (`COUNT(*) <> 3`)
+   - a single-group scalar compared to a literal
+   - a flat `NOT EXISTS` / `WHERE` predicate returning offending rows
+3. **No joins, no correlated subqueries, no nested cross-table subqueries, no window functions** inside
+   the assertion.
+4. **No bare scalar subqueries.** `(SELECT col FROM model WHERE key = 'x') = 'y'` ERRORS the moment a wrong
+   fix produces duplicate rows for that key — precisely when you most need a clean failure. Express it as a
+   predicate instead:
+   ```sql
+   -- Fragile: errors (not fails) if the model returns duplicates for PARTY_ID = '1'
+   -- WHERE (SELECT PARTY_NAME FROM {{ ref('mart_parties') }} WHERE PARTY_ID = '1') <> 'Alice New'
+
+   -- Robust: fails cleanly whether the row is wrong, missing or duplicated
+   SELECT * FROM {{ ref('mart_parties') }}
+   WHERE PARTY_ID = '1' AND PARTY_NAME <> 'Alice New'
+   ```
+5. **Expected values are literals derived by hand from the source definition.** Never recompute the
+   expected value inside the assertion from the same model you are testing — that passes trivially. Never
+   read it from the converted SQL; derive it from the source ETL logic.
+6. **State the expected value in the ASSERT comment** so a reviewer can check the derivation without
+   re-reading the source.
+
+### Step 3.2b: Discriminating Case Rule (MANDATORY)
+
+A test suite that only a correct fix can pass is the point; a suite that a *wrong* fix also passes is
+worthless. So for **every model with real transformation logic** (filter, lookup/join, aggregation,
+de-duplication, ranking, conditional split, NULL handling):
+
+- Include at least one assertion that a **nameable plausible-but-wrong** implementation would FAIL.
+- Name that wrong implementation in the ASSERT comment, with the wrong answer it produces.
+
+Worked example — a de-duplication that must keep the most recent row per key:
+
+```sql
+-- ARRANGE: seed has two rows for PARTY_ID '1' (LOAD_TS 2024-01-01 'Alice Old', 2024-06-01 'Alice New')
+-- ACT: source Rank transformation keeps the single most recent row per PARTY_ID by LOAD_TS DESC
+-- ASSERT: PARTY_ID '1' survives exactly once, with PARTY_NAME 'Alice New'.
+--   Catches: no de-duplication at all (both rows survive -> duplicate PARTY_ID),
+--            and ordering ASC instead of DESC (keeps 'Alice Old').
+SELECT PARTY_ID
+FROM {{ ref('mart_parties') }}
+WHERE PARTY_ID = '1'
+GROUP BY PARTY_ID
+HAVING COUNT(*) <> 1 OR MIN(PARTY_NAME) <> 'Alice New'
+```
+
+Models with no real logic (pure passthrough) still get the row-count and key assertions from Step 3.3, but
+need no discriminating case.
+
+Record in the test report's Coverage Gaps section any model where you could not construct a discriminating
+assertion, and why — that is a known blind spot in the gate, and the fixer's "passed" verdict for that
+model is correspondingly weaker.
+
 ### Step 3.3: Staging and Mart Model Tests
 
 Staging/mart models still require: a row count assertion verifying output matches upstream, `not_null` + `unique` on the primary key, and a value assertion if the model applies any transformation.

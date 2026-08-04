@@ -1,6 +1,6 @@
 {
   "name": "snowflake-migration",
-  "version": "2.38.0",
+  "version": "2.39.0",
   "description": "End-to-end database migration to Snowflake — assessment, conversion, validation, and deployment",
   "author": { "name": "db-eng-migrations" },
   "skills": ["skills/migration"],

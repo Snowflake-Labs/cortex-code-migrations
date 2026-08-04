@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..conversion_status import is_etl as _is_etl
+from ..conversion_status import map_conversion_status as _map_conversion_status
 from .registry_loader import (
     build_id_to_name_map,
     load_registry_entries,
@@ -54,10 +56,6 @@ def _is_udf_helper(entry: dict) -> bool:
         entry.get("files", {}).get("converted", {}).get("path", "") or ""
     )
     return UDF_HELPER_PATH_MARKER in converted
-
-
-def _is_etl(entry: dict) -> bool:
-    return entry.get("kind") == "etl"
 
 
 def _is_non_toplevel_other(entry: dict) -> bool:
@@ -175,56 +173,6 @@ def _aggregate_etl_dependencies(entry: dict) -> tuple[list[dict], list[dict]]:
             if rid and rid not in seen_req:
                 seen_req[rid] = dict(req)
     return list(seen_deps.values()), list(seen_req.values())
-
-
-def _aggregate_etl_issues(entry: dict) -> list[dict]:
-    """Concatenate ``parts[*].issues`` for an ETL entry.
-
-    Top-level ``entry.issues`` is empty for ETL; the SnowConvert EWIs / FDMs
-    raised during conversion are attached per-part. Used by
-    ``_map_conversion_status`` so an ETL with conversion gaps surfaces as
-    "Require Attention" instead of "Success".
-    """
-    out: list[dict] = []
-    for part in entry.get("parts") or []:
-        if not isinstance(part, dict):
-            continue
-        for issue in part.get("issues") or []:
-            if isinstance(issue, dict):
-                out.append(issue)
-    return out
-
-
-def _map_conversion_status(entry: dict) -> str:
-    """Map registry conversion status + issue presence to the UI status value.
-
-    Rules:
-    - ``isMissing == true`` → "Missing" (takes precedence)
-    - ``conversion.status == "pending"`` and no issues  → "Pending Conversion"
-    - ``conversion.status == "pending"`` and issues > 0 → "Require Attention"
-    - ``conversion.status == "completed"`` and issues > 0 → "Require Attention"
-    - ``conversion.status == "completed"`` and no issues → "Success"
-    - otherwise: "Require Attention" if issues else "Pending Conversion"
-
-    For ETL units, "issues" includes ``parts[*].issues`` since the
-    SnowConvert conversion attaches gaps per-part.
-    """
-    if entry.get("isMissing"):
-        return "Missing"
-
-    conv = (
-        entry.get("codeStatus", {}).get("conversion", {}).get("status", "") or ""
-    ).strip().lower()
-    issues = entry.get("issues") or []
-    if _is_etl(entry):
-        issues = list(issues) + _aggregate_etl_issues(entry)
-    has_issues = bool(issues)
-
-    if conv == "pending":
-        return "Require Attention" if has_issues else "Pending Conversion"
-    if conv == "completed":
-        return "Require Attention" if has_issues else "Success"
-    return "Require Attention" if has_issues else "Pending Conversion"
 
 
 def _relation_type(dep: dict) -> str:

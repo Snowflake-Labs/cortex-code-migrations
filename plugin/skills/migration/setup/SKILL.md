@@ -9,7 +9,7 @@ license: Proprietary. See License-Skills for complete terms
 ## On Entry
 
 Tell the user:
-> **Phase 1: Setup** — I'll walk you through connecting to your source database, initializing the project, registering your objects, converting them to Snowflake SQL, and generating an assessment report.
+> **Phase 1: Setup** — I'll walk you through connecting to your source database, initializing the project, registering your objects, converting them to Snowflake SQL, and generating an assessment report. Once you've seen the assessment I'll ask whether you want to go on to migrating objects.
 
 ## Flow
 
@@ -71,13 +71,26 @@ Tasks the machine routes through, in order:
 | `chooseSourceDialect`            | inline prompt (`next_prompt`) — no sub-skill load                 |
 | `chooseEntryMode`                | inline prompt (`next_prompt`) — no sub-skill load                 |
 | `midwayEntry`                    | sub-skill: `setup/midway-entry.md`                                |
-| `configureSnowflakeConnection`   | sub-skill: `setup/configure-snowflake-connection.md`              |
 | `configureSourceConnection`      | sub-skill: `setup/configure-source-connection.md`                 |
 | `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
 | `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
-| `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (opt-in; excluded unless enabled) |
+| `continueToMigration`            | inline prompt (`next_prompt`) — the post-assessment gate           |
+| `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md`                  |
+| `configureTesting`               | sub-skill: `setup/configure-testing.md`                           |
+| `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (synthetic testing path only) |
+
+Conversion and assessment come first on purpose: neither needs a Snowflake
+target, so a user reaches their assessment report without picking a
+connection or database. Everything Snowflake-side is gated behind the
+`continueToMigration` prompt — answer "Not now" and the machine finishes
+at assessment. Nothing is persisted for that answer, so the gate is
+offered again on the next run.
+
+The testing choice also decides the last step: **synthetic** walks into
+`generateTestbed` (synthetic tests need generated data), while
+**source-data** ends setup right after `configureTesting`.
 
 If `progress_setup()` returns an unexpected `next_task` not listed above,
 surface the raw response to the user and stop — do not invent a skill
@@ -91,6 +104,9 @@ resolves the next step exactly as a normal call would (for the last step,
 `completed: true`) — act on it directly. Nothing is persisted, so the step
 is offered again later; for a permanent opt-out use
 `configure(tasks={"runAssessment": {"enabled": false}})`.
+
+Trust `progress_setup()` / related MCP return values for what is done vs
+pending — do not invent completion from chat history.
 
 ## Sub-Skills Reference
 
@@ -106,6 +122,8 @@ is offered again later; for a permanent opt-out use
 | 4 | convert | `../convert/SKILL.md` |
 | 4 | code-conversion-only | `../code-conversion-only/SKILL.md` |
 | 5 | snowconvert-assessment | `../assessment/SKILL.md` |
+| — | configure-snowflake-target (post-assessment: connection + database) | `./configure-snowflake-target.md` |
+| — | configure-testing (post-assessment: source-data vs synthetic) | `./configure-testing.md` |
 | — | data-infrastructure-setup | `../data-infrastructure/SKILL.md` |
 | — | data-migration-setup | `../migrate-objects/actions/data-migration/SKILL.md` |
 | — | data-validation-setup | `./data-validation/SKILL.md` |
@@ -118,8 +136,23 @@ is offered again later; for a permanent opt-out use
 
 ## On Completion
 
-When the setup machine reaches `setupComplete`, tell the user:
-> **Setup complete** — Your migration project is configured: connected to <source_type>, <N> objects registered, code converted, and assessment generated. Ready to start migrating objects to Snowflake.
+When the setup machine reaches `setupComplete`, the closing message depends
+on how the user answered the `continueToMigration` gate.
+
+**If they chose "Not now"** (no Snowflake target configured) — close out
+here without nudging them toward migration:
+> **Assessment complete** — connected to <source_type>, <N> objects
+> registered, code converted, and your assessment report is ready. Every
+> step was committed to git.
+>
+> Whenever you want to go on to deploying objects to Snowflake, just say
+> so — I'll pick up right here and set up the Snowflake target then.
+
+Then ask what else you can help with, and stop. Do **not** load
+`../migrate-objects/SKILL.md`.
+
+**If they opted in** and the Snowflake target and testing path are set:
+> **Setup complete** — Your migration project is configured: connected to <source_type>, <N> objects registered, code converted, assessment generated, and your Snowflake target (`<snowflake_database>`) and testing path are set. Ready to start migrating objects.
 >
 > Every step along the way was committed to git. This is a good time
 > to share the project with your team — the next phase (object
