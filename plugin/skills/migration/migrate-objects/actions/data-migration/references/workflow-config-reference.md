@@ -12,6 +12,7 @@
 | `affinity` | String | No | Only orchestrator and worker instances with a matching affinity will process this workflow. If the SPCS orchestrator was started with a specific affinity (visible in service logs as `Orchestrator affinity: <value>`), the workflow **must** set the same value or it will be silently skipped. The worker's `[application].affinity` must also match. Omit from all sides for fresh setups. |
 | `preflight` | Boolean | No | When `true`, cap each table to one partition and run against a transient `PREFLIGHT_<workflowId>` schema (bounded dry-run). Default `false`. |
 | `preflightKeepSchema` | Boolean | No | When `preflight` is `true`, skip cleanup so the transient schema remains for manual inspection. Default `false`. |
+| `cleanUpTransientResources` | `"never"` \| `"on-success"` \| `"always"` | No | Delete intermediate stage files for this workflow after it finishes (`TASK_RESULTS` and any external stages used by extraction). Default `"never"`. Underscores are accepted (`on_success`). |
 | `intervalHandling` | `"interval"` \| `"varchar"` | No | How PostgreSQL/BigQuery mixed-family interval columns are mapped. Default `"interval"`. Can be overridden per table. |
 
 ## TableConfiguration
@@ -40,8 +41,10 @@
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
 | `databaseName` | String | Yes | Database name |
-| `schemaName` | String | Yes | Schema name |
+| `schemaName` | String | Yes\* | Schema name |
 | `tableName` | String | Yes | Table name. Case-sensitive names must be quoted: `"\"MyCaseSensitiveTable\""` |
+
+\* For **Teradata** sources, omit `source.schemaName` — Teradata is `database.table` (no schema layer). Align `databaseName` with `[connections.source.teradata].database` in worker TOML. Snowflake **target** still requires `schemaName`.
 
 ## TargetIdentifier
 
@@ -50,7 +53,7 @@ Extends `SourceTargetIdentifier` with optional Iceberg fields.
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
 | `databaseName` | String | Yes | Database name |
-| `schemaName` | String | Yes | Schema name |
+| `schemaName` | String | Yes | Schema name (always required on Snowflake targets, including Teradata migrations) |
 | `tableName` | String | Yes | Table name |
 | `tableType` | `"native"` \| `"iceberg"` | No | Target table format. Defaults to `"native"`. **`"iceberg"` is Redshift-source only today** (partial support). |
 | `icebergConfig` | `IcebergConfig` | When `tableType` is `"iceberg"` | Iceberg-specific configuration (see below) |

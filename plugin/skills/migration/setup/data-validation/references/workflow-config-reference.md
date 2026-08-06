@@ -21,6 +21,7 @@
 | `affinity` | String | No | Routes work to workers with matching affinity |
 | `useSnowflakeCompute` | Boolean | `false` | Run validation compute on Snowflake instead of the worker |
 | `useSnowpipeForResults` | Boolean | `true` | Ingest L2/L3 CSV results via Snowpipe (default). Set `false` for per-partition `COPY INTO`. |
+| `cleanUpTransientResources` | `"never"` \| `"on-success"` \| `"always"` | `"never"` | Delete intermediate DV `TASK_RESULTS` stage files for this workflow after it finishes. Underscores are accepted (`on_success`). |
 | `targetPartitionSizeRows` | Integer | No | Global partition row target (mutually exclusive with `targetPartitionSizeMb`) |
 | `targetPartitionSizeMb` | Integer | No | Global partition size target in MB |
 | `validationCustomTypes` | Object | `{}` | Source datatype normalizations for L1 |
@@ -202,6 +203,7 @@ validationCustomMetrics:
 |-------|-------|-------------|
 | `defaultTableConfiguration` | top-level | Shared defaults for every `tables[]` / `views[]` entry (DM parity); `synchronization` deep-merges |
 | `affinity` | top-level | Affinity group — orchestrator only picks up matching workflows |
+| `cleanUpTransientResources` | top-level | Delete intermediate DV stage files after the workflow finishes (`never` / `on-success` / `always`) |
 | `views` | top-level | Array of view validation entries (same schema as `tables`) |
 
 > View validation is handled separately from table validation — see the migrate-objects view validation flow.
@@ -236,7 +238,7 @@ Align `source.databaseName` (when present) with the Oracle **service name** in w
 
 ## Teradata identifiers
 
-Teradata uses **database.table** naming. Align `databaseName` with `[connections.source.teradata].database` in worker TOML. Teradata L3 requires the `HASH_MD5` UDF in that database.
+Teradata uses **database.table** naming — omit source `schemaName` (there is no schema layer). Align `databaseName` with `[connections.source.teradata].database` in worker TOML. Teradata L3 requires the `HASH_MD5` UDF in that database. Snowflake target identifiers still require `schemaName`.
 
 ## Common edit scenarios
 
