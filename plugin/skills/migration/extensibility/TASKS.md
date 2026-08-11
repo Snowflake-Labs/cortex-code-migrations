@@ -47,8 +47,8 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | Task id | What it does |
 |---|---|
 | `midwayEntry` | Imports an existing pre-converted Snowflake project to be compatible with AIM projects. |
-| `configureSourceConnection` | Configures the source database connection. |
 | `configureGit` | Configures git integration (main branch; a remote is optional). |
+| `configureSourceConnection` | Configures the source database connection. |
 | `registerCode` | Pulls source SQL into the project. |
 | `convertCode` | Runs the source → Snowflake conversion. |
 | `runAssessment` | Generates a migration assessment report. |
@@ -95,11 +95,12 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Inputs:** An existing project tree containing source SQL and pre-converted Snowflake SQL.
 - **Done when:** Project is initialized (`.scai/config/project.yml`) and at least one file exists under both `source/**/*.sql` and `snowflake/**/*.sql` (produced by `scai code sync`).
 
+#### `configureGit`
+- **Inputs:** A user who has opted into object migration. Runs after that gate so an assessment-only user is never asked about git.
+- **Done when:** Session config has `git_main_branch` set — call `configure(git_main_branch=...)`.
+
 #### `configureSourceConnection`
 - **Done when:** Session config has `source_connection` set — call `configure(source_connection=...)`.
-
-#### `configureGit`
-- **Done when:** Session config has `git_main_branch` set — call `configure(git_main_branch=...)`.
 
 #### `registerCode`
 - **Inputs:** Either a configured source connection (extracted via scai) or a folder of `.sql` files to register as-is.
@@ -119,7 +120,7 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `generateTestbed`
 - **Inputs:** A converted, assessed workload with testbed mining artifacts under `artifacts/**/testbed/*.testbed.json`. A source connection is still required downstream.
-- **Done when:** The generate deliverable exists at `**/testbed/generate/summary-view.json` (synthetic-data summary; CSVs + `manifest.json` land under `testbed/generate/data/`).
+- **Done when:** The generate deliverable exists at `**/testbed/generate/summary-view.json` (synthetic-data summary; each table's CSV lands under its object's `<artifacts>/testbed/` folder and `manifest.json` beside `state.bin`).
 
 ### `main` (per-object migration)
 
@@ -145,15 +146,15 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `seedSourceDb`
 - **Inputs:** Object that needs test inputs; configured source connection.
-- **Done when:** Per-object YAML exists at `<project_dir>/artifacts/<id>/test/<name>.yml`.
+- **Done when:** Per-object YAML exists at `<project_dir>/<files.artifacts.path>/test/<name>.yml`.
 
 #### `seedSynthetic`
 - **Inputs:** Object that needs test inputs (no source connection required).
-- **Done when:** Per-object YAML exists at `<project_dir>/artifacts/<id>/test/<name>.yml`.
+- **Done when:** Per-object YAML exists at `<project_dir>/<files.artifacts.path>/test/<name>.yml`.
 
 #### `seedScript`
 - **Inputs:** A converted BTEQ script unit; the shell script(s) that set its variables and run bteq (plus any invocation args); configured source connection; bteq binary installed.
-- **Done when:** Per-object YAML exists at `<project_dir>/artifacts/<id>/test/<name>.yml`.
+- **Done when:** Per-object YAML exists at `<project_dir>/<files.artifacts.path>/test/<name>.yml`.
 
 #### `captureBaseline`
 - **Inputs:** Object with seed data; configured source connection.

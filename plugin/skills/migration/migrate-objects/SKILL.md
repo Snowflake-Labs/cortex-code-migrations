@@ -97,7 +97,7 @@ VERY IMPORTANT: **Wait for user input before acting.** Once the user confirms wh
 >   1. **Register the missing dep** — extract DDL from the source database (or import a local SQL file) and add it to the project. Load `../register-code-units/SKILL.md` for the matching dep `object_type`. After registration completes, re-run the blocked group; the dep should now resolve.
 >   2. **Stub the missing dep in Snowflake** — create a placeholder object (empty table / no-op procedure / view returning the right column shape) so the dependent unit can deploy. Use this when the source isn't available but the shape is known. Capture what was stubbed in `extensions.notes` on the registry entry so the team has a record.
 >   3. **Mark this object out of scope** — when the dependent shouldn't migrate at all because its missing dep is genuinely deprecated. Run `update_registry(field="inScope", status="false", objects="<object_id>")`.
->   4. **Bypass the precondition** — only when the user has already mitigated the dep externally (e.g. it lives in another database that's already in Snowflake) and wants to proceed without registering. Use `transition_status(status="bypass", task="<blocking_task>", where="id IN ('<object_id>')")`. This is logged and reversible.
+>   4. **Bypass the precondition** — **last resort, not a peer of the options above.** Do not offer it proactively; use it only when the user has already mitigated the dep externally (e.g. it lives in another database that's already in Snowflake) and explicitly insists on proceeding without registering. A `reason` is required and the bypass is surfaced distinctly downstream (never as a satisfied precondition). Use `transition_status(status="bypass", task="<blocking_task>", where="id IN ('<object_id>')", reason="<why the dep is safe to skip>")`. This is logged and reversible.
 >
 >   **Wait for the user to pick one option per object** before acting. Do not auto-pick — "missing" usually surfaces a real data-modeling decision the user needs to make.
 >
@@ -132,14 +132,14 @@ re-run.
 
 When the current task is **`migrateData`** and you call `migrate_data(mode="run")` (from FSM instructions or this skill), you **must** complete poll and report before marking work done:
 
-1. Load [actions/data-migration/SKILL.md](actions/data-migration/SKILL.md) **Steps 5–7** if you have not already (background Monitor+/loop or poll fallback with `migrate_data_status()`, present the error-first migration report, offer teardown).
+1. Load [actions/data-migration/SKILL.md](actions/data-migration/SKILL.md) **Steps 5–7** if you have not already (background Monitor or poll fallback with `job_status`, present the error-first migration report, offer teardown).
 2. Do not return to the object loop or claim the next task until the user has seen the summary.
 
 ### After `validateData` (data validation run)
 
 When the current task is **`validateData`** and you call `validate_data(mode="run")` (from FSM instructions or the validate-objects skill), you **must** complete poll and report before marking work done:
 
-1. Load [../validate-objects/actions/validate_tables.md](../validate-objects/actions/validate_tables.md) **Steps 4–6** if you have not already (background Monitor+/loop or poll fallback with `validate_data_status()`, present the error-first validation report, offer re-validation when eligible, then teardown).
+1. Load [../validate-objects/actions/validate_tables.md](../validate-objects/actions/validate_tables.md) **Steps 4–6** if you have not already (background Monitor or poll fallback with `job_status`, present the error-first validation report, offer re-validation when eligible, then teardown).
 2. Do not return to the object loop or claim the next task until the user has seen the summary.
 
 ## Step 3: Report

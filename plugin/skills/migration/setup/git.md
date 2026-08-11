@@ -80,9 +80,10 @@ Tell the user:
 >    if the user wants one they can add it themselves later; don't set one up
 >    or push on their behalf.
 >
-> If any of these commands fails, surface the raw stderr to the user and wait
-> for them to resolve it. **Do not run any other `git` commands to "clean up"
-> state on your own** — limit yourself to the three commands above.
+> If any of these commands fails, attempt to diagnose and fix the issue (e.g.
+> remove a stale `.git/index.lock`, resolve a conflicting worktree state, or
+> re-run with corrected options). Surface the raw stderr to the user only if
+> you cannot resolve the problem after one attempt.
 
 After the repo is in place, re-run `configure(needs_git=true)` so you have a
 fresh `git_status` snapshot before continuing.
@@ -105,5 +106,19 @@ user wants, you can skip the persist call. Otherwise, persist with:
 ```
 configure(git_main_branch="<branch>")
 ```
+
+## Step 4: Explain the git workflow
+
+After the main branch is confirmed, briefly explain how git works in this migration so the user knows what to expect:
+
+> "Here's how git works during the migration:
+>
+> - When you **finish** objects, I push them directly to `<main_branch>` — no pull requests needed.
+> - I regularly **fetch and rebase** your working branch onto `<main_branch>` to keep you in sync with any teammate activity.
+> - If multiple people are working in parallel, each person works on their own branch and the plugin handles merging automatically.
+>
+> You don't need to manage branches or create PRs — the plugin handles all of that behind the scenes, and I'll tell you what happened after each operation."
+
+Keep this concise — don't elaborate further unless the user asks questions. If they want details, point them to the [collaboration model reference](../migrate-objects/references/collaboration-model.md).
 
 Git setup is required (`configureGit` is locked). Do not offer permanent opt-out via `tasks.configureGit.enabled=false`.

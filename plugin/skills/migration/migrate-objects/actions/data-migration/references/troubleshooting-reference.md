@@ -69,7 +69,7 @@ ORDER BY ID DESC LIMIT 5;
    WHERE ID = <workflow_id>;
    ```
 2. Or, set `affinity: <value>` in the workflow YAML before submitting.
-3. Also set `affinity = "<value>"` in the worker's `[application]` section in `DataExchangeWorkerConfig.toml`.
+3. Also set `affinity = "<value>"` in the worker's `[application]` section in the project's `.scai/config/dew_configuration.toml` (path relative to the SCAI project root).
 
 ---
 
@@ -135,9 +135,9 @@ WHERE WORKFLOW_ID != <your_workflow_id>
 
 **Symptom:** The orchestrator logs `TableNotFoundError: Table '<db>.<schema>.<table>' does not exist in the source database`. The worker completed the metadata extraction task without errors, but no data was uploaded.
 
-**Cause:** The worker's ODBC connection uses the `database` field from `DataExchangeWorkerConfig.toml` to set the active database. If this doesn't match the `source.databaseName` in the workflow YAML, queries against `information_schema.columns` and `SVV_TABLE_INFO` return zero rows (they are scoped to the connected database).
+**Cause:** The worker's ODBC connection uses the `database` field from the project's `.scai/config/dew_configuration.toml` (path relative to the SCAI project root) to set the active database. If this doesn't match the `source.databaseName` in the workflow YAML, queries against `information_schema.columns` and `SVV_TABLE_INFO` return zero rows (they are scoped to the connected database).
 
-**Fix:** Ensure the `database` field in `[connections.source.*]` in `DataExchangeWorkerConfig.toml` matches the `source.databaseName` in `workflow-config.yaml`. Then delete the failed workflow/tasks and resubmit.
+**Fix:** Ensure the `database` field in `[connections.source.*]` in the project's `.scai/config/dew_configuration.toml` matches the `source.databaseName` in `workflow-config.yaml`. Then delete the failed workflow/tasks and resubmit.
 
 **Oracle:** `[connections.source.oracle].database` is the **service name** (from `scai connection add-oracle --service-name`), not a SQL Server–style database name. It must match `source.databaseName` in the workflow YAML the same way.
 
@@ -267,7 +267,7 @@ Hybrid L3 validation may stop early when `earlyStoppingForRowHashing` or `maxFai
 
 ## Workflow finished but tables incomplete
 
-**Symptom:** `progress.output.isFinished` is `true` (workflow status `Finished`) but work did not complete for every table:
+**Symptom:** `details.progress.output.isFinished` is `true` (workflow status `Finished`) but work did not complete for every table:
 
 | Job | Incomplete signal |
 |-----|-------------------|
@@ -285,8 +285,8 @@ Hybrid L3 validation may stop early when `earlyStoppingForRowHashing` or `maxFai
 
 **Fix path (in order):**
 
-1. **MCP / reports (no SQL):** Re-read the latest status response. Use `reports.files.errors` / `reports.files.progress` (migration) or `tableStates[].errorMessage` and `reports.files.data_validation_errors` (validation) for `LastErrorMessage` / task detail.
-2. **Task queue:** Resolve `WORKFLOW_ID` from `WORKFLOW` (match `NAME` to `progress.output.workflowName`), then run the queries below. Look for tasks still `pending` / `executing` / `blocked` vs `failed` / `cancelled` / `completed`, and read `LAST_ERROR_MESSAGE`.
+1. **MCP / reports (no SQL):** Re-read the latest status response. Use `details.reports.files.errors` / `details.reports.files.progress` (migration) or `tableStates[].errorMessage` and `details.reports.files.data_validation_errors` (validation) for `LastErrorMessage` / task detail.
+2. **Task queue:** Resolve `WORKFLOW_ID` from `WORKFLOW` (match `NAME` to `details.progress.output.workflowName`), then run the queries below. Look for tasks still `pending` / `executing` / `blocked` vs `failed` / `cancelled` / `completed`, and read `LAST_ERROR_MESSAGE`.
 3. **Infrastructure:** If tasks are stuck pending with no errors, check worker process, affinity, stale `TASK_QUEUE` rows, and `SYSTEM$GET_SERVICE_STATUS` for the orchestrator — see sections above in this reference.
 
 **Tell the user:** “Workflow finished but N table(s) never completed — checking task errors…” — then report what `reports` and (if needed) `TASK_QUEUE` show. Offer troubleshooting steps before suggesting re-run.

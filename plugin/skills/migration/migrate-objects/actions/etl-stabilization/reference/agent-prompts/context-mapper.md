@@ -6,12 +6,12 @@ Analyze the converted ETL migration object and produce a structural understandin
 Your inputs:
 - Orchestration SQL (post-strip): {ORCH_SQL_PATH}
 - Source definition file: {SOURCE_FILE_PATH} (READ-ONLY — source of truth)
-- Scan results: {PACKAGE}/stabilization/planning/scan_results.json
+- Scan results: {UNIT}/stabilization/planning/scan.json
 - Platform-specific EWI reference files: {PLATFORM_DIR}/ewi/
 - Shared EWI reference files: {SKILL_DIR}/reference/ewi/
 - Source orchestration guide: {ORCHESTRATION_GUIDE}
 
-Write your output to: {PACKAGE}/stabilization/planning/MIGRATION_OBJECT_ORCH_CONTEXT.md
+Write your output to: {UNIT}/stabilization/planning/orchestration-context.md
 
 Extract:
 - Statement inventory: name, type, element count, EWI count, pattern (event-handler / monster-task / simple)
@@ -68,7 +68,7 @@ Groups of size 1 are unique elements — do not create a group entry for them.
 
 ## Output Format
 
-Write MIGRATION_OBJECT_ORCH_CONTEXT.md with the following sections in order:
+Write orchestration-context.md with the following sections in order:
 
 ### 1. Statement Inventory
 Table with columns: Name | Type | Element Count | EWI Count | Pattern
@@ -124,17 +124,17 @@ Format:
 ```
 ```
 
-**Size check:** If total excerpts exceed ~3000 lines, write them to a separate file `{PACKAGE}/stabilization/planning/SOURCE_EXCERPTS.md` instead of embedding in MIGRATION_OBJECT_ORCH_CONTEXT.md. In that case, add a pointer in MIGRATION_OBJECT_ORCH_CONTEXT.md:
+**Size check:** If total excerpts exceed ~3000 lines, write them to a separate file `{UNIT}/stabilization/planning/source-excerpts.md` instead of embedding in orchestration-context.md. In that case, add a pointer in orchestration-context.md:
 
 ```
 ### 7. Source Element Excerpts
 
-Source excerpts written to `{PACKAGE}/stabilization/planning/SOURCE_EXCERPTS.md` (too large for inline).
+Source excerpts written to `{UNIT}/stabilization/planning/source-excerpts.md` (too large for inline).
 ```
 
 ---
 
-Do NOT ask the user any questions — make reasonable defaults and document assumptions in MIGRATION_OBJECT_ORCH_CONTEXT.md.
+Do NOT ask the user any questions — make reasonable defaults and document assumptions in orchestration-context.md.
 
 ## Completion
 When your work is complete, your results will be returned to the caller automatically.

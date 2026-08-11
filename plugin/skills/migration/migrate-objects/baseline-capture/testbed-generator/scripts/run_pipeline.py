@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from subcommands import TestbedCli, default_runner, enumerate_stems  # noqa: E402
+from subcommands import TestbedCli, default_runner, enumerate_artifacts  # noqa: E402
 from recovery import RecoveryClass, classify  # noqa: E402
 from manifest import Manifest  # noqa: E402
 from assembler import (  # noqa: E402
@@ -26,12 +26,13 @@ VIEW_REL = "testbed/mine/unsolved-view.json"  # non-hidden: it's the state-machi
 COMPILE_VIEW_REL = "testbed/compile/clusters-view.json"  # non-hidden: the compile-phase completion predicate
 VALIDATE_VIEW_REL = "testbed/validate/readiness-view.json"  # non-hidden: the validate-phase completion predicate
 GENERATE_VIEW_REL = "testbed/generate/summary-view.json"  # non-hidden: the TERMINAL completion predicate
-GENERATE_OUT_REL = "testbed/generate/data"  # flat dir the CSV pool + manifest.json land in
 ENRICH_VIEW_REL = "testbed/enrich/enrichment-view.json"  # completion predicate: present <=> ready
 ENRICH_REPORT_REL = "testbed/enrich/enrichment-report.json"  # not-ready / reject diagnostics
 FRAGMENTS_DIR_REL = "testbed/enrich/fragments"
 QUARANTINE_REL = ".scai/testbed/quarantine"
 MAX_QUARANTINE_ATTEMPTS = 20
+# PENDING key for a malformed whole-workload entry that carries no identity to attribute it to.
+WORKLOAD_PENDING_KEY = "inspect-branches"
 
 
 def _present(project_dir: str, rel: str) -> bool:
@@ -79,61 +80,119 @@ def _write_mine_view(project_dir: str, result: dict, branches: list, manifest: M
     return view
 
 
-def _collect_branches(artifacts_path, cli, manifest):
-    """Per-object inspect-branches drill-down over the surviving artifacts.
-    Runs after list-unsolved (which already quarantined any malformed artifact).
-    A per-object failure is isolable: record PENDING and skip, never abort.
+def _branch_ids(obj, raw, manifest):
+    """(branch_count, unsolved_branch_ids) for one object's `branches` payload.
 
-    A *successful* envelope can still carry malformed branch data — a non-dict
-    result, a null/non-list `branches`, a non-dict branch element, or an unsolved
-    branch with no branch_id. Each of those is treated the same way: the offending
-    object (or branch) is recorded PENDING so the unsolved work stays traceable in
-    both the view and the run.json ledger — never silently dropped, never aborting.
+    A *successful* envelope can still carry malformed branch data — a null/non-list `branches`, a
+    non-dict branch element, or an unsolved branch with no branch_id. Each is treated the same way:
+    the offending object (or branch) is recorded PENDING so the unsolved work stays traceable in
+    both the view and the run.json ledger — never silently dropped, never aborting."""
+    if isinstance(raw, list):
+        branches = raw
+    else:
+        # Absent/null/non-list branches can't be enumerated (len(None) would abort).
+        branches = []
+        manifest.record_pending(
+            obj, f"malformed inspect-branches result: 'branches' is not a list ({type(raw).__name__})")
+    unsolved = []
+    for b in branches:
+        if not isinstance(b, dict):
+            # A non-dict element would AttributeError on b.get(); keep it traceable.
+            manifest.record_pending(obj, "malformed branch: not a JSON object")
+            continue
+        if b.get("solution_status") != "unsolved":
+            continue
+        bid = b.get("branch_id")
+        if bid is None:
+            # Unsolved work with no id: record PENDING rather than silently
+            # dropping it — the contract is "record PENDING and skip", not "skip".
+            manifest.record_pending(obj, "unsolved branch missing branch_id")
+            continue
+        unsolved.append(bid)
+    return len(branches), unsolved
+
+
+def _workload_failure(env):
+    """Why the whole-workload envelope is unusable, or None when it carries an `objects` list."""
+    if not env.success:
+        return f"{env.error.code}: {env.error.message}"
+    if not isinstance(env.result, dict):
+        return "malformed inspect-branches result: not a JSON object"
+    objects = env.result.get("objects")
+    if not isinstance(objects, list):
+        return ("malformed inspect-branches result: 'objects' is not a list "
+                f"({type(objects).__name__})")
+    return None
+
+
+def _collect_branches(project_dir, artifacts_path, cli, manifest):
+    """Whole-workload inspect-branches drill-down over the surviving artifacts.
+    Runs after list-unsolved (which already quarantined any malformed artifact).
+
+    One no-<object> call projects every branch-carrying object from a single state.bin load, so the
+    drill-down costs one process for the workload rather than one per procedure. A *known*
+    non-procedure (TABLE/VIEW/…) folds in a branch_count:0 entry directly — it is not in the
+    procedure state, so the projection never mentions it. An artifact whose type is absent (which
+    init may still resolve to a procedure via the CUR registry) is expected in that projection:
+    treating it as a non-procedure would silently zero-branch a real procedure.
+
+    Unlike the per-object form, a failed call is NOT isolable — it costs every candidate its
+    drill-down — so each is recorded PENDING individually, keyed by stem. A candidate the projection
+    never mentions (an untyped artifact that was really a table, say) is recorded PENDING the same
+    way: traceable, never a silent branch_count 0.
 
     PENDING records accumulate on the manifest and the caller persists the ledger once
     after the drill-down: a kill mid-drill-down leaves no view, so resume re-runs the
     whole drill-down from scratch — per-record saves would only add O(n^2) rewrites."""
-    out = []
-    for stem in enumerate_stems(artifacts_path):
-        env = cli.inspect_branches(artifacts_path, stem)
-        if not env.success:
-            manifest.record_pending(stem, f"{env.error.code}: {env.error.message}")
-            continue
-        result = env.result
-        if not isinstance(result, dict):
-            manifest.record_pending(stem, "malformed inspect-branches result: not a JSON object")
-            continue
-        obj = result.get("object", stem)
-        raw = result.get("branches")
-        if isinstance(raw, list):
-            branches = raw
+    refs = enumerate_artifacts(artifacts_path)
+    # Everything except a KNOWN non-procedure: inspect-branches (BranchInspector) projects only
+    # branch sources, and a missing type ("") may still be a registry-typed procedure, so the CLI
+    # stays authoritative rather than us zero-branching it here.
+    expected = [ref for ref in refs if not (ref.object_type and ref.object_type != "PROCEDURE")]
+    drilled = {}
+
+    if expected:
+        env = cli.inspect_branches(project_dir)
+        reason = _workload_failure(env)
+        if reason is not None:
+            for ref in expected:
+                manifest.record_pending(ref.stem, reason)
         else:
-            # Absent/null/non-list branches on a success envelope can't be
-            # enumerated (len(None) would abort); record PENDING, treat as empty.
-            branches = []
-            manifest.record_pending(
-                obj, f"malformed inspect-branches result: 'branches' is not a list ({type(raw).__name__})")
-        unsolved = []
-        for b in branches:
-            if not isinstance(b, dict):
-                # A non-dict element would AttributeError on b.get(); keep it traceable.
-                manifest.record_pending(obj, "malformed branch: not a JSON object")
-                continue
-            if b.get("solution_status") != "unsolved":
-                continue
-            bid = b.get("branch_id")
-            if bid is None:
-                # Unsolved work with no id: record PENDING rather than silently
-                # dropping it — the contract is "record PENDING and skip", not "skip".
-                manifest.record_pending(obj, "unsolved branch missing branch_id")
-                continue
-            unsolved.append(bid)
-        out.append({
-            "object": obj,
-            "stem": stem,
-            "branch_count": len(branches),  # tables legitimately have 0
-            "unsolved_branches": unsolved,
-        })
+            # state.bin is authoritative for what exists; the stem stays the view/quarantine key, so
+            # each entry is joined back onto the mined identity the CLI echoes in `object`.
+            stem_by_identity = {ref.object_name: ref.stem for ref in expected}
+            for entry in env.result["objects"]:
+                if not isinstance(entry, dict):
+                    manifest.record_pending(
+                        WORKLOAD_PENDING_KEY, "malformed workload entry: not a JSON object")
+                    continue
+                obj = entry.get("object")
+                if not isinstance(obj, str) or not obj:
+                    manifest.record_pending(
+                        WORKLOAD_PENDING_KEY, "malformed workload entry: no 'object' identity")
+                    continue
+                count, unsolved = _branch_ids(obj, entry.get("branches"), manifest)
+                stem = stem_by_identity.get(obj, obj)
+                drilled[stem] = {
+                    "object": obj,
+                    "stem": stem,
+                    "branch_count": count,  # a procedure with no unsolved branches legitimately has 0
+                    "unsolved_branches": unsolved,
+                }
+            for ref in expected:
+                if ref.stem not in drilled:
+                    manifest.record_pending(
+                        ref.stem, "inspect-branches projected no branches for this artifact")
+
+    # Emitted in enumerate_artifacts order (sorted by stem) so the view stays stable regardless of
+    # the order the CLI returns objects in.
+    out = []
+    for ref in refs:
+        if ref.object_type and ref.object_type != "PROCEDURE":
+            out.append({"object": ref.object_name, "stem": ref.stem,
+                        "branch_count": 0, "unsolved_branches": []})
+        elif ref.stem in drilled:
+            out.append(drilled[ref.stem])
     return out
 
 
@@ -194,21 +253,25 @@ def _validate_summary(view: dict) -> str:
             f"{c.get('unsatisfied_constraints', 0)} unsatisfied constraints)")
 
 
-def _write_summary_view(project_dir: str, result: dict, out: str,
+def _write_summary_view(project_dir: str, result: dict,
                         readiness_overridden: bool, manifest: Manifest) -> dict:
     # Zero ints and null strings are dropped by the CLI envelope writer, so the
     # driver re-defaults them here (csv_files/tables/rows_written -> 0, manifest_path
-    # /note -> None). readiness_overridden + pending are driver-injected.
+    # /note -> None, warnings -> []). out_path comes straight from the CLI (it derives the
+    # location); readiness_overridden + pending are driver-injected.
     result = _as_dict(result)
     view = {
         "schema_version": 1,
         "json_schema_version": result.get("json_schema_version"),
-        "out_path": result.get("out_path", out),
+        "out_path": result.get("out_path"),
         "tables": result.get("tables", 0),
         "rows_written": result.get("rows_written", 0),
         "csv_files": result.get("csv_files", 0),
         "manifest_path": result.get("manifest_path"),
         "note": result.get("note"),
+        # Non-fatal generation diagnostics (e.g. a declared width too narrow for row_count distinct
+        # keys). The CLI omits the key when clean; surface it so width collisions reach the agent.
+        "warnings": result.get("warnings") or [],
         "readiness_overridden": readiness_overridden,
         "pending": manifest.pending,
     }
@@ -220,8 +283,10 @@ def _write_summary_view(project_dir: str, result: dict, out: str,
 def _generate_summary(view: dict) -> str:
     override = " (readiness overridden)" if view.get("readiness_overridden") else ""
     note = f"; {view['note']}" if view.get("note") else ""
+    warnings = view.get("warnings") or []
+    warn = f"; {len(warnings)} warning(s)" if warnings else ""
     return (f"generate complete: {view['tables']} tables, {view['rows_written']} rows "
-            f"across {view['csv_files']} CSV files{override}{note}")
+            f"across {view['csv_files']} CSV files{override}{warn}{note}")
 
 
 def _fail(env, station: str) -> tuple[int, str]:
@@ -246,7 +311,7 @@ def run_mine(project_dir: str, artifacts_path: str | None, cli: TestbedCli) -> t
             return fail
 
     env, fail = _run_with_quarantine(
-        "list-unsolved", lambda: cli.list_unsolved(artifacts_path),
+        "list-unsolved", lambda: cli.list_unsolved(project_dir),
         project_dir, artifacts_path, manifest)
     if fail is not None:
         return fail
@@ -254,7 +319,7 @@ def run_mine(project_dir: str, artifacts_path: str | None, cli: TestbedCli) -> t
     # per-object branch drill-down over the survivors (list-unsolved already
     # quarantined any malformed artifact). A per-object failure is isolable:
     # record PENDING and skip, never abort the mine.
-    branches = _collect_branches(artifacts_path, cli, manifest)
+    branches = _collect_branches(project_dir, artifacts_path, cli, manifest)
     view = _write_mine_view(project_dir, env.result, branches, manifest)
     manifest.mark_mine_complete()
     manifest.save(project_dir)
@@ -325,16 +390,16 @@ def _readiness_gate(project_dir: str, ignore_readiness: bool) -> tuple[bool, str
     return True, "", not ready
 
 
-def run_generate(project_dir: str, cli: TestbedCli, out: str | None = None,
+def run_generate(project_dir: str, cli: TestbedCli,
                  rows: int | None = None, seed: int | None = None,
                  ignore_readiness: bool = False) -> tuple[int, str]:
-    # Generate consumes the compiled clusters + validated readiness and writes the
-    # CSV pool + manifest under testbed/generate/data/. Idempotent: the summary view
+    # Generate consumes the compiled clusters + validated readiness and writes each
+    # table's CSV into its own artifacts folder plus a manifest beside state.bin (the
+    # CLI derives those paths — no output dir is passed). Idempotent: the summary view
     # is the TERMINAL completion predicate. A readiness gate guards it: generate must
     # not run before validate, nor against a not-ready workspace unless the caller
     # explicitly overrides.
     project_dir = str(project_dir)
-    out = out or str(Path(project_dir) / GENERATE_OUT_REL)
     manifest = Manifest.load(project_dir)
 
     if _present(project_dir, GENERATE_VIEW_REL):
@@ -344,11 +409,11 @@ def run_generate(project_dir: str, cli: TestbedCli, out: str | None = None,
     if not ok:
         return 1, block_message
 
-    env = cli.generate(project_dir, out, rows, seed)
+    env = cli.generate(project_dir, rows, seed)
     if not env.success:
         return _fail(env, "generate")  # TBD0012 -> input_config (run compile first); TBD0003/4/5 -> escalate
 
-    view = _write_summary_view(project_dir, env.result, out, readiness_overridden, manifest)
+    view = _write_summary_view(project_dir, env.result, readiness_overridden, manifest)
     manifest.mark_generate_complete()
     manifest.save(project_dir)
     return 0, _generate_summary(view)
@@ -593,8 +658,6 @@ def main(argv=None) -> int:
     comp.add_argument("--scai", default=None, help="override the scai binary")
     gen = sub.add_parser("generate", help="run the workload-scoped generate phase")
     gen.add_argument("--project-dir", required=True)
-    gen.add_argument("--out", default=None,
-                     help="CSV pool + manifest output dir (default: testbed/generate/data)")
     gen.add_argument("--rows", type=int, default=None)
     gen.add_argument("--seed", type=int, default=None)
     gen.add_argument("--ignore-readiness", action="store_true",
@@ -617,7 +680,7 @@ def main(argv=None) -> int:
     elif args.phase == "validate":
         rc, msg = run_validate(args.project_dir, cli)
     elif args.phase == "generate":
-        rc, msg = run_generate(args.project_dir, cli, args.out, args.rows, args.seed,
+        rc, msg = run_generate(args.project_dir, cli, args.rows, args.seed,
                                args.ignore_readiness)
     elif args.phase == "enrich":
         rc, msg = run_enrich(args.project_dir, cli,

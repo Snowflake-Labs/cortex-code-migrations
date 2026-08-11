@@ -41,6 +41,7 @@ from .unified_loader import (
     load_object_references_auto,
     load_missing_references_auto,
 )
+from .project_config import PROJECT_CONFIG_RELPATH, read_project_name
 
 __all__ = [
     "read_csv_rows",
@@ -71,4 +72,6 @@ __all__ = [
     "load_code_units_auto",
     "load_object_references_auto",
     "load_missing_references_auto",
+    "PROJECT_CONFIG_RELPATH",
+    "read_project_name",
 ]

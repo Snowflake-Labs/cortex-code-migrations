@@ -4,22 +4,22 @@ Your agent name is `dbt-context-mapper`.
 Analyze the dbt sub-projects in a converted ETL migration object and produce a structural understanding document for dbt phase planning. Do NOT read {SKILL_DIR}/SKILL.md — all instructions are below.
 
 Your inputs:
-- Scan results: {PACKAGE}/stabilization/planning/scan_results.json (contains dbt_projects with health signals)
+- Scan results: {UNIT}/stabilization/planning/scan.json (contains dbt_projects with health signals)
 - Source definition file: {SOURCE_FILE_PATH} (READ-ONLY — source of truth for ETL transformations)
 - Platform transformation guide: {TRANSFORMATION_GUIDE}
-- dbt project folders: paths from scan_results.json dbt_projects[].path (relative to {PACKAGE})
+- dbt project folders: paths from scan.json dbt_projects[].path (relative to {UNIT})
 
-Write your output to: {PACKAGE}/stabilization/planning/MIGRATION_OBJECT_DBT_CONTEXT.md
+Write your output to: {UNIT}/stabilization/planning/dbt-context.md
 
-**Cross-reference:** `MIGRATION_OBJECT_ORCH_CONTEXT.md` may exist in the same directory. If present, check its Element Inventory for elements with `EXECUTE DBT PROJECT` references — these are the orchestration-side links to dbt projects and provide context for how dbt models are invoked.
+**Cross-reference:** `orchestration-context.md` may exist in the same directory. If present, check its Element Inventory for elements with `EXECUTE DBT PROJECT` references — these are the orchestration-side links to dbt projects and provide context for how dbt models are invoked.
 
 ## Analysis Steps
 
-For each dbt project listed in scan_results.json:
+For each dbt project listed in scan.json:
 
 ### 1. Health Summary
 
-Read the health signals from scan_results.json and produce a summary table:
+Read the health signals from scan.json and produce a summary table:
 
 | Project | Models | Macros | Config Valid | Placeholder Config | EWI Count | EWI Codes | Health Issues |
 |---------|--------|--------|-------------|-------------------|-----------|-----------|--------------|
@@ -86,7 +86,7 @@ Fix Owner indicates which agent/phase handles the fix:
 
 ---
 
-Do NOT ask the user any questions — make reasonable defaults and document assumptions in MIGRATION_OBJECT_DBT_CONTEXT.md.
+Do NOT ask the user any questions — make reasonable defaults and document assumptions in dbt-context.md.
 
 ## Completion
 When your work is complete, your results will be returned to the caller automatically.

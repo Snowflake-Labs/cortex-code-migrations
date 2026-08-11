@@ -13,15 +13,23 @@ Tell the user:
 
 ## Step 1: Ask How to Register
 
-Ask the user:
+The setup machine asks this at `chooseCodeSource` and persists the answer, so
+read `code_source` from the session first and do not ask twice. Only when it is
+unset — this skill can be entered outside setup — ask:
+
 > "How would you like to add source code?"
 > 1. **Extract from database** - Pull DDL/code from a connected source database
-> 2. **Add local files** - Import SQL files from a local directory
+> 2. **I already have my code locally** - Import SQL files from a local directory
 
 ## Step 2: Route
 
-- If **Extract from database** → Load `extract-code-units/SKILL.md`
-- If **Add local files** → Load `add-code-units/SKILL.md`
+- `code_source=extract`, or **Extract from database** → Load `extract-code-units/SKILL.md`
+- `code_source=local`, or **I already have my code locally** → Load `add-code-units/SKILL.md`
+
+Extracting needs a source connection; importing local files does not. Don't
+offer to set one up here — the machine routes through
+`../setup/configure-source-connection.md` before this task on the extract path,
+and testing and data migration ask for it themselves when they need it.
 
 ## Sub-Skills
 
