@@ -10,7 +10,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NamedTuple
 
 TESTBED_SUFFIX = ".testbed.json"
 
@@ -105,11 +105,12 @@ class TestbedCli:
         # must be the project (like compile). It takes no artifacts path.
         return self._envelope(self._run(["testbed", "validate", "--json"], project_dir))
 
-    def generate(self, project_dir: str, out: str,
+    def generate(self, project_dir: str,
                  rows: int | None = None, seed: int | None = None) -> Envelope:
-        # generate is RequiresProject=true; --out is the flat dir the CSV pool +
-        # manifest.json land in. rows/seed are optional generator knobs.
-        argv = ["testbed", "generate", "--out", out]
+        # generate is RequiresProject=true; output is derived per-object (each table's CSV
+        # into its own artifacts folder, manifest beside state.bin), so there is no --out.
+        # rows/seed are optional generator knobs.
+        argv = ["testbed", "generate"]
         if rows is not None:
             argv += ["--rows", str(rows)]
         if seed is not None:
@@ -117,15 +118,23 @@ class TestbedCli:
         argv.append("--json")
         return self._envelope(self._run(argv, project_dir))
 
-    def inspect_branches(self, artifacts_path: str, stem: str) -> Envelope:
-        argv = ["testbed", "inspect-branches", stem, "--artifacts-path", artifacts_path, "--json"]
-        return self._envelope(self._run(argv, None))
+    def inspect_branches(self, project_dir: str, stem: str | None = None) -> Envelope:
+        # RequiresProject=true and resolves Workspace from the project (like compile/validate),
+        # so cwd is the project; the command declares no artifacts-path option. Omitting the
+        # identity projects every branch-carrying object from a single state.bin load — what
+        # spares the drill-down one process (and one deserialization) per procedure.
+        argv = ["testbed", "inspect-branches"]
+        if stem is not None:
+            argv.append(stem)
+        argv.append("--json")
+        return self._envelope(self._run(argv, project_dir))
 
-    def list_unsolved(self, artifacts_path: str) -> Envelope:
-        # Whole-workload scan. Per-object list-unsolved (a `stem` arg) has no caller
-        # yet; it's a one-line add back the day per-object scanning is needed.
-        argv = ["testbed", "list-unsolved", "--artifacts-path", artifacts_path, "--json"]
-        return self._envelope(self._run(argv, None))
+    def list_unsolved(self, project_dir: str) -> Envelope:
+        # Whole-workload scan; RequiresProject=true, resolves Workspace from the project (cwd)
+        # like compile/validate. Per-object list-unsolved (a `stem` arg) has no caller yet;
+        # it's a one-line add back the day per-object scanning is needed.
+        argv = ["testbed", "list-unsolved", "--json"]
+        return self._envelope(self._run(argv, project_dir))
 
     @staticmethod
     def _envelope(cp: subprocess.CompletedProcess) -> Envelope:
@@ -137,10 +146,43 @@ class TestbedCli:
             return Envelope(False, None, TestbedError("EXEC", detail or "no parseable envelope"))
 
 
-def enumerate_stems(artifacts_path: str) -> list[str]:
-    """List artifact file stems under artifacts/**/testbed/*.testbed.json (sorted)."""
-    root = Path(artifacts_path)
+class ArtifactRef(NamedTuple):
+    """One mined artifact. `stem` is the bare filename — the view/quarantine key; `object_name` is
+    the identity inspect-branches reports each projected object under (FQN or code_unit_id);
+    `object_type` is the engine's authoritative `"TABLE"`/`"PROCEDURE"` stamp (`""` when the artifact
+    omits it), which the drill-down dispatches on: a known non-procedure folds in with no branches,
+    while a procedure — or an untyped artifact, which init may still resolve to a procedure via the
+    CUR registry — is expected in the whole-workload projection."""
+    stem: str
+    object_name: str
+    object_type: str
+
+
+def enumerate_artifacts(artifacts_path: str) -> list[ArtifactRef]:
+    """One ArtifactRef per artifacts/**/testbed/*.testbed.json, sorted by stem.
+
+    The whole-workload inspect-branches projection reports each object under the exact FQN or
+    code_unit_id it was mined as (never the bare filename), so each stem is paired with that
+    identity for the join back: procedures — and current-layout tables — carry it as `object`,
+    legacy-layout tables as `table`. An unreadable or identity-less artifact falls back to its stem
+    with no type; since a missing type may still be a registry-typed procedure, the drill-down
+    expects it in the projection (recording PENDING if it never appears) rather than silently
+    folding it in as an empty-branch entry."""
     return sorted(
-        p.name[: -len(TESTBED_SUFFIX)]
-        for p in root.glob(f"**/testbed/*{TESTBED_SUFFIX}")
+        (_artifact_ref(p, p.name[: -len(TESTBED_SUFFIX)])
+         for p in Path(artifacts_path).glob(f"**/testbed/*{TESTBED_SUFFIX}")),
+        key=lambda ref: ref.stem,
     )
+
+
+def _artifact_ref(path: Path, stem: str) -> ArtifactRef:
+    try:
+        doc = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return ArtifactRef(stem, stem, "")
+    if not isinstance(doc, dict):
+        return ArtifactRef(stem, stem, "")
+    identity = doc.get("object") or doc.get("table")
+    object_name = identity if isinstance(identity, str) and identity else stem
+    object_type = doc.get("object_type")
+    return ArtifactRef(stem, object_name, object_type if isinstance(object_type, str) else "")

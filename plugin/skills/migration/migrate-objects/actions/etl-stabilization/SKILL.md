@@ -213,12 +213,12 @@ uv run --project {SKILL_DIR} python {PLATFORM_DIR}/{STRIP_SCRIPT} {ORCHESTRATION
 Use `team_create` tool: team_name="etl-plan-{unit_name}".
 
 **Orchestration context mapper** (always):
-Spawn a teammate with `name="context-mapper"`, `run_in_background=false`, and the prompt template at `{SKILL_DIR}/reference/agent-prompts/context-mapper.md` (substitute `{ORCH_SQL_PATH}`, `{SOURCE_FILE_PATH}`, `{UNIT}`, `{SKILL_DIR}`, `{PLATFORM_DIR}` placeholders).
+Spawn a teammate with `name="context-mapper"`, `run_in_background=false`, and the prompt template at `{SKILL_DIR}/reference/agent-prompts/context-mapper.md` (substitute `{ORCH_SQL_PATH}`, `{SOURCE_FILE_PATH}`, `{UNIT}`, `{SKILL_DIR}`, `{PLATFORM_DIR}`, `{ORCHESTRATION_GUIDE}` placeholders).
 
 Output: `orchestration-context.md` — element inventory, duplicate groups, behavioral patterns, container hierarchy.
 
 **dbt context mapper** (conditional — dbt flavor only, when dbt_projects exist):
-Spawn a teammate with `name="dbt-context-mapper"`, `run_in_background=false`, and the prompt template at `{SKILL_DIR}/reference/agent-prompts/dbt-context-mapper.md` (substitute `{UNIT}`, `{SOURCE_FILE_PATH}`, `{TRANSFORMATION_GUIDE}` placeholders).
+Spawn a teammate with `name="dbt-context-mapper"`, `run_in_background=false`, and the prompt template at `{SKILL_DIR}/reference/agent-prompts/dbt-context-mapper.md` (substitute `{UNIT}`, `{SOURCE_FILE_PATH}`, `{SKILL_DIR}`, `{TRANSFORMATION_GUIDE}` placeholders).
 
 Output: `dbt-context.md` — project health, model inventory, macro inventory, source mapping, bootstrap blockers.
 

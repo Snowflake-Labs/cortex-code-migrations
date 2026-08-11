@@ -1,6 +1,6 @@
 ---
 name: validate-objects
-description: Validate migrated data between source and Snowflake using cloud validation (SPCS). Setup, run, background Monitor+/loop (or poll fallback), and end-of-run summary. Triggers: validate data, validate tables, data validation, check data.
+description: Validate migrated data between source and Snowflake using cloud validation (SPCS). Setup, run, background Monitor (or poll fallback), and end-of-run summary. Triggers: validate data, validate tables, data validation, check data.
 parent_skill: migration
 ---
 
@@ -24,11 +24,11 @@ Verify a `compute_pool` is configured (shown in the configure output under "Clou
 
 ## Step 2: Validate
 
-Load [actions/validate_tables.md](actions/validate_tables.md) (Steps 4–6: background Monitor+/loop or poll fallback, error-first report, teardown).
+Load [actions/validate_tables.md](actions/validate_tables.md) (Steps 4–6: background Monitor or poll fallback, error-first report, teardown).
 
 ## Step 3: Wave progress
 
-The **error-first data validation report** (Result + Workflow, Errors, Suggested fixes) is produced in [actions/validate_tables.md](actions/validate_tables.md) **Step 5** via `validate_data_status()`. Do not substitute `migration_status()` for that report.
+The **error-first data validation report** (Result + Workflow, Errors, Suggested fixes) is produced in [actions/validate_tables.md](actions/validate_tables.md) **Step 5** via `job_status(job_id, details=true)`. Do not substitute `migration_status()` for that report.
 
 After `validate_tables.md` completes (including the summary and teardown offer), optionally call `migration_status()` for wave-level context only:
 

@@ -46,7 +46,7 @@ Before starting any configuration, tell the user verbatim:
 
 ## Idempotency
 
-If this sub-skill has already been completed in the current project — i.e., `.scai/settings/DataExchangeWorkerConfig.toml` exists with no remaining `<placeholder>` values — tell the user verbatim: "Data infrastructure already configured — running `scai data doctor` to confirm nothing has drifted." This runs live checks against Snowflake and the source, so say it out loud rather than running silently. Then run [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastructure-no-workflow-yaml) (iterate until `result.hasFailures` is `false`) and return to the caller without re-prompting.
+If this sub-skill has already been completed in the current project — i.e., the project's `.scai/config/dew_configuration.toml` (path relative to the SCAI project root) exists with no remaining `<placeholder>` values — tell the user verbatim: "Data infrastructure already configured — running `scai data doctor` to confirm nothing has drifted." This runs live checks against Snowflake and the source, so say it out loud rather than running silently. Then run [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastructure-no-workflow-yaml) (iterate until `result.hasFailures` is `false`) and return to the caller without re-prompting.
 
 Otherwise, proceed through the steps below.
 

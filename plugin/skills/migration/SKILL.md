@@ -7,21 +7,36 @@ license: Proprietary. See License-Skills for complete terms
 # Database Migration to Snowflake
 
 Tell the user:
-> **Welcome to the Snowflake AIM Migration Agent.** Let me get started by configuring your session.
+> **Welcome to the Snowflake AIM Migration Agent.**
+
+On the first message of a session, the plugin injects whether a migration project exists in this directory. If the user's message already states what they want, act on it (Step 1); otherwise begin with Step 0. Either way, do **not** call `migration_status` — `configure` returns the status.
 
 ## IMPORTANT NOTE
 
 The built-in MCP server has a state machine that will guide you through user flows and ask you to "tell the user x" or "ask the user y". This is expected and you should follow its lead, as it is the official MCP server of Snowflake migrations.
 
-## Step 0: Configure Session
+## Step 0: Ask first (no tools)
 
-Call `configure` with `project_dir = "<current directory>"`. If a saved config is found, the response shows all restored values — proceed to Step 1.
+If the user's first message already states what they want (a specific task, or "continue"/"resume"), skip to Step 1. Otherwise greet and ask:
 
-## Step 1: Detect Current State
+> "What would you like to do? You can:
+> 1. **Continue** — I'll pick up your migration where we left off (or start setup if this is a new project)
+> 2. **Something specific** — tell me what you need"
 
-Call the `migration_status` tool. It returns JSON with `project_exists`, `directory_empty`, `by_type`, `stage_totals`, `routing`, and `highest_stage_reached` fields.
+- **Continue** (or "continue", "next", "resume", "keep going") → **Step 1**.
+- **Specific request** → **Skill Match** (no forced `configure`).
 
-### Step 1.A: If `project_exists` is false, this is a new project. Go to the setup skill ./setup/SKILL.md
+## Step 1: Configure — one call, returns status
+
+Call `configure` with `project_dir = "<current directory>"`. Because this call is what sets `project_dir` for the session, the response contains **both** the restored session config **and** a `## Migration status` block — the same JSON `migration_status(mode="summary")` returns (`project_exists`, `directory_empty`, `by_type`, `stage_totals`, `routing`, `highest_stage_reached`). Route from that block; do **not** make a separate `migration_status` call. Later `configure` calls that re-pass the same `project_dir` do not repeat the block; use `migration_status(mode="summary")` when you need a fresh read.
+
+### Step 1.A: If `project_exists` is false, there is no migration project in this directory.
+
+Follow the guidance in the tool response. `configure` and `migration_status` surface any migration
+projects opened before on this machine (a `known_projects` list plus a `guidance` line): when they do,
+offer those to the user to **resume** — on their pick, call `configure(project_dir="<path>")` and go
+back to **Step 1**, and the now-initialized project resumes via Step 1.B. When there are no known
+projects, this is a new project — load `./setup/SKILL.md`.
 
 ### Step 1.B: If `project_exists` is true, construct a brief narrative summary for the user from the JSON before showing the checklist. Use the `routing` booleans and `by_type` counts to describe the current state in plain language. Examples of the tone and level of detail:
 
@@ -50,19 +65,9 @@ Use `by_type.<type>.total` to decide what to show:
 - **Type not in the project** (`total` absent or 0): omit that bullet (e.g. no functions in the project).
 - **Type present but none in the current wave** (`total` > 0, but the wave-scoped counts like `deployed` are absent or 0 for this wave): keep it visible and acknowledge it in the narrative. For example, "You also have 1 Informatica ETL workflow staged, scheduled in a later wave and ready to deploy." Do not let the current wave hide work that exists elsewhere in the project.
 
-Never describe the project as "<type>-only" (e.g. "table-only") when `by_type` lists any other type with `total` > 0. The placeholders read directly from `by_type.<type>` in the `migration_status` response; counts that never incremented are absent from the JSON and should be treated as `0`. **BTEQ scripts have no deploy step** — they run their converted SQL inside the test itself, so report them only by `tested` (never "deployed"); `by_type.bteq` carries no `deployed` count.
+Never describe the project as "<type>-only" (e.g. "table-only") when `by_type` lists any other type with `total` > 0. The placeholders read directly from `by_type.<type>` in the `## Migration status` block; counts that never incremented are absent from the JSON and should be treated as `0`. **BTEQ scripts have no deploy step** — they run their converted SQL inside the test itself, so report them only by `tested` (never "deployed"); `by_type.bteq` carries no `deployed` count.
 
-Follow the summary with the progress checklist (see below), then go to Step 2.
-
-## Step 2: Ask the User
-
-> "What would you like to do? You can:
-> 1. **Continue with migration plan** — I'll start or pick up where we left off
-> 2. **Something specific** — tell me what you need"
-
-If the user picks **Continue** (or just says "continue", "next", etc.) → go to **Prescribed Path**.
-
-If the user describes a **specific request** → go to **Skill Match**.
+Present the narrative summary followed by the progress checklist, then continue with the **Prescribed Path** below.
 
 ---
 
@@ -149,6 +154,6 @@ If no skill matches, say so explicitly, then help with your own knowledge.
 
 ## Rules
 
-1. **Always detect first** — Call `migration_status` before routing
+1. **Configure returns status** — `configure(project_dir=...)` includes the `## Migration status` block; route from it. No separate `migration_status` call on the continue path.
 2. **Follow sub-skill instructions** — Complete each sub-skill fully before returning
 3. **Confirm transitions** — Ask user before moving to next stage

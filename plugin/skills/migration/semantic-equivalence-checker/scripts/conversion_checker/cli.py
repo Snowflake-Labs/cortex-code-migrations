@@ -25,6 +25,7 @@ _SOURCE_RE = re.compile(
     r"\{\{\s*source\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)\s*\}\}"
 )
 _VAR_RE = re.compile(r"\{\{\s*var\s*\(\s*['\"]([^'\"]+)['\"]\s*\)\s*\}\}")
+_SAFE_WF_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _resolve_env_var(val: str) -> str:
@@ -110,6 +111,12 @@ def _resolve_refs_for_workflow(
     return {"resolved_sources": resolved_sources, "resolved_vars": resolved_vars}
 
 
+def _validate_workflow_name(name: str) -> None:
+    if not _SAFE_WF_RE.fullmatch(name):
+        print(f"Error: workflow name contains unsafe characters: {name!r}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _cmd_manifest(args: argparse.Namespace) -> None:
     """Build workflow manifest."""
     mapping_csv = Path(args.mapping_csv)
@@ -152,7 +159,9 @@ def _cmd_check(args: argparse.Namespace) -> None:
     sources_lookup = _load_all_sources(dbt_project_dir) if dbt_project_dir else {}
     vars_lookup = _load_all_vars(dbt_project_dir) if dbt_project_dir else {}
 
-    # Resolve the single workflow to check.
+    # Reject workflow names with path-unsafe characters before any path construction.
+    _validate_workflow_name(args.workflow)
+
     wf_key = args.workflow.lower()
     if wf_key not in manifest:
         print(f"Error: workflow '{args.workflow}' not in manifest", file=sys.stderr)
@@ -175,6 +184,9 @@ def _cmd_check(args: argparse.Namespace) -> None:
         if out is not None:
             target = out / wf_key / "work"
             target.mkdir(parents=True, exist_ok=True)
+            if not target.resolve().is_relative_to(out.resolve()):
+                print("Error: output path escapes report directory", file=sys.stderr)
+                sys.exit(1)
             (target / "primary_ambiguous.json").write_text(
                 json.dumps({
                     "workflow": wf_key,
@@ -210,7 +222,7 @@ def _cmd_check(args: argparse.Namespace) -> None:
         print(f"Error: DBT model not found: {dbt_path}", file=sys.stderr)
         sys.exit(1)
 
-    infa = parse_infa_xml(xml_p)
+    infa = parse_infa_xml(xml_p, args.workflow)
     if infa is None:
         print(f"Error: could not parse XML: {xml_path}", file=sys.stderr)
         sys.exit(1)
@@ -226,12 +238,17 @@ def _cmd_check(args: argparse.Namespace) -> None:
         return
 
     out_dir = output_base if output_base.suffix == "" else output_base.parent
-    wf_dir = out_dir / result.workflow.lower()
+    # Use validated wf_key (from --workflow CLI arg), not result.workflow (raw XML NAME),
+    # to prevent path traversal via a crafted WORKFLOW NAME attribute.
+    wf_dir = out_dir / wf_key
     # Everything the run produces on the way to an answer goes in work/. Only
     # final_verdict.json, written by the skill at the end, sits at wf_dir level, so a
     # reader sees the verdict and has to opt in to the evidence behind it.
     work_dir = wf_dir / "work"
     work_dir.mkdir(parents=True, exist_ok=True)
+    if not work_dir.resolve().is_relative_to(out_dir.resolve()):
+        print("Error: output path escapes report directory", file=sys.stderr)
+        sys.exit(1)
 
     # work/check.json — kept as a single-element array so critic.py and any
     # downstream consumer of the existing artifact shape keep working.
@@ -288,6 +305,8 @@ def _cmd_critic(args: argparse.Namespace) -> None:
     """Run critic checks on a workflow's checker output."""
     from .critic import run_critic_checks
 
+    _validate_workflow_name(args.workflow)
+
     reports_dir = Path(args.reports_dir)
     wf = args.workflow.lower()
     wf_dir = reports_dir / wf
@@ -328,6 +347,9 @@ def _cmd_critic(args: argparse.Namespace) -> None:
     }
 
     out_path = work_dir / "critic.json"
+    if not out_path.resolve().is_relative_to(reports_dir.resolve()):
+        print("Error: output path escapes reports directory", file=sys.stderr)
+        sys.exit(1)
     with open(out_path, "w") as f:
         json.dump(output, f, indent=2)
 

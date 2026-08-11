@@ -15,5 +15,18 @@
 
 from .issue_effort_service import IssueEffortService
 from .report_finder import ReportFinder
+from .assessment_metadata import (
+    ASSESSMENT_METADATA_RELPATH,
+    read_assessment_metadata,
+    resolve_assessment_name,
+    write_assessment_metadata,
+)
 
-__all__ = ["IssueEffortService", "ReportFinder"]
+__all__ = [
+    "IssueEffortService",
+    "ReportFinder",
+    "ASSESSMENT_METADATA_RELPATH",
+    "read_assessment_metadata",
+    "resolve_assessment_name",
+    "write_assessment_metadata",
+]

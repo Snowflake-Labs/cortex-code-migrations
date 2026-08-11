@@ -55,8 +55,7 @@ If Step 1 or `scai data orchestrator stop` fails with an insufficient-privileges
 
 Do **not** suspend mid-job. Check the most recently observed job(s) first:
 
-- `migrate_data_status(job_id=<latest>)` — must be `completed` or `failed`.
-- `validate_data_status(job_id=<latest>)` — must be `completed` or `failed`.
+- `job_status()` — every job must report `terminal: true`.
 
 Then probe the orchestrator's queue directly:
 
@@ -200,7 +199,7 @@ Both changes are persistent and safe to apply outside this teardown.
 
 ```bash
 scai data orchestrator start --local   # when using local orchestrator
-scai data worker start --local .scai/settings/DataExchangeWorkerConfig.toml
+scai data worker start --local
 ```
 
 Eager resume without scheduling work (SPCS only):

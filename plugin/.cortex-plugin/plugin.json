@@ -1,6 +1,6 @@
 {
   "name": "snowflake-migration",
-  "version": "2.39.1",
+  "version": "2.40.0",
   "description": "End-to-end database migration to Snowflake — assessment, conversion, validation, and deployment",
   "author": { "name": "db-eng-migrations" },
   "skills": ["skills/migration"],
@@ -18,6 +18,17 @@
         "hooks": [
           {
             "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.cmd",
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-context.cmd",
             "type": "command"
           }
         ],

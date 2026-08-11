@@ -1,6 +1,6 @@
 # Action: Validate Tables
 
-Validate migrated table data between source and Snowflake using cloud validation — **setup → run → monitor → report** (passive Monitor + `/loop` when available; active poll fallback otherwise).
+Validate migrated table data between source and Snowflake using cloud validation — **setup → run → monitor → report** (passive Monitor — always prefer it; active polling only when Monitor cannot be invoked).
 
 > **Always use the official tooling.** Run validation through `validate_data(mode="setup")` / `validate_data(mode="run")` (backed by `scai data validate`). **Never** suggest ad-hoc scripts to compare source and target data outside the DMVF validation pipeline.
 
@@ -12,7 +12,7 @@ Validate migrated table data between source and Snowflake using cloud validation
 
 ### 1.A — Validation mode and sync (state machine)
 
-Validation mode (full vs incremental) and sync strategy are driven by the **`data-validation-setup` state machine**. Call `progress_setup(mode="data_validation")` in a loop until `completed` is true — follow each response's `next_prompt` (persist answers with `configure(<write_to>=value)`) the same way as project setup / data-migration setup.
+Validation mode (full vs incremental) and sync strategy are driven by the **`data-validation-setup` state machine**. Call `progress_setup(mode="data_validation")` in a loop until `completed` is true — ask each response's `next_prompt` (plus any `then_ask`, in the same turn) and send the answers back with `progress_setup(mode="data_validation", answers={...})`, the same way as project setup / data-migration setup.
 
 | Choice | Meaning |
 |--------|---------|
@@ -145,75 +145,74 @@ After run starts, go to **Step 4** (do not busy-poll every 30–60s unless you a
 
 ---
 
-## Step 4: Wait for completion (Monitor + `/loop`, or poll fallback)
+## Step 4: Wait for completion (Monitor, or poll fallback)
 
-Load [Background monitoring](./references/background-monitoring.md) and follow it. Summary below; the reference is authoritative for capability checks, watch command shape, and crash fallback.
+Load [Background monitoring](./references/background-monitoring.md) and follow it. Summary below; the reference is authoritative for capability checks, event phases, and crash fallback.
 
 **Status tool** (both paths):
 
 ```
-validate_data_status()
+job_status(job_id="<JOB_ID>")                 # cheap summary
+job_status(job_id="<JOB_ID>", details=true)   # + full progress and failure reports
 ```
 
-(or `migration_status(mode="summary")` for wave-level progress — per-table detail always comes from `validate_data_status`)
+`job_id` is `monitor.job_id` from the `validate_data(mode="run")` / `mode="revalidate"` response. Use `migration_status(mode="summary")` for wave-level progress — per-table detail always comes from `job_status(..., details=true)`.
 
-`progress` may be absent until `create-workflow` returns a workflow name; that is normal early in the run.
+`details` may report `details_unavailable` until `create-workflow` returns a workflow name; that is normal early in the run.
 
 ### 4.A — Choose path
 
+**Always prefer Monitor when it can be invoked.** Polling is never the better choice while Monitor is available — one relay poller serves every watcher, it wakes you on trouble and not only on completion, and it spends no tool call per check.
+
 | Condition | Path |
 |-----------|------|
-| Interactive session **and** Monitor tool available **and** `/loop` (or session cron) available | **Background** — Phases A–E in the reference |
-| Otherwise (older CoCo, non-interactive, Monitor/`/loop` disabled/unavailable, or unsure) | **Fallback** — active poll below |
+| Monitor tool can be invoked — **the default** | **Background** — Phases A–D in the reference |
+| Monitor genuinely unavailable (absent from the tool list, or invoking it fails) | **Fallback** — active poll below |
+
+If you are unsure whether Monitor is available, **try it** rather than defaulting to the poll. Calling `job_status(job_id)` because the user asked for an update is not the polling path and is always fine.
 
 **One completion owner:** only the background Monitor path **or** the fallback poll may present Step 5 — never both.
 
-### 4.A.1 — Background path (preferred)
+### 4.A.1 — Background path (always use this when Monitor is available)
 
-1. **Phase A — workflow name:** Call `validate_data_status()` every **5–15s** until `progress.output.workflowName` is set, or the job is already terminal (then skip to final status → 4.B → Step 5).
-2. **Phase B — Monitor:** Start the **Monitor** tool (`persistent: true`) with:
+1. **Phase A — Monitor:** Start the **Monitor** tool (`persistent: true`) with `monitor.watch_command` from the run response, verbatim, from the project root. No wait for a workflow name, and no hand-built command — the cursor baked into it is what prevents replays and gaps.
+2. **Phase B — Monitor fire:** Branch on the event's `phase`. `failure` / `stalled` / `relay_error` are warnings — surface them and keep watching. On `terminal`: `job_status(job_id, details=true)` once → Step 4.B if needed → **Step 5**.
 
-   ```bash
-   scai data validate status <WORKFLOW_NAME> --json --watch --connection <SNOWFLAKE_CONNECTION>
-   ```
+**No progress loop.** Do not start `/loop` or a cron to poll for progress. The relay emits a `stalled` event once a job has gone **30 minutes** without changing, so a quiet job reports itself. A healthy run is silent by design — progress lands in the log, and `job_status(job_id, details=true)` names the tables in flight whenever the user asks (see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths)).
 
-   Use the Snowflake connection from `configure()`. Omit `--connection …` only if none is configured. Run from the project root. **Do not** watch `create-workflow`. **Do not** use plugin `monitors/`.
-3. **Phase C — progress loop:** Start `/loop 30m` (or equivalent cron) that calls `validate_data_status()`, reports a short progress update that **names the tables currently validating and any that just finished** (from `progress.output.tableStates`, not just counts — see [background-monitoring](./references/background-monitoring.md#per-table-progress-narration-all-paths)), and runs Step 4 health checks. **Do not** present Step 5 on a loop tick.
-4. **Phase D — Monitor fire:** Cancel the loop → call `validate_data_status()` once → Step 4.B if needed → **Step 5**.
-5. **Phase E — loop sees terminal first:** Cancel Monitor if still running → `validate_data_status()` once → Step 4.B → Step 5 (crash fallback).
+The watch fires only on terminal, first failure, a 30-minute stall, or relay error — not on ordinary progress. It exits by itself on its job's terminal record.
 
-Tell the user once (plain language) that you will report progress about every 30 minutes and notify immediately when validation finishes. Do not require the user to understand Monitor/`/loop` tool chrome.
+Tell the user once (plain language) that you'll report back when validation finishes or hits trouble. Do not require them to understand Monitor tool chrome.
 
-### 4.A.2 — Fallback path (active poll)
+**If the watch goes silent,** re-arm with `job_status(job_id, monitor=true)` — it returns a fresh cursor and watch command and restores the relay's poller if it was lost. With no progress loop there is no second timer cross-checking the watch, so this is the recovery path after a compaction, a session restart, or an answer that looks stale.
+
+### 4.A.2 — Fallback path (last resort — only when Monitor cannot be invoked)
 
 Poll until the job is terminal:
 
-- Poll every **30–60 seconds**, or when the user asks for an update.
-- When `progress.output` is present, share a one-line update that **names the tables** currently validating and any that just finished (from `progress.output.tableStates`), alongside counts (`validatedTables`/`totalTables`, `failedTables`) — see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths). Don't emit silent, identical-looking repeat calls.
+- Call `job_status(job_id)` every **30–60 seconds**, or when the user asks for an update.
+- When `details.progress.output` is present, share a one-line update that **names the tables** currently validating and any that just finished (from `details.progress.output.tableStates`), alongside counts (`validatedTables`/`totalTables`, `failedTables`) — see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths). Don't emit silent, identical-looking repeat calls.
 
-**Stop when:**
-
-- `status` is `"completed"` or `"failed"`, **and**
-- `progress.output.isFinished` is `true` when `progress` is present.
+**Stop when** `terminal` is `true`.
 
 Then Step 4.B → Step 5.
 
 ### 4.A.3 — Health monitoring (while waiting)
 
-No extra tools — derive health from consecutive `validate_data_status()` responses. Keep the previous response in memory (at least `progress.output.validatedTables`, `failedTables`, `totalTables`, and `tableStates`).
+On the background path the relay emits a `stalled` event when counters stop moving, so you do not compute stalls yourself. On the fallback path, derive health from consecutive `job_status(job_id, details=true)` responses. Keep the previous response in memory (at least `details.progress.output.validatedTables`, `failedTables`, `totalTables`, and `tableStates`).
 
 **When to run:**
 
-- **Background path:** every `/loop` tick (and when the user asks). Skip until `progress.output` exists.
-- **Fallback path:** every **2nd or 3rd** poll, or when the user asks. Skip until `progress.output` exists.
+- **Background path:** the relay reports stalls itself; check health when it fires an event or the user asks.
+- **Fallback path:** every **2nd or 3rd** poll, or when the user asks. Skip until `details.progress.output` exists.
 
 **Progress key:** `validatedTables + failedTables`. Record the poll/tick time when this key last increased.
 
-| Signal | Background (`/loop` ~30m) | Fallback (30–60s poll) | Severity |
+| Signal | Background (relay events) | Fallback (30–60s poll) | Severity |
 |--------|---------------------------|-------------------------|----------|
-| Stall | Progress key unchanged across **≥1** tick while running and `isFinished` is false | unchanged **≥10 minutes** | **Warning** |
+| Stall | `stalled` event | Progress key unchanged **≥10 minutes** | **Warning** |
 | Stuck | unchanged across **≥2** ticks | unchanged **≥20 minutes** | **Critical** |
-| Table failures | `failedTables > 0` or failed `tableStates` / `reports.files.data_validation_errors` | same | **Warning** (immediate) |
+| Table failures | `failedTables > 0` or failed `tableStates` / `details.reports.files.data_validation_errors` | same | **Warning** (immediate) |
 | Slow start | Progress key still `0` and running **≥30 minutes** | running **≥15 minutes** | **Warning** |
 
 **What to tell the user** (short; do not block waiting unless they ask to stop):
@@ -227,21 +226,21 @@ No extra tools — derive health from consecutive `validate_data_status()` respo
 
 On **Warning** or **Critical**, point to [Troubleshooting Reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md) (stale `TASK_QUEUE` tasks, worker DB mismatch, affinity). Do **not** auto-cancel the workflow — offer: keep waiting, open troubleshooting, or pause/teardown if the user wants to stop cost.
 
-A stall or stuck warning does **not** end monitoring — only terminal `status` plus `isFinished` (or Monitor fire + confirmed terminal status) does.
+A stall or stuck warning does **not** end monitoring — only a `terminal` event (or a fallback poll seeing `terminal: true`) does.
 
-If `status` is `"failed"` and top-level `error` is set, surface it under **Execution** (or **Infrastructure** when no table progress exists) in Step 5.
+When a job fails before a workflow exists, the failure text is in the job's `summary` — surface it under **Execution** (or **Infrastructure** when no table progress exists) in Step 5.
 
 ### 4.B — Finished workflow with pending tables (anomaly)
 
-After the terminal status (Monitor fire + confirm, loop crash fallback, or fallback poll), if `progress.output.isFinished == true` **and** any of:
+After the terminal status (Monitor fire + confirm, or fallback poll), if `details.progress.output.isFinished == true` **and** any of:
 
 - `validatedTables + failedTables < totalTables`
 - any `tableStates[].status == "Pending"`
 
 **Do not report “Passed”.** Treat as failures (matches scai `HasErrors` — tables left pending when the workflow finished).
 
-1. List pending tables under **Execution** as “never validated” — use `errorMessage` when set; otherwise `reports.files.data_validation_errors` or “Table not validated — check task errors”.
-2. Pull detail from `reports.files` before guessing. Do **not** treat `metricsValidated: null` as failure when metrics was disabled.
+1. List pending tables under **Execution** as “never validated” — use `errorMessage` when set; otherwise `details.reports.files.data_validation_errors` or “Table not validated — check task errors”.
+2. Pull detail from `details.reports.files` before guessing. Do **not** treat `metricsValidated: null` as failure when metrics was disabled.
 3. If messages are thin, follow [Workflow finished but tables incomplete](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md#workflow-finished-but-tables-incomplete) — query `TASK_QUEUE` for the workflow. Worker/orchestrator issues are one cause, not the only one.
 4. Do **not** suggest re-run until prerequisites are identified.
 
@@ -249,7 +248,7 @@ After the terminal status (Monitor fire + confirm, loop crash fallback, or fallb
 
 ## Step 5: Report — data validation summary
 
-**Do not skip.** Present an **error-first** summary in chat (markdown). Build it from `validate_data_status()` (`progress`, `reports`) — **not** a per-table results grid unless the user asks.
+**Do not skip.** Present an **error-first** summary in chat (markdown). Build it from `job_status(job_id, details=true)` (`details.progress`, `details.reports`) — **not** a per-table results grid unless the user asks.
 
 ### 5.A — Read inputs
 
@@ -259,12 +258,12 @@ Read **`validationConfiguration`** from the workflow YAML (or `defaults` / `appl
 |--------|--------|
 | Status response (top level) | `status`, `error` (if failed before progress) |
 | Workflow toggles | `validationConfiguration.metricsValidation` — when **false**, metrics were **not executed**; do not discuss or report them |
-| `progress.output` | `workflowName`, `isFinished`, `totalTables`, `validatedTables`, `failedTables`, `tableStates` (`schemaValidated`, `metricsValidated`, `rowsValidated`, `status`, `errorMessage`) |
-| **`reports.files`** | `schema_validation_results`, `metrics_validation_results` (only when metrics enabled), `row_validation_summary`, `row_validation_results`, `data_validation_errors`, `results` — PascalCase CSV columns |
+| `details.progress.output` | `workflowName`, `isFinished`, `workflowStatus`, `totalTables`, `validatedTables`, `failedTables`, `tableStates` (`schemaValidated`, `metricsValidated`, `rowsValidated`, `status`, `errorMessage`) |
+| **`details.reports.files`** | `schema_validation_results`, `metrics_validation_results` (only when metrics enabled), `row_validation_summary`, `row_validation_results`, `data_validation_errors`, `results` — PascalCase CSV columns |
 
 `metricsValidated`: `true` = passed; `null` = not run (N/A); do **not** treat `null` as a metrics failure when `metrics_validation` was false in the workflow.
 
-`reports` is attached by `validate_data_status()` after `scai data validate status` writes CSV under `reports/data-validation/workflow-<timestamp>/`.
+`details` is attached by `job_status(job_id, details=true)`, which runs `scai data validate status` (writing CSV under `reports/data-validation/workflow-<timestamp>/`) and parses it.
 
 ### 5.B — Derive headline **Result** (header only)
 
@@ -275,9 +274,9 @@ Read **`validationConfiguration`** from the workflow YAML (or `defaults` / `appl
 | **Finished but pending** (Step 4.B) | `<N_ok>/<N_total> tables OK — <F> never validated` |
 | Job failed / no meaningful progress | `Failed — no tables validated` (adjust counts if partial) |
 
-**Never** use the all-passed **Result** when Step 4.B applies — even if top-level MCP `status` is `"completed"`.
+**Never** use the all-passed **Result** when Step 4.B applies — even if the job reached `terminal` without `failed`.
 
-**Workflow** line: `` `progress.output.workflowName` ``.
+**Workflow** line: `` `details.progress.output.workflowName` ``.
 
 **Header shows only `Result` and `Workflow`** — no elapsed time, check toggles, workflow file path, or job id in the header.
 
@@ -287,8 +286,8 @@ List categories **only when they have at least one error** and that check **was 
 
 | Order | Category | When to include | Sources |
 |-------|----------|-----------------|---------|
-| 1 | **Schema** | `schema_validation == true` | `schemaValidated == false`, `reports.files.schema_validation_results`, schema-related `errorMessage` |
-| 2 | **Metrics** | **`metrics_validation == true` only** | `metricsValidated == false` (not `null`), `reports.files.metrics_validation_results` |
+| 1 | **Schema** | `schema_validation == true` | `schemaValidated == false`, `details.reports.files.schema_validation_results`, schema-related `errorMessage` |
+| 2 | **Metrics** | **`metrics_validation == true` only** | `metricsValidated == false` (not `null`), `details.reports.files.metrics_validation_results` |
 | 3 | **Row** | `row_validation == true` | `rowsValidated == false`, `row_validation_summary`, `row_validation_results`, `cell_validation_results` |
 | 4 | **Execution** | always when applicable | `status == "Pending"` with `isFinished` (Step 4.B), `status == EXECUTION_ERROR`, `data_validation_errors`, connectivity/infra `errorMessage` |
 
@@ -296,7 +295,7 @@ List categories **only when they have at least one error** and that check **was 
 
 A table may appear in more than one category when multiple checks failed — place each issue under the appropriate category.
 
-**Deduplicate within a category:** identical messages → one bullet + `- Affects: \`table1\`, \`table2\`, …`. Prefer concrete text from `reports.files` (e.g. `ColumnValidated`, `SourceValue`, `SnowflakeValue`) over generic `errorMessage` when available.
+**Deduplicate within a category:** identical messages → one bullet + `- Affects: \`table1\`, \`table2\`, …`. Prefer concrete text from `details.reports.files` (e.g. `ColumnValidated`, `SourceValue`, `SnowflakeValue`) over generic `errorMessage` when available.
 
 **Category gloss (optional, first use in this conversation):** When a category subsection appears under `### Errors`, you may add one short line under the header using the glosses in [Validation levels reference](./references/validation-levels-reference.md). Skip glosses if you already explained levels at Step 2 or the user declined.
 
@@ -358,7 +357,7 @@ No validation mismatches or execution errors.
 4. **Execution (<tables>)** — …
 ```
 
-Omit empty category subsections. On full success **and when Step 4.B does not apply**, omit `### Errors` and failure fixes. If the job failed before `progress`, use a **failed** title and put top-level `error` under **Execution**.
+Omit empty category subsections. On full success **and when Step 4.B does not apply**, omit `### Errors` and failure fixes. If the job failed before any progress existed, use a **failed** title and put the job's `summary` under **Execution**.
 
 ### 5.F — After failures (optional follow-up)
 
@@ -374,12 +373,12 @@ Use [Validation levels reference](./references/validation-levels-reference.md) f
 
 | Condition | Required? |
 |-----------|-----------|
-| `progress.output.isFinished == true` | Yes |
+| `details.progress.output.isFinished == true` | Yes |
 | `failedTables > 0` **or** Schema / Row / Metrics errors in `### Errors` | Yes |
 | Step 4.B pending-tables anomaly | **No** — investigate first; do not offer re-validation |
 | **Execution** failures only (infra, worker, orchestrator, connectivity) | **No** — fix via `../../data-infrastructure/SKILL.md` first |
 
-Re-validation retries **failed partitions only** from the finished parent workflow — it is **not** a full re-run of every table. Chain resolution is automatic: pass the workflow name from the run that just finished (`progress.output.workflowName`).
+Re-validation retries **failed partitions only** from the finished parent workflow — it is **not** a full re-run of every table. Chain resolution is automatic: pass the workflow name from the run that just finished (`details.progress.output.workflowName`).
 
 Ask verbatim when eligible:
 
@@ -394,10 +393,10 @@ Ask verbatim when eligible:
 **If the user picks option 1:**
 
 ```
-validate_data(mode="revalidate", workflow_name="<progress.output.workflowName>")
+validate_data(mode="revalidate", workflow_name="<details.progress.output.workflowName>")
 ```
 
-Then repeat **Steps 4–5** (background Monitor+/loop or poll fallback with `validate_data_status()`, present a new error-first report). Skip Step 6 teardown until the user picks **Stop** or all tables pass. Relay the `cost_reminder` from the revalidate response when infrastructure starts.
+Then repeat **Steps 4–5** (background Monitor or poll fallback with `job_status`, present a new error-first report). Skip Step 6 teardown until the user picks **Stop** or all tables pass. Relay the `cost_reminder` from the revalidate response when infrastructure starts.
 
 **If the user picks option 2:** guide fixes from `### Suggested fixes`, then offer this menu again when ready.
 
@@ -429,8 +428,8 @@ If the user picks **Yes** (or doesn't respond), load the teardown sub-skill, the
 - [ ] User saw workflow YAML and was offered optional field updates (Step 2)
 - [ ] User confirmed the final workflow YAML and validation toggles before run
 - [ ] validate_data(mode="run") started
-- [ ] Background Monitor+/loop used when available; otherwise active poll fallback (Step 4)
-- [ ] Waited until job terminal and progress.output.isFinished (when progress present)
+- [ ] Monitor used (the default); active polling only if Monitor could not be invoked (Step 4)
+- [ ] Waited until the job reported a `terminal` event
 - [ ] Finished-but-pending anomaly checked (Step 4.B — do not report passed if tables still Pending)
 - [ ] Health monitoring run while waiting when triggered (Step 4.A.3)
 - [ ] Error-first data validation summary presented (Step 5 — Result + Workflow, Errors, Suggested fixes)

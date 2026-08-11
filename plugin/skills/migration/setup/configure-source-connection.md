@@ -1,32 +1,28 @@
 ---
 name: configure-source-connection
-description: Optionally set up a connection to the source database (extract DDL, migrate data, run baselines). Routes to per-dialect connection skills, defers the question for later, or marks the task excluded if the user opts out permanently.
+description: Set up a connection to the source database (extract DDL, migrate data, run baselines). Routes to per-dialect connection skills; offers deferral or a permanent opt-out only if the user pushes back.
 license: Proprietary. See License-Skills for complete terms
 ---
 
 # Configure source connection
 
-Invoked by the setup state machine after the Snowflake connection is
-set. Also re-invoked from `seedSourceDb` / `migrateData` when their
-prereq isn't met.
+Two ways in, and they differ in whether a connection has already been agreed to:
 
-## What to do
+- **From setup**, because the user chose **Extract from database** at
+  `chooseCodeSource`. That answer already *is* "yes, I need a source
+  connection" — don't ask again, go straight to **Set up the connection**.
+- **From `seedSourceDb` / `migrateData`**, whose prereq isn't met. Here the user
+  has no connection and may never have wanted one, so name the capability that
+  needs it and ask before setting one up.
 
-Ask the user:
-> "Will you need to connect to your source system? Some common reasons
-> are extracting code for conversion, migrating data, and testing
-> functional equivalence."
-> 1. **Yes** — set up a source connection now
-> 2. **Skip for now** — keep the option open; I'll re-ask before tests-from-source or data migration
-> 3. **Never** — won't need a source connection; use synthetic test data only
+A user importing local SQL files never reaches this skill from setup.
 
-### If **Yes**
+## Set up the connection
 
-Call `configure(needs_source_connection=true)` to list existing
-connections for the configured dialect.
+Call `configure(needs_source_connection=true)` to list existing connections for
+the configured dialect. Safe to repeat — it only reads.
 
-- If `existing_connections` listed connections, ask the user to pick
-  one.
+- If `existing_connections` is non-empty, ask the user to pick one.
 - Otherwise, load the per-dialect connection sub-skill:
   - `sqlserver` → `../connection/sql-server-connection/SKILL.md`
   - `redshift` → `../connection/redshift-connection/SKILL.md`
@@ -34,26 +30,31 @@ connections for the configured dialect.
   - `teradata` → `../connection/teradata-connection/SKILL.md`
   - `postgresql` → `../connection/postgresql-connection/SKILL.md`
 
-### If **Skip for now**
+## If the user pushes back
 
-Transient for this walk only:
+Don't offer these up front on the setup path — only once the user says they
+don't want to connect now, or the re-entry question above gets a "no".
+
+**Defer for this run:**
 
 ```
 progress_setup(mode="setup", skip="configureSourceConnection")
 ```
 
-The next `progress_setup()` (or a later re-entry from `seedSourceDb` /
-`migrateData`) may offer source-connection setup again.
+Nothing is persisted, so a later `progress_setup()` — or a re-entry from
+`seedSourceDb` / `migrateData` — can offer it again.
 
-### If **Never**
-
-Permanent opt-out — persists to `.scai/config/plugin.yml`:
+**Permanent opt-out:**
 
 ```
 configure(tasks={"configureSourceConnection": {"enabled": false}})
 ```
 
+Say what it costs first: code already in the project still converts and
+deploys; extracting code from the source, tests-from-source and data migration
+stay unavailable until they reconsider.
+
 ## On completion
 
-Return to the parent setup skill once the connection is set or the user
-has chosen Skip / Never.
+Return to the parent setup skill once the connection is set, or the user has
+deferred or opted out.

@@ -1,13 +1,13 @@
 ---
 name: data-migration-setup
-description: Setup, run, and report on cloud data migration — workflow YAML, migrate_data run, background Monitor+/loop (or poll fallback), and end-of-run summary for the user.
+description: Setup, run, and report on cloud data migration — workflow YAML, migrate_data run, background Monitor (or poll fallback), and end-of-run summary for the user.
 parent_skill: migration
 license: Proprietary. See License-Skills for complete terms
 ---
 
 # Data Migration Setup
 
-One-time configuration for migrating data from a source database into Snowflake via the **scai CLI**, plus **run → monitor → report** after `migrate_data(mode="run")` (passive Monitor + `/loop` when available; active poll fallback otherwise).
+One-time configuration for migrating data from a source database into Snowflake via the **scai CLI**, plus **run → monitor → report** after `migrate_data(mode="run")` (passive Monitor — always prefer it; active polling only when Monitor cannot be invoked).
 
 > **Always use the official tooling.** Run data migration through `migrate_data(mode="setup")` / `migrate_data(mode="run")` (backed by `scai data migrate`). **Never** suggest writing ad-hoc scripts to extract, copy, or load data outside the DMVF task pipeline — the orchestrator handles partitioning, retries, incremental sync, and load orchestration.
 
@@ -77,7 +77,7 @@ confirmation before continuing.
 
 **Extraction mechanism** (how data leaves the source) is **not always ODBC**. PostgreSQL uses COPY; Oracle can use `DBMS_CLOUD`; Redshift and Teradata support server-side export to object storage. Before calling the state machine, read `source_language` from `configure()` and load [Extraction strategies reference](./references/extraction-strategies-reference.md) so you can explain options if the user asks.
 
-Migration type, sync strategy, **extraction strategy**, and target table type are driven by the **`data-migration-setup` state machine**. Call `progress_setup(mode="data_migration")` in a loop until `completed` is true — follow each response's `next_prompt` (persist answers with `configure`) the same way as project setup in `setup/SKILL.md`.
+Migration type, sync strategy, **extraction strategy**, and target table type are driven by the **`data-migration-setup` state machine**. Call `progress_setup(mode="data_migration")` in a loop until `completed` is true — ask each response's `next_prompt` (plus any `then_ask`, in the same turn) and send the answers back with `progress_setup(mode="data_migration", answers={...})`, the same way as project setup in `setup/SKILL.md`.
 
 The state machine routes by dialect:
 
@@ -169,7 +169,7 @@ Notes:
    | Incremental sync | `synchronization.strategy`, `watermarkColumn`, `trackModifications`, `trackDeletions`, `primaryKeyColumns` |
    | Limit rows (preliminary) | `whereClauseCriteria` |
    | Reduce source locking | `queryModifiers` (or worker TOML `query_modifiers`) |
-   | Large table performance | `columnNamesToPartitionBy`, `targetPartitionSizeMb` / `targetPartitionSizeRows` |
+   | Large table performance | `columnNamesToPartitionBy`, `targetPartitionSizeMb` / `targetPartitionSizeRows`, `executionTimeoutMinutes` (Analyze boundaries only; default 20) |
    | Column rename/type map | `columnNameMappings`, `columnTypeMappings` |
    | Server-side export | `extraction.strategy`, `externalStage` + worker TOML (UNLOAD/WRITE_NOS/DBMS_CLOUD) |
    | Iceberg target | `target.tableType`, `target.icebergConfig`, `migrationStrategy` |
@@ -229,79 +229,78 @@ After run starts, go to **Step 5** (do not busy-poll every 30–60s unless you a
 
 ---
 
-## Step 5: Wait for completion (Monitor + `/loop`, or poll fallback)
+## Step 5: Wait for completion (Monitor, or poll fallback)
 
-Load [Background monitoring](./references/background-monitoring.md) and follow it. Summary below; the reference is authoritative for capability checks, watch command shape, and crash fallback.
+Load [Background monitoring](./references/background-monitoring.md) and follow it. Summary below; the reference is authoritative for capability checks, event phases, and crash fallback.
 
 **Status tool** (both paths):
 
 ```
-migrate_data_status()
+job_status(job_id="<JOB_ID>")                 # cheap summary
+job_status(job_id="<JOB_ID>", details=true)   # + full progress and failure reports
 ```
 
-(or `migration_status(mode="data_migration")` — same JSON shape)
-
-`progress` may be absent until `create-workflow` returns a workflow name; that is normal early in the run.
+`job_id` is `monitor.job_id` from the `migrate_data(mode="run")` response. `details` may report `details_unavailable` until `create-workflow` returns a workflow name; that is normal early in the run.
 
 ### 5.A — Choose path
 
+**Always prefer Monitor when it can be invoked.** Polling is never the better choice while Monitor is available — one relay poller serves every watcher, it wakes you on trouble and not only on completion, and it spends no tool call per check.
+
 | Condition | Path |
 |-----------|------|
-| Interactive session **and** Monitor tool available **and** `/loop` (or session cron) available | **Background** — Phases A–E in the reference |
-| Otherwise (older CoCo, non-interactive, Monitor/`/loop` disabled/unavailable, or unsure) | **Fallback** — active poll below |
+| Monitor tool can be invoked — **the default** | **Background** — Phases A–D in the reference |
+| Monitor genuinely unavailable (absent from the tool list, or invoking it fails) | **Fallback** — active poll below |
+
+If you are unsure whether Monitor is available, **try it** rather than defaulting to the poll. Calling `job_status(job_id)` because the user asked for an update is not the polling path and is always fine.
 
 **One completion owner:** only the background Monitor path **or** the fallback poll may present Step 6 — never both.
 
-### 5.A.1 — Background path (preferred)
+### 5.A.1 — Background path (always use this when Monitor is available)
 
-1. **Phase A — workflow name:** Call `migrate_data_status()` every **5–15s** until `progress.output.workflowName` is set, or the job is already terminal (then skip to final status → 5.C → Step 6).
-2. **Phase B — Monitor:** Start the **Monitor** tool (`persistent: true`) with:
+1. **Phase A — Monitor:** Start the **Monitor** tool (`persistent: true`) with `monitor.watch_command` from the run response, verbatim, from the project root. No wait for a workflow name, and no hand-built command — the cursor baked into it is what prevents replays and gaps.
+2. **Phase B — Monitor fire:** Branch on the event's `phase`. `failure` / `stalled` / `relay_error` are warnings — surface them and keep watching. On `terminal`: `job_status(job_id, details=true)` once → Step 5.C if needed → **Step 6**.
 
-   ```bash
-   scai data migrate status <WORKFLOW_NAME> --json --watch --connection <SNOWFLAKE_CONNECTION>
-   ```
+**No progress loop.** Do not start `/loop` or a cron to poll for progress. The relay emits a `stalled` event once a job has gone **30 minutes** without changing, so a quiet job reports itself. A healthy run is silent by design — progress lands in the log, and `job_status` reads it whenever the user asks.
 
-   Use the Snowflake connection from `configure()`. Omit `--connection …` only if none is configured. Run from the project root. **Do not** watch `create-workflow`. **Do not** use plugin `monitors/`.
-3. **Phase C — progress loop:** Start `/loop 30m` (or equivalent cron) that calls `migrate_data_status()`, reports a short progress update, and runs Step 5.B health checks. **Do not** present Step 6 on a loop tick.
-4. **Phase D — Monitor fire:** Cancel the loop → call `migrate_data_status()` once → Step 5.C if needed → **Step 6**.
-5. **Phase E — loop sees terminal first:** Cancel Monitor if still running → `migrate_data_status()` once → Step 5.C → Step 6 (crash fallback).
+The watch fires only on terminal, first failure, a 30-minute stall, or relay error — not on ordinary progress, which changes on nearly every poll. It exits by itself on its job's terminal record.
 
-Tell the user once that you will report progress about every 30 minutes and notify immediately when the job finishes.
+Tell the user once that you'll report back when the job finishes or hits trouble.
 
-### 5.A.2 — Fallback path (active poll)
+**If the watch goes silent,** re-arm with `job_status(job_id, monitor=true)` — it returns a fresh cursor and watch command and restores the relay's poller if it was lost. With no progress loop there is no second timer cross-checking the watch, so this is the recovery path after a compaction, a session restart, or an answer that looks stale.
+
+### 5.A.2 — Fallback path (last resort — only when Monitor cannot be invoked)
 
 Poll until the job is terminal:
 
-- Poll every **30–60 seconds**, or when the user asks for an update.
-- On polls where you are **not** running a health check (Step 5.B), optionally share a one-line update from `progress.output` when present (e.g. `preprocessedTables`/`totalTables`, `aggregatedCounts.loadedPartitions`/`totalPartitions`).
+- Call `job_status(job_id)` every **30–60 seconds**, or when the user asks for an update.
+- On polls where you are **not** running a health check (Step 5.B), optionally share a one-line update from `summary`, or from `details.progress.output` when you pass `details=true` (e.g. `preprocessedTables`/`totalTables`, `aggregatedCounts.loadedPartitions`/`totalPartitions`).
 
-**Stop when:**
-
-- `status` is `"completed"` or `"failed"`, **and**
-- `progress.output.isFinished` is `true` when `progress` is present.
+**Stop when** `terminal` is `true`.
 
 Then Step 5.C → Step 6.
 
 ### 5.B — Health monitoring (while waiting)
 
-No extra tools — derive health from consecutive `migrate_data_status()` responses. Keep the previous response in memory (at least `progress.output.aggregatedCounts`, `preprocessedTables`, `totalTables`, and `tablePartitions`).
+On the background path the relay emits a `stalled` event when counters stop moving, so you do not compute stalls yourself — warn the user and keep watching.
+
+On the fallback path, derive health from consecutive `job_status(job_id, details=true)` responses. Keep the previous response in memory (at least `details.progress.output.aggregatedCounts`, `preprocessedTables`, `totalTables`, and `tablePartitions`).
 
 **When to run:**
 
-- **Background path:** every `/loop` tick (and when the user asks). Skip until `progress.output` exists.
-- **Fallback path:** every **2nd or 3rd** poll, or when the user asks. Skip until `progress.output` exists.
+- **Background path:** the relay reports stalls itself; check health when it fires an event or the user asks.
+- **Fallback path:** every **2nd or 3rd** poll, or when the user asks. Skip until `details.progress.output` exists.
 
-**Progress key:** `loadedPartitions` from `progress.output.aggregatedCounts` (fallback: sum of `tablePartitions[].loadedPartitions`). Record the poll/tick time when this key last increased.
+**Progress key:** `loadedPartitions` from `details.progress.output.aggregatedCounts` (fallback: sum of `tablePartitions[].loadedPartitions`). Record the poll/tick time when this key last increased.
 
-| Signal | Background (`/loop` ~30m) | Fallback (30–60s poll) | Severity |
+| Signal | Background (relay events) | Fallback (30–60s poll) | Severity |
 |--------|---------------------------|-------------------------|----------|
-| Stall | `loadedPartitions` unchanged across **≥1** progress tick while running and `isFinished` is false | unchanged **≥10 minutes** | **Warning** |
-| Stuck | unchanged across **≥2** ticks | unchanged **≥20 minutes** | **Critical** |
-| Partition failures | `aggregatedCounts.failedPartitions > 0` | same | **Warning** (immediate) |
+| Stall | `stalled` event | `loadedPartitions` unchanged **≥10 minutes** | **Warning** |
+| Stuck | a second `stalled` event, or one still standing when you next look | unchanged **≥20 minutes** | **Critical** |
+| Partition failures | `failure` event, or `failed: true` on any event | `aggregatedCounts.failedPartitions > 0` | **Warning** (immediate) |
 | Preprocessing lag | `preprocessedTables < totalTables` and running **≥30 minutes** | running **≥15 minutes** | **Warning** |
 | Partial table failure | Any `tablePartitions[]` with `failedPartitions > 0` or `hasBeenPreprocessed == false` while still running | same | **Warning** |
 
-When **`reports`** is present, also scan `reports.files.errors` — any rows mean at least one task/partition has failed even if aggregate counters look healthy.
+When **`reports`** is present, also scan `details.reports.files.errors` — any rows mean at least one task/partition has failed even if aggregate counters look healthy.
 
 **What to tell the user** (short; do not block waiting unless they ask to stop):
 
@@ -318,13 +317,13 @@ On **Warning** or **Critical**, point to [Troubleshooting Reference](./reference
 
 Fold the worst severity seen while waiting into Step 6 **Infrastructure** or **Load** only if it was never surfaced to the user.
 
-A stall or stuck warning does **not** end monitoring — only terminal `status` plus `isFinished` (or Monitor fire + confirmed terminal status) does.
+A stall or stuck warning does **not** end monitoring — only a `terminal` event (or a fallback poll seeing `terminal: true`) does.
 
-If `status` is `"failed"` and top-level `error` is set, surface it under **Infrastructure** in `### Errors`.
+When a job fails before a workflow exists, the failure text is in the job's `summary` — surface it under **Infrastructure** in `### Errors`.
 
 ### 5.C — Finished workflow with incomplete tables (anomaly)
 
-After the terminal status (Monitor fire + confirm, loop crash fallback, or fallback poll), if `progress.output.isFinished == true` **and** any of:
+After the terminal status (Monitor fire + confirm, or fallback poll), if `details.progress.output.isFinished == true` **and** any of:
 
 - `preprocessedTables < totalTables`
 - any `tablePartitions[].hasBeenPreprocessed == false`
@@ -332,7 +331,7 @@ After the terminal status (Monitor fire + confirm, loop crash fallback, or fallb
 
 **Do not report success.** Treat as a failed/partial run (matches scai `HasErrors`).
 
-1. Pull messages from `reports.files.progress` (`ExampleErrorMessage`) and `reports.files.errors` (`LastErrorMessage`, `TaskName`, `PartitionNumber`) — `progress.output` has no error text.
+1. Pull messages from `details.reports.files.progress` (`ExampleErrorMessage`) and `details.reports.files.errors` (`LastErrorMessage`, `TaskName`, `PartitionNumber`) — `details.progress.output` has no error text.
 2. Classify tables with `hasBeenPreprocessed == false` under **Preprocessing**; failed partitions under **Load** or **Extraction** per task name.
 3. If errors are missing or tasks look stuck, follow [Workflow finished but tables incomplete](./references/troubleshooting-reference.md#workflow-finished-but-tables-incomplete) — query `TASK_QUEUE` for terminal vs non-terminal tasks. Worker/orchestrator stall is **one** hypothesis (worker down, affinity, stale tasks, suspended service), not the only one.
 4. Do **not** suggest re-run until prerequisites are identified.
@@ -341,33 +340,33 @@ After the terminal status (Monitor fire + confirm, loop crash fallback, or fallb
 
 ## Step 6: Report — data migration summary
 
-**Do not skip.** Present an **error-first** summary in chat (markdown). Build it from the final `migrate_data_status()` response (`progress`, `reports`) and classify failures — **not** a per-table results grid unless the user asks.
+**Do not skip.** Present an **error-first** summary in chat (markdown). Build it from the final `job_status(job_id, details=true)` response (`details.progress`, `details.reports`) and classify failures — **not** a per-table results grid unless the user asks.
 
 ### 6.A — Read inputs
 
 | Source | Fields |
 |--------|--------|
-| Status response (top level) | `status`, `error` (if failed before progress) |
-| `progress.output` | `workflowName`, `isFinished`, `totalTables`, `preprocessedTables`, `aggregatedCounts`, `tablePartitions` (`hasBeenPreprocessed`, `failedPartitions`, `loadedPartitions`, `totalPartitions`) |
-| **`reports`** | `files.progress` (`TableName`, `ExampleErrorMessage`, partition counts); `files.errors` (`TableName`, `TaskName`, `PartitionNumber`, `LastErrorMessage`, …) — PascalCase columns |
+| Job entry (top level) | `status`, `terminal`, `failed`, `summary` (carries the failure text when the job died before a workflow existed) |
+| `details.progress.output` | `workflowName`, `isFinished`, `workflowStatus`, `totalTables`, `preprocessedTables`, `aggregatedCounts`, `tablePartitions` (`hasBeenPreprocessed`, `failedPartitions`, `loadedPartitions`, `totalPartitions`) |
+| **`details.reports`** | `files.progress` (`TableName`, `ExampleErrorMessage`, partition counts); `files.errors` (`TableName`, `TaskName`, `PartitionNumber`, `LastErrorMessage`, …) — PascalCase columns |
 | Workflow YAML | Use only when suggesting fixes (sync, extraction, `whereClauseCriteria`, target) |
 
-`reports` is attached by `migrate_data_status()` after `scai data migrate status` writes CSV under `reports/data-migration/workflow-<timestamp>/`. **`progress.output` has no error text** — use `reports.files` for messages.
+`details` is attached by `job_status(job_id, details=true)`, which runs `scai data migrate status` (writing CSV under `reports/data-migration/workflow-<timestamp>/`) and parses it. **`details.progress.output` has no error text** — use `details.reports.files` for messages.
 
 ### 6.B — Derive headline **Result** (header only)
 
-Count tables from `progress.output.tablePartitions` when present:
+Count tables from `details.progress.output.tablePartitions` when present:
 
 | Outcome | **Result** line |
 |---------|-----------------|
 | All tables loaded, no failures | `Success — <N>/<N> tables loaded` |
 | Some failures | `<N_ok>/<N_total> tables OK — <F> failed` |
 | **Finished but incomplete** (Step 5.C) | `<N_ok>/<N_total> tables OK — <F> never completed` |
-| Job `status` is `"failed"` or no table progress | `Failed — no tables processed` (or partial counts if available) |
+| Job `failed` is true or no table progress | `Failed — no tables processed` (or partial counts if available) |
 
-**Never** use the all-success **Result** when Step 5.C applies — even if top-level MCP `status` is `"completed"`.
+**Never** use the all-success **Result** when Step 5.C applies — even if the job reached `terminal` without `failed`.
 
-**Workflow** line: `` `progress.output.workflowName` `` when set; if the job failed before a workflow name exists, say so in **Result** and use top-level `error` under **Infrastructure**.
+**Workflow** line: `` `details.progress.output.workflowName` `` when set; if the job failed before a workflow name exists, say so in **Result** and use the job's `summary` under **Infrastructure**.
 
 **Header shows only `Result` and `Workflow`** — do not put elapsed time, partition totals, config, workflow file path, or job id in the header.
 
@@ -382,7 +381,7 @@ Assign each failed table to **one** category (first match wins). List categories
 | 3 | **Load** | Load-phase failures, `failedPartitions` > 0 with load task, partial partition load (table-specific message) |
 | 4 | **Infrastructure** | Top-level `error`, orchestrator/compute pool/worker failures before per-table progress |
 
-**Message per table:** prefer `reports.files.progress[].ExampleErrorMessage`, else first `reports.files.errors[].LastErrorMessage` for that `TableName`. For load, you may add partition context (`loaded`/`total`, `PartitionNumber`) on the same bullet.
+**Message per table:** prefer `details.reports.files.progress[].ExampleErrorMessage`, else first `details.reports.files.errors[].LastErrorMessage` for that `TableName`. For load, you may add partition context (`loaded`/`total`, `PartitionNumber`) on the same bullet.
 
 **Deduplicate:** when two or more tables share the same normalized message in a category, emit **one** bullet with the message and a line `- Affects: \`table1\`, \`table2\`, …`. Use a single table name in the bullet only when the failure is table-specific (e.g. one load timeout with partition detail).
 
@@ -432,7 +431,7 @@ No errors. You can run validation for this scope or continue the wave.
 - `<table>` — <message> (<loaded>/<total> partitions failed if relevant)
 
 **Infrastructure**
-- <top-level or orchestrator error>
+- <job summary or orchestrator error>
 
 ### Suggested fixes
 
@@ -521,8 +520,8 @@ Shared infrastructure checklist is owned by `../../../data-infrastructure/SKILL.
 - [ ] Target database and schema exist
 - [ ] Iceberg prerequisites validated — if Redshift + `target_table_type=iceberg`
 - [ ] migrate_data(mode="run") started
-- [ ] Background Monitor+/loop used when available; otherwise active poll fallback (Step 5)
-- [ ] Waited until job terminal and progress.output.isFinished (when progress present)
+- [ ] Monitor used (the default); active polling only if Monitor could not be invoked (Step 5)
+- [ ] Waited until the job reported a `terminal` event
 - [ ] Finished-but-incomplete anomaly checked (Step 5.C — do not report success if tables never preprocessed)
 - [ ] Health monitoring run while waiting when triggered (Step 5.B — stall/failure signals surfaced)
 - [ ] Error-first data migration summary presented (Step 6 — Result + Workflow, Errors, Suggested fixes)

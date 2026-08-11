@@ -13,11 +13,15 @@ Tell the user:
 > **Code Conversion.**
 >
 > Here's what I'll do:
-> 1. Run SnowConvert against your source SQL files, which transforms each one into Snowflake SQL syntax.
+> 1. Run SnowConvert against your source SQL files, transforming each into Snowflake SQL syntax (optionally tailoring conversion settings to your source first, or going with defaults).
 > 2. Generate reports flagging anything that needs manual review (EWIs, FDMs, performance remarks, out-of-scope items).
 > 3. Save converted code under `snowflake/` and reports under `reports/SnowConvert/`.
 
 Convert source code to Snowflake SQL using SnowConvert.
+
+Report the result from the `--json` envelope and hand off. Reading the generated
+reports, counting EWIs by severity or judging what needs fixing is the
+assessment's job — do that here only if the user asks a direct question.
 
 ## Prerequisites
 
@@ -64,20 +68,32 @@ If **yes**, load `../powerbi-repointing/SKILL.md`. It collects `PBIT_PATH` and t
 
 If **no**, proceed to Step 4. `PBIT_PATH` remains unset; do not pass `--powerbi-repointing` to scai.
 
+### Step 3.5: Offer Custom Conversion Settings
+
+Keep this quick — most users just want defaults. Ask via `ask_user_question` (`multiSelect = false`):
+
+> "SnowConvert supports custom conversion settings tailored to your source language. Want to tailor them, or go with the defaults?"
+>
+> 1. **Tailor settings** — I'll suggest options based on your code; you confirm.
+> 2. **Go with defaults**
+
+- On **Go with defaults**: `<SETTINGS_FLAGS>` stays empty; proceed to Step 4.
+- On **Tailor settings**: load `./recommend-settings/SKILL.md`. It scans the source, proposes dialect-specific settings, and — after the user confirms — returns a flag string. Store it as `<SETTINGS_FLAGS>` for Step 4. If the user declines all suggestions or the catalog can't be loaded, `<SETTINGS_FLAGS>` stays empty. Return here when complete.
+
 ### Step 4: Run Conversion
 
 Before running, tell the user what the conversion will cover: mention ETL if `ETL_PATH` was set, and Power BI repointing if `PBIT_PATH` was set.
 
-Always include `--json` so the agent can parse the result envelope. Append `--etl-replatform-sources-path <ETL_PATH>` and/or `--powerbi-repointing <PBIT_PATH>` only if those paths were set. If `SCRIPTING_MODE` was set (Informatica to Snowflake Scripting), also append `--informatica-to-snowflake-scripting`. If `CONSOLIDATE_DBT` was set (Informatica to dbt), also append `--consolidate-dbt-model-chains`.
+Always include `--json` so the agent can parse the result envelope. Append `<SETTINGS_FLAGS>` (from Step 3.5; omit if empty), and `--etl-replatform-sources-path <ETL_PATH>` and/or `--powerbi-repointing <PBIT_PATH>` only if those paths were set. If `SCRIPTING_MODE` was set (Informatica to Snowflake Scripting), also append `--informatica-to-snowflake-scripting`. If `CONSOLIDATE_DBT` was set (Informatica to dbt), also append `--consolidate-dbt-model-chains`.
 
 **No ETL:**
 ```bash
-scai code convert --json
+scai code convert <SETTINGS_FLAGS> --json
 ```
 
 **With ETL:**
 ```bash
-scai code convert --etl-replatform-sources-path <ETL_PATH> --json
+scai code convert --etl-replatform-sources-path <ETL_PATH> <SETTINGS_FLAGS> --json
 ```
 
 **With ETL, Snowflake Scripting (Informatica preview):**
@@ -85,20 +101,21 @@ scai code convert --etl-replatform-sources-path <ETL_PATH> --json
 scai code convert --etl-replatform-sources-path <ETL_PATH> --informatica-to-snowflake-scripting --json
 ```
 
-Substitute the bracketed tokens with the actual paths you stored. Do not emit literal `<ETL_PATH>` or `<PBIT_PATH>` to the shell.
+Substitute the bracketed tokens with the actual paths you stored. Do not emit literal `<ETL_PATH>` or `<PBIT_PATH>` to the shell. Do not emit a literal `<SETTINGS_FLAGS>`; substitute the confirmed flags (or nothing).
 
-### Step 5: Review Results
+### Step 5: Read the Result Envelope
 
-Conversion produces:
+`--json` returns the result. That envelope is the whole story for this step —
+**don't open the reports, the CSVs or the logs to work out what happened.**
+
+Conversion writes:
 - **Converted code** in `snowflake/`
 - **Reports** in `reports/SnowConvert/`
 - **Logs** in `logs/`
 
-**Key metrics to check:**
-- Files Processed
-- Code Units Converted (LOC)
-- Conversion Errors (should be 0)
-- EWIs (Early Warning Issues), especially high/critical
+Name those locations so the user knows where to look. Reading them is the
+assessment's job, or something to do later if the user asks a question the
+envelope can't answer.
 
 ### Conversion Options
 
@@ -118,7 +135,8 @@ scai code convert --show-ewis --overwrite-working-directory --json
 
 ## Understanding EWIs
 
-EWIs (Early Warning Issues) indicate conversion items needing attention:
+Reference for answering a question the user asks — not a prompt to go analyze
+the run. EWIs (Early Warning Issues) indicate conversion items needing attention:
 
 | Severity | Action Required |
 |----------|----------------|
@@ -164,31 +182,39 @@ For Power BI output paths, see `../powerbi-repointing/SKILL.md`.
 
 ## CHECKPOINT
 
-Confirm with user:
-- [ ] Conversion completed without errors
-- [ ] Review EWI summary (especially high/critical count)
-- [ ] Converted files appear in `snowflake/`
-- [ ] If ETL code was included: ETL packages processed successfully, ETL issues reviewed, and converted ETL code appears under `snowflake/_etl/`
+The envelope's own status is the check — don't go looking for corroboration.
+
+- [ ] The convert command exited successfully and the envelope reports no conversion errors
 - [ ] If Power BI reports were included, follow the CHECKPOINT addendum in `../powerbi-repointing/SKILL.md`
+
+If the envelope reports errors, surface them verbatim and stop. Otherwise move on
+— don't ask the user to review EWI counts or confirm that files landed.
 
 ## On Completion
 
-After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON envelope returned by `scai code convert --json`.
+Show the JSON envelope from `scai code convert --json` **as-is**, in a fenced
+`json` block, under one line:
 
-> **Conversion complete.** `<filesProcessed>` files / `<codeUnitsConverted>` code units converted in `<duration>`.
->
-> Issues found: `<total>` instances total
->  • EWIs: `<ewi.total>` instances across `<ewi.unique>` codes (`<critical>` critical, `<high>` high, `<medium>` medium, `<low>` low)
->  • FDMs (functional differences): `<fdm.total>` instances *(omit line if 0)*
->  • PRFs (performance remarks): `<prf.total>` instances *(omit line if 0)*
->  • OOS (out-of-scope): `<oos.total>` instances *(omit line if 0)*
->
-> *If `etlReplatforming` is present:* ETL: `<etl.processedFiles>` files, `<etl.totalIssues>` issues.
-> Critical EWIs require manual fix before deploy. Reports in `reports/SnowConvert/`.
->
+> **Conversion complete.** Converted code is in `snowflake/`, reports in `reports/SnowConvert/`.
+
+Then one line on what's next, and move on:
+
 > Next, we'll run an assessment to plan your migration: dependency waves, object categorization, and a deployment plan.
+
+Do not restate the envelope's numbers in prose, break issues down by severity,
+rank them, or say which ones need fixing — the assessment does that with the
+full picture, and a summary here is one more thing that can disagree with it.
+If the user asks about a number, an EWI code, or a specific file, dig in *then*;
+the reference sections above are for that.
 
 *If `SCRIPTING_MODE` was set*, also tell the user:
 > Informatica mappings were converted to Snowflake Scripting stored procedures (preview). **ETL Stabilization is not supported for Snowflake Scripting conversions (dbt only)**, and deploy is not part of this preview flow - both are skipped for these ETL units. The generated procedures and Task graph are under `snowflake/_etl/` for review.
+
+There is now enough converted code for the local dashboard to be worth looking
+at. If `configure` reported a dashboard URL at session start, mention it once:
+> You can watch progress at `<url>` — read-only, and only on your machine.
+
+Skip the line if no URL came back (the user opted out, or the port was busy).
+Don't guess a URL, and don't repeat this every step.
 
 Then return to the calling skill.

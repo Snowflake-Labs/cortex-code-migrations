@@ -29,7 +29,7 @@ skill only sequences subcommands and surfaces their JSON. It replaces production
 capture the baseline.
 
 The core phases are independent and resumable: **mine** (`init` → `list-unsolved`
-→ per-object branch drill-down) inventories the constraint/branch coverage;
+→ whole-workload branch drill-down) inventories the constraint/branch coverage;
 **validate** reads the mined state and reports readiness (fk gaps / type conflicts
 / unsatisfied constraints) — `ready: false` is a report, not a failure; **enrich**
 is the reasoning + propose/validate loop that turns unsolved constraints into
@@ -106,7 +106,7 @@ Tell the user:
 
     - If the workspace was **not ready** at validate, the driver blocks with `"generate blocked: N blocking issue(s); re-run with --ignore-readiness to override"`. Only re-run with `--ignore-readiness` after telling the user which blocking issues will be bypassed.
     - If validate never ran, the driver blocks with `"generate blocked: run validate first"` — run Step 5 first.
-13. **On generate exit code 0:** the driver wrote `testbed/generate/summary-view.json` and printed a one-line summary. Read the view and present `tables`, `rows_written`, `csv_files`, `out_path`, `manifest_path`, and `readiness_overridden`. An empty workspace is a success with `csv_files: 0` and a `note` — surface the note. The CSV pool + `manifest.json` land flat under `testbed/generate/data/`.
+13. **On generate exit code 0:** the driver wrote `testbed/generate/summary-view.json` and printed a one-line summary. Read the view and present `tables`, `rows_written`, `csv_files`, `warnings`, and `readiness_overridden` — surface each warning (a non-fatal generation diagnostic, e.g. a declared width too narrow to hold `row_count` distinct key values). An empty workspace is a success with `csv_files: 0` and a `note` — surface the note. `out_path` is the **project root** the manifest's per-table `csv_path` entries are relative to (not a CSV directory), and `manifest_path` is the provenance `manifest.json` beside `state.bin`; to list the generated CSVs, read the `csv_path` entries from `manifest.json` at `manifest_path` — don't present `out_path` as the output directory.
 14. **On generate non-zero exit:** act on the class (`input_config` `TBD0012`: state not compiled — run Step 9 first; `escalate`: surface the error and stop).
 15. Do **not** call `transition_status`. The `generateTestbed` task completes when `testbed/generate/summary-view.json` exists (a `filesystemProxy` status source) — the resolver detects it. Calling `advance` for a filesystem-backed task returns an error. If generate is blocked or escalates and never writes the summary view, the task stays incomplete by design; surface the error and stop rather than looping.
 
@@ -156,5 +156,5 @@ Note: `fk_cycle` and `parent_missing_key` gaps are **advisory** (never blocking)
 - `testbed/validate/readiness-view.json` — the validate deliverable: readiness + fk gaps / type conflicts / unsatisfied constraints (written by the driver).
 - `testbed/compile/clusters-view.json` — the compile deliverable: cluster summary (written by the driver).
 - `testbed/generate/summary-view.json` — the generate deliverable and **task completion predicate**: row counts + CSV/manifest paths (written by the driver).
-- `testbed/generate/data/` — the flat CSV pool + `manifest.json` emitted by `scai testbed generate --out`.
+- Generated CSVs + provenance `manifest.json` — the `generate` deliverable. Each table's CSV lands under its own object's `<artifacts>/testbed/` folder; the `manifest.json` (beside `state.bin`, at the view's `manifest_path`) lists them as project-root-relative `csv_path` entries. The view's `out_path` is that project root — not a CSV directory. No output dir is passed to `scai testbed generate`.
 - `.scai/testbed/run.json` — derived progress ledger (mine/validate/compile/generate status, PENDING records).

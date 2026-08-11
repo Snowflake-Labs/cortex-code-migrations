@@ -46,6 +46,9 @@ if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 from snowconvert_reports.console_utils import DONE  # noqa: E402
+from snowconvert_reports.services.assessment_metadata import (  # noqa: E402
+    resolve_assessment_name,
+)
 
 # Waves-generator modules (optional)
 try:
@@ -1302,7 +1305,8 @@ def generate_multi_report(
         missing_objects_data=missing_objects_data,
         effort_assessment=effort_assessment,
         testing_readiness=testing_readiness,
-        data_migration_readiness=data_migration_readiness
+        data_migration_readiness=data_migration_readiness,
+        assessment_name=resolve_assessment_name(project_dir)
     )
     
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -1353,7 +1357,8 @@ def generate_html_template(
     anti_patterns_json: Path = None,
     effort_assessment: Dict = None,
     testing_readiness: Any = None,
-    data_migration_readiness: Any = None
+    data_migration_readiness: Any = None,
+    assessment_name: str = ""
 ) -> str:
     """Generate the complete HTML template"""
     dynamic_sql_meta_json = json.dumps(dynamic_sql_meta or {}, ensure_ascii=False)
@@ -1552,6 +1557,14 @@ def generate_html_template(
     source_dialect_json = json.dumps(source_dialect)
     source_dialect_display = 'SQL Server' if source_dialect == 'Transact' else source_dialect
     safe_source_dialect = html_escape_module.escape(str(source_dialect_display)) if source_dialect_display else 'Unknown'
+    # The sidebar sits inside the Vue mount, so v-pre is required or a name
+    # containing {{ }} would be compiled as an expression.
+    safe_assessment_name = html_escape_module.escape(assessment_name) if assessment_name else ''
+    assessment_title_prefix = f'{safe_assessment_name} — ' if safe_assessment_name else ''
+    assessment_name_html = (
+        f'<span class="status-badge-neutral" v-pre>{safe_assessment_name}</span>'
+        if safe_assessment_name else ''
+    )
     # An unresolved dialect must hide the phase, so this stays a positive check.
     show_virtualization = VIRTUALIZATION_ENABLED and source_dialect == 'Teradata'
 
@@ -2509,7 +2522,7 @@ def generate_html_template(
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Migration Assessment Report</title>
+    <title>{assessment_title_prefix}Migration Assessment Report</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -2615,6 +2628,21 @@ def generate_html_template(
             color: #2A3342;
             overflow-y: auto;
             border-right: 1px solid #D5DAE4;
+        }}
+        /* Stellar StatusBadge variant="neutral", inlined because this page has no
+           React build. Height is unset on purpose so long names wrap, not clip. */
+        .status-badge-neutral {{
+            display: inline-block;
+            max-width: 100%;
+            margin-top: 6px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(5, 25, 58, 0.07); /* stellar color-background-neutral */
+            color: #23272C;
+            font-size: 12px;
+            font-weight: 600;
+            line-height: 18px;
+            overflow-wrap: break-word;
         }}
         .content {{
             margin-left: 248px;
@@ -5131,6 +5159,7 @@ def generate_html_template(
                 <div style="border-bottom: 1px solid #D5DAE4; padding-bottom: 0.75rem; margin-bottom: 0.75rem;">
                 </div>
                 <p style="font-size: 1rem; color: #5D6A85; margin: 0; font-weight: 500;">Assessment</p>
+                {assessment_name_html}
             </div>
             <nav style="padding: 16px 0;">
                 <a @click="activeTab = 'journey'" class="nav-section" data-tab="journey" :class="{{active: activeTab === 'journey'}}">

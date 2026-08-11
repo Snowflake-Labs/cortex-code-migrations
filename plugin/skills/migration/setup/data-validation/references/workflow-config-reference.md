@@ -19,7 +19,6 @@
 | `views` | Array | No | View entries (same schema as `tables`) |
 | `objects` | Array | No | Unified table/view entries — additive with `tables`/`views` |
 | `affinity` | String | No | Routes work to workers with matching affinity |
-| `useSnowflakeCompute` | Boolean | `false` | Run validation compute on Snowflake instead of the worker |
 | `useSnowpipeForResults` | Boolean | `true` | Ingest L2/L3 CSV results via Snowpipe (default). Set `false` for per-partition `COPY INTO`. |
 | `cleanUpTransientResources` | `"never"` \| `"on-success"` \| `"always"` | `"never"` | Delete intermediate DV `TASK_RESULTS` stage files for this workflow after it finishes. Underscores are accepted (`on_success`). |
 | `targetPartitionSizeRows` | Integer | No | Global partition row target (mutually exclusive with `targetPartitionSizeMb`) |

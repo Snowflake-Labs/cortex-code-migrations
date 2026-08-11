@@ -78,13 +78,15 @@ Configure `write_nos_*` fields in `[connections.source.teradata]`. Set `extracti
 
 > **Skip this step** for Iceberg migration strategies that don't use a Worker (`catalog_link`, `convert_to_managed`, `copy_files` with `sourceDataStage`).
 
-If `.scai/settings/DataExchangeWorkerConfig.toml` already exists with no `<PLACEHOLDER>` tokens, report "Worker config already complete" and continue to Step 2.
+If the project's `.scai/config/dew_configuration.toml` (path relative to the SCAI project root) already exists with no `<PLACEHOLDER>` tokens, report "Worker config already complete" and continue to Step 2.
 
 Otherwise, run:
 
 ```bash
-scai data worker generate-config .scai/settings/DataExchangeWorkerConfig.toml
+scai data worker generate-config
 ```
+
+Run inside the project (no path argument) — scai writes the project-default `.scai/config/dew_configuration.toml`.
 
 This pre-fills `[connections.source.<engine>]` from the project's scai source connection (host, user, database, port, and engine-specific fields like SQL Server's `trust_server_certificate` and `encrypt`, or Teradata `authentication = "LDAP"` when `--auth ldap`). Pass `--affinity <label>` if your workflow uses one. The CLI will prompt before overwriting an existing file; pass `-y` to overwrite without prompting.
 
@@ -108,10 +110,10 @@ See [`../references/worker-config-reference.md`](../references/worker-config-ref
 Run:
 
 ```bash
-scai data worker start --local .scai/settings/DataExchangeWorkerConfig.toml
+scai data worker start --local
 ```
 
-This command installs the worker if it is not already present, then starts it using the configuration in `.scai/settings/DataExchangeWorkerConfig.toml`.
+This command installs the worker if it is not already present, then starts it using the project-default configuration at `.scai/config/dew_configuration.toml`.
 
 Tell the user:
 

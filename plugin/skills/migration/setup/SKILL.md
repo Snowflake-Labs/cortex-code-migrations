@@ -30,6 +30,8 @@ the next step automatically. The flow:
      you Read it normally.
    - `next_prompt` — present when the task is an inline question (see
      step 3 below)
+   - `then_ask` — further questions to ask in the **same turn**, in
+     order (see step 3)
    - `planned_steps` — remaining task ids in order
    - `completed: true` — only when the machine reached its terminal
      state; absence means "not done, keep looping"
@@ -44,9 +46,52 @@ the next step automatically. The flow:
    - `next_prompt.options` is the list of `{label, value, description?}`
      entries to render. Use `label` as the user-facing choice; **never**
      show `value` to the user.
-   - When the user answers, call
-     `configure(<next_prompt.write_to>=<chosen option's value>)` to
-     persist the answer. Then go back to step 1.
+   - **If `then_ask` is present, ask every question in one
+     `ask_user_question` call** — `next_prompt` first, then each entry of
+     `then_ask` in the order given, one question per entry,
+     `multiSelect = false` on each. Don't ask them one call at a time.
+     They are queued precisely because the machine reaches all of them
+     whatever the user answers, so nothing you learn from one can make a
+     later one wrong. The queue is capped so a whole run always fits in a
+     single call; never split it.
+   - Send every answer you collected in **one** call:
+     `progress_setup(answers={"<write_to>": "<chosen value>", ...})` —
+     keys are each prompt's `write_to`, values the chosen option's
+     `value` verbatim (a string, even for a number or a boolean). That
+     records the answers *and* returns the next step, so for **questions**
+     it replaces both the separate `configure(...)` call and the follow-up
+     `progress_setup()`. Go to step 2 with its response.
+   - A prompt whose chosen option carries `then` is the other case —
+     that answer leads somewhere specific, so you can start on it in the
+     same turn (such a prompt never has `then_ask`):
+     - `then.completed` → setup is done; jump to **On Completion**.
+     - `then.skill` → that is the step the answer leads to. Send the
+       answer with `progress_setup(answers={...})`; its response carries
+       `next_skill_md` for that very step, so execute it from there
+       rather than Reading the file. `then` gives you the route early —
+       what to tell the user, and what's coming — while the body arrives
+       once, for the branch actually taken.
+     - a `then` with only `task` → that step is already satisfied; send
+       the answer and act on whatever the response names.
+     If that response names the same `next_task` you just acted on, the
+     step did not complete — do **not** run its skill again. Re-running it
+     re-asks questions the user just answered; instead do what that skill
+     says to do when it can't finish (e.g.
+     `progress_setup(skip="<task>")`).
+
+   If the user has **already** answered one of these questions in
+   conversation — "move on to migration", "I'll use SQL Server" — don't
+   ask it again. Put it straight in `answers` on your next call. An
+   answer for a step that is already settled is harmless: the walk still
+   decides what runs next, so a premature or unnecessary answer costs
+   nothing.
+
+   `answers` is for **questions the engine asked you**. Values a
+   *sub-skill* tells you to set — `project_dir_confirmed`,
+   `source_connection`, `git_main_branch`, `snowflake_database` — go
+   through `configure(...)` as that skill instructs; that is what it is
+   for, and those steps are not prompts. Folding one into `answers`
+   anyway is tolerated rather than an error, but it is not the path.
 4. Otherwise (no prompt): if `next_skill_md` is set, **execute its
    instructions directly in this same turn** — no Read needed.
    Otherwise **load the skill at `next_skill` immediately** (Read it,
@@ -66,27 +111,38 @@ Tasks the machine routes through, in order:
 |----------------------------------|-------------------------------------------------------------------|
 | `validateEmptyDir`               | sub-skill: `setup/validate-empty-dir.md`                          |
 | `confirmProjectDir`              | sub-skill: `setup/confirm-project-dir.md`                         |
-| `enableDashboard`                | inline prompt (`next_prompt`) — no sub-skill load                 |
-| `recommendSafeTools`             | inline prompt (`next_prompt`) — no sub-skill load                 |
-| `chooseSourceDialect`            | inline prompt (`next_prompt`) — no sub-skill load                 |
-| `chooseEntryMode`                | inline prompt (`next_prompt`) — no sub-skill load                 |
+| `recommendSafeTools`             | inline prompt — arrives with the next two queued in `then_ask`     |
+| `chooseSourceDialect`            | inline prompt (queued)                                            |
+| `chooseEntryMode`                | inline prompt (queued; nothing queues after it — it routes by dialect) |
 | `midwayEntry`                    | sub-skill: `setup/midway-entry.md`                                |
-| `configureSourceConnection`      | sub-skill: `setup/configure-source-connection.md`                 |
-| `configureGit`                   | sub-skill: `setup/git.md`                                         |
+| `chooseCodeSource`               | inline prompt (`next_prompt`) — extract vs. local files; each answer carries its `then` |
+| `configureSourceConnection`      | sub-skill: `setup/configure-source-connection.md` (extract path only) |
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
 | `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
-| `continueToMigration`            | inline prompt (`next_prompt`) — the post-assessment gate           |
+| `continueToMigration`            | inline prompt (`next_prompt`) — the post-assessment gate; each answer carries its `then` |
+| `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md`                  |
 | `configureTesting`               | sub-skill: `setup/configure-testing.md`                           |
 | `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (synthetic testing path only) |
 
 Conversion and assessment come first on purpose: neither needs a Snowflake
 target, so a user reaches their assessment report without picking a
-connection or database. Everything Snowflake-side is gated behind the
-`continueToMigration` prompt — answer "Not now" and the machine finishes
-at assessment. Nothing is persisted for that answer, so the gate is
+connection or database. Everything else — git included — is gated behind the
+`continueToMigration` prompt, so a user who only wanted an assessment is
+never asked to set up a repository. Answer "Not now" and the machine
+finishes at assessment; nothing is persisted for that answer, so the gate is
 offered again on the next run.
+
+One consequence: the milestone commits (`registerCode`, `convertCode`,
+`runAssessment`) need git, which now comes after the gate. They land together
+on the first `progress_setup()` after `configureGit` rather than one at a
+time, and an assessment-only run makes none of them — it has no repository.
+
+The `assessment` skill's closing menu asks the same thing the gate asks, so
+on "Move on to migration" it submits
+`progress_setup(answers={"continue_to_migration": "true"})` instead of a bare
+call. A bare call there would put the question a second time.
 
 The testing choice also decides the last step: **synthetic** walks into
 `generateTestbed` (synthetic tests need generated data), while

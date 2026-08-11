@@ -38,7 +38,7 @@ Resolve all inputs from `project_dir`. Do not prompt the user.
 
 Selection rules:
 - **Wave generation is always driven by `scai assessment waves`** — it reads the registry from the current project folder and writes `<project_dir>/assessment/waves_analysis_*.json`. There is no CSV fallback for wave creation.
-- The multi-tab HTML report (`generate_multi_report.py`) takes `--project-dir` (the scai project root) and auto-discovers everything it needs: `registry/`, `reports/`, `assessment/waves_analysis_*.json`, and the exclusion / dynamic-SQL JSONs. The registry is **required** — without it the report cannot enrich the waves JSON (which emits UUIDs) with canonical names, categories, file paths, and conversion status.
+- The multi-tab HTML report (`scai assessment report`) takes `--project-dir` (the scai project root) and auto-discovers everything it needs: `registry/`, `reports/`, `assessment/waves_analysis_*.json`, and the exclusion / dynamic-SQL JSONs. The registry is **required** — without it the report cannot enrich the waves JSON (which emits UUIDs) with canonical names, categories, file paths, and conversion status.
 - If the registry or reports are missing after a successful-looking convert, re-run `../convert/SKILL.md` once and stop if it still produces nothing.
 
 ## Step 3: Confirm Scope (single, short)
@@ -377,11 +377,45 @@ Build a `results` table indexed by sub-skill name (`waves-generator`, `object-ex
 
 ## Step 7: Generate Unified HTML Report
 
-Run the multi-report generator with `--project-dir` and **pass flags for ssis or informatica if they apply* from the `results` table:
+**First, resolve the report name.** A generated report gets shared outside the team, so it has to
+say which customer or project it belongs to. Check whether this project already has a name:
 
 ```bash
 uv run --project plugin/skills/migration/assessment \
-  python plugin/skills/migration/assessment/scripts/generate_multi_report.py \
+  python plugin/skills/migration/assessment/scripts/metadata_tools.py \
+  --project-dir "<project_dir>" --show-assessment-name
+```
+
+It prints three lines:
+
+```
+assessmentName: (unset)
+projectName:    beverage
+resolved:       beverage
+```
+
+- `assessmentName` is anything other than `(unset)` → **do not ask.** Go straight to the generator.
+- Otherwise ask once, offering `projectName` as the default:
+
+  > **What would you like to name this assessment report?** This will be visible in the report
+  > (e.g., Customer or Project name) `[default: beverage]`
+
+  Then store the answer:
+
+```bash
+uv run --project plugin/skills/migration/assessment \
+  python plugin/skills/migration/assessment/scripts/metadata_tools.py \
+  --project-dir "<project_dir>" --set-assessment-name "<answer>"
+```
+
+**Name rules:**
+1. If `--set-assessment-name` exits non-zero, warn and continue anyway — the report still renders
+   from `projectName`.
+
+**Then run `scai assessment report`** with `--project-dir` and **pass flags for ssis or informatica if they apply** from the `results` table:
+
+```bash
+scai assessment report \
   --project-dir "<project_dir>" \
   --output "<project_dir>/assessment/multi_report.html" \
   [--ssis-json "<path>" if etl-assessment succeeded] \
@@ -467,7 +501,7 @@ Help users get the best results by understanding what they can ask:
 
 **NO CUSTOM SCRIPTS:** Only execute existing scripts within sub-skills. Do not create automation, batch processing tools, or bash loops.
 
-**🚫 NEVER WRITE CUSTOM HTML REPORTS:** When delivering results to users, you MUST use `generate_multi_report.py` from `scripts/`. Do NOT write HTML manually under any circumstances. See [Report Generation](#report-generation) section.
+**🚫 NEVER WRITE CUSTOM HTML REPORTS:** When delivering results to users, you MUST use `scai assessment report`. Do NOT write HTML manually under any circumstances. See [Report Generation](#report-generation) section.
 
 **USER CONFIRMATION:** Stop at mandatory checkpoints in sub-skills for user input.
 
@@ -518,7 +552,8 @@ Detect user intent and load the appropriate sub-skill:
 When running any scripts in any of the above skills, make sure to do all of the following:
 
 - **Wave generation** is executed via `scai assessment waves`. It must be run from inside the SCAI project directory so that it can read the registry.
-- **All other Python scripts** in this skill and its sub-skills (report generation, ETL analysis, etc.) must be run with `uv run --project <DIRECTORY THIS SKILL.md file is in> python <DIRECTORY THIS SKILL.md file is in>/scripts/script_name.py`.
+- **Multi-tab HTML report** is executed via `scai assessment report`.
+- **All other Python scripts** in this skill and its sub-skills (ETL analysis, etc.) must be run with `uv run --project <DIRECTORY THIS SKILL.md file is in> python <DIRECTORY THIS SKILL.md file is in>/scripts/script_name.py`.
 - Do not `cd` into another directory to run Python scripts, but run them from whatever directory you're already in. When `scai assessment waves` needs the project directory, `cd` into it only for that single invocation.
 
 **WHY:** This maintains your current working context and prevents path confusion. When using `uv run --project`, you must provide absolute paths for BOTH the `--project` flag AND the script itself. Just run the script the way the skill says. Do not question it by running --help or reading the script.
@@ -554,7 +589,7 @@ The user has already confirmed scope in **Step 4**. Do **not** re-prompt for con
    - Classify packages and estimate migration effort
 
 5. **Generate Multi-Tab Report** (FINAL - REQUIRED)
-   - Use `generate_multi_report.py` script - see [Report Generation](#report-generation) section
+   - Use `scai assessment report` - see [Report Generation](#report-generation) section
    - Pass all available JSON outputs from previous steps
    - 🚫 Do NOT write custom HTML - the script handles all formatting
 
@@ -562,11 +597,11 @@ The user has already confirmed scope in **Step 4**. Do **not** re-prompt for con
 
 ## Tools
 
-### generate_multi_report.py
+### `scai assessment report`
 
 **Description**: Generates unified multi-tab HTML report combining Object Exclusion, Dynamic SQL Analysis, Waves, and SSIS Assessment reports.
 
-**Location**: `scripts/generate_multi_report.py`
+**Location**: `scai assessment report`
 
 **When to use**: After completing any requested assessment(s) (1, 2, 3, or all) to deliver results in a consistent format, or whenever the user requests a combined HTML report.
 
@@ -700,24 +735,21 @@ Wait for approval.
 
 -->
 
-**MANDATORY:** When users request an assessment report (even if it’s only one sub-assessment), a migration report, or a combined HTML report—or when you have completed the requested assessment(s) and are ready to deliver results—you **MUST** use `generate_multi_report.py`. This is the **ONLY** approved method for generating consolidated assessment reports.
+**MANDATORY:** When users request an assessment report (even if it’s only one sub-assessment), a migration report, or a combined HTML report—or when you have completed the requested assessment(s) and are ready to deliver results—you **MUST** use `scai assessment report`. This is the **ONLY** approved method for generating consolidated assessment reports.
 
 **DO NOT:**
 - Write custom HTML reports manually
 - Use individual sub-skill report generators in isolation
 - Create new report generation scripts
 
-**Script Location:** `scripts/generate_multi_report.py`
-
-**Usage with uv (recommended — single `--project-dir` argument):**
+**Usage (recommended — single `--project-dir` argument):**
 ```bash
-uv run --project <SKILL_DIRECTORY> \
-  python <SKILL_DIRECTORY>/scripts/generate_multi_report.py \
+scai assessment report \
   --project-dir "path/to/<projectRoot>" \
   --output "path/to/<projectRoot>/assessment/multi_report.html"
 ```
 
-When `--project-dir` is provided, the script auto-discovers:
+When `--project-dir` is provided, the command auto-discovers:
 
 - `<projectRoot>/registry/` — registry JSONs (REQUIRED for object enrichment: names, categories, files, status, missing-deps, direct dep counts)
 - `<projectRoot>/reports/` — SnowConvert CSVs (for EWI/FDM/PRF counts and severity)
@@ -729,8 +761,7 @@ Explicit per-source flags (below) override auto-discovery. The individual flags 
 
 **Usage with explicit paths (advanced):**
 ```bash
-uv run --project <SKILL_DIRECTORY> \
-  python <SKILL_DIRECTORY>/scripts/generate_multi_report.py \
+scai assessment report \
   --project-dir "path/to/<projectRoot>" \
   --waves-json "path/to/waves_analysis_TIMESTAMP.json" \
   --exclusion-json "path/to/object_exclusion.json" \
@@ -741,8 +772,6 @@ uv run --project <SKILL_DIRECTORY> \
 ```
 
 **IMPORTANT:** Always pass `--project-dir` even when providing explicit flags — the registry at `<projectRoot>/registry/` is required to enrich the waves JSON (which now emits UUIDs; canonical names, categories, file paths, and status come from the registry). Without `--project-dir` (or an equivalent `--registry-dir`), the dependencies table will show UUIDs and every row will have category "UNKNOWN".
-
-**Note**: Replace `<SKILL_DIRECTORY>` with the absolute path to this skill directory.
 
 **Parameters:**
 - `--project-dir` **(recommended)**: Path to the scai project root. Auto-discovers registry, SnowConvert reports, and assessment artifacts. Use this alone in the common case.
@@ -770,7 +799,7 @@ When generating HTML reports, see `STYLES.md` for styling specifications.
 An assessment is complete when:
 - All requested analyses have completed without errors
 - For Dynamic SQL: All occurrences have status `REVIEWED` (no `PENDING` records)
-- Reports generated successfully with all requested data sources ** using `generate_multi_report.py` (NOT custom HTML) **
+- Reports generated successfully with all requested data sources ** using `scai assessment report` (NOT custom HTML) **
 - User has reviewed and approved findings
 
 ### Pre-Completion Checklist
@@ -778,8 +807,8 @@ An assessment is complete when:
 Before marking assessment as complete, verify:
 
 ```
-□ Did I use generate_multi_report.py for the final report?
-□ Did I pass all available JSON files to the script?
+□ Did I use `scai assessment report` for the final report?
+□ Did I pass all available JSON files to the command?
 □ Did I avoid writing any custom HTML?
 ```
 
@@ -806,4 +835,21 @@ Present the closing message with: **opening line** (`migration_status.in_scope` 
 
 Mark option **(1)** as `(recommended)` when `missing > 0`, otherwise **(3)**. Wait for response.
 
-On **(3)**, return to the parent setup skill and call `progress_setup()` — the machine asks the `continueToMigration` gate and then walks the Snowflake target and testing setup. Do not load `../migrate-objects/SKILL.md` directly from here; it has no Snowflake target configured yet.
+If `configure` reported a dashboard URL at session start, add one line before the menu:
+> The dashboard at `<url>` shows the same picture live as you migrate.
+
+Skip it if no URL came back (the user opted out, or the port was busy) — never guess one.
+
+On **(3)**, the user has just answered the setup machine's `continueToMigration`
+gate, so **submit it rather than letting the gate ask again**:
+
+```
+progress_setup(answers={"continue_to_migration": "true"})
+```
+
+Act on that response as `setup/SKILL.md` describes — it walks git, the Snowflake
+target and the testing choice. Calling a bare `progress_setup()` here instead
+makes the machine put the same question to the user a second time. The same
+applies later: if the user reviews the report and *then* says to move on, submit
+the answer with that call. Do not load `../migrate-objects/SKILL.md` directly
+from here; it has no Snowflake target configured yet.
