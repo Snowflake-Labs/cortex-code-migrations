@@ -22,6 +22,7 @@ The project-default `.scai/config/dew_configuration.toml` (path relative to the 
 | `[connections.source.*]` | `database` | String | **Must match** `source.databaseName` in the workflow YAML. For SQL Server/Redshift/Teradata/PostgreSQL this is the database name. For **Oracle** it is the **service name**. A mismatch causes empty metadata/schema extraction. |
 | `[connections.source.sqlserver]` | `trust_server_certificate` | Boolean | Optional. Forwarded from the scai SQL Server connection. When omitted, ODBC Driver 18 defaults apply (certificate not trusted). |
 | `[connections.source.sqlserver]` | `encrypt` | Boolean | Optional. Forwarded from the scai SQL Server connection. When omitted, ODBC Driver 18 defaults to `encrypt=on`. |
+| `[connections.source.sqlserver]` | `host` | String | Source host. Bare `localhost` is treated as `127.0.0.1` for IPv4-only SQL Server instances. |
 | `[connections.source.oracle]` | `oracle_connection_mode` | String | Required. Use `"basic"` for standard username/password (EZ Connect). |
 | `[connections.source.oracle]` | `database` | String | Oracle **service name** (same value as `service_name` in `~/.snowflake/snowct/oracle.toml`). |
 | `[connections.source.teradata]` | `database` | String | Teradata **database name** (same value as `database` in `~/.snowflake/snowct/teradata.toml`). |

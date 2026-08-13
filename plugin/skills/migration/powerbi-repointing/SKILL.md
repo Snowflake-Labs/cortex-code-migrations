@@ -17,7 +17,7 @@ Do the following in order:
 1. Say to the user (verbatim): *"Repointing rewrites the connection in each `.pbit` to point at Snowflake and translates any embedded SQL queries to Snowflake syntax."*
 2. Ask the user (verbatim): *"Please provide the folder path containing your Power BI `.pbit` files. Only `.pbit` (Power BI template) files are supported — `.pbix` is not. If you only have `.pbix`, see https://github.com/Snowflake-Labs/SC.DDLExportScripts/tree/main/Power%20BI to export `.pbit`."*
 3. Store the user's answer internally as `PBIT_PATH`.
-4. Return to the calling skill. When it runs `scai code convert`, append `--powerbi-repointing <PBIT_PATH>` to the command (alongside any other flags such as `--etl-replatform-sources-path <ETL_PATH>`). Do not emit the literal `<PBIT_PATH>` token to the shell.
+4. Return to the calling skill. When it runs `scai code convert`, append `--powerbi-repointing <PBIT_PATH>` to the command. Do not emit the literal `<PBIT_PATH>` token to the shell.
 
 ## Convert Output for Power BI
 

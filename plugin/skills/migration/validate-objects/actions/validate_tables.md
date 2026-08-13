@@ -60,6 +60,8 @@ validate_data(
 
 Do **not** prompt for `metrics_validation` unless the user asks for aggregate-statistics comparison. Omit the param to keep scai's default (`false`).
 
+**"Full" ≠ metrics on.** `validation_type=full` (vs incremental) only means re-validate the whole table — it does **not** mean enable L2 metrics. Keep `metrics_validation` / `metricsValidation` **false** unless the user explicitly asked for metrics / aggregate statistics.
+
 Setup patches known `validation_configuration` toggles and, when mode/sync are known, `defaultTableConfiguration.synchronization.strategy`. For watermark, still edit `watermarkColumn` (and ensure partition columns) per `edit_hints` before run.
 
 If setup returns `status: "error"` with a message about validation not being configured, load `../../setup/data-validation/SKILL.md` to complete the one-time infrastructure setup, then retry.
@@ -86,10 +88,10 @@ The setup response contains:
 > Here is the validation workflow at `<workflow_path>`.
 >
 > **Would you like to update any fields before we run?**
-> 1. **No — proceed**
-> 2. **Yes — I want to change something** (tell me which table, section, or field names)
+> 1. **Proceed**
+> 2. **Change something** (tell me which table, section, or field names)
 
-5. **If Yes:** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (camelCase field names — for example `columnMappings`, `indexColumnList`, `sourceWhereClause` + `targetWhereClause`, `targetDatabase` / `targetSchema` / `targetName`, `synchronization.watermarkColumn`). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **No — proceed** or says they are done editing.
+5. **If the user chooses "Change something":** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (camelCase field names — for example `columnMappings`, `indexColumnList`, `sourceWhereClause` + `targetWhereClause`, `targetDatabase` / `targetSchema` / `targetName`, `synchronization.watermarkColumn`). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **Proceed** or says they are done editing.
 
    **Common scenarios → fields to edit:**
 
@@ -97,6 +99,7 @@ The setup response contains:
    |-----------|-----------------|
    | Limit compared rows | `sourceWhereClause` + `targetWhereClause` (both required) |
    | Skip L2 on wide tables | `excludeMetrics` or disable `metricsValidation` |
+   | Exclude drift-prone columns from L3 row compare | `useColumnSelectionAsExcludeList: true` + `columnSelectionList: [<cols>]` on the table (e.g. `created_at` / `CREATED_AT` for SQL Server `DATETIME2` → Snowflake timestamp precision drift) |
    | Whitelist known diffs | `acceptedTransformations` |
    | Rename / remap columns | `columnMappings`, `indexColumnList`, `targetIndexColumnList` |
    | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber` |
@@ -105,16 +108,28 @@ The setup response contains:
 
    For stalled or partially finished runs, see [Task model reference](../../migrate-objects/actions/data-migration/references/task-model-reference.md) and [Troubleshooting reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md).
 
-6. **If No:** skip discretionary edits unless agent-only blockers remain (step 7).
+6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7).
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
    - When `row_validation` is on: ensure each table has usable `indexColumnList` (and `targetIndexColumnList` when names differ) per `edit_hints`.
    - When incremental **watermark**: ensure `watermarkColumn` is set on `defaultTableConfiguration.synchronization` (or per table).
    - When incremental: ensure partition columns (`columnNamesToPartitionBy`) are present.
    - Verify `targetDatabase` / per-table targets match the deployed Snowflake objects.
    - Tell the user what you changed and why before confirming.
-8. Get **explicit confirmation** to run with the final workflow, then continue to Step 3.
+8. **Apply user-requested edits before run (hard gate).** If the user already asked to change the workflow (exclude columns, turn metrics off, narrow tables, etc.) — including the audit-timestamp answer in step 9 — those edits are **not optional**:
+   - Write them into `workflow_path`, re-display the changed sections, and only then accept “Proceed” / confirmation to run.
+   - **Do not** call `validate_data(mode="run")` while a user-requested edit is still unapplied. Fixing exclusions only *after* a failed row compare — even if you then re-validate to a pass — is a **miss**: the first run must already reflect what the user told you to exclude. "Run with it in, see it fail, exclude, re-run" is the exact anti-pattern to avoid.
+   - **Never flip metrics on for "Full" mode.** If setup wrote `metricsValidation: false` (or the user said metrics off / schema+row only), leave it false — do not set `metricsValidation: true` because the mode is Full or because you want "all three levels." Full vs incremental is orthogonal to schema/metrics/row toggles.
+9. **Timestamp / audit-column drift (ask before first run when relevant).** When `row_validation` is on and tables include typical audit timestamps (`created_at`, `updated_at`, `CREATED_AT`, …) — especially SQL Server `DATETIME2` / `DATETIME` → Snowflake `TIMESTAMP_*` — ask once before run:
 
-**Optional — explain validation levels:** After step 4 (or while the user is reviewing), offer a brief explanation unless they are clearly repeating a prior run or only asked to execute:
+   > Row compare often fails on audit timestamps because source and Snowflake can differ by precision or by when each side was written. Exclude `created_at` / similar columns from L3 for this run?
+
+   - **Yes / exclude** — this answer is **binding and part of the hard gate in step 8**: set per table `useColumnSelectionAsExcludeList: true` and `columnSelectionList: [created_at]` (use the real column names from the YAML) **before** the first `validate_data(mode="run")`, re-display the table block, and do **not** run with the column still compared. Running with it in and excluding only after L3 fails is a miss — you already had the answer.
+   - **No / compare them** — only when the user **explicitly** chose to keep them. Leave the columns in; if L3 then fails only on those columns, offer exclude + `validate_data(mode="revalidate")` afterward. Do **not** take this branch when the user asked to exclude.
+
+   Whatever the user answered here is binding: never launch the first run with the **opposite** of their choice. If unsure which branch you're in, re-read your captured answer before running — do not default to comparing.
+10. **Pre-run verification (hard gate).** Before calling `validate_data(mode="run")`, **re-read `workflow_path`** and confirm every user-requested edit from steps 5/8/9 is actually written to the file — in particular that any requested `columnSelectionList` / `useColumnSelectionAsExcludeList` exclusion is present and `metricsValidation` matches the agreed value. If a requested edit is missing, apply it now; do not run until the on-disk YAML matches what the user asked for. Then get **explicit confirmation** to run with the final workflow and continue to Step 3.
+
+**Optional — explain validation levels:** After the “update any fields?” question (or while the user is reviewing), offer a brief explanation unless they are clearly repeating a prior run or only asked to execute:
 
 > Would you like a quick explanation of what schema, row, and metrics validation mean before we run?
 
@@ -123,9 +138,9 @@ The setup response contains:
 
 Also answer ad-hoc questions about levels at any time using the same reference; do not block the run on the offer.
 
-## Step 2b: Doctor gate (automatic)
+## Step 2b: Doctor gate (ran at infrastructure bring-up)
 
-You no longer run doctor by hand here. `validate_data(mode="run")` runs a `scai data doctor` check and **refuses to start** if any check fails, returning `doctor_failures`. Surface those to the user and fix them, or call `validate_data(mode="run", skip_doctor=true)` only after the user explicitly accepts the failures.
+The `scai data doctor` gate runs during `data_infrastructure(mode="up")` (the prerequisite), **not** on `validate_data(mode="run")` — dispatch is pure. If `up` reported `doctor_failures`, surface them and fix them (or re-run `data_infrastructure(mode="up", skip_doctor=true)` only after the user explicitly accepts the failures) before dispatching.
 
 ## Step 3: Run validation
 
@@ -414,7 +429,7 @@ After presenting the summary, ask the user (default Yes):
 
 > Suspend the orchestrator and compute pool now to stop accruing SPCS / warehouse cost? The local worker will keep polling until stopped separately.
 >
-> 1. **Yes (default)** — load `../../data-infrastructure/teardown/SKILL.md` to suspend the service, suspend the compute pool, and stop the local worker. The next `migrate_data()` / `validate_data()` call will auto-resume the service.
+> 1. **Yes (default)** — load `../../data-infrastructure/teardown/SKILL.md` to suspend the service, suspend the compute pool, and stop the local worker. Bring it back for the next wave with `data_infrastructure(mode="up")` (dispatch does not auto-resume).
 > 2. **No, keep running** — useful if you're starting the next wave immediately and want to avoid the ~60s warm-up.
 
 If the user picks **Yes** (or doesn't respond), load the teardown sub-skill, then return to the parent skill.

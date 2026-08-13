@@ -245,11 +245,29 @@ Teradata uses **database.table** naming — omit source `schemaName` (there is n
 |----------|----------------|
 | Limit validation to a subset of rows | `sourceWhereClause` + `targetWhereClause` (both sides) |
 | Skip expensive L2 on wide tables | `excludeMetrics: true` or disable `metricsValidation` |
+| Keep metrics off (default / user said off) | Leave `metricsValidation: false` — **Full** mode does not mean enable L2 |
+| Exclude columns from L3 row compare (timestamp / audit drift) | Per table: `useColumnSelectionAsExcludeList: true` and `columnSelectionList: [created_at]` (or `CREATED_AT`, `updated_at`, …). Common for SQL Server `DATETIME2` → Snowflake `TIMESTAMP_*` precision or write-time drift. |
 | Whitelist known formatting differences | `acceptedTransformations` |
 | Reduce source locking | `queryModifiers` on table or worker TOML |
 | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber` |
 | Rename columns between source and target | `columnMappings`, `indexColumnList`, `targetIndexColumnList` |
 | Incremental watermark column | `defaultTableConfiguration.synchronization.watermarkColumn` (or per-table) |
 | Views vs tables in one workflow | Use `objects[]` or separate `views[]` section |
+
+Example — exclude `created_at` from row compare for one table:
+
+```yaml
+tables:
+  - name: customers
+    schemaName: dbo
+    databaseName: eval_setup
+    useColumnSelectionAsExcludeList: true
+    columnSelectionList:
+      - created_at
+    indexColumnList:
+      - id
+```
+
+Apply user-requested excludes **before** `validate_data(mode="run")`. Do not wait for a failed row compare to add them when the user already asked.
 
 For task-level debugging when validation stalls or finishes with incomplete tables, see [Task model reference](../../../migrate-objects/actions/data-migration/references/task-model-reference.md) and [Troubleshooting reference](../../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md).

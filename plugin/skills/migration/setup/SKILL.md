@@ -123,6 +123,7 @@ Tasks the machine routes through, in order:
 | `continueToMigration`            | inline prompt (`next_prompt`) — the post-assessment gate; each answer carries its `then` |
 | `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md`                  |
+| `setupDataInfrastructure`        | sub-skill: `data-infrastructure/SKILL.md`                         |
 | `configureTesting`               | sub-skill: `setup/configure-testing.md`                           |
 | `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (synthetic testing path only) |
 

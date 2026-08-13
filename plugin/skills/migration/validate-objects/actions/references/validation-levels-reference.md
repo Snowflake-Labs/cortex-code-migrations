@@ -14,6 +14,8 @@ These control **which checks run** for every table in the workflow YAML.
 
 Do **not** prompt the user to enable metrics unless they ask for aggregate-statistics comparison.
 
+**Full vs metrics:** Choosing **Full** validation (entire table, not incremental) does **not** enable metrics. Metrics stays **off** unless the user explicitly asks for L2 / aggregate statistics. Do not rewrite `metricsValidation: false` → `true` just to "run all levels."
+
 ## Report categories (`### Errors` in Step 5)
 
 These describe **what failed** after a run. Order is always: **Schema → Metrics → Row → Execution**.

@@ -38,15 +38,13 @@ If no files are found, the setup state machine should have already routed back t
 
 ### Step 2: Check for ETL Code
 
-Ask the user via `ask_user_question` (`multiSelect = false`):
+Any ETL in this project was imported during register (`scai code add`), which arranges the packages into `source/_etl/`. That is where `convert` reads them from.
 
-> "Do you have any ETL code (SSIS or Informatica Power Center) to include in the conversion?"
->
-> 1. **Yes**
-> 2. **No**
+Check whether `source/_etl/` exists and contains ETL files — `.dtsx` for SSIS, `.xml` for Informatica PowerCenter (use whichever portable form fits the host).
 
-- If **Yes**, ask which platform (SSIS or Informatica), then ask for the filesystem path where the ETL code is located. Store it as `<ETL_PATH>` for Step 4.
-  - **If Informatica**, ask the remaining ETL questions up front, in one sequence, before running the conversion:
+- If it is **missing or empty**, there is no ETL to convert; proceed to Step 3.
+- If it contains **SSIS** packages only, no conversion-target prompt is needed; proceed to Step 3.
+- If it contains **Informatica** PowerCenter XML, ask the remaining ETL questions up front, in one sequence, before running the conversion:
     1. Conversion target, via `ask_user_question` (`multiSelect = false`):
        > "How should Informatica mappings be converted?
        > 1. **dbt** (default): each mapping becomes a dbt model orchestrated by Snowflake Tasks. Supports ETL stabilization and deploy.
@@ -55,8 +53,8 @@ Ask the user via `ask_user_question` (`multiSelect = false`):
     3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 4.
 
     Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`. When the target is Snowflake Scripting, the `--informatica-to-snowflake-scripting` convert flag in Step 4 additionally records the project-level `etl_target` in `project.yml` that gates the scripting-preview routing.
-  - **If SSIS**, no conversion-target prompt is needed.
-- If **no**, proceed to Step 3; no `<ETL_PATH>` will be set.
+
+These questions are still required: the conversion target is not something `scai code add` can infer from the imported files.
 
 ### Step 3: Check for Power BI Reports
 
@@ -82,26 +80,25 @@ Keep this quick — most users just want defaults. Ask via `ask_user_question` (
 
 ### Step 4: Run Conversion
 
-Before running, tell the user what the conversion will cover: mention ETL if `ETL_PATH` was set, and Power BI repointing if `PBIT_PATH` was set.
+Before running, tell the user what the conversion will cover: the SQL and ETL already in the project (`source/`, plus `source/_etl/` when present), and Power BI repointing if `PBIT_PATH` was set.
 
-Always include `--json` so the agent can parse the result envelope. Append `<SETTINGS_FLAGS>` (from Step 3.5; omit if empty), and `--etl-replatform-sources-path <ETL_PATH>` and/or `--powerbi-repointing <PBIT_PATH>` only if those paths were set. If `SCRIPTING_MODE` was set (Informatica to Snowflake Scripting), also append `--informatica-to-snowflake-scripting`. If `CONSOLIDATE_DBT` was set (Informatica to dbt), also append `--consolidate-dbt-model-chains`.
+Start from the base command:
 
-**No ETL:**
 ```bash
 scai code convert <SETTINGS_FLAGS> --json
 ```
 
-**With ETL:**
-```bash
-scai code convert --etl-replatform-sources-path <ETL_PATH> <SETTINGS_FLAGS> --json
-```
+`--json` is always required so you can parse the result envelope. Substitute `<SETTINGS_FLAGS>` with the confirmed flags from Step 3.5 (or omit the token when empty). Then append one flag per decision already recorded in the steps above — nothing else. Do **not** pass `--etl-replatform-sources-path`; ETL already lives under `source/_etl/` from register.
 
-**With ETL, Snowflake Scripting (Informatica preview):**
-```bash
-scai code convert --etl-replatform-sources-path <ETL_PATH> --informatica-to-snowflake-scripting --json
-```
+| Append | When |
+|--------|------|
+| `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 2 (Informatica target is Snowflake Scripting) |
+| `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set in Step 2 (Informatica target is dbt and the user chose to consolidate model chains) |
+| `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 3 |
 
-Substitute the bracketed tokens with the actual paths you stored. Do not emit literal `<ETL_PATH>` or `<PBIT_PATH>` to the shell. Do not emit a literal `<SETTINGS_FLAGS>`; substitute the confirmed flags (or nothing).
+The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. Either combines with `--powerbi-repointing`. If none of the conditions hold, run the base command as-is.
+
+Substitute `<PBIT_PATH>` with the actual path you stored. Do not emit literal placeholder tokens to the shell.
 
 ### Step 5: Read the Result Envelope
 
@@ -123,8 +120,8 @@ envelope can't answer.
 |--------|-------------|
 | `-x, --show-ewis` | Show detailed EWI breakdown |
 | `--overwrite-working-directory` | Overwrite output files in `snowflake/` and registry |
-| `--etl-replatform-sources-path <PATH>` | Path to ETL code (SSIS or Informatica) for conversion |
 | `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; ETL stabilization and deploy are skipped for these units. |
+| `--consolidate-dbt-model-chains` | Consolidate Informatica dbt model chains to reduce the number of generated model files. Applies when the Informatica target is dbt. |
 
 For Power BI options, see `../powerbi-repointing/SKILL.md`.
 

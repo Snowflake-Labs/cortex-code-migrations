@@ -13,7 +13,7 @@ Before starting any configuration, tell the user verbatim:
 
 > Snowflake's Data Migration and Validation Framework is a fault-tolerant, scalable system for Snowflake Migrations. It uses a two-component architecture: an **Orchestrator** that runs inside your Snowflake account (on Snowpark Container Services) and breaks migration work into parallel tasks, and one or more **Workers** that run in an environment of your choice, connect and read data from your source system, and upload it to your Snowflake account.
 
-> If your Snowflake account **cannot** use Snowpark Container Services or you **are not** using a compute pool for the orchestrator, you can run the **Orchestrator** and **Workers** **locally**.
+> You make **two independent placement choices** in Step 0: where the **orchestrator** runs — **local** (on your machine, no compute pool — simplest) or **SPCS** (on a Snowpark Container Services compute pool — scalable) — and where each **worker** runs (usually **your machine**, since it reads your source; optionally other VMs, SPCS, or Kubernetes). The two don't have to match; nothing about compute pools matters until you put the orchestrator on SPCS.
 
 > **You are in full control of what gets migrated and how.** You decide which tables to include, how they are partitioned for extraction, whether to use incremental synchronization or full loads, and how many workers run in parallel. You can filter rows, remap column names and types, and stop or resume the process at any point without losing progress. Nothing runs until you review and approve the configuration.
 >
@@ -39,10 +39,14 @@ Before starting any configuration, tell the user verbatim:
 └──────────────────┘     └──────────────────────────────────────┘
 ```
 
-- **Orchestrator** runs on SPCS (requires a compute pool). Handles migration workflows (break into tasks, `COPY INTO`) and validation workflows (schema/metrics/row comparison).
+- **Orchestrator** runs on SPCS (requires a compute pool) or locally. Handles migration workflows (break into tasks, `COPY INTO`) and validation workflows (schema/metrics/row comparison).
 - **Worker** runs locally. Reads from the source and uploads to a Snowflake stage (migration) or streams rows for comparison (validation). Not needed for most Iceberg migration strategies.
-- Both can be stopped and resumed safely. The next `migrate_data()` / `validate_data()` call auto-resumes the SPCS service. To suspend everything between waves and minimise idle SPCS / warehouse cost, use [./teardown/SKILL.md](./teardown/SKILL.md).
-- **Whenever a worker or orchestrator starts**, tell the user that idle infrastructure can accrue Snowflake credits until teardown — `migrate_data` / `validate_data` run responses include a `cost_reminder` field to relay.
+- **The orchestrator + worker are shared, brought up ONCE, and reused across every `migrate_data` / `validate_data` dispatch** (migrate → validate → revalidate all run against the same infrastructure). Bring it up with `data_infrastructure(mode="up")` and tear it down with `data_infrastructure(mode="down")` (local) or [./teardown/SKILL.md](./teardown/SKILL.md) (SPCS). Dispatch does **not** start or resume infrastructure — if it is not up, `migrate_data` / `validate_data` return a `remediation` pointing back to `data_infrastructure(mode="up")`.
+- **Whenever infrastructure starts**, tell the user that idle infrastructure can accrue Snowflake credits until teardown — the `data_infrastructure(mode="up")` response includes a `cost_reminder` field to relay.
+
+## The `data_infrastructure` tool
+
+Use the `data_infrastructure` tool (modes `up` / `down` / `status`) to manage the shared orchestrator + worker lifecycle — **pass `compute_pool` to run the orchestrator on SPCS, omit it for local**; `start_worker=false` skips the local worker (Iceberg / externally-managed workers). Call `up` once before dispatching migrations/validations. See the tool's own description for the full parameter list — don't restate it here.
 
 ## Idempotency
 
@@ -53,24 +57,52 @@ Otherwise, proceed through the steps below.
 
 ---
 
+## Step 0 — Confirm intent, then choose where to run (ask FIRST)
+
+Do this **before** gathering any compute pool, role, or warehouse details — those only matter once the placements in 0.b/0.c are chosen. Do not dive into cloud specifics until the user has answered 0.a, 0.b, and 0.c.
+
+### 0.a — Do you actually need data infrastructure?
+
+The orchestrator + worker exist **only** to migrate or validate table **data**. Deploying tables/views and testing objects (schema/code) does **not** need them. Ask:
+
+> Are you going to migrate or validate table **data**? (Just deploying objects and testing them does **not** need this — tell me and I'll skip it.)
+
+- **No / not now** → call `progress_setup(mode="setup", skip="setupDataInfrastructure")` and return to the caller. Set nothing up.
+- **Yes** → continue to 0.b.
+
+### 0.b — Where should the orchestrator run?
+
+The orchestrator runs inside your Snowflake account, breaking work into tasks and issuing `COPY INTO` / validation queries. This is the **only** choice that decides whether you need a compute pool — it is **independent** of where the worker runs (0.c).
+
+| Orchestrator | What it means | Choose when |
+|--------------|---------------|-------------|
+| **Local** | Runs on your machine — **no compute pool** | Simplest; small tables, dev/PoC, or an account that can't use SPCS. Runs only while your session is up. |
+| **SPCS** | Runs on a Snowpark Container Services **compute pool** | Scalable + fault-tolerant, lives in your Snowflake account, survives your local session. Large/production migrations. Needs a compute pool. |
+
+Ask:
+
+> Where should the data-migration **orchestrator** run — **local** (simplest, no compute pool) or **SPCS** (scalable, needs a compute pool)?
+
+| Answer | Next step |
+|--------|-----------|
+| **Local** | **Skip Question 0** (no compute pool). Bring it up later with `data_infrastructure(mode="up")` (omit `compute_pool`). |
+| **SPCS** | Set up the compute pool in **Question 0**; bring it up with `data_infrastructure(mode="up", compute_pool="<POOL>")`. |
+
+### 0.c — Where should each worker run?
+
+The worker reads from your **source** system and moves the data, so it **usually runs on your machine** (or wherever can reach the source) — independent of the orchestrator's placement in 0.b. Ask this **once**; the Worker setup step (Question 3) only acts on the answer and does **not** re-ask:
+
+> How will you run the Data Exchange **Worker(s)** — a **single worker on this machine** (default), **multiple workers on separate VMs/servers**, on **Snowpark Container Services (SPCS)**, or on **Kubernetes**? (Some Iceberg strategies need **no** worker at all — say so and I'll set `start_worker=false`.)
+
+Record the answer; it selects the worker sub-skill in **Question 3**.
+
 ## Worker Deployment Decisions
 
-After the overview, walk the user through the following questions **in order**. Each answer determines the next step.
-
-### Preflight: Orchestrator placement (before compute pool)
-
-Ask the user:
-
-> **Orchestrator:** Can this Snowflake account run the migration **orchestrator** on **Snowpark Container Services** using a **compute pool**? (If **no** — account cannot use SPCS, or you will **not** use a compute pool / SPCS for the orchestrator — use the **local orchestrator** path and **skip Question 0**.)
-
-| Situation | Next step |
-|-----------|-----------|
-| **Yes** — SPCS + compute pool for the orchestrator | Continue to **Question 0** (compute pool). |
-| **No** — local orchestrator | **Skip Question 0** (no compute pool setup for orchestrator placement). The data orchestrator will run locally (Python must be available; the CLI prepares the orchestrator environment). Continue to **Question 1**. |
+Having chosen placement in Step 0, gather the remaining Snowflake-side details **in order**. Question 0 is **SPCS-only** — skip it entirely on the local path.
 
 ### Question 0: Compute pool SPCS
 
-If the user chose **local orchestrator** in the preflight, **do not ask Question 0** — continue from **Question 1**.
+If the user chose **local** in Step 0.b, **do not ask Question 0** — continue from **Question 1**.
 
 Ask the user:
 
@@ -81,13 +113,13 @@ Ask the user:
 | **I have one** | Verify it is active (see below), then save it and continue to Question 1. |
 | **I need to set one up** | Route to → `./compute-pool-setup/SKILL.md` — guide the user through creating and configuring a compute pool. After that skill completes, return here and run the steps below. |
 
-**Save compute pool to MCP config:**
+**Bring the shared infrastructure up on this pool:**
 
 ```
-configure(compute_pool="<COMPUTE_POOL>")
+data_infrastructure(mode="up", compute_pool="<COMPUTE_POOL>")
 ```
 
-> The orchestrator SPCS service starts automatically when we start migrating or validating data later on.
+> The pool is persisted, so later `up` calls (and `migrate_data`/`validate_data` after them) reuse it without re-passing it. Omit `compute_pool` to run a local orchestrator instead.
 
 ### Question 1: Snowflake role and privileges
 
@@ -129,20 +161,19 @@ Ask the user:
 | **User provides a warehouse name** | Verify the warehouse exists and the role from Question 1 has USAGE on it. Confirm that `~/.snowflake/config.toml` has `warehouse = "<WAREHOUSE>"` under the active connection. If not, help the user add it. Continue to Question 3. |
 | **User is unsure** | Run `SHOW WAREHOUSES;` to list available warehouses and help them pick one. For large migrations, recommend a dedicated warehouse to avoid contention with other workloads. |
 
-### Question 3: Worker deployment
+### Question 3: Worker setup
 
-Ask the user:
+**Do not ask where the worker runs again** — that was decided in **Step 0.c**. Route to the matching sub-skill; it handles install/start and returns control here:
 
-> How will you run the Data Exchange Worker?
+| Step 0.c answer | Sub-skill |
+|-----------------|-----------|
+| **Single worker on this machine** | → `./worker-local-setup/SKILL.md` — install and start on one host |
+| **Multiple workers on separate VMs/servers** | → `./worker-distributed-setup/SKILL.md` — affinity config + per-host copy instructions |
+| **Snowpark Container Services (SPCS)** | → `./worker-spcs/SKILL.md` — image selection, Snowflake Secrets, CREATE SERVICE |
+| **Kubernetes (external cluster)** | → `./worker-k8s-external/SKILL.md` — image selection, Kubernetes Secrets, Deployment manifest |
+| **No worker (Iceberg)** | none — set `start_worker=false` on `data_infrastructure(mode="up")` |
 
-| Answer | Route |
-|--------|-------|
-| **Single worker on one machine** | → `./worker-local-setup/SKILL.md` — handles install and start on one host |
-| **Multiple workers on separate VMs or servers** | → `./worker-distributed-setup/SKILL.md` — handles affinity config and per-host copy instructions |
-| **Snowpark Container Services (SPCS)** | → `./worker-spcs/SKILL.md` — handles image selection, Snowflake Secrets, and CREATE SERVICE |
-| **Kubernetes on an external cluster** | → `./worker-k8s-external/SKILL.md` — handles image selection, Kubernetes Secrets, and Deployment manifest |
-
-**Stop here for worker deployment** — the routed sub-skill handles install/start, then **returns control here**. After it returns (or after you complete a path that does not route to a worker sub-skill), run the Data Doctor section below before returning to the caller.
+**Stop here for worker deployment** — the routed sub-skill handles install/start, then **returns control here**. After it returns (or on the no-worker path), run the Data Doctor section below before returning to the caller.
 
 ---
 
@@ -157,7 +188,7 @@ Run [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastr
 ## Checklist
 
 ```
-- [ ] Compute pool registered (configure(compute_pool=...)) — when using SPCS orchestrator
+- [ ] Compute pool passed to `data_infrastructure(mode="up", compute_pool=...)` — when using SPCS orchestrator
 - [ ] Snowflake role has DATA_MIGRATION / DATA_VALIDATION usage (and service grants if needed)
 - [ ] Warehouse configured on the Snowflake connection
 - [ ] Worker config complete (no <placeholder> values) — unless pure Iceberg
