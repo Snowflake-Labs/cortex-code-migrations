@@ -157,10 +157,10 @@ Notes:
 > Here is the migration workflow at `<workflow_path>`.
 >
 > **Would you like to update any fields before we run?**
-> 1. **No — proceed**
-> 2. **Yes — I want to change something** (tell me which table, section, or field names)
+> 1. **Proceed**
+> 2. **Change something** (tell me which table, section, or field names)
 
-5. **If Yes:** apply the user's requested edits using `./references/workflow-config-reference.md` and [extraction-strategies-reference.md](./references/extraction-strategies-reference.md). Use `edit_hints` as a guide when the user is unsure what can be changed. Re-display the sections you changed. Repeat the question in step 4 until the user chooses **No — proceed** or says they are done editing.
+5. **If the user chooses "Change something":** apply the user's requested edits using `./references/workflow-config-reference.md` and [extraction-strategies-reference.md](./references/extraction-strategies-reference.md). Use `edit_hints` as a guide when the user is unsure what can be changed. Re-display the sections you changed. Repeat the question in step 4 until the user chooses **Proceed** or says they are done editing.
 
    **Common scenarios → fields to edit:**
 
@@ -176,7 +176,7 @@ Notes:
 
    For stalled or partially finished runs, see [Task model reference](./references/task-model-reference.md) and [Troubleshooting reference](./references/troubleshooting-reference.md).
 
-6. **If No:** skip discretionary edits unless agent-only blockers remain (step 7).
+6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7).
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
    - Resolve `partition_key_findings` and required `columnNamesToPartitionBy` per `edit_hints` (empty `[]` finishes the workflow without moving data; SQL Server / Redshift need an explicit PK or partition column; Oracle defaults to `ROWID`; PostgreSQL: monotonic integer PK or timestamp — avoid `ctid`).
    - **Preliminary type:** add `whereClauseCriteria: "<row predicate>"` per table or `defaultTableConfiguration` when missing.
@@ -191,9 +191,9 @@ Notes:
 
 ---
 
-## Step 2b: Doctor gate (automatic)
+## Step 2b: Doctor gate (ran at infrastructure bring-up)
 
-You no longer run doctor by hand here. `migrate_data(mode="run")` runs a `scai data doctor` check and **refuses to start** if any check fails, returning `doctor_failures`. Surface those to the user and fix them, or call `migrate_data(mode="run", skip_doctor=true)` only after the user explicitly accepts the failures. Resolve `partition_key_findings` during Step 2a (blockers or user-requested edits).
+The `scai data doctor` gate runs during `data_infrastructure(mode="up")` (the prerequisite in Step 4), **not** on `migrate_data(mode="run")` — dispatch is pure. If `up` reported `doctor_failures`, surface them and fix them (or re-run `data_infrastructure(mode="up", skip_doctor=true)` only after the user explicitly accepts the failures) before dispatching. Resolve `partition_key_findings` during Step 2a (blockers or user-requested edits).
 
 ---
 
@@ -212,16 +212,15 @@ CREATE SCHEMA IF NOT EXISTS <target_db>.<target_schema>;
 migrate_data(mode="run", workflow_path="<path from setup>")
 ```
 
-Returns immediately with `job_id` — migration runs in the background via `scai data migrate create-workflow`. The compute pool is **optional**:
+Returns immediately with `job_id` — migration is **dispatched** in the background via `scai data migrate create-workflow` against the already-running shared orchestrator + worker.
 
-- **No compute pool configured (default for small migrations):** runs **locally** (`--start-orchestrator --start-worker`) — a local orchestrator and worker run in-process, no SPCS service or compute pool. The response `execution` field is `"local"`. Prefer this unless the user wants SPCS.
-- **`compute_pool` configured:** runs on the **cloud** SPCS orchestrator (`--start-service --compute-pool`), starting the persistent local worker when a worker config exists. `execution` is `"cloud"`.
+**Prerequisite:** the shared infrastructure must already be up. If you have not done so this session, run `data_infrastructure(mode="up")` once first — it brings up the orchestrator + worker (SPCS when a `compute_pool` is configured, otherwise local), runs the doctor gate, and returns the `cost_reminder` to relay. If infrastructure is not up, `migrate_data(mode="run")` returns a `remediation` pointing at `data_infrastructure(mode="up")` — bring it up and retry.
 
-The response `cost_reminder` differs per path — **relay it to the user verbatim**. If absent, use the note that matches the `execution` field:
+The `execution` field (`"local"` | `"cloud"`) and `cost_reminder` are on the `data_infrastructure(mode="up")` response — **relay the reminder to the user verbatim**. If absent, use the note that matches the `execution` field:
 
-> **Cost note (cloud):** The SPCS orchestrator and local worker are running and can keep using Snowflake credits while idle (the worker polls the warehouse on an interval). When this wave is done, suspend the orchestrator, compute pool, and stop all workers — accept teardown when offered at the end. The local worker started via MCP stops when this Coco session ends; the orchestrator does not.
+> **Cost note (cloud):** The SPCS orchestrator and local worker are running and shared across every dispatch this session; they can keep using Snowflake credits while idle (the worker polls the warehouse on an interval). When you are done, tear the infrastructure down — `data_infrastructure(mode="down")` for the local worker, and the teardown skill to suspend the SPCS orchestrator and compute pool. The local worker stops when this session ends; the SPCS orchestrator does not.
 >
-> **Cost note (local):** A local orchestrator and worker run in-process for this wave and stop when it finishes — nothing is left running to suspend. Source extraction still runs SQL against your warehouse while active.
+> **Cost note (local):** A local orchestrator and worker run for this session, shared across every dispatch, and stop when the session ends or you call `data_infrastructure(mode="down")`. Source extraction still runs SQL against your warehouse while active.
 
 Retain `workflow_path` for the report in Step 6.
 
@@ -476,7 +475,7 @@ Ask only about components that are **in use**. Then load `../../../data-infrastr
 
 > Suspend the SPCS orchestrator and compute pool to stop idle SPCS cost? Also stop the local worker if it is still running so the warehouse can auto-suspend.
 >
-> 1. **Yes (default)** — teardown (SPCS Steps 2–3 + local worker 4b as needed). The next `migrate_data()` / `validate_data()` auto-resumes the SPCS service.
+> 1. **Yes (default)** — teardown (SPCS Steps 2–3 + local worker 4b as needed). Bring it back for the next wave with `data_infrastructure(mode="up")` (dispatch does not auto-resume).
 > 2. **No, keep running** — next batch soon; avoids ~60s SPCS warm-up.
 
 **SPCS orchestrator + SPCS worker:**

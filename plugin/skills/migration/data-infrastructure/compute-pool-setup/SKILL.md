@@ -29,7 +29,7 @@ CREATE COMPUTE POOL <COMPUTE_POOL_NAME>
 
 > **Defaults:** `CPU_X64_S` is sufficient for the orchestrator. The orchestrator itself is lightweight — it coordinates work but does not process data. `MIN_NODES = 1` and `MAX_NODES = 1` are recommended; the pool scales the number of nodes, not the workers.
 >
-> **`AUTO_SUSPEND_SECS = 60`** lets the pool go cold ~60s after the orchestrator service suspends, so an idle pool stops billing even if teardown is never run. It stays active while the service is running, and the next `migrate_data()` / `validate_data()` resumes it automatically (a ~30–60s warm-up). Raise it if your migration waves run back-to-back and the warm-up is disruptive.
+> **`AUTO_SUSPEND_SECS = 60`** lets the pool go cold ~60s after the orchestrator service suspends, so an idle pool stops billing even if teardown is never run. It stays active while the service is running, and `data_infrastructure(mode="up")` resumes it before the next wave (a ~30–60s warm-up). Raise it if your migration waves run back-to-back and the warm-up is disruptive.
 
 ## Step 3 — Verify the Pool Is Active
 
@@ -59,4 +59,4 @@ GRANT USAGE ON COMPUTE POOL <COMPUTE_POOL_NAME> TO ROLE <MIGRATION_ROLE>;
 
 ## Done
 
-Return to `../SKILL.md` and save the compute pool name via `configure(compute_pool="<COMPUTE_POOL_NAME>")`.
+Return to `../SKILL.md`; the compute pool name is passed to `data_infrastructure(mode="up", compute_pool="<COMPUTE_POOL_NAME>")` when bringing the shared infrastructure up (it is persisted for reuse).

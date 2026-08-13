@@ -68,11 +68,11 @@ Analysis Progress:
 |-------|-----------------|
 | `ETL.Elements.csv` | Latest `<project_dir>/reports/SnowConvert/ETL.Elements.*.csv` |
 | `ETL.Issues.csv` | Latest `<project_dir>/reports/SnowConvert/ETL.Issues.*.csv` |
-| Informatica source dir | The `--etl-replatform-sources-path` recorded by `convert` (or `<project_dir>/source/etl/`, falling back to whatever was passed to `scai code convert`) |
+| Informatica source dir | `<project_dir>/source/_etl/` |
 | Output dir | `<project_dir>/assessment/informatica/` (create if missing) |
 
 **Validation (silent — only surface a problem to the user if validation fails):**
-- Confirm both `ETL.*` CSVs exist. If they don't, the conversion either skipped ETL or didn't include the `--etl-replatform-sources-path` flag — return to the parent and ask the parent to re-run `convert` with ETL inputs.
+- Confirm both `ETL.*` CSVs exist. If they don't, ETL was not converted — return to the parent and ask the parent to re-run register (`code add`) then `convert`.
 - Confirm the Informatica source directory contains `.xml` files (PowerCenter XML exports).
 
 ---

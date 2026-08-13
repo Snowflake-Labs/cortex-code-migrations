@@ -54,6 +54,7 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `runAssessment` | Generates a migration assessment report. |
 | `configureTesting` | Picks the testing path (source data vs synthetic) and verifies the Snowflake side is ready for it. |
 | `generateTestbed` | Builds the synthetic testbed for the workload (mine → validate → compile → generate). Reached only on the synthetic testing path. |
+| `setupDataInfrastructure` | Configures the shared Data Migration & Validation infrastructure (compute pool for SPCS, or local) and generates the worker config, so it can be brought up at migration time with data_infrastructure(mode="up"). |
 
 ### `main` (per-object migration)
 
@@ -70,8 +71,8 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `captureBaseline` | Captures a source object's output as a test baseline (procedures, functions, and BTEQ scripts). |
 | `deploy` | Deploys one object to Snowflake. |
 | `validateView` | Validates a deployed view against its source. |
-| `migrateData` | Migrates data into a deployed table. |
-| `validateData` | Validates migrated data against the source. |
+| `migrateData` | Migrates data into a deployed table (pure dispatch — requires the shared orchestrator+worker to be up). |
+| `validateData` | Validates migrated data against the source (pure dispatch — requires the shared orchestrator+worker to be up). |
 | `runTests` | Runs the scai test suite for an object. |
 | `extractRules` | Extracts reusable migration rules from a fix. |
 | `applyRules` | Applies matched migration rules to an object. |
@@ -122,6 +123,10 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Inputs:** A converted, assessed workload with testbed mining artifacts under `artifacts/**/testbed/*.testbed.json`. A source connection is still required downstream.
 - **Done when:** The generate deliverable exists at `**/testbed/generate/summary-view.json` (synthetic-data summary; each table's CSV lands under its object's `<artifacts>/testbed/` folder and `manifest.json` beside `state.bin`).
 
+#### `setupDataInfrastructure`
+- **Inputs:** A configured Snowflake target and source connection.
+- **Done when:** Either `.scai/config/dew_configuration.toml` (worker config, written for both local and SPCS) or `.scai/settings/cloud-migration.yaml` (SPCS compute pool) exists. The setup walkthrough writes the worker config, so local completes here too — unlike the dashboard `dataInfrastructure` tile, which still requires a compute pool.
+
 ### `main` (per-object migration)
 
 #### `registration`
@@ -169,11 +174,11 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Done when:** Registry field `extensions.tasks.validateView` reads completed.
 
 #### `migrateData`
-- **Inputs:** Deployed table; configured source connection; completed data infrastructure setup.
+- **Inputs:** Deployed table; configured source connection; shared data infrastructure brought up once via data_infrastructure(mode="up").
 - **Done when:** Registry field `extensions.dataMigration` reads completed.
 
 #### `validateData`
-- **Inputs:** Object with migrated data.
+- **Inputs:** Object with migrated data; shared data infrastructure brought up once via data_infrastructure(mode="up").
 - **Done when:** Registry field `extensions.dataValidation` reads completed.
 
 #### `runTests`

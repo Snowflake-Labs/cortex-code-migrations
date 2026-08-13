@@ -98,11 +98,11 @@ Analysis Progress:
 |-------|-----------------|
 | `ETL.Elements.csv` | Latest `<project_dir>/reports/SnowConvert/ETL.Elements.*.csv` |
 | `ETL.Issues.csv` | Latest `<project_dir>/reports/SnowConvert/ETL.Issues.*.csv` |
-| SSIS source dir | The `--etl-replatform-sources-path` recorded by `convert` (or `<project_dir>/source/etl/`, falling back to whatever was passed to `scai code convert`) |
+| SSIS source dir | `<project_dir>/source/_etl/` |
 | Output dir | `<project_dir>/assessment/ssis/` (create if missing) |
 
 **Validation (silent — only surface a problem to the user if validation fails):**
-- Confirm both `ETL.*` CSVs exist. If they don't, the conversion either skipped ETL or didn't include the `--etl-replatform-sources-path` flag — return to the parent and ask the parent to re-run `convert` with ETL inputs. Do not ask the user to upload paths.
+- Confirm both `ETL.*` CSVs exist. If they don't, ETL was not converted — return to the parent and ask the parent to re-run register (`code add`) then `convert`. Do not ask the user to upload paths.
 - Confirm the SSIS source directory contains `.dtsx` files.
 
 ---

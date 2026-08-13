@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 
 # Data Infrastructure Teardown
 
-Tear down only what this project actually provisioned: **SPCS orchestrator + compute pool**, **local orchestrator process**, **SPCS DEW worker**, and/or **local worker process**. The next `migrate_data()` or `validate_data()` automatically resumes SPCS services when configured (per `../SKILL.md`); local processes must be restarted manually.
+Tear down only what this project actually provisioned: **SPCS orchestrator + compute pool**, **local orchestrator process**, **SPCS DEW worker**, and/or **local worker process**. Nothing auto-resumes on the next dispatch — `migrate_data()` / `validate_data()` are pure dispatch and assume the infrastructure is already up. To run another wave after teardown, bring it back explicitly with `data_infrastructure(mode="up")` (per `../SKILL.md`).
 
 > **Why this exists:** an SPCS `DATA_MIGRATION_SERVICE` consumes compute pool seconds; a local orchestrator or local worker polling `TASK_QUEUE` wakes the warehouse on every interval — all accrue cost when idle.
 
@@ -118,7 +118,7 @@ ALTER COMPUTE POOL <COMPUTE_POOL> SUSPEND;
 SHOW COMPUTE POOLS LIKE '<COMPUTE_POOL>';
 ```
 
-`<COMPUTE_POOL>` is the value persisted by `configure(compute_pool=...)` — read from `.scai/settings/cloud-migration.yaml`.
+`<COMPUTE_POOL>` is the value persisted by `data_infrastructure(mode="up", compute_pool=...)` — read from `.scai/settings/cloud-migration.yaml`.
 
 The pool's `STATE` should report `SUSPENDED` (or `STOPPING` for a few seconds, then `SUSPENDED`).
 
@@ -191,22 +191,17 @@ Both changes are persistent and safe to apply outside this teardown.
 
 ## Resuming for the Next Wave
 
-**SPCS orchestrator:** Calling `migrate_data()` or `validate_data()` again starts the service automatically. Expect a 30-60s warm-up after suspend.
+Nothing auto-resumes on the next dispatch. Bring the shared infrastructure back up **once** with `data_infrastructure(mode="up")` before the next `migrate_data` / `validate_data` — it resumes the SPCS orchestrator (expect a 30–60s warm-up after suspend) or starts a persistent local orchestrator, plus the worker, depending on whether a `compute_pool` is configured.
 
-**SPCS DEW worker:** Resumes with `scai data worker start` when used.
-
-**Local orchestrator / local worker:** **Not** auto-restarted — re-launch before the next wave:
+`data_infrastructure(mode="up")` wraps these underlying commands; run them directly only when debugging outside the tool:
 
 ```bash
-scai data orchestrator start --local   # when using local orchestrator
-scai data worker start --local
-```
-
-Eager resume without scheduling work (SPCS only):
-
-```bash
+# SPCS
 scai data orchestrator start
 scai data worker start          # SPCS DEW worker, if used
+# Local
+scai data orchestrator start --local
+scai data worker start --local
 ```
 
 ---

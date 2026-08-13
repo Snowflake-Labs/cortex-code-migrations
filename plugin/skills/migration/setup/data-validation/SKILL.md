@@ -40,11 +40,12 @@ This completes infrastructure setup. The actual validation is started later by t
 
 1. `progress_setup(mode="data_validation")` — choose full vs incremental (+ sync strategy).
 2. `validate_data(mode="setup", where=..., validation_type=..., sync_strategy=...)` — generates `artifacts/data_validation/workflows/<hash>.yaml` and patches known toggles / sync strategy.
-3. Agent edits (e.g. `watermarkColumn`, partition columns) then `validate_data(mode="run", workflow_path=...)` — runs the orchestrator + worker + `validate create-workflow` lifecycle.
+3. `data_infrastructure(mode="up")` — bring the shared orchestrator + worker up once (if not already up for this session).
+4. Agent edits (e.g. `watermarkColumn`, partition columns) then `validate_data(mode="run", workflow_path=...)` — pure dispatch (`scai data validate create-workflow`) against the already-running infrastructure.
 
-**Do not run `scai data validate create-workflow` directly** — `validate_data` handles service and worker lifecycle internally. **Do not write ad-hoc comparison scripts** — use the validation workflow YAML and `validate_data` instead.
+**Do not run `scai data validate create-workflow` directly** — use `validate_data` for dispatch and `data_infrastructure` for the orchestrator/worker lifecycle. **Do not write ad-hoc comparison scripts** — use the validation workflow YAML and `validate_data` instead.
 
-When editing validation workflows, load [Workflow Config Reference](./references/workflow-config-reference.md) for camelCase field names and common edit scenarios. For task-level debugging, see [Task model reference](../../migrate-objects/actions/data-migration/references/task-model-reference.md).
+When editing validation workflows, load [Workflow Config Reference](./references/workflow-config-reference.md) for camelCase field names and common edit scenarios (including excluding drift-prone timestamp columns from row compare **before** `validate_data(mode="run")`). For task-level debugging, see [Task model reference](../../migrate-objects/actions/data-migration/references/task-model-reference.md).
 
 ---
 
@@ -53,7 +54,7 @@ When editing validation workflows, load [Workflow Config Reference](./references
 Shared infrastructure checklist is owned by `../../data-infrastructure/SKILL.md`. Validation-specific items:
 
 ```
-- [ ] Compute pool registered (configure(compute_pool=...))
+- [ ] Compute pool passed to data_infrastructure(mode="up", compute_pool=...) — SPCS only
 - [ ] Worker config has no remaining <placeholder> values — unless pure Iceberg
 - [ ] Level 1 scai data doctor — no Fail checks (see data-infrastructure skill)
 - [ ] Data Validation Service running (READY)

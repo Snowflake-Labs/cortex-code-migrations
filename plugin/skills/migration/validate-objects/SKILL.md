@@ -20,7 +20,7 @@ Check the returned values for `snowflake_connection`, `source_connection`, and `
 - **All three set** → confirm them with the user (e.g. "Using snowflake_connection=X, source_connection=Y, database=Z — correct?"). If the user wants changes, call `configure` with the updated values.
 - **Any missing** → ask the user for the missing values, then call `configure` with all of them.
 
-Verify a `compute_pool` is configured (shown in the configure output under "Cloud (SPCS) configured"). If not, ask the user for the compute pool name and call `configure(compute_pool="<POOL>")`.
+Ensure the shared infrastructure is up before validating: run `data_infrastructure(mode="up")` — pass `compute_pool="<POOL>"` for SPCS (ask the user for the pool name) or omit it for a local orchestrator.
 
 ## Step 2: Validate
 

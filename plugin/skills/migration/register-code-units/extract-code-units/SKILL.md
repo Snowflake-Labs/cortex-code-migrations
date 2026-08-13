@@ -155,6 +155,21 @@ After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON enve
 
 > **Extraction complete.** `<extracted>/<discovered>` objects extracted in `<duration>`, broken down by type (filled from `byType`). Files saved under `source/`.
 > *If `failed > 0`:* `<failed>` failed. Most common error: `<top_failure_reason>`. Full list in the reports.
-> Next, we'll convert these to Snowflake SQL.
+
+Then ask via `ask_user_question` (`multiSelect = false`):
+
+> "Do you have any ETL code (SSIS or Informatica Power Center) to include?"
+>
+> 1. **Yes**
+> 2. **No**
+
+- If **no**, say that next we'll convert these to Snowflake SQL.
+- If **yes**, ask for the ETL folder path and run (do **not** pass `--overwrite` — the extracted SQL is already in `source/`):
+
+```bash
+scai code add -i <ETL_PATH> --json
+```
+
+This arranges the packages into `source/_etl/`, where `convert` finds them without an external path flag.
 
 Then return to the calling skill.
