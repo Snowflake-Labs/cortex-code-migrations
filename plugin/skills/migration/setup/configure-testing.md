@@ -53,8 +53,8 @@ Show the two-path framing, then ask:
 > **Synthetic-data tests** — when source data isn't representative or you want isolated logic tests. The agent analyzes each proc's branches and generates seed data + assertions from scratch.
 >
 > Does your source DB have representative production-like data?
-> - **A) Yes** → source-data path
-> - **B) No** → synthetic-data path
+> - **A) Yes** → use source data
+> - **B) No** → use synthetic data tests
 
 Persist the answer **without** `recheck=true` yet — the recheck is batched
 into **Verify** below.

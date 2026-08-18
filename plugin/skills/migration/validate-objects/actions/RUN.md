@@ -12,7 +12,7 @@ Call `validate_data(mode="setup", where=<the batch's object filter>)`. It writes
 
 ## 3. Dispatch
 
-Call `validate_data(mode="run", workflow_path=<path from setup>)` — **pure dispatch** against the already-running infrastructure. If the response is a `remediation` saying infrastructure is not up, call `data_infrastructure(mode="up")` first, then retry. Use `validate_data(mode="revalidate", workflow_name=<finished parent>)` to retry only the failed partitions of a finished run.
+Call `validate_data(mode="run", workflow_path=<path from setup>)` — **pure dispatch** against the already-running infrastructure. If the response is a `remediation` saying infrastructure is not up, **stop here — dispatch does not bring infrastructure up.** Hand back to [`../../data-infrastructure/SKILL.md`](../../data-infrastructure/SKILL.md): it is the single place the shared orchestrator + worker come up, and the only place the **local vs SPCS** placement is confirmed. Once it reports ready, retry this dispatch. Use `validate_data(mode="revalidate", workflow_name=<finished parent>)` to retry only the failed partitions of a finished run.
 
 The response carries a `monitor` block (a `job_id` and a ready-made `watch_command`).
 

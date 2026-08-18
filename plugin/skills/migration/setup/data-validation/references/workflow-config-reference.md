@@ -2,7 +2,7 @@
 
 `validate_data(mode="setup")` writes a YAML file with this shape to `artifacts/data_validation/workflows/<hash>.yaml`. The agent edits the file between `mode="setup"` and `mode="run"` for per-table overrides.
 
-> **Field naming:** Use **camelCase** for all workflow YAML keys (for example `validationConfiguration`, `sourceWhereClause`, `useSnowpipeForResults`). The orchestrator accepts snake_case as a fallback.
+> **Field naming:** Prefer **camelCase** for all workflow YAML keys (for example `validationConfiguration`, `sourceWhereClause`, `useSnowpipeForResults`, `indexColumnList`) — that is what `validate_data(mode="setup")` generates and what this reference documents. For index columns, the JSON-contract snake_case name is also accepted in YAML (`index_column_list`, `target_index_column_list`), matching the dual-alias pattern used for `sourceWhereClause` / `whereClause`. If both spellings of an index-column field appear, camelCase wins. Snake_case remains the JSON key the CLI serializes to for the orchestrator.
 
 ## Top-level properties
 

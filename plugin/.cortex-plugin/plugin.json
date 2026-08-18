@@ -1,6 +1,6 @@
 {
   "name": "snowflake-migration",
-  "version": "2.40.1",
+  "version": "2.41.0",
   "description": "End-to-end database migration to Snowflake — assessment, conversion, validation, and deployment",
   "author": { "name": "db-eng-migrations" },
   "skills": ["skills/migration"],
@@ -9,7 +9,7 @@
       "type": "stdio",
       "command": "scai",
       "args": ["mcp", "run"],
-      "env": {}
+      "env": { }
     }
   },
   "hooks": {

@@ -44,4 +44,8 @@ Workflow:
 
 ## After deployment
 
-Once the tool returns success, call `transition_status(status='advance', task='deploy', outcome='completed')` to let the machine decide the next step. If it failed and you cannot fix it, call `transition_status(status='advance', task='deploy', outcome='failed')` with the appropriate `error` code.
+Re-pull `migration_status(mode="my_objects_summary")` (or `next_task` with the object's
+`object_id`). The machine advances you once it sees the deployment — `cloudStatus.deployment`
+from the `deploy` tool, or the object existing in Snowflake. If deployment **failed** and you
+cannot fix it, call `transition_status(status='advance', task='deploy', outcome='failed')` with
+the appropriate `error` code. See [Advancing and reporting](../SKILL.md#advancing-and-reporting).

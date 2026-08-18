@@ -37,6 +37,19 @@ This is also the path for a user who answered "Not now" at the gate and has
 since changed their mind: the prompt is re-offered, and answering "Yes"
 walks them through the Snowflake target and testing setup.
 
+## Advancing and reporting
+
+This rule is the same for **every** task in the loop below — deploy, test, capture, seed, fix, validate:
+
+1. **Do the task's work** as its skill describes.
+2. **Ask what's next.** Re-pull `migration_status(mode="my_objects_summary")` (or `migration_status(mode="next_task", object_id="<id>")` for one object). The machine advances you when it can see the work is done — a tool wrote the registry field, the object exists in Snowflake, or the expected file exists.
+3. **Call `transition_status` to report or override:**
+   - a **failure** you can't fix — `transition_status(status='advance', task='<task>', outcome='failed', error='<sql|dependency|infra>')`;
+   - an outcome the system **can't observe** and you had to judge — e.g. "all tests passed" ([migrate-object/RUN_TESTS.md](migrate-object/RUN_TESTS.md)), view parity ([migrate-object/VALIDATE_VIEW.md](migrate-object/VALIDATE_VIEW.md)), ETL stabilization ([migrate-etl/SKILL.md](migrate-etl/SKILL.md));
+   - an **override** — `bypass` a precondition, `reset` an errored task, or `skip`.
+
+The outcome and error vocabulary is defined once in [../extensibility/TASKS.md](../extensibility/TASKS.md#outcome-vocabulary).
+
 ## Step 2: Object Loop
 
 **IMPORTANT** Ask the user to `/compact` between work units to free up context. **IMPORTANT**
@@ -55,10 +68,10 @@ If `groups` is empty, `blocked_groups` is empty, and `errored_count` and `done_c
 
 Show **only** the following status lines, all derived from the cached summary response. Skip any line whose count is zero or whose group is empty — do not write "(no errored bucket)" or "(none)" placeholders, and do not mention buckets that don't apply.
 
-> **Use `group.user_label` verbatim.** Every group entry carries a server-controlled `user_label` (e.g. `"Generate test cases from source database"`). Render it exactly as returned. **Do not paraphrase, shorten, or substitute the camelCase `group.task` identifier** — those identifiers (`seedSourceDb`, `captureBaseline`, `extractRules`, ...) are opaque to end users and must not appear in your output.
+> **Use `group.user_label` verbatim.** Every group entry carries a server-controlled `user_label` (e.g. `"Generate test cases from source database"`). Render it exactly as returned. **Do not paraphrase, shorten, or substitute the camelCase `group.task` identifier** — those identifiers (`generateTestCases`, `captureBaseline`, `extractRules`, ...) are opaque to end users and must not appear in your output.
 
-- One line per `group`: `<group.count> <group.object_type>s ready: <group.user_label>`.
-- One line per `blocked_groups` entry: `<count> <object_type>s blocked at "<blocked_group.user_label>" (waiting on dependencies)` — only if `blocked_groups` is non-empty. Don't list individual deps here; that comes from the drill-down in 2c.
+- One line per `group`: `<group.count> <group.object_type>s ready: <group.user_label>`. If `group.reason` contains a parenthetical like `(claimed in another session)`, include it after the count — e.g. `1 table (claimed in another session) ready: Deploy`.
+- One line per `blocked_groups` entry: `<count> <object_type>s blocked at "<blocked_group.user_label>" (waiting on dependencies)` — only if `blocked_groups` is non-empty. Same rule: include any session parenthetical from the reason after the count. Don't list individual deps here; that comes from the drill-down in 2c.
 - `<done_count> objects ready to finish (merge)` — only if `done_count > 0`.
 - `<errored_count> objects errored` — only if `errored_count > 0`.
 
