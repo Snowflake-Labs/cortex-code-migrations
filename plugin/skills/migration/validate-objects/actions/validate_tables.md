@@ -10,9 +10,9 @@ Validate migrated table data between source and Snowflake using cloud validation
 
 ## Step 1: Choose validation approach + generate workflow
 
-### 1.A — Validation mode and sync (state machine)
+### 1.A — Validation mode and sync (captured at setup)
 
-Validation mode (full vs incremental) and sync strategy are driven by the **`data-validation-setup` state machine**. Call `progress_setup(mode="data_validation")` in a loop until `completed` is true — ask each response's `next_prompt` (plus any `then_ask`, in the same turn) and send the answers back with `progress_setup(mode="data_validation", answers={...})`, the same way as project setup / data-migration setup.
+Validation mode (full vs incremental) and sync strategy are **captured once at setup** by the `dataStrategy` task (executor [`../../setup/data-strategy/SKILL.md`](../../setup/data-strategy/SKILL.md)) and committed, so they are **already set** when you dispatch — do not re-ask. **Fallback only** (project set up before setup-phase capture): run the `data-validation-setup` wizard as a catch-up — `progress_setup(mode="data_validation")` in a loop until `completed` (idempotent; a no-op once set). The choices:
 
 | Choice | Meaning |
 |--------|---------|
@@ -205,8 +205,10 @@ Tell the user once (plain language) that you'll report back when validation fini
 
 Poll until the job is terminal:
 
-- Call `job_status(job_id)` every **30–60 seconds**, or when the user asks for an update.
+- Call `job_status(job_id)` repeatedly until `terminal` is `true` (or when the user asks for an update). A natural gap between turns is enough — **do not insert your own timer**.
 - When `details.progress.output` is present, share a one-line update that **names the tables** currently validating and any that just finished (from `details.progress.output.tableStates`), alongside counts (`validatedTables`/`totalTables`, `failedTables`) — see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths). Don't emit silent, identical-looking repeat calls.
+
+**Never wait with `bash sleep` (or by tailing worker / `scai data validate status` logs) for validation progress.** That burns wall-clock and skips the status tool. The only allowed wait signals are Monitor (preferred) or another `job_status` call. Short `sleep` after killing a process (1–3s) is fine; multi-tens-of-seconds sleeps to "give the workflow time" are not.
 
 **Stop when** `terminal` is `true`.
 
@@ -425,14 +427,14 @@ When all tables passed on the first run, skip 5.G and continue to Step 6.
 
 ## Step 6: Offer to Suspend Infrastructure (Cost Saving)
 
-After presenting the summary, ask the user (default Yes):
+After presenting the summary, offer to tear down idle infrastructure to save cost (default **Yes**), then **delegate** — do **not** re-derive what is running here:
 
-> Suspend the orchestrator and compute pool now to stop accruing SPCS / warehouse cost? The local worker will keep polling until stopped separately.
->
-> 1. **Yes (default)** — load `../../data-infrastructure/teardown/SKILL.md` to suspend the service, suspend the compute pool, and stop the local worker. Bring it back for the next wave with `data_infrastructure(mode="up")` (dispatch does not auto-resume).
-> 2. **No, keep running** — useful if you're starting the next wave immediately and want to avoid the ~60s warm-up.
+- **Local** orchestrator/worker this session started → `data_infrastructure(mode="down")`.
+- **SPCS** orchestrator / compute pool / DEW worker (or any mixed setup) → load [`../../data-infrastructure/teardown/SKILL.md`](../../data-infrastructure/teardown/SKILL.md); it owns the "what's running" detection (its *Which steps apply* table) and runs only the applicable steps.
 
-If the user picks **Yes** (or doesn't respond), load the teardown sub-skill, then return to the parent skill.
+Nothing auto-resumes — bring infrastructure back for the next wave with `data_infrastructure(mode="up")`.
+
+If the user picks **Yes** (or doesn't respond), run the teardown, then return to the parent skill.
 
 ---
 

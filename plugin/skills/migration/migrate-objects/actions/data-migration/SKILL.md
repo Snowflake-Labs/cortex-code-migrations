@@ -73,27 +73,13 @@ Decide the value in this order:
 Show the proposed `where` **and the resulting table names** to the user and get
 confirmation before continuing.
 
-### 1.B — Extraction mechanism and migration approach (state machine)
+### 1.B — Migration strategy (captured at setup)
 
-**Extraction mechanism** (how data leaves the source) is **not always ODBC**. PostgreSQL uses COPY; Oracle can use `DBMS_CLOUD`; Redshift and Teradata support server-side export to object storage. Before calling the state machine, read `source_language` from `configure()` and load [Extraction strategies reference](./references/extraction-strategies-reference.md) so you can explain options if the user asks.
+The migration strategy — **migration type, sync strategy, extraction mechanism, and target table type** — is chosen **once during setup** by the `dataStrategy` task (executor [`setup/data-strategy/SKILL.md`](../../../setup/data-strategy/SKILL.md)) and committed to the git main branch, so by the time you dispatch it is **already set**. Do not re-ask it here.
 
-Migration type, sync strategy, **extraction strategy**, and target table type are driven by the **`data-migration-setup` state machine**. Call `progress_setup(mode="data_migration")` in a loop until `completed` is true — ask each response's `next_prompt` (plus any `then_ask`, in the same turn) and send the answers back with `progress_setup(mode="data_migration", answers={...})`, the same way as project setup in `setup/SKILL.md`.
+**Fallback only** — if the strategy is unset (e.g. a project set up before setup-phase capture): run the `data-migration-setup` wizard as a catch-up — `progress_setup(mode="data_migration")` in a loop until `completed` (idempotent; a no-op once the keys exist). Extraction is **not always ODBC** (PostgreSQL COPY; Oracle ODP.NET/DBMS_CLOUD; Redshift ODBC/UNLOAD + optional Iceberg; Teradata direct/TPT/WRITE_NOS) and each strategy has worker/infra prerequisites (worker TOML fields, `externalStage`, Oracle grants, S3/IAM, TTU) — see [Extraction strategies reference](./references/extraction-strategies-reference.md) for the per-dialect matrix. `target_table_type=iceberg` is Redshift-only.
 
-The state machine routes by dialect:
-
-| Source | Extraction prompt |
-|--------|-------------------|
-| SQL Server | Direct read (ODBC) — only option |
-| PostgreSQL | Direct read (COPY) — only option |
-| Oracle | Direct read (ODP.NET) or DBMS_CLOUD export |
-| Redshift | ODBC or UNLOAD to S3; optional **Iceberg** target (partial) |
-| Teradata | Direct read, TPT, or WRITE_NOS |
-
-**Target table type:** the state machine asks **Native vs Iceberg** only for **Redshift**. Other dialects default to native — do not pass `target_table_type=iceberg` unless the source is Redshift.
-
-After the machine completes, walk the user through **strategy-specific setup** from the extraction reference (worker TOML fields, `externalStage`, Oracle grants, S3/IAM, TTU, etc.) before generating YAML.
-
-For **Preliminary** migrations, after YAML generation (Step 2a), add `whereClauseCriteria` per table with a valid WHERE predicate; see `./references/workflow-config-reference.md`.
+For **Preliminary** migrations, after YAML generation (Step 2a) add `whereClauseCriteria` per table with a valid WHERE predicate; see `./references/workflow-config-reference.md`.
 
 ### 1.C — Confirm
 
@@ -271,8 +257,10 @@ Tell the user once that you'll report back when the job finishes or hits trouble
 
 Poll until the job is terminal:
 
-- Call `job_status(job_id)` every **30–60 seconds**, or when the user asks for an update.
+- Call `job_status(job_id)` repeatedly until `terminal` is `true` (or when the user asks for an update). A natural gap between turns is enough — **do not insert your own timer**.
 - On polls where you are **not** running a health check (Step 5.B), optionally share a one-line update from `summary`, or from `details.progress.output` when you pass `details=true` (e.g. `preprocessedTables`/`totalTables`, `aggregatedCounts.loadedPartitions`/`totalPartitions`).
+
+**Never wait with `bash sleep` (or by tailing worker logs) for migrate progress.** That burns wall-clock and skips the status tool. The only allowed wait signals are Monitor (preferred) or another `job_status` call. Short `sleep` after killing a process (1–3s) is fine; multi-tens-of-seconds sleeps to "give the workflow time" are not.
 
 **Stop when** `terminal` is `true`.
 
@@ -458,50 +446,14 @@ Then continue to Step 7 (teardown offer) when wave data work is done for this pa
 
 ## Step 7: Offer to tear down infrastructure (cost saving)
 
-Before prompting, determine what this project actually runs (from infrastructure setup, `configure()` output, and `.scai/settings/cloud-migration.yaml`):
+When the wave's data work is done, offer to tear down idle infrastructure to save cost (default **Yes**), then **delegate** — do **not** re-derive what is running here:
 
-| Signal | Orchestrator | Worker |
-|--------|--------------|--------|
-| `compute_pool` configured (in configure / `cloud-migration.yaml`) | **SPCS** (`DATA_MIGRATION_SERVICE`) | — |
-| No `compute_pool` — user chose **local orchestrator** in setup | **Local** (`scai data orchestrator start --local`) | — |
-| `worker-spcs` / `scai data worker setup` completed | — | **SPCS DEW** |
-| `worker-local-setup` or `migrate_data` started a local worker | — | **Local** (`scai data worker start --local`) |
+- **Local** orchestrator/worker this session started → `data_infrastructure(mode="down")`.
+- **SPCS** orchestrator / compute pool / DEW worker (or any mixed setup) → load [`../../../data-infrastructure/teardown/SKILL.md`](../../../data-infrastructure/teardown/SKILL.md); it owns the "what's running" detection (its *Which steps apply* table) and runs only the applicable steps.
 
-Ask only about components that are **in use**. Then load `../../../data-infrastructure/teardown/SKILL.md` and run **applicable steps only** (skip SPCS orchestrator + pool steps when there is no compute pool; skip worker 4a or 4b per `scai data worker status` / setup path).
+Nothing auto-resumes — dispatch is pure, so bring infrastructure back for the next wave with `data_infrastructure(mode="up")`. (A local worker started via MCP also stops when the session ends.)
 
-**Prompt variants** (default **Yes** to tear down what applies):
-
-**SPCS orchestrator + local worker** (typical `migrate_data` MCP path when `compute_pool` is set):
-
-> Suspend the SPCS orchestrator and compute pool to stop idle SPCS cost? Also stop the local worker if it is still running so the warehouse can auto-suspend.
->
-> 1. **Yes (default)** — teardown (SPCS Steps 2–3 + local worker 4b as needed). Bring it back for the next wave with `data_infrastructure(mode="up")` (dispatch does not auto-resume).
-> 2. **No, keep running** — next batch soon; avoids ~60s SPCS warm-up.
-
-**SPCS orchestrator + SPCS worker:**
-
-> Suspend the SPCS orchestrator, compute pool, and DEW worker service now?
->
-> 1. **Yes (default)** — teardown Steps 2–3 + 4a.
-> 2. **No, keep running**
-
-**Local orchestrator + local worker** (no `compute_pool`):
-
-> Stop the local orchestrator and local worker processes so nothing keeps polling Snowflake?
->
-> 1. **Yes (default)** — teardown Step 2b + 4b (Ctrl+C / kill processes; `scai data orchestrator stop --local` is advisory only).
-> 2. **No, keep running**
-
-**Local worker only** (orchestrator already stopped / not applicable):
-
-> Stop the local worker if it is still running so the warehouse can auto-suspend?
->
-> 1. **Yes (default)** — teardown 4b only.
-> 2. **No, keep running**
-
-**Note:** A local worker started by `migrate_data()` / `validate_data()` through MCP stops when the MCP session ends. Step 4b still applies when the worker was started manually, the user chose **keep running** earlier, or you need to stop it before session end.
-
-If the user picks **Yes** (or doesn't respond), load the teardown sub-skill, then return to the parent skill.
+If the user picks **Yes** (or doesn't respond), run the teardown, then return to the parent skill.
 
 ---
 
@@ -510,8 +462,8 @@ If the user picks **Yes** (or doesn't respond), load the teardown sub-skill, the
 Shared infrastructure checklist is owned by `../../../data-infrastructure/SKILL.md`. Migration-specific items:
 
 ```
-- [ ] Migration approach selected (including extraction mechanism for this dialect)
-- [ ] Strategy-specific setup completed per extraction-strategies-reference.md
+- [ ] Migration strategy set (captured at setup via dataStrategy; fallback wizard only if unset)
+- [ ] Strategy-specific worker/infra prerequisites met per extraction-strategies-reference.md
 - [ ] Workflow YAML generated via migrate_data(mode="setup", ...) (or existing file reviewed at Step 2a)
 - [ ] User saw workflow YAML and was offered optional field updates (Step 2a)
 - [ ] User confirmed the final workflow YAML before run

@@ -93,7 +93,7 @@ So do not wait until you suspect it. **Whenever you call `job_status` for a live
 
 ## Fallback path (last resort — only when Monitor cannot be invoked)
 
-- `job_status(job_id)` every **30–60 seconds** (or when the user asks). Add `details=true` for counts worth narrating.
+- Call `job_status(job_id)` repeatedly until `terminal` is true (or when the user asks). Do **not** pace yourself with `bash sleep` / wall-clock delays / worker-log tails — those skip the status tool and waste minutes. Short sleeps after killing a process (1–3s) are fine.
 - Health every 2nd/3rd poll with **10m / 20m** stall/stuck thresholds (see SKILL Step 5.B fallback column).
 - Stop when `terminal` is true.
 - Then Step 5.C → Step 6.

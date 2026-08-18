@@ -6,22 +6,7 @@ license: Proprietary. See License-Skills for complete terms
 
 # Git Setup
 
-## On Entry
-
-Tell the user:
-
-> **Git is required for this migration.** Every object is converted on its
-> own branch and merged back into a main branch — that is how progress is
-> tracked and, if something goes wrong, how work is recovered. So the project
-> needs to live in a git repository.
->
-> A **remote is optional.** A purely local repository is fully supported. You
-> only need a remote (GitHub, GitLab, …) if you want an off-machine backup or
-> to let teammates clone the project and work in parallel. I will never push
-> anywhere on my own — set a remote and progress is pushed to it; leave it and
-> everything simply stays local.
->
-> To continue I need this folder to be a git repository.
+The user has chosen to use git. Set up their repository.
 
 ## Step 1: Inspect current git state
 
@@ -45,27 +30,51 @@ Use this to drive the next step. **Do not run any `git` commands yourself**
 to inspect state — `configure(needs_git=true)` is the source of truth. An
 empty `remote_url` is expected and needs no action.
 
-## Step 2: Ensure the folder is a git repository
+## Step 2: Confirm git settings
 
-**If `git_status.is_git_repo` is `true`:**
+**If `git_status.is_git_repo` is `true` AND `git_status.remote_url` is present:**
 
-Confirm the detected `current_branch` with the user:
+Present a single confirmation covering repo, branch, and remote:
 
-> "This folder is a git repository (current branch: `<current_branch>`). Is
-> this the repo you want to use for the migration project?"
+> "This folder is a git repository. I'll use these settings:
+> - **Main branch:** `<current_branch>` (finished work lands here)
+> - **Remote:** `<remote_url>` (`origin`) — finished work pushed here for backup/collaboration
 >
-> 1. **Yes** — continue to Step 3.
-> 2. **No** — ask the user to switch into the correct repository (or
->    re-clone) and let you know when it's ready. Then re-run
->    `configure(needs_git=true)` and continue.
+> Does this look right?"
+>
+> 1. **Yes** — persist with `configure(git_main_branch="<current_branch>")`
+>    and continue to Step 3.
+> 2. **No** — ask what needs changing (branch, remote URL, or both), apply
+>    the corrections:
+>    ```
+>    configure(git_main_branch="<branch>")
+>    configure(git_remote_url="<url>")
+>    ```
+
+**If `git_status.is_git_repo` is `true` AND `git_status.remote_url` is empty:**
+
+> "This folder is a git repository on branch `<current_branch>`, but no remote
+> is configured. I'll use `<current_branch>` as the main branch.
+>
+> A remote (GitHub, GitLab, etc.) gives you off-machine backup and lets
+> teammates collaborate in parallel. Would you like to set one up?"
+>
+> 1. **Set up a remote** — ask for the URL, then call:
+>    ```
+>    configure(git_main_branch="<current_branch>", git_remote_url="<url>")
+>    ```
+> 2. **Skip** — keep everything local. Call:
+>    ```
+>    configure(git_main_branch="<current_branch>")
+>    ```
+>    You can add a remote later with `configure(git_remote_url="<url>")`.
 
 **If `git_status.is_git_repo` is `false`:**
 
 Tell the user:
 
-> "This folder isn't a git repository yet. Migrations need a repo so I can
-> branch per object and merge work back to main. Can you set one up for this
-> folder and let me know when it's ready?"
+> "This folder isn't a git repository yet. Can you set one up for this folder
+> and let me know when it's ready?"
 >
 > 1. **I'll set it up myself** — wait for the user to confirm, then re-run
 >    `configure(needs_git=true)` and continue.
@@ -76,9 +85,6 @@ Tell the user:
 >    git add -A
 >    git commit -m "Initial migration project"
 >    ```
->    That local repository is all the migration needs. A remote is optional —
->    if the user wants one they can add it themselves later; don't set one up
->    or push on their behalf.
 >
 > If any of these commands fails, attempt to diagnose and fix the issue (e.g.
 > remove a stale `.git/index.lock`, resolve a conflicting worktree state, or
@@ -86,25 +92,37 @@ Tell the user:
 > you cannot resolve the problem after one attempt.
 
 After the repo is in place, re-run `configure(needs_git=true)` so you have a
-fresh `git_status` snapshot before continuing.
+fresh `git_status` snapshot, then present the confirmation above.
 
-## Step 3: Pick the main branch
+If `git_status.configured_main_branch` is already set and matches the
+confirmed branch, you can skip the `configure(git_main_branch=...)` call.
 
-Use `git_status.current_branch` as the suggested default.
+A remote is **optional**. A purely local repository is fully supported. The
+plugin will never push anywhere unless a remote is configured.
 
-Ask the user:
+## Step 3: Housekeeping commits
 
-> "Which branch should I treat as the main migration branch?" (default:
-> `<current_branch>`)
+After the main branch is confirmed, ask the user about automatic housekeeping
+commits:
+
+> "Would you like me to **automatically commit** workflow files and reports
+> (deployment reports, data migration/validation workflows and reports) to
+> `<main_branch>` as they're generated? This keeps your working tree clean
+> without you having to think about it.
 >
-> This is the long-lived branch that per-object feature branches will rebase
-> onto and fast-forward-merge back into.
+> 1. **Yes** (recommended) — automatically commit project-wide files.
+> 2. **No** — leave them uncommitted; you'll manage them yourself."
 
-If `git_status.configured_main_branch` is already set and matches what the
-user wants, you can skip the persist call. Otherwise, persist with:
+**If the user says yes (or accepts the default):**
 
 ```
-configure(git_main_branch="<branch>")
+configure(git_housekeeping_commits=true)
+```
+
+**If the user says no:**
+
+```
+configure(git_housekeeping_commits=false)
 ```
 
 ## Step 4: Explain the git workflow
@@ -113,12 +131,10 @@ After the main branch is confirmed, briefly explain how git works in this migrat
 
 > "Here's how git works during the migration:
 >
-> - When you **finish** objects, I push them directly to `<main_branch>` — no pull requests needed.
+> - When you **finish** objects, I commit them directly to `<main_branch>` — no pull requests needed.
 > - I regularly **fetch and rebase** your working branch onto `<main_branch>` to keep you in sync with any teammate activity.
-> - If multiple people are working in parallel, each person works on their own branch and the plugin handles merging automatically.
+> - If a remote is configured, finished work is pushed there automatically for backup and collaboration.
 >
 > You don't need to manage branches or create PRs — the plugin handles all of that behind the scenes, and I'll tell you what happened after each operation."
 
 Keep this concise — don't elaborate further unless the user asks questions. If they want details, point them to the [collaboration model reference](../migrate-objects/references/collaboration-model.md).
-
-Git setup is required (`configureGit` is locked). Do not offer permanent opt-out via `tasks.configureGit.enabled=false`.

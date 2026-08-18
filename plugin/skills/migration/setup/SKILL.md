@@ -124,6 +124,7 @@ Tasks the machine routes through, in order:
 | `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md`                  |
 | `setupDataInfrastructure`        | sub-skill: `data-infrastructure/SKILL.md`                         |
+| `dataStrategy`            | sub-skill: `setup/data-strategy/SKILL.md`                         |
 | `configureTesting`               | sub-skill: `setup/configure-testing.md`                           |
 | `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (synthetic testing path only) |
 
@@ -182,6 +183,7 @@ pending — do not invent completion from chat history.
 | — | configure-snowflake-target (post-assessment: connection + database) | `./configure-snowflake-target.md` |
 | — | configure-testing (post-assessment: source-data vs synthetic) | `./configure-testing.md` |
 | — | data-infrastructure-setup | `../data-infrastructure/SKILL.md` |
+| — | data-strategy | `./data-strategy/SKILL.md` |
 | — | data-migration-setup | `../migrate-objects/actions/data-migration/SKILL.md` |
 | — | data-validation-setup | `./data-validation/SKILL.md` |
 | — | data-infrastructure-teardown | `../data-infrastructure/teardown/SKILL.md` |

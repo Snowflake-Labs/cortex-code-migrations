@@ -47,7 +47,7 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | Task id | What it does |
 |---|---|
 | `midwayEntry` | Imports an existing pre-converted Snowflake project to be compatible with AIM projects. |
-| `configureGit` | Configures git integration (main branch; a remote is optional). |
+| `configureGit` | Configures git integration (main branch, remote, housekeeping commits). |
 | `configureSourceConnection` | Configures the source database connection. |
 | `registerCode` | Pulls source SQL into the project. |
 | `convertCode` | Runs the source → Snowflake conversion. |
@@ -55,6 +55,7 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `configureTesting` | Picks the testing path (source data vs synthetic) and verifies the Snowflake side is ready for it. |
 | `generateTestbed` | Builds the synthetic testbed for the workload (mine → validate → compile → generate). Reached only on the synthetic testing path. |
 | `setupDataInfrastructure` | Configures the shared Data Migration & Validation infrastructure (compute pool for SPCS, or local) and generates the worker config, so it can be brought up at migration time with data_infrastructure(mode="up"). |
+| `dataStrategy` | Captures the project's data migration and validation strategy (migration type, sync strategy, extraction strategy, target table type; validation type + sync strategy) during setup so the choices are committed to the git main branch and shared with the team, instead of being decided ad hoc at first migration/validation. |
 
 ### `main` (per-object migration)
 
@@ -65,7 +66,7 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `etlStabilization` | Stabilizes a converted ETL code unit (SSIS, Informatica, ...) and validates the functionality. |
 | `etlSeed` | Runs `scai test seed` to generate the per-unit ETL test YAML (pipeline + validation.tables) with the source/target table pairs filled from the Code Unit Registry write-dependencies; the agent fills index_columns and the user confirms before validation runs. |
 | `etlValidate` | Runs `scai test etl-validate --platform <platform>` to compare source package output with the converted Snowflake output. |
-| `seedSourceDb` | Captures test inputs from the source database. |
+| `generateTestCases` | Generates a per-object test-case YAML from source-connected inputs (via `scai test seed`); reads source to build the cases, never writes to source. |
 | `seedSynthetic` | Generates synthetic test inputs. |
 | `seedScript` | Writes a BTEQ script's test YAML, resolving binding values and staging .IMPORT fixtures from the shell script that runs it via `scai test seed --bindings-from`; values that can't be resolved statically become `{ eval }` recipes or stay `__REPLACE_ME__` for manual fill, and bindings shared across scripts are hoisted to the global test_config.yaml. Requires the bteq binary on PATH. |
 | `captureBaseline` | Captures a source object's output as a test baseline (procedures, functions, and BTEQ scripts). |
@@ -74,17 +75,38 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `migrateData` | Migrates data into a deployed table (pure dispatch — requires the shared orchestrator+worker to be up). |
 | `validateData` | Validates migrated data against the source (pure dispatch — requires the shared orchestrator+worker to be up). |
 | `runTests` | Runs the scai test suite for an object. |
+| `verify` | Catch-all verification for a converted object whose type has no deploy/test path of its own (Oracle PACKAGE, PACKAGE_BODY, TYPE, TYPE_BODY, SYNONYM, ...). Reached via convert's unfiltered `completed` transition, which must stay last so every type-gated route wins first. |
 | `extractRules` | Extracts reusable migration rules from a fix. |
 | `applyRules` | Applies matched migration rules to an object. |
 | `fixCode` | Diagnoses and fixes a failing object. |
 
 </cat>
 
+## Outcome vocabulary
+
+Every task resolves to one **outcome**. Read-only detection (the resolver seeing a status source satisfied) and the `transition_status(status='advance', outcome=…)` write speak the same vocabulary:
+
+| Outcome | Meaning |
+|---|---|
+| `completed` | The task finished successfully. |
+| `failed` | The task could not finish; carries an `error` class (below). Routes into the fix loop, or the errored bucket for a dependency block. |
+| `excluded` | The task was disabled for this project/object (see [How to exclude a task](#how-to-exclude-a-task)); the machine follows the task's `excluded` branch. |
+| `skipped` | Deferred for now (not disabled) — the task may still run later. |
+| `inProgress` | An async task (`migrateData` / `validateData`) is still running. |
+
+**`error` classes** (required on `failed`):
+
+| Class | Use for |
+|---|---|
+| `sql` | A SQL/DDL bug the fix loop can address. |
+| `dependency` | Blocked on another object not yet migrated/deployed — lands in the errored bucket, not the fix loop. |
+| `infra` | A transient environment failure (timeout, connection drop, cancelled run) — retry with `reset`. |
+
 ## Per-task contracts
 
 Every entry below names the task id, what your override needs as input, and the signal that tells the plugin the task is complete. "Done when" is the only completion contract — once the listed condition holds, the plugin moves on.
 
-> **Signaling completion via the registry.** Several tasks complete by updating the per-object registry entry. Use the `transition_status(action='advance', task='<task_id>', where=...)` MCP tool from your override skill — it stamps the correct fields and unblocks the next task. You do not need to write into the registry directly. Reads completed means: registryField.status = 'completed' (if status does not exist in registryField object, we take existence of the field as completion).
+> **Signaling completion.** After the work, call `migration_status` to pick up the next task. The plugin reads the "Done when" condition (a registry field, a file on disk, an object in Snowflake) and advances. Call `transition_status(status='advance', task='<task_id>', outcome=…)` to report a failure, a judged outcome the plugin cannot observe, or an override (`bypass` / `reset` / `skip`). A registry-field "Done when" reads completed when `status = 'completed'` (or when the field exists, if it has no `status`).
 
 > **Signaling completion via session config.** Setup tasks that gather user choices complete by calling the `configure` MCP tool with the relevant field set (e.g. `configure(source_language='sqlserver')`). The plugin reads from the session config to know the task is done.
 
@@ -97,8 +119,8 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Done when:** Project is initialized (`.scai/config/project.yml`) and at least one file exists under both `source/**/*.sql` and `snowflake/**/*.sql` (produced by `scai code sync`).
 
 #### `configureGit`
-- **Inputs:** A user who has opted into object migration. Runs after that gate so an assessment-only user is never asked about git.
-- **Done when:** Session config has `git_main_branch` set — call `configure(git_main_branch=...)`.
+- **Inputs:** A user who has opted into git. Reached only when askGit answer is true.
+- **Done when:** Session config has `git_main_branch` set.
 
 #### `configureSourceConnection`
 - **Done when:** Session config has `source_connection` set — call `configure(source_connection=...)`.
@@ -127,6 +149,10 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Inputs:** A configured Snowflake target and source connection.
 - **Done when:** Either `.scai/config/dew_configuration.toml` (worker config, written for both local and SPCS) or `.scai/settings/cloud-migration.yaml` (SPCS compute pool) exists. The setup walkthrough writes the worker config, so local completes here too — unlike the dashboard `dataInfrastructure` tile, which still requires a compute pool.
 
+#### `dataStrategy`
+- **Inputs:** A source language chosen in setup and the intent to migrate/validate table data (the data-infrastructure step establishes that intent).
+- **Done when:** Session config has `data_migration_type` (and/or `data_validation_type`) set — the data-migration-setup and data-validation-setup wizards (`progress_setup(mode="data_migration"|"data_validation")`) have run to completion.
+
 ### `main` (per-object migration)
 
 #### `registration`
@@ -149,7 +175,7 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Inputs:** ETL test YAML present (from etlSeed or hand-authored); ETL unit deployed to Snowflake and source/Snowflake connections configured — all enforced via preconditions.
 - **Done when:** Registry field `codeStatus.etlValidate` reads completed.
 
-#### `seedSourceDb`
+#### `generateTestCases`
 - **Inputs:** Object that needs test inputs; configured source connection.
 - **Done when:** Per-object YAML exists at `<project_dir>/<files.artifacts.path>/test/<name>.yml`.
 
@@ -184,6 +210,10 @@ Every entry below names the task id, what your override needs as input, and the 
 #### `runTests`
 - **Inputs:** Object with a captured baseline; procedures and functions are also deployed first (BTEQ scripts are not).
 - **Done when:** Registry field `codeStatus.testing` reads completed.
+
+#### `verify`
+- **Inputs:** A converted object of a type the machine routes nowhere else.
+- **Done when:** Registry field `extensions.tasks.verify` reads completed.
 
 #### `extractRules`
 - **Inputs:** A fixed object's diff (the change you want to make reusable).

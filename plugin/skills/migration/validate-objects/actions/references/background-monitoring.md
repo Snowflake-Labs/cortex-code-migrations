@@ -106,7 +106,7 @@ So do not wait until you suspect it. **Whenever you call `job_status` for a live
 
 ## Fallback path (last resort — only when Monitor cannot be invoked)
 
-- `job_status(job_id)` every **30–60 seconds** (or when the user asks). Add `details=true` when you want per-table narration ([Per-table progress narration](#per-table-progress-narration-all-paths)) rather than a silent repeat call.
+- Call `job_status(job_id)` repeatedly until `terminal` is true (or when the user asks). Do **not** pace yourself with `bash sleep` / wall-clock delays / worker-log or raw `scai data validate status` tails — those skip the status tool and waste minutes. Short sleeps after killing a process (1–3s) are fine. Add `details=true` when you want per-table narration ([Per-table progress narration](#per-table-progress-narration-all-paths)) rather than a silent repeat call.
 - Health every 2nd/3rd poll with **10m / 20m** stall/stuck thresholds (see `validate_tables.md` Step 4 health fallback column).
 - Stop when `terminal` is true.
 - Then Step 4.B → Step 5.

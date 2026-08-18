@@ -11,7 +11,7 @@ Two ways in, and they differ in whether a connection has already been agreed to:
 - **From setup**, because the user chose **Extract from database** at
   `chooseCodeSource`. That answer already *is* "yes, I need a source
   connection" — don't ask again, go straight to **Set up the connection**.
-- **From `seedSourceDb` / `migrateData`**, whose prereq isn't met. Here the user
+- **From `generateTestCases` / `migrateData`**, whose prereq isn't met. Here the user
   has no connection and may never have wanted one, so name the capability that
   needs it and ask before setting one up.
 
@@ -42,7 +42,7 @@ progress_setup(mode="setup", skip="configureSourceConnection")
 ```
 
 Nothing is persisted, so a later `progress_setup()` — or a re-entry from
-`seedSourceDb` / `migrateData` — can offer it again.
+`generateTestCases` / `migrateData` — can offer it again.
 
 **Permanent opt-out:**
 

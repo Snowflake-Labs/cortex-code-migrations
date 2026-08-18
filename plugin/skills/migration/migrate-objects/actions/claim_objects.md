@@ -52,4 +52,6 @@ The `where` clause must be `id IN (...)` with the specific IDs the user picked i
 
 Surface any error and stop without retry.
 
+If the response includes `reclaimed_from_other_sessions`, tell the user which objects were re-claimed from a previous session (include the session ID and timestamp) before proceeding with any deployment or migration work.
+
 Return to [../SKILL.md](../SKILL.md).

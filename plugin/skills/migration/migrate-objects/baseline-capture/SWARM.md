@@ -1,17 +1,17 @@
 ---
-name: seed-source-db
+name: generate-test-cases
 description: Seed-first orchestrator for a single source-database test target. Runs `scai test seed` to scaffold the step-based YAML stub (optionally hydrating from a query-log CSV), then — if `test_cases:` is still empty — spawns an AI swarm to fill them.
 parent_skill: baseline-capture
 ---
 
-# Seed Source-DB Tests (Seed → Maybe-Fill)
+# Generate Test Cases (Seed → Maybe-Fill)
 
 State-machine entry point for `testing_data_source = "source_database"`. Handles **one object (`<object_name>`)** at a time. Two stages:
 
 1. **Seed** — run `scai test seed` to scaffold the step-based YAML stub. If `test_seed_source = logs`, pass `--execution-log <path>` to hydrate `test_cases:` from real captured calls.
 2. **Maybe-fill** — if the stub came back with empty `test_cases:`, spawn an AI swarm to fill them. The swarm fills *rows only*; it never edits `steps:`.
 
-> **SCOPE: One object only.** Triggered per-object by the `seedSourceDb` state-machine task. Do not loop here — the state machine handles the next object after `captureBaseline` completes.
+> **SCOPE: One object only.** Triggered per-object by the `generateTestCases` state-machine task. Do not loop here — the state machine handles the next object after `captureBaseline` completes.
 
 > **Not for BTEQ scripts.** Units with `kind: "script"` (BTEQ) are seeded by [seed-script/SKILL.md](seed-script/SKILL.md) from user-provided bindings + import fixtures — not here. Do not generate `test_cases:` rows or synthesize fixtures for them.
 
