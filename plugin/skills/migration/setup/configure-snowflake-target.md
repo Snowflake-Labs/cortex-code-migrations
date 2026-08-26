@@ -27,6 +27,11 @@ response.
 
 If the user wants a different connection, ask for the name and use it.
 
+If they still need a Snowflake connection created, or the current one fails
+SSO against Microsoft Entra ID / Azure AD / OIDC, load
+`../connection/snowflake-connection/SKILL.md` before persisting a name.
+Use `oauth_authorization_code` for Entra OIDC — never `externalbrowser`.
+
 ## Step 2: Target database
 
 This is where the migration tracking database and the converted objects

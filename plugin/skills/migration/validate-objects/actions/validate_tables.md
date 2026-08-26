@@ -6,6 +6,8 @@ Validate migrated table data between source and Snowflake using cloud validation
 
 > **Scope is set per call.** `validate_data(mode="run")` validates **every** table listed in the workflow file produced by setup. Pass a `where` filter to setup that matches exactly the tables you intend to validate.
 
+> **Advanced validation (when the customer asks):** [Incremental validation](../../setup/data-validation/references/workflow-config-reference.md#incremental-validation-synchronization) (re-validate changed partitions only), [re-validation](../../data-infrastructure/references/advanced-operations-reference.md#re-validation-retry-failed-partitions) (`validate_data(mode="revalidate")`), [custom L3 normalization](../../data-infrastructure/references/advanced-operations-reference.md#custom-normalization-data-validation-l3), and [checksum/sync blind spots](../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync) (why a column change did not trigger re-sync). Load [Advanced operations reference](../../data-infrastructure/references/advanced-operations-reference.md) for rate limiting and full agent guidance.
+
 > **Run-only entry:** If you were routed here only to execute `validateData` (registry task) and the workflow YAML already exists, skip Step 1 and complete **Step 2** (display the existing `workflow_path` and offer optional updates) before **Step 3**. You **must** complete **Steps 4–6** (background monitor or poll fallback, error-first validation report, teardown offer) before returning to the parent skill — even when the state machine invoked `validate_data(mode="run")` without walking setup.
 
 ## Step 1: Choose validation approach + generate workflow
@@ -18,7 +20,7 @@ Validation mode (full vs incremental) and sync strategy are **captured once at s
 |--------|---------|
 | **Full** | Validate all partitions every run (`synchronization.strategy: none`) |
 | **Incremental** | Re-validate only partitions that changed since the prior baseline |
-| Sync **Checksum** | Hash partitions; re-validate changed ones (not offered for Oracle) |
+| Sync **Checksum** | Hash partitions; re-validate changed ones (supported on all platforms, including Oracle) |
 | Sync **Watermark** | Track a monotonic column; re-validate partitions with newer values |
 
 After the machine completes, confirm with the user:
@@ -91,13 +93,13 @@ The setup response contains:
 > 1. **Proceed**
 > 2. **Change something** (tell me which table, section, or field names)
 
-5. **If the user chooses "Change something":** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (camelCase field names — for example `columnMappings`, `indexColumnList`, `sourceWhereClause` + `targetWhereClause`, `targetDatabase` / `targetSchema` / `targetName`, `synchronization.watermarkColumn`). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **Proceed** or says they are done editing.
+5. **If the user chooses "Change something":** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (prefer camelCase — for example `columnMappings`, `indexColumnList`, `sourceWhereClause` + `targetWhereClause`, `targetDatabase` / `targetSchema` / `targetName`, `synchronization.watermarkColumn`; snake_case aliases such as `index_column_list` and legacy `whereClause` still parse). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **Proceed** or says they are done editing.
 
    **Common scenarios → fields to edit:**
 
    | User goal | Workflow fields |
    |-----------|-----------------|
-   | Limit compared rows | `sourceWhereClause` + `targetWhereClause` (both required) |
+   | Limit compared rows | `sourceWhereClause` + `targetWhereClause` (both required; set matching predicates on each side) |
    | Skip L2 on wide tables | `excludeMetrics` or disable `metricsValidation` |
    | Exclude drift-prone columns from L3 row compare | `useColumnSelectionAsExcludeList: true` + `columnSelectionList: [<cols>]` on the table (e.g. `created_at` / `CREATED_AT` for SQL Server `DATETIME2` → Snowflake timestamp precision drift) |
    | Whitelist known diffs | `acceptedTransformations` |
@@ -427,14 +429,14 @@ When all tables passed on the first run, skip 5.G and continue to Step 6.
 
 ## Step 6: Offer to Suspend Infrastructure (Cost Saving)
 
-After presenting the summary, offer to tear down idle infrastructure to save cost (default **Yes**), then **delegate** — do **not** re-derive what is running here:
+After presenting the summary, offer to tear down the shared infrastructure to save idle cost — a single prompt regardless of placement (default **Yes**):
 
-- **Local** orchestrator/worker this session started → `data_infrastructure(mode="down")`.
-- **SPCS** orchestrator / compute pool / DEW worker (or any mixed setup) → load [`../../data-infrastructure/teardown/SKILL.md`](../../data-infrastructure/teardown/SKILL.md); it owns the "what's running" detection (its *Which steps apply* table) and runs only the applicable steps.
+> Tear down the shared data infrastructure now to stop accruing SPCS / warehouse cost? Bring it back for the next wave with `data_infrastructure(mode="up")` (dispatch does not auto-resume).
+>
+> 1. **Yes (default)** — call `data_infrastructure(mode="down")`.
+> 2. **No, keep running** — useful if you're starting the next wave immediately and want to avoid the ~60s warm-up.
 
-Nothing auto-resumes — bring infrastructure back for the next wave with `data_infrastructure(mode="up")`.
-
-If the user picks **Yes** (or doesn't respond), run the teardown, then return to the parent skill.
+On **Yes** (or no response), call `data_infrastructure(mode="down")` and relay the returned `execution` + `orchestrator`/`worker` actions. Load `../../data-infrastructure/teardown/SKILL.md` **only** for what the tool can't cover: the cross-machine `TASK_QUEUE` check before suspending shared SPCS, a local process started outside MCP (Ctrl+C / `pkill`), or a `partial` payload with an SPCS privilege failure. Then return to the parent skill.
 
 ---
 
@@ -458,6 +460,7 @@ Return control to the parent skill (../SKILL.md).
 
 ## Reference
 
+- [Advanced operations reference](../../data-infrastructure/references/advanced-operations-reference.md) — rate limiting, incremental DV, revalidate
 - [Background monitoring](./references/background-monitoring.md)
 - [Validation levels reference](./references/validation-levels-reference.md) — what schema, metrics, row, and execution mean (setup + report)
 - [Workflow Config Reference](../../setup/data-validation/references/workflow-config-reference.md)

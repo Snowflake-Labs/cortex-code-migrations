@@ -2,12 +2,26 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # UserPromptSubmit hook (Windows) — see session-context.sh for full rationale.
-# Injects, ONCE per session, whether a migration project exists here plus
-# routing guidance, on the user's first message. UserPromptSubmit reaches the
-# model (SessionStart additionalContext does not, in coco).
+# Injects, ONCE per session, migration-project context plus routing guidance
+# on the user's first message. Dev-channel plugin builds also receive their
+# release-safety guardrail here. UserPromptSubmit reaches the model
+# (SessionStart additionalContext does not, in coco).
 
 $stdin = ""
 try { $stdin = [Console]::In.ReadToEnd() } catch {}
+
+$pluginRoot = if ($env:CLAUDE_PLUGIN_ROOT) {
+  $env:CLAUDE_PLUGIN_ROOT
+} else {
+  Split-Path -Parent $PSScriptRoot
+}
+$devReminder = $null
+try {
+  $manifest = Get-Content -Raw (Join-Path $pluginRoot '.cortex-plugin/plugin.json') | ConvertFrom-Json
+  if ($manifest.buildChannel -ceq 'dev') {
+    $devReminder = Get-Content -Raw (Join-Path $pluginRoot 'hooks/dev-build-reminder.txt')
+  }
+} catch {}
 
 $sid = ""
 if ($stdin -match '"session_id"\s*:\s*"([^"]*)"') { $sid = $Matches[1] }
@@ -37,6 +51,10 @@ if (Test-Path (Join-Path $dir '.scai/config/project.yml')) {
   Write-Output "- To start or continue a migration here: read the built-in snowflake-migration:migration skill and follow its setup flow."
   Write-Output "- Otherwise, match the request to the relevant skill."
   Write-Output "</system-reminder>"
+}
+
+if ($devReminder) {
+  Write-Output $devReminder
 }
 
 if ($marker) {

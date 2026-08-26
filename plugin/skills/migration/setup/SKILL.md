@@ -187,6 +187,7 @@ pending — do not invent completion from chat history.
 | — | data-migration-setup | `../migrate-objects/actions/data-migration/SKILL.md` |
 | — | data-validation-setup | `./data-validation/SKILL.md` |
 | — | data-infrastructure-teardown | `../data-infrastructure/teardown/SKILL.md` |
+| — | discover-extras (custom assets the engine doesn't generate — FiveTran, SSAS, Oracle PACKAGE, scripts) | `./discover-extras/SKILL.md` |
 
 ## Rules
 

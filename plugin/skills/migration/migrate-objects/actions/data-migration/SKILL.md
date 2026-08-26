@@ -81,6 +81,8 @@ The migration strategy — **migration type, sync strategy, extraction mechanism
 
 For **Preliminary** migrations, after YAML generation (Step 2a) add `whereClauseCriteria` per table with a valid WHERE predicate; see `./references/workflow-config-reference.md`.
 
+> **Advanced — preflight dry-run:** If the customer wants a **bounded pipeline smoke test** (one partition per table, transient `PREFLIGHT_<workflowId>` schema, not production targets), set `preflight: true` in the workflow YAML at Step 2a — see [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md#preflight-workflows-bounded-migration-dry-run). This is **not** Preliminary row sampling to production and **not** `scai data doctor`.
+
 ### 1.C — Confirm
 
 ```
@@ -130,6 +132,8 @@ Notes:
   `configure(snowflake_database=...)`), and Oracle `columnNamesToPartitionBy`
   (`ROWID`) when the CLI left them empty.
 
+> **Duplicate data on re-run:** `migration_type=full` or `preliminary`, or `sync_strategy=none`, performs a **full extract and load every run**. Re-running the same workflow against a target that already has rows from a prior run **appends duplicate/extra data**. For repeatable runs, use `sync_strategy=watermark` or `checksum` (and set `primaryKeyColumns` / `watermarkColumn` / `checksumExpression` as needed — see [workflow-config-reference.md](./references/workflow-config-reference.md#synchronizationstrategy)). **Never** `TRUNCATE` or bulk-`DELETE` the target without explicit user confirmation — the table may legitimately contain pre-existing or expected rows. Before any cleanup: confirm with the user, compare source vs target row counts, and prefer switching to incremental sync for future runs.
+
 ### Step 2a: Display, optional edits, confirm
 
 1. Read `workflow_path`.
@@ -137,7 +141,7 @@ Notes:
    - **Small/medium files** — show the full YAML in chat.
    - **Large files** — show the path, `tables:` count, `defaultTableConfiguration`, and table names; offer to show the full file or specific tables on request.
    - Note whether setup **reused** an existing file (`workflow_reused`) or regenerated it.
-3. **Summarize:** table count, `migration_type`, sync strategy, extraction strategy, `target_table_type`, and any `partition_key_findings` from setup.
+3. **Summarize:** table count, `migration_type`, sync strategy, extraction strategy, `target_table_type`, and any `partition_key_findings` and `computed_column_findings` from setup.
 4. Ask verbatim:
 
 > Here is the migration workflow at `<workflow_path>`.
@@ -159,12 +163,28 @@ Notes:
    | Column rename/type map | `columnNameMappings`, `columnTypeMappings` |
    | Server-side export | `extraction.strategy`, `externalStage` + worker TOML (UNLOAD/WRITE_NOS/DBMS_CLOUD) |
    | Iceberg target | `target.tableType`, `target.icebergConfig`, `migrationStrategy` |
+   | Teradata mixed charsets / untranslatable bytes | `onUntranslatable` (`substitute` default, `fail` to stop on Error 6706); applies to ODBC, TPT, and `write_nos` — see `dmvf/docs/data-migration-orchestrator/teradata-charset-extraction.md` |
 
    For stalled or partially finished runs, see [Task model reference](./references/task-model-reference.md) and [Troubleshooting reference](./references/troubleshooting-reference.md).
 
 6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7).
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
    - Resolve `partition_key_findings` and required `columnNamesToPartitionBy` per `edit_hints` (empty `[]` finishes the workflow without moving data; SQL Server / Redshift need an explicit PK or partition column; Oracle defaults to `ROWID`; PostgreSQL: monotonic integer PK or timestamp — avoid `ctid`).
+
+     **Show the table's columns first.** A partition column can only be judged against
+     the alternatives, and the user sees your edit as a one-line diff — so in the message
+     **before** you write `columnNamesToPartitionBy`, give per affected table the column
+     you picked, why it beats the others (primary key, non-nullable, cardinality / NULL
+     ratio from the finding's `detail`), and the columns it was picked from. Read those
+     from the table's DDL under `snowflake/`, or with `query_source` against the source
+     catalog.
+     - **Narrow tables** — list every column with its type.
+     - **Wide tables, or several tables at once** — do not paste every column. Give the
+       column count and the **partition candidates** only (unique / non-nullable keys,
+       date and numeric columns), and offer the full list per table on request.
+
+     A bare `suggestion` string leaves the user nothing to approve or reject on.
+   - Resolve `computed_column_findings` (SQL Server COMPUTED columns): exclude each listed column from the table's migration — drop it from the column list / `columnNameMappings` so its stored expression value is not migrated. The target column is redefined or recomputed post-migration.
    - **Preliminary type:** add `whereClauseCriteria: "<row predicate>"` per table or `defaultTableConfiguration` when missing.
    - Required **extraction strategy** fields (`extraction.strategy`, `externalStage`, worker TOML cross-refs for `unload` / `write_nos` / `dbms_cloud` / `tpt`).
    - **Redshift Iceberg** (`target_table_type=iceberg`): required fields from [iceberg-setup-reference.md](./references/iceberg-setup-reference.md).
@@ -200,11 +220,11 @@ migrate_data(mode="run", workflow_path="<path from setup>")
 
 Returns immediately with `job_id` — migration is **dispatched** in the background via `scai data migrate create-workflow` against the already-running shared orchestrator + worker.
 
-**Prerequisite:** the shared infrastructure must already be up. If you have not done so this session, run `data_infrastructure(mode="up")` once first — it brings up the orchestrator + worker (SPCS when a `compute_pool` is configured, otherwise local), runs the doctor gate, and returns the `cost_reminder` to relay. If infrastructure is not up, `migrate_data(mode="run")` returns a `remediation` pointing at `data_infrastructure(mode="up")` — bring it up and retry.
+**Prerequisite:** the shared infrastructure must already be up. If you have not done so this session, run `data_infrastructure(mode="up")` once first — it brings up the orchestrator + worker (SPCS when a `compute_pool` is configured, otherwise local), runs the doctor gate, and returns the `cost_reminder` to relay. If infrastructure is not up, `migrate_data(mode="run")` returns a `remediation` pointing at `data_infrastructure(mode="up")` — bring it up and retry. **Unless you were dispatched for a single object:** the infrastructure is shared by every slot and belongs to the session driving the wave, so report the `remediation` back and let it bring the infrastructure up.
 
 The `execution` field (`"local"` | `"cloud"`) and `cost_reminder` are on the `data_infrastructure(mode="up")` response — **relay the reminder to the user verbatim**. If absent, use the note that matches the `execution` field:
 
-> **Cost note (cloud):** The SPCS orchestrator and local worker are running and shared across every dispatch this session; they can keep using Snowflake credits while idle (the worker polls the warehouse on an interval). When you are done, tear the infrastructure down — `data_infrastructure(mode="down")` for the local worker, and the teardown skill to suspend the SPCS orchestrator and compute pool. The local worker stops when this session ends; the SPCS orchestrator does not.
+> **Cost note (cloud):** The SPCS orchestrator and local worker are running and shared across every dispatch this session; they can keep using Snowflake credits while idle (the worker polls the warehouse on an interval). When you are done, tear the infrastructure down with `data_infrastructure(mode="down")` — it stops the local worker **and** suspends the SPCS orchestrator (the compute pool then auto-suspends). The local worker also stops when this session ends; the SPCS orchestrator does not, so call `down` explicitly.
 >
 > **Cost note (local):** A local orchestrator and worker run for this session, shared across every dispatch, and stop when the session ends or you call `data_infrastructure(mode="down")`. Source extraction still runs SQL against your warehouse while active.
 
@@ -325,6 +345,12 @@ After the terminal status (Monitor fire + confirm, or fallback poll), if `detail
 
 ---
 
+If the job **failed**, do not re-run it and do not change Snowflake with `sql_execute`. Call `migration_status(mode="next_task")`. A failed load is `error=sql`; the machine sends you to `applyRules` → `fixCode`. Edit the converted `snowflake/` file, **deploy**, then the fix loop retries `migrateData`.
+
+A live `ALTER` / `DROP` / `CREATE` that is not in `snowflake/` is not a `note` — the next `deploy` overwrites it. `note` is for a judgment you already made in the file (you chose among meanings and can name the inverse). See the walker definition: meanings vs compile. Do not `note` as a substitute for the fix, and do not re-dispatch the same failed workflow.
+
+---
+
 ## Step 6: Report — data migration summary
 
 **Do not skip.** Present an **error-first** summary in chat (markdown). Build it from the final `job_status(job_id, details=true)` response (`details.progress`, `details.reports`) and classify failures — **not** a per-table results grid unless the user asks.
@@ -378,7 +404,7 @@ Number fixes in the **same category order** as **Errors** (Preprocessing → Ext
 
 - [Troubleshooting Reference](./references/troubleshooting-reference.md) for worker/orchestrator/partition issues
 - YAML / TOML edits: `whereClauseCriteria`, partitions, `source.databaseName`, extraction strategy, worker connection fields — as required by the error category
-- **Re-run only as a follow-up:** mention `migrate_data(mode="run", workflow_path=...)` in `### Suggested fixes` only when prerequisites are clear, or label it “after the steps above” — do not list re-run as the first or only fix
+- **Re-run only as a follow-up:** mention `migrate_data(mode="run", workflow_path=...)` in `### Suggested fixes` only when prerequisites are clear, or label it “after the steps above” — do not list re-run as the first or only fix. Before suggesting re-run, confirm the workflow uses incremental sync (`watermark` / `checksum`) or that the user accepts a full reload; a non-incremental re-run against a populated target duplicates rows (see duplicate-data callout in Step 2).
 - After all tables succeed → offer [validation](../../../validate-objects/actions/validate_tables.md) for the same scope
 
 Do **not** include a per-table markdown table unless the user asks for a full audit.
@@ -435,7 +461,7 @@ Omit empty category subsections. If every table completed **and Step 5.C does no
 - **All tables succeeded** — offer validation for this scope or continuing the wave.
 - **Any failures** — do **not** jump to re-run. Summarize the prerequisite actions from `### Suggested fixes`, then **ask the user** how to proceed, for example:
   1. Apply fixes (YAML/TOML/config) — you or the user edits files; confirm when done
-  2. Re-run the same workflow — only after prerequisites are done or the user explicitly accepts re-run without fixes (e.g. transient infra)
+  2. Re-run the same workflow — only after prerequisites are done or the user explicitly accepts re-run without fixes (e.g. transient infra). **Warn:** if `sync_strategy=none` (or no `synchronization` block), re-run reloads all rows and **duplicates data** on the target; prefer adding `watermark`/`checksum` or scoped cleanup confirmed with the user — never blind `TRUNCATE`/`DELETE`.
   3. Narrow scope — adjust `where` / workflow YAML and run setup + run for failed tables only
   4. Investigate further — troubleshooting reference, logs, health signals from Step 5.B
   5. Stop — proceed to Step 7 (teardown) without re-running
@@ -446,14 +472,20 @@ Then continue to Step 7 (teardown offer) when wave data work is done for this pa
 
 ## Step 7: Offer to tear down infrastructure (cost saving)
 
-When the wave's data work is done, offer to tear down idle infrastructure to save cost (default **Yes**), then **delegate** — do **not** re-derive what is running here:
+When the wave's data work is done, offer to tear down the shared infrastructure to save idle cost — a single
+prompt regardless of placement (default **Yes**):
 
-- **Local** orchestrator/worker this session started → `data_infrastructure(mode="down")`.
-- **SPCS** orchestrator / compute pool / DEW worker (or any mixed setup) → load [`../../../data-infrastructure/teardown/SKILL.md`](../../../data-infrastructure/teardown/SKILL.md); it owns the "what's running" detection (its *Which steps apply* table) and runs only the applicable steps.
+> Tear down the shared data infrastructure to stop idle cost? Bring it back for the next wave with
+> `data_infrastructure(mode="up")` (dispatch does not auto-resume).
+>
+> 1. **Yes (default)** — call `data_infrastructure(mode="down")`.
+> 2. **No, keep running** — next batch soon; avoids the ~60s SPCS warm-up.
 
-Nothing auto-resumes — dispatch is pure, so bring infrastructure back for the next wave with `data_infrastructure(mode="up")`. (A local worker started via MCP also stops when the session ends.)
-
-If the user picks **Yes** (or doesn't respond), run the teardown, then return to the parent skill.
+On **Yes** (or no response), call `data_infrastructure(mode="down")` and relay the returned `execution` +
+`orchestrator`/`worker` actions. Then load `../../../data-infrastructure/teardown/SKILL.md` **only** for the
+cases the tool cannot cover on its own: the cross-machine in-flight `TASK_QUEUE` check before suspending
+shared SPCS, a local orchestrator/worker the user started **outside** MCP (needs Ctrl+C / `pkill`), or a
+`partial` payload reporting an SPCS privilege failure. Otherwise return to the parent skill.
 
 ---
 
@@ -485,11 +517,13 @@ Return control to the parent skill.
 
 ## Reference
 
+- [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md) — rate limiting, preflight, incremental/revalidate DV
 - [Background monitoring](./references/background-monitoring.md)
 - [Workflow Config Reference](./references/workflow-config-reference.md)
 - [Task Model Reference](./references/task-model-reference.md)
 - [Extraction Strategies Reference](./references/extraction-strategies-reference.md)
 - [Iceberg Setup Reference](./references/iceberg-setup-reference.md)
 - [Troubleshooting Reference](./references/troubleshooting-reference.md)
+- [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md) — rate limiting, preflight dry-run
 - [Data Doctor reference](../../../data-infrastructure/references/data-doctor-reference.md)
 - [Teardown (cost-saving suspend)](../../../data-infrastructure/teardown/SKILL.md)

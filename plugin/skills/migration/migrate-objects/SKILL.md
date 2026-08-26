@@ -44,11 +44,23 @@ This rule is the same for **every** task in the loop below — deploy, test, cap
 1. **Do the task's work** as its skill describes.
 2. **Ask what's next.** Re-pull `migration_status(mode="my_objects_summary")` (or `migration_status(mode="next_task", object_id="<id>")` for one object). The machine advances you when it can see the work is done — a tool wrote the registry field, the object exists in Snowflake, or the expected file exists.
 3. **Call `transition_status` to report or override:**
-   - a **failure** you can't fix — `transition_status(status='advance', task='<task>', outcome='failed', error='<sql|dependency|infra>')`;
+   - a **failure** you can't fix — `transition_status(status='advance', task='<task>', outcome='failed', error='<sql|infra>')`;
    - an outcome the system **can't observe** and you had to judge — e.g. "all tests passed" ([migrate-object/RUN_TESTS.md](migrate-object/RUN_TESTS.md)), view parity ([migrate-object/VALIDATE_VIEW.md](migrate-object/VALIDATE_VIEW.md)), ETL stabilization ([migrate-etl/SKILL.md](migrate-etl/SKILL.md));
    - an **override** — `bypass` a precondition, `reset` an errored task, or `skip`.
 
 The outcome and error vocabulary is defined once in [../extensibility/TASKS.md](../extensibility/TASKS.md#outcome-vocabulary).
+
+## Autonomous mode
+
+If the user asks to run the wave unattended — "autonomous", "auto-pilot", "just
+migrate everything", "run objects in parallel" — load
+[autonomous/SKILL.md](autonomous/SKILL.md) instead of the loop below and follow
+it. That skill claims work itself and dispatches one subagent per ready task
+group, up to a parallelism the user picks, escalating only when one gets stuck.
+
+Everything below is the interactive loop: one batch at a time, the user picks
+every group and every claim. It stays the default — do not offer autonomous mode
+as a menu item in 2b, and do not switch to it unless the user asks.
 
 ## Step 2: Object Loop
 
@@ -77,7 +89,7 @@ Show **only** the following status lines, all derived from the cached summary re
 
 Then ask the user to pick a next action. **Only list actions you are actually offering** — never include an absent option just to acknowledge it. Build the action menu like this:
 
-1. One numbered item per task group, labelled `<group.user_label> for the <group.count> <group.object_type>(s)` — e.g. `Deploy to Snowflake for the 5 tables`, `Generate test cases from source database for the 1 function`. Use `group.user_label` verbatim.
+1. One numbered item per task group, labelled `<group.user_label> for the <group.count> <group.object_type>(s)` — e.g. `Deploy for the 5 tables`, `Generate test cases from source database for the 1 function`. Use `group.user_label` verbatim.
 2. One numbered item per `blocked_groups` entry, labelled `Resolve blocked <object_type>s waiting on "<blocked_group.user_label>" (see deps)` — only if `blocked_groups` is non-empty.
 3. `finishObjects` — only if `done_count > 0`.
 4. `claimObjects` — only if `done_count == 0` (when `done_count > 0`, omit this entirely; the user must merge first). The exception: if the user *explicitly overrides* on a later turn ("I know, claim anyway", "skip the merge for now"), proceed to claim and flag the unmerged done objects in your reply.
@@ -118,9 +130,9 @@ VERY IMPORTANT: **Wait for user input before acting.** Once the user confirms wh
 
 **User picked the errored bucket** → call `migration_status(mode="my_objects_details", group="errored")` to fetch `ErroredObject` entries and present them. **Wait for the user to pick which errored object(s) to address** before attempting any resolution; resolution depends on each `task`/`reason`.
 
-### Resolving errored async tasks (`migrateData`, `validateData`, `runTests`)
+### Resolving errored long-running tasks (`migrateData`, `validateData`, `runTests`)
 
-When the errored task is a long-running async one and the failure is
+When a long-running task fails and the failure is
 **transient** (Snowflake connection drop, source timeout, cancelled
 run), don't try to fix anything — just retry. After confirming with
 the user, call:

@@ -148,6 +148,7 @@ Validate: baseline_batch_{B}.md MUST exist for EVERY batch.
   After 2 retries: mark remaining elements `failed` reason `context-exhaustion`.
   For partial-completion recovery (agent processed some elements then died):
     see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL — one call per invocation, never batched):
   For each element in baseline summary:
     uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
@@ -167,6 +168,7 @@ Wait for all agents via task notifications. Validate: batch_{B}.md AND learnings
   Re-read session_status.json — confirm all fixed elements have terminal status.
   Same retry logic as Step {P}.2 (max 2, then mark failed).
   For partial-completion recovery: see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   For each element in task artifacts:
     uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
@@ -242,6 +244,7 @@ NO test-gen agents — patterns are already proven from the archetype phase.
 Wait + validate: batch_{B}.md AND learnings_batch_{B}.md for every batch.
   Retry logic: max 2 retries per batch, then mark failed.
   For partial-completion recovery: see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   For each element in task artifacts:
     uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
@@ -305,6 +308,11 @@ Register dbt nodes (SEQUENTIAL — one call per project):
   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
     init-dbt {SESSION_JSON} {PROJECT_NAME} {DBT_PROJECT_PATH}
 {end for}
+Assign dbt phase (SEQUENTIAL — one call per project):
+{for each dbt_project:}
+  uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
+    assign-dbt-phase {SESSION_JSON} --phase {P} --project {PROJECT_NAME}
+{end for}
 
 - [ ] **Step {P}.2: dbt-Test-Gen Wave**
 Resume guard: if test_report.md already exists for ALL projects
@@ -328,6 +336,7 @@ Validate for EACH project — ALL must exist:
   - stabilization/tests/dbt/{PROJECT}/test_report.md
 If ANY missing: respawn (max 2 retries), then mark nodes `failed` reason `test-gen-exhaustion`.
   For partial-completion recovery: see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   uv run ... track_status.py update-dbt {SESSION_JSON} {PROJECT} --status dbt-tested
   uv run ... track_status.py update-dbt-node {SESSION_JSON} {PROJECT} {NODE} --status {result}
@@ -344,6 +353,7 @@ Spawn fix agents for projects with: failing tests, compilation errors, or bootst
 Projects where ALL nodes passed and no compilation errors: no agent needed.
   Write minimal dbt_learnings_{project}.md with no-fix-needed.
 Wait + validate: dbt_learnings_{project}.md MUST exist for every project.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   uv run ... track_status.py update-dbt-node per node
   uv run ... track_status.py update-dbt per project
@@ -406,6 +416,7 @@ Validate for EACH mapping proc — ALL must exist under stabilization/tests/proc
   - {proc_name}.seed.sql, {proc_name}.assert.sql, test_report.md
 If ANY missing: respawn (max 2 retries), then mark the proc `failed` reason `test-gen-exhaustion`.
   For partial-completion recovery: see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   uv run ... track_status.py update {SESSION_JSON} {PROC} --status proc-tested
 
@@ -424,6 +435,7 @@ Procs whose baseline already creates clean and passes all assertions: no agent n
 Wait for all agents via task notifications. Validate: a fix record exists for every proc.
   Re-read session_status.json — confirm all fixed procs have terminal status.
   Same retry logic as Step {P}.2 (max 2, then mark failed).
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   uv run ... track_status.py update {SESSION_JSON} {PROC} --status {status_from_artifact}
 

@@ -22,4 +22,10 @@ Arm the `monitor.watch_command` with the Monitor tool, or call `job_status(job_i
 
 ## When it finishes
 
-Completion stamps the registry field `extensions.dataValidation`, which advances the machine. Present the error-first validation report (`validate_tables.md` Step 5) and offer re-validation when eligible.
+The machine reads live `DATA_VALIDATION.TABLE_PROGRESS_DETAIL` — do not stamp the registry. Present the error-first validation report (`validate_tables.md` Step 5) and offer re-validation when eligible.
+
+Offer re-validation only after the report identifies a changed input or a transient
+condition that has cleared. A repeatable source/target row mismatch, schema drift,
+or invalid identifier / compilation error in generated validation SQL is
+deterministic: park it with the exact evidence and required repair instead of
+dispatching the same workflow again.

@@ -25,6 +25,18 @@ Fix SnowConvert ETL conversion gaps through phased execution with upfront unit a
 - Active Snowflake connection with a warehouse
 - DATABASE + SCHEMA with write privileges (`CREATE TABLE`, `CREATE FUNCTION`, `CREATE PROCEDURE`)
 
+### When the converted-output folder is not isolated
+
+The default contract above assumes one folder per unit. If instead you're handed a flat, whole-repository conversion output where a dbt project is referenced by more than one sibling unit's orchestration file (e.g. Informatica `SHORTCUT` mappings reused across workflows), do not edit the shared project in place:
+
+1. Stage a real copy of the orchestration file and every dbt project it references under `{PACKAGE_FOLDER}/Output/ETL/{unit}/`. Treat the original location read-only until sync-back.
+2. If a staged dbt project's `packages.yml` has a local `path:` dependency, do **not** edit the path to account for the extra staging depth — that breaks canonical when synced back. Instead, symlink the shared-assets directory into the unit folder at the depth `packages.yml` already expects.
+3. Before syncing any fix back, run the leak gate on every touched file, then diff against the original — test-environment values (schema/database names, credentials) must never reach the canonical copy:
+   ```bash
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/check_sync_leaks.py {SESSION_JSON} <file1> [<file2> ...]
+   ```
+   Do not copy until this exits 0.
+
 ## Persistent Files
 
 All files stored in `{UNIT}/stabilization/`:
@@ -241,6 +253,7 @@ If `scan.json` contains dbt_projects:
    - **Ready**: `has_valid_config=true`, zero or low EWI count → standard dbt phase
    - **Needs bootstrap**: `has_valid_config=false` or `has_placeholder_config=true` → dbt phase with bootstrap sub-phase (config + macro fixes before model testing)
    - **Heavy EWI**: high EWI count relative to model count → dbt phase with expected baseline failures, longer fix cycle
+   - **Reused (pre-existing) project**: if the dbt project directory predates this unit — more than one sibling unit's orchestration file references it, or `dbt-context.md` shows it wasn't newly generated for this unit — cross-check every var default the models actually read (`sources.yml`, `dbt_project.yml` vars) against *this* unit's own source-XML identity (folder/repository/workflow name), even when `has_valid_config=true`. A previously-stabilized shared project is not a smoke-check target; wrong-but-valid-looking defaults are a silent data-correctness defect, not a compile error.
 
 These classifications inform the ROADMAP phase design in Step 7. Do NOT mark projects as `needs-user` at planning time — that decision is made by the dbt-test-gen agent after attempting test generation.
 
@@ -258,6 +271,7 @@ Using orchestration-context.md, dbt-context.md (if dbt projects exist), and scan
   - **Large item**: a dbt project with >20 models. **Only dbt projects can be classified as large** — orchestration elements are always small-medium
   - **Phase cap**: pack up to **40-50 small-medium items per phase** OR up to **20 large items per phase**
   - **Do NOT mix classes in the same phase** — route small-medium and large items into separate phases so sizing stays predictable
+    *(This mixing rule governs phases approaching the item cap — for a phase with only a handful of items, keep them together even if one crosses a size threshold; splitting a 3-item phase into two is needless fragmentation.)*
   - **Batch cap**: ~10 small-medium items per batch, ~5 large items per batch
   - **Concurrency cap**: max 5 parallel batches per phase regardless of item size
 - Push each phase toward its cap rather than creating many small phases — a 48-project small-medium phase is preferable to two 24-project phases when the items share patterns
@@ -472,11 +486,13 @@ See [reference/examples.md](reference/examples.md).
 
 See [reference/troubleshooting.md](reference/troubleshooting.md).
 
+`scan_unit.py` fails, or the unit folder doesn't match Prerequisites → check whether the input is a flat, multi-unit conversion output rather than an isolated per-unit folder; see "When the converted-output folder is not isolated" above.
+
 ## Output
 
 - Fixed orchestration `.sql` file with EWI gaps resolved
 - Fixed dbt model files (per sub-project)
 - Test artifacts in `{UNIT}/stabilization/tests/`
 - `{UNIT}/stabilization/report.html` — self-contained HTML report aggregating all artifacts (generated during Final Validation)
-- `artifacts/tracking/fix_log.md` — append-only record of every fix applied
+- `artifacts/tracking/fix_log.md` — append-only record of every fix applied. Each entry carries per-instance anchors (file + stable symbol/tag anchor into the fixed tree and the `stabilization/original/` backup) plus a `Classification` — `engine-defect | conversion-improvement | intentional-decline | context-dependent`. **An `!!!RESOLVE EWI!!!` breaking wrapper (or any correctly emitted supported EWI/FDM) is `intentional-decline`, resolved manually — never log it as `engine-defect`.** See [reference/templates/fix-log-format.md](reference/templates/fix-log-format.md) and [reference/templates/batch-artifacts.md](reference/templates/batch-artifacts.md).
 - `artifacts/phases/phase_{N}/` — per-phase baselines, batch reports, learnings

@@ -96,11 +96,10 @@ except ImportError as e:
     print(f"Warning: Anti-patterns report generator not available: {e}", file=sys.stderr)
     ANTI_PATTERNS_SUPPORT = False
 
-# Effort estimation (dialect-gated calculator tab: SQL Server, Redshift)
+# Effort estimation artifact loader and renderers
 try:
     from effort_estimation import (
-        build_effort_assessment,
-        is_effort_estimation_supported,
+        load_effort_assessment,
         render_effort_tab_html,
         render_overview_section_b_html,
     )
@@ -1025,7 +1024,7 @@ def generate_multi_report(
     anti_patterns_json: Path = None,
     informatica_json: Path = None,
     informatica_source_dir: Path = None,
-    base_estimates_csv: Path = None,
+    effort_estimates_json: Path = None,
     project_dir: Path = None,
 ) -> None:
     """Generate multi-tab HTML report"""
@@ -1097,8 +1096,18 @@ def generate_multi_report(
             print(f"Warning: Could not load anti-patterns data: {e}", file=sys.stderr)
             has_anti_patterns = False
 
-    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns:
-        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, or anti-patterns) must be provided")
+    effort_assessment = None
+    if effort_estimates_json and EFFORT_SUPPORT:
+        print(f"Loading effort estimates data from {effort_estimates_json}...")
+        effort_assessment = load_effort_assessment(effort_estimates_json)
+        if effort_assessment:
+            print(
+                f"  - Effort estimates: {effort_assessment['summary']['total_fde_hours']:,.1f} "
+                f"FDE hours ({effort_assessment['source_dialect']})"
+            )
+
+    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns and not effort_estimates_json:
+        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, anti-patterns, or effort estimates) must be provided")
     
     # Process exclusion data — schema produced by `scai assessment object-exclusion`
     # is the single source of truth; field names below match that schema directly.
@@ -1208,30 +1217,6 @@ def generate_multi_report(
         if scai_lang:
             overview_stats['source_dialect'] = scai_lang
             print(f"  - Using source dialect from SQL Dynamic: {scai_lang}")
-
-    # Dialect-gated effort calculator (SQL Server, Redshift). The dialect is read from
-    # {project_dir}/.scai/config/project.yml only, so runs without --project-dir get no effort tab.
-    effort_assessment = None
-    if EFFORT_SUPPORT and snowconvert_reports_dir and project_dir:
-        reports_path = Path(snowconvert_reports_dir)
-        project_path = Path(project_dir)
-        if is_effort_estimation_supported(project_path):
-            effort_assessment = build_effort_assessment(
-                reports_path,
-                base_estimates_csv,  # None → per-dialect bundled CSV is resolved
-                project_dir=project_path,
-            )
-            if effort_assessment:
-                print(
-                    f"  - Effort estimates: {effort_assessment['summary']['total_fde_hours']:,.1f} "
-                    f"FDE hours ({effort_assessment['source_dialect']})"
-                )
-            else:
-                print(
-                    "  - Warning: supported dialect but effort assessment could not be built "
-                    "(missing TopLevelCodeUnits report?)",
-                    file=sys.stderr,
-                )
 
     # Set default tab to overview if available
     if waves_json:
@@ -2670,6 +2655,11 @@ def generate_html_template(
         .nav-link.active {{
             background: #D6E6FF;
             color: #1A6CE7;
+        }}
+        /* Only nav row carrying a badge: without nowrap the flex label gives way
+           to it and the wrapped line is clipped by the fixed 30px height. */
+        .nav-link[data-tab="effort-estimates"] {{
+            white-space: nowrap;
         }}
         .nav-sublist {{
             padding: 4px 0 8px 0;
@@ -6501,11 +6491,9 @@ def main():
     )
 
     parser.add_argument(
-        '--base-estimates',
+        '--effort-estimates-json',
         type=Path,
-        help='Path to Base_estimates CSV file with per-object-type hourly rates. '
-             'Defaults to the bundled CSV for the project source dialect '
-             '(Base_estimates.csv for SQL Server, Base_estimates.redshift.csv for Redshift).'
+        help='Path to effort-estimates JSON produced by `scai assessment effort-estimate`.'
     )
 
     parser.add_argument(
@@ -6516,6 +6504,7 @@ def main():
     )
 
     args = parser.parse_args()
+    explicit_effort_estimates_json = args.effort_estimates_json
 
     # --project-dir auto-discovery: fill in registry-dir and snowconvert-reports-dir
     # from the conventional layout if they weren't set explicitly.
@@ -6568,6 +6557,18 @@ def main():
                 if ap_candidates:
                     args.anti_patterns_json = ap_candidates[-1]
                     print(f"Using anti-patterns JSON: {args.anti_patterns_json}", file=sys.stderr)
+        if not args.effort_estimates_json:
+            effort_dir = args.project_dir / "artifacts" / "assessment"
+            if effort_dir.is_dir():
+                effort_candidates = sorted(
+                    effort_dir.glob("effort-estimates-*.json")
+                )
+                if effort_candidates:
+                    args.effort_estimates_json = effort_candidates[-1]
+                    print(
+                        f"Using effort estimates JSON: {args.effort_estimates_json}",
+                        file=sys.stderr,
+                    )
         if not args.informatica_json:
             # Check common locations for Informatica analysis output
             candidates = [
@@ -6580,8 +6581,8 @@ def main():
                     print(f"Using Informatica JSON: {args.informatica_json}", file=sys.stderr)
                     break
 
-    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.registry_dir:
-        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
+    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.effort_estimates_json and not args.registry_dir:
+        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --effort-estimates-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
         print_usage()
         sys.exit(1)
 
@@ -6605,10 +6606,14 @@ def main():
         print(f"Error: Anti-Patterns JSON file not found: {args.anti_patterns_json}", file=sys.stderr)
         sys.exit(1)
 
-    # Validated here rather than at load time: load_effort_estimate_config() opens the
-    # path unguarded, so a typo reaching the render would abort the whole report.
-    if args.base_estimates and not args.base_estimates.exists():
-        print(f"Error: Base estimates CSV not found: {args.base_estimates}", file=sys.stderr)
+    if (
+        explicit_effort_estimates_json
+        and not explicit_effort_estimates_json.exists()
+    ):
+        print(
+            f"Error: Effort estimates JSON file not found: {explicit_effort_estimates_json}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Registry-driven waves data. Two modes:
@@ -6669,7 +6674,7 @@ def main():
                 anti_patterns_json=args.anti_patterns_json,
                 informatica_json=args.informatica_json,
                 informatica_source_dir=getattr(args, 'informatica_source_dir', None),
-                base_estimates_csv=getattr(args, 'base_estimates', None),
+                effort_estimates_json=getattr(args, 'effort_estimates_json', None),
                 project_dir=getattr(args, 'project_dir', None),
             )
     except Exception as e:

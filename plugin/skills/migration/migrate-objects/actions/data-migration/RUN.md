@@ -12,7 +12,7 @@ Call `migrate_data(mode="setup", where=<the batch's object filter>)`. It writes 
 
 ## 3. Dispatch
 
-Call `migrate_data(mode="run", workflow_path=<path from setup>)`. This is **pure dispatch** against the already-running infrastructure — there are no infra flags to pass. If the response is a `remediation` saying infrastructure is not up, **stop here — dispatch does not bring infrastructure up.** Hand back to [`../../../data-infrastructure/SKILL.md`](../../../data-infrastructure/SKILL.md): it is the single place the shared orchestrator + worker come up, and the only place the **local vs SPCS** placement is confirmed. Once it reports ready, retry this dispatch.
+Call `migrate_data(mode="run", workflow_path=<path from setup>)`. This is **pure dispatch** against the already-running infrastructure — there are no infra flags to pass. If the response is a `remediation` saying infrastructure is not up: when you are the session driving the wave, call `data_infrastructure(mode="up")` and retry. When you were dispatched for a single object, it is not yours to fix — the infrastructure is shared by every slot, so return `partial` and let the orchestrator bring it up.
 
 The response carries a `monitor` block (a `job_id` and a ready-made `watch_command`).
 
@@ -22,4 +22,6 @@ Arm the `monitor.watch_command` with the Monitor tool, or call `job_status(job_i
 
 ## When it finishes
 
-Completion stamps the registry field `extensions.dataMigration`, which advances the machine. Present the migration summary (`SKILL.md` Step 6) and offer to tear the shared infrastructure down when the wave is done.
+The machine reads live `DATA_MIGRATION.TABLE_PROGRESS` — do not stamp the registry. Present the migration summary (`SKILL.md` Step 6), and offer to tear the shared infrastructure down when the wave is done — unless you were dispatched for a single object, in which case leave it alone: `data_infrastructure(mode="down")` stops the worker every other slot is using, so that offer belongs to whoever owns the wave.
+
+If the job **failed**, do not re-run it and do not change Snowflake with `sql_execute`. Call `migration_status(mode="next_task")`. A failed load is `error=sql` and the machine owns the next step. A judgment you made in the converted file (meanings vs compile) is a `note` after the fix, not a live `ALTER` and not a re-dispatch of the same workflow.

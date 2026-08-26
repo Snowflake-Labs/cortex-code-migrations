@@ -1,6 +1,6 @@
 ---
 name: etl-validate
-description: Run scai test etl-validate to compare live SSIS/Informatica package output against the converted Snowflake output, and record the result on the registry entry.
+description: Run scai test etl-validate to compare live SSIS/Informatica package output against the converted Snowflake output. The CLI stamps codeStatus.etlValidate — do not invent advance outcomes.
 parent_skill: migrate-etl
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -51,21 +51,22 @@ If the session uses named-connection overrides, append:
 
 The command streams per-package results. Watch for the summary line reporting the failed-unit count.
 
-## Step 3: Record Result
+**The CLI owns the registry stamp.** On each unit it actually ran, `scai test etl-validate` writes `codeStatus.etlValidate`:
 
-**All packages passed (failed units = 0):**
+| CLI outcome | Registry stamp |
+|---|---|
+| Unit passed | `{ status: "completed", updatedAt }` |
+| Unit failed | `{ status: "failed", updatedAt, error: "comparison" }` |
+| Skipped (no ETL test YAML) | *no stamp* — field stays pending |
 
-```
-transition_status(status="advance", task="etlValidate", outcome="completed", where="id = '{ETL_ID}'")
-```
+## Step 3: Confirm stamp — do not invent advance
 
-**One or more packages failed (failed units > 0):**
+**Do not** call `transition_status(status="advance", …)` to invent a green or red outcome from narration. Re-read the unit via `query_registry` / `migration_status` and confirm `codeStatus.etlValidate` matches the CLI summary.
 
-```
-transition_status(status="advance", task="etlValidate", outcome="failed", error="comparison", where="id = '{ETL_ID}'")
-```
+- All packages passed → registry should already read `completed`; the ETL flow is terminal.
+- One or more packages failed → registry should read `failed` with `error: "comparison"`. Surface the failed package names and row-level differences from the CLI output so the user can investigate the conversion gap.
 
-Then surface the failed package names and the row-level differences to the user so they can investigate the conversion gap.
+If the CLI exited non-zero but the stamp is missing (registry write failed), say so explicitly and do **not** stamp green yourself — ask the user to re-run or investigate the registry write error.
 
 ## Step 4: Exclusion
 

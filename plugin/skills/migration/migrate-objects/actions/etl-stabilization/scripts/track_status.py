@@ -22,6 +22,7 @@ Essential commands (always used):
     python track_status.py set-test-env <session_status.json> <database> <schema>
     python track_status.py init-roadmap <session_status.json> --phases-json '<json>'
     python track_status.py init-roadmap <session_status.json> --phases-file <path>
+    python track_status.py start-phase <session_status.json> <phase_num>
     python track_status.py assign-phases <session_status.json> --phase <N> --elements <csv>  --strategy <strategy>
     python track_status.py assign-phases <session_status.json> --phase <N> --elements-file <path> --strategy <strategy>
     python track_status.py batch-assign-phases <session_status.json> --assignments-file <path>
@@ -34,10 +35,13 @@ Situational commands (error recovery, dbt):
     python track_status.py add-decision <session_status.json> --phase <N> --decision <text>
     python track_status.py update-dbt <session_status.json> <project_name> --status <status> [--reason <reason>]
     python track_status.py init-dbt <session_status.json> <project_name> <dbt_project_path>
+    python track_status.py assign-dbt-phase <session_status.json> --phase <N> --project <name>
     python track_status.py update-dbt-node <session_status.json> <project_name> <node_name> --status <status> [--reason <reason>]
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import json
 import os
@@ -106,6 +110,17 @@ def save_json(path: Path, data: dict) -> None:
             except OSError:
                 pass
         raise
+
+
+@contextlib.contextmanager
+def _locked(status_path: Path):
+    lock_path = status_path.with_suffix(status_path.suffix + ".lock")
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lf, fcntl.LOCK_UN)
 
 
 def now_iso() -> str:
@@ -182,7 +197,7 @@ def cmd_init(scan_path: Path) -> None:
         if orch_path.is_file():
             orch_hash = _file_hash(orch_path)
 
-    source_file_path = scan.get("source_definition_path")
+    source_file_path = scan.get("source_file_path")
     platform_id = scan.get("platform_id")
     if platform_id is None and "platform_id" not in scan:
         # Backward compat: old scan results created before multi-platform support
@@ -220,44 +235,45 @@ def cmd_update(status_path: Path, element_name: str, status: str, reason: str | 
         print(f"Error: invalid status '{status}'. Valid: {', '.join(sorted(VALID_STATUSES))}", file=sys.stderr)
         sys.exit(1)
 
-    session = load_json(status_path)
-    found = None
-    for el in session["elements"]:
-        if el["name"] == element_name:
-            found = el
-            break
+    with _locked(status_path):
+        session = load_json(status_path)
+        found = None
+        for el in session["elements"]:
+            if el["name"] == element_name:
+                found = el
+                break
 
-    if found is None:
-        print(f"Error: element '{element_name}' not found", file=sys.stderr)
-        sys.exit(1)
-
-    current = found["status"]
-    allowed = VALID_TRANSITIONS.get(current)
-    if allowed and status not in allowed:
-        print(f"Warning: unusual transition '{current}' -> '{status}' for '{element_name}'", file=sys.stderr)
-
-    # Validate needs-user requires reason
-    if status == "needs-user" and reason is None:
-        print("Error: 'needs-user' status requires --reason documenting prior fix attempts", file=sys.stderr)
-        sys.exit(1)
-
-    # Validate skipped requires valid reason
-    if status == "skipped":
-        if reason is None:
-            print("Error: 'skipped' status requires --reason. Valid: " + ", ".join(sorted(VALID_SKIP_REASONS)), file=sys.stderr)
-            sys.exit(1)
-        if reason not in VALID_SKIP_REASONS:
-            print(f"Error: invalid skip reason '{reason}'. Valid skip reasons: " + ", ".join(sorted(VALID_SKIP_REASONS)), file=sys.stderr)
+        if found is None:
+            print(f"Error: element '{element_name}' not found", file=sys.stderr)
             sys.exit(1)
 
-    found["status"] = status
-    if reason is not None:
-        found["reason"] = reason
-    elif "reason" in found and status not in ("skipped", "failed", "needs-user", "test-failed", "orch-tested"):
-        del found["reason"]
+        current = found["status"]
+        allowed = VALID_TRANSITIONS.get(current)
+        if allowed and status not in allowed:
+            print(f"Warning: unusual transition '{current}' -> '{status}' for '{element_name}'", file=sys.stderr)
 
-    session["last_updated"] = now_iso()
-    save_json(status_path, session)
+        # Validate needs-user requires reason
+        if status == "needs-user" and reason is None:
+            print("Error: 'needs-user' status requires --reason documenting prior fix attempts", file=sys.stderr)
+            sys.exit(1)
+
+        # Validate skipped requires valid reason
+        if status == "skipped":
+            if reason is None:
+                print("Error: 'skipped' status requires --reason. Valid: " + ", ".join(sorted(VALID_SKIP_REASONS)), file=sys.stderr)
+                sys.exit(1)
+            if reason not in VALID_SKIP_REASONS:
+                print(f"Error: invalid skip reason '{reason}'. Valid skip reasons: " + ", ".join(sorted(VALID_SKIP_REASONS)), file=sys.stderr)
+                sys.exit(1)
+
+        found["status"] = status
+        if reason is not None:
+            found["reason"] = reason
+        elif "reason" in found and status not in ("skipped", "failed", "needs-user", "test-failed", "orch-tested"):
+            del found["reason"]
+
+        session["last_updated"] = now_iso()
+        save_json(status_path, session)
     print(f"Updated '{element_name}' -> {status}")
 
 
@@ -352,6 +368,111 @@ def _validate_orch_artifacts(session: dict, phase_num: int, pkg_path: str) -> li
     return errors
 
 
+def _dbt_project_dir(session: dict, pkg_path: str, project: str) -> Path | None:
+    """Resolve a dbt project directory from session `dbt_projects[].path`."""
+    rel = None
+    for proj in session.get("dbt_projects", []):
+        if proj.get("name") == project:
+            rel = proj.get("path")
+            break
+    if not rel:
+        rel = project
+    path = Path(rel)
+    if path.is_absolute():
+        return path
+    if pkg_path:
+        return Path(pkg_path) / rel
+    return None
+
+
+def _top_level_yaml_scalar(text: str, key: str) -> str | None:
+    prefix = f"{key}:"
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent != 0:
+            continue
+        content = line.strip()
+        if content.startswith(prefix):
+            value = content[len(prefix):].strip().strip("'\"")
+            return value or None
+    return None
+
+
+def _first_level_yaml_mapping_keys(text: str, section: str) -> list[str]:
+    keys: list[str] = []
+    in_section = False
+    child_indent: int | None = None
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip())
+        content = line.strip()
+        if indent == 0:
+            in_section = content == f"{section}:" or content.startswith(f"{section}:")
+            child_indent = None
+            continue
+        if not in_section:
+            continue
+        if child_indent is None:
+            child_indent = indent
+        if indent < child_indent:
+            in_section = False
+            continue
+        if indent != child_indent:
+            continue
+        if ":" not in content:
+            continue
+        key = content.split(":", 1)[0].strip().strip("'\"")
+        if not key or key.startswith("+"):
+            continue
+        keys.append(key)
+    return keys
+
+
+def _check_dbt_project_yml_sanity(project_path: Path) -> list[str]:
+    """Structural sanity checks independent of placeholder-scanning (scan_unit.py's job).
+
+    Catches a specific, deterministic class of incomplete-bootstrap bug: the `models:`
+    block's key must match the project's own `name:` — if not, +materialized config
+    for the real project silently never applies to any model.
+    """
+    errors: list[str] = []
+    dbt_project_yml = project_path / "dbt_project.yml"
+    if not dbt_project_yml.is_file():
+        return errors
+    try:
+        text = dbt_project_yml.read_text(encoding="utf-8")
+    except OSError:
+        return errors
+    name = _top_level_yaml_scalar(text, "name")
+    models_keys = _first_level_yaml_mapping_keys(text, "models")
+    if name and models_keys and name not in models_keys:
+        errors.append(
+            f"{dbt_project_yml}: models: key(s) {models_keys} do not match name: '{name}' "
+            f"— placeholder rename incomplete (expected a 'models: {name}:' block)"
+        )
+    return errors
+
+
+def _dbt_project_yml_sanity_errors(session: dict, phase_num: int, pkg_path: str) -> list[str]:
+    dbt_nodes = session.get("dbt_nodes", [])
+    projects = sorted({
+        node.get("project")
+        for node in dbt_nodes
+        if node.get("phase") == phase_num and node.get("project")
+    })
+    errors: list[str] = []
+    for project in projects:
+        project_dir = _dbt_project_dir(session, pkg_path, project)
+        if project_dir:
+            errors.extend(_check_dbt_project_yml_sanity(project_dir))
+    return errors
+
+
 def _validate_dbt_artifacts(session: dict, phase_num: int, pkg_path: str) -> list[str]:
     """Return a list of validation errors for a dbt phase.
 
@@ -361,6 +482,7 @@ def _validate_dbt_artifacts(session: dict, phase_num: int, pkg_path: str) -> lis
     - stabilization/tests/dbt/{PROJECT}/test_report.md exists
     - dbt_learnings_{project}.md exists in phase dir
     - All dbt nodes assigned to this phase have terminal status
+    - dbt_project.yml `models:` top-level key matches `name:` (incomplete bootstrap)
     """
     errors: list[str] = []
 
@@ -388,10 +510,13 @@ def _validate_dbt_artifacts(session: dict, phase_num: int, pkg_path: str) -> lis
                 errors.append(f"Missing dbt artifact: {report_file} not found")
             if not learnings_file.is_file():
                 errors.append(f"Missing dbt artifact: {learnings_file} not found")
+            project_dir = _dbt_project_dir(session, pkg_path, project)
+            if project_dir:
+                errors.extend(_check_dbt_project_yml_sanity(project_dir))
         else:
             errors.append("Missing artifact: migration_object_path not set in session; cannot locate dbt test artifacts")
 
-    node_terminal_statuses = TERMINAL_STATUSES | {"passing"}
+    node_terminal_statuses = TERMINAL_STATUSES | {"passing", "unverified"}
     non_terminal_nodes = [
         node["name"]
         for node in dbt_nodes
@@ -611,19 +736,20 @@ def _generate_state_md(session: dict, current_phase: int, phase_status: str, nex
 
 
 def cmd_update_state(status_path: Path, current_phase: int, phase_status: str, next_action: str) -> None:
-    session = load_json(status_path)
-    if "roadmap" not in session:
-        print("Error: no roadmap in session. Run init-roadmap first.", file=sys.stderr)
-        sys.exit(1)
-    session["last_updated"] = now_iso()
-    if "planning_completed_at" not in session:
-        session["planning_completed_at"] = now_iso()
-    save_json(status_path, session)
+    with _locked(status_path):
+        session = load_json(status_path)
+        if "roadmap" not in session:
+            print("Error: no roadmap in session. Run init-roadmap first.", file=sys.stderr)
+            sys.exit(1)
+        session["last_updated"] = now_iso()
+        if "planning_completed_at" not in session:
+            session["planning_completed_at"] = now_iso()
+        save_json(status_path, session)
 
-    state_md = _generate_state_md(session, current_phase, phase_status, next_action)
-    state_dir = status_path.parent
-    state_path = state_dir / "STATE.md"
-    state_path.write_text(state_md, encoding="utf-8")
+        state_md = _generate_state_md(session, current_phase, phase_status, next_action)
+        state_dir = status_path.parent
+        state_path = state_dir / "STATE.md"
+        state_path.write_text(state_md, encoding="utf-8")
 
     print(f"STATE.md generated: {state_path}")
 
@@ -694,22 +820,45 @@ def cmd_add_decision(status_path: Path, phase_num: int, decision: str) -> None:
 # ---------------------------------------------------------------------------
 
 def cmd_assign_phases(status_path: Path, phase: int, element_names: list[str], strategy: str) -> None:
-    session = load_json(status_path)
-    updated = 0
-    for el in session["elements"]:
-        if el["name"] in element_names:
-            el["phase"] = phase
-            el["test_strategy"] = strategy
-            updated += 1
+    with _locked(status_path):
+        session = load_json(status_path)
+        updated = 0
+        for el in session["elements"]:
+            if el["name"] in element_names:
+                el["phase"] = phase
+                el["test_strategy"] = strategy
+                updated += 1
 
-    if updated == 0:
-        print("Warning: no elements matched the provided names", file=sys.stderr)
-        sys.exit(1)
+        if updated == 0:
+            print("Warning: no elements matched the provided names", file=sys.stderr)
+            sys.exit(1)
 
-    session["last_updated"] = now_iso()
-    save_json(status_path, session)
+        session["last_updated"] = now_iso()
+        save_json(status_path, session)
 
     print(f"Assigned {updated} elements to phase {phase} with strategy '{strategy}'")
+
+
+# ---------------------------------------------------------------------------
+# assign-dbt-phase
+# ---------------------------------------------------------------------------
+
+def cmd_assign_dbt_phase(status_path: Path, phase: int, project: str) -> None:
+    with _locked(status_path):
+        session = load_json(status_path)
+        updated = 0
+        for node in session.get("dbt_nodes", []):
+            if node.get("project") == project:
+                node["phase"] = phase
+                updated += 1
+
+        if updated == 0:
+            print(f"Warning: no dbt_nodes found for project '{project}'", file=sys.stderr)
+            sys.exit(1)
+
+        session["last_updated"] = now_iso()
+        save_json(status_path, session)
+    print(f"Assigned {updated} dbt nodes in project '{project}' to phase {phase}")
 
 
 # ---------------------------------------------------------------------------
@@ -734,31 +883,32 @@ def cmd_batch_assign_phases(status_path: Path, assignments_json: str) -> None:
                 print(f"Error: assignment[{i}] missing required key '{key}'", file=sys.stderr)
                 sys.exit(1)
 
-    session = load_json(status_path)
+    with _locked(status_path):
+        session = load_json(status_path)
 
-    roadmap_phases = {p["phase"] for p in session.get("roadmap", {}).get("phases", [])}
-    if roadmap_phases:
-        for i, entry in enumerate(assignments):
-            if entry["phase"] not in roadmap_phases:
-                print(f"Warning: assignment[{i}] references phase {entry['phase']} which does not exist in roadmap (available: {sorted(roadmap_phases)})", file=sys.stderr)
+        roadmap_phases = {p["phase"] for p in session.get("roadmap", {}).get("phases", [])}
+        if roadmap_phases:
+            for i, entry in enumerate(assignments):
+                if entry["phase"] not in roadmap_phases:
+                    print(f"Warning: assignment[{i}] references phase {entry['phase']} which does not exist in roadmap (available: {sorted(roadmap_phases)})", file=sys.stderr)
 
-    total_updated = 0
-    for entry in assignments:
-        phase = entry["phase"]
-        element_set = set(entry["elements"])
-        strategy = entry["strategy"]
-        for el in session["elements"]:
-            if el["name"] in element_set:
-                el["phase"] = phase
-                el["test_strategy"] = strategy
-                total_updated += 1
+        total_updated = 0
+        for entry in assignments:
+            phase = entry["phase"]
+            element_set = set(entry["elements"])
+            strategy = entry["strategy"]
+            for el in session["elements"]:
+                if el["name"] in element_set:
+                    el["phase"] = phase
+                    el["test_strategy"] = strategy
+                    total_updated += 1
 
-    if total_updated == 0:
-        print("Warning: no elements matched any provided names", file=sys.stderr)
-        sys.exit(1)
+        if total_updated == 0:
+            print("Warning: no elements matched any provided names", file=sys.stderr)
+            sys.exit(1)
 
-    session["last_updated"] = now_iso()
-    save_json(status_path, session)
+        session["last_updated"] = now_iso()
+        save_json(status_path, session)
 
     print(f"Batch-assigned {total_updated} elements across {len(assignments)} phases")
 
@@ -769,6 +919,14 @@ def cmd_batch_assign_phases(status_path: Path, assignments_json: str) -> None:
 
 def cmd_validate_phase(status_path: Path, phase_num: int, list_test_files: bool = False) -> None:
     session = load_json(status_path)
+
+    phases = session.get("roadmap", {}).get("phases", [])
+    phase_data = next((p for p in phases if p["phase"] == phase_num), None)
+    scope = (phase_data or {}).get("scope", "orchestration")
+
+    if scope == "dbt":
+        _validate_dbt_phase(session, status_path, phase_num, list_test_files)
+        return
 
     phase_els = [e for e in session["elements"] if e.get("phase") == phase_num]
     if not phase_els:
@@ -789,6 +947,7 @@ def cmd_validate_phase(status_path: Path, phase_num: int, list_test_files: bool 
         status_counts[s] = status_counts.get(s, 0) + 1
 
     fixed = status_counts.get("fixed", 0) + status_counts.get("test-passed", 0) + status_counts.get("no-fix-needed", 0)
+    needs_user = status_counts.get("needs-user", 0) + status_counts.get("auto-fixed-needs-review", 0)
     failed = status_counts.get("failed", 0) + status_counts.get("test-failed", 0)
     pending = status_counts.get("pending", 0) + status_counts.get("in_progress", 0)
     skipped = status_counts.get("skipped", 0)
@@ -797,30 +956,38 @@ def cmd_validate_phase(status_path: Path, phase_num: int, list_test_files: bool 
     print(f"Orchestration file: {line_count} lines, {ewi_count} EWI markers (file-wide, not phase-scoped)")
     print(f"Elements: {len(phase_els)} total")
     print(f"  Fixed/passed: {fixed}")
+    print(f"  Needs-user:   {needs_user}")
     print(f"  Failed:       {failed}")
     print(f"  Pending:      {pending}")
     print(f"  Skipped:      {skipped}")
 
     if list_test_files:
         pkg_path = session.get("migration_object_path", "")
-        test_directory = phase_dir(pkg_path, phase_num) if pkg_path else None
+        test_directory = (tests_dir(pkg_path) / "orchestration") if pkg_path else None
         seen: set[str] = set()
         found: list[str] = []
         for el in phase_els:
             strategy = el.get("test_strategy") or ""
-            stmt = el.get("statement", "")
             if strategy.startswith("grouped:"):
                 group_name = strategy.split(":", 1)[1]
-                fname = f"grouped_{group_name}.sql"
+                short_name = f"grouped_{group_name}"
             else:
-                fname = f"{el['name']}.sql"
+                short_name = el["name"].rsplit(".", 1)[-1]
+            fname = f"{short_name}.sql"
             if fname in seen:
                 continue
             seen.add(fname)
             if test_directory:
-                candidate = test_directory / stmt / fname
-                if candidate.is_file():
-                    found.append(str(candidate))
+                matches = sorted(test_directory.rglob(fname))
+                if not matches:
+                    found.append(f"{fname}: (not found)")
+                elif len(matches) == 1:
+                    found.append(str(matches[0]))
+                else:
+                    found.append(
+                        f"{fname}: {len(matches)} candidates — "
+                        f"{', '.join(str(m) for m in matches)} (verify)"
+                    )
         print(f"\nTest files ({len(found)}):")
         for f in found:
             print(f"  {f}")
@@ -838,6 +1005,64 @@ def cmd_validate_phase(status_path: Path, phase_num: int, list_test_files: bool 
         sys.exit(1)
 
 
+def _validate_dbt_phase(session: dict, status_path: Path, phase_num: int, list_test_files: bool) -> None:
+    pkg_path = session.get("migration_object_path", "")
+    dbt_nodes = [n for n in session.get("dbt_nodes", []) if n.get("phase") == phase_num]
+    if not dbt_nodes:
+        print(f"Error: no dbt nodes assigned to phase {phase_num}", file=sys.stderr)
+        sys.exit(1)
+
+    status_counts: dict[str, int] = {}
+    for node in dbt_nodes:
+        s = node["status"]
+        status_counts[s] = status_counts.get(s, 0) + 1
+
+    fixed = (
+        status_counts.get("fixed", 0)
+        + status_counts.get("test-passed", 0)
+        + status_counts.get("no-fix-needed", 0)
+        + status_counts.get("passing", 0)
+        + status_counts.get("unverified", 0)
+    )
+    needs_user = status_counts.get("needs-user", 0) + status_counts.get("auto-fixed-needs-review", 0)
+    failed = status_counts.get("failed", 0) + status_counts.get("test-failed", 0)
+    pending = status_counts.get("pending", 0) + status_counts.get("in_progress", 0)
+
+    print(f"=== Phase {phase_num} Validation (dbt) ===")
+    print(f"dbt nodes: {len(dbt_nodes)} total")
+    print(f"  Fixed/passed: {fixed}")
+    print(f"  Needs-user:   {needs_user}")
+    print(f"  Failed:       {failed}")
+    print(f"  Pending:      {pending}")
+
+    if list_test_files:
+        projects = sorted({n.get("project") for n in dbt_nodes if n.get("project")})
+        stab_tests_dir = tests_dir(pkg_path) if pkg_path else None
+        for project in projects:
+            if stab_tests_dir:
+                project_tests = stab_tests_dir / "dbt" / project / "tests"
+                for f in sorted(project_tests.glob("*.sql")) if project_tests.is_dir() else []:
+                    print(f"  {f}")
+
+    yml_errors = _dbt_project_yml_sanity_errors(session, phase_num, pkg_path) if pkg_path else []
+    for err in yml_errors:
+        print(f"Error: {err}", file=sys.stderr)
+
+    ok = failed == 0 and pending == 0 and not yml_errors
+    if ok:
+        print("PASS: All dbt nodes resolved.")
+    else:
+        reasons = []
+        if pending > 0:
+            reasons.append(f"{pending} nodes still pending")
+        if failed > 0:
+            reasons.append(f"{failed} nodes failed")
+        if yml_errors:
+            reasons.append(f"{len(yml_errors)} dbt_project.yml sanity error(s)")
+        print(f"FAIL: {'; '.join(reasons)}")
+        sys.exit(1)
+
+
 # ---------------------------------------------------------------------------
 # update-dbt
 # ---------------------------------------------------------------------------
@@ -847,27 +1072,28 @@ def cmd_update_dbt(status_path: Path, project_name: str, status: str, reason: st
         print(f"Error: invalid dbt status '{status}'. Valid: {', '.join(sorted(VALID_DBT_STATUSES))}", file=sys.stderr)
         sys.exit(1)
 
-    session = load_json(status_path)
-    dbt_projects = session.get("dbt_projects", [])
+    with _locked(status_path):
+        session = load_json(status_path)
+        dbt_projects = session.get("dbt_projects", [])
 
-    found = None
-    for proj in dbt_projects:
-        if proj["name"] == project_name:
-            found = proj
-            break
+        found = None
+        for proj in dbt_projects:
+            if proj["name"] == project_name:
+                found = proj
+                break
 
-    if found is None:
-        print(f"Error: dbt project '{project_name}' not found", file=sys.stderr)
-        sys.exit(1)
+        if found is None:
+            print(f"Error: dbt project '{project_name}' not found", file=sys.stderr)
+            sys.exit(1)
 
-    found["status"] = status
-    if reason is not None:
-        found["reason"] = reason
-    elif "reason" in found and status not in ("dbt-failed", "skipped"):
-        del found["reason"]
+        found["status"] = status
+        if reason is not None:
+            found["reason"] = reason
+        elif "reason" in found and status not in ("dbt-failed", "skipped"):
+            del found["reason"]
 
-    session["last_updated"] = now_iso()
-    save_json(status_path, session)
+        session["last_updated"] = now_iso()
+        save_json(status_path, session)
     print(f"Updated dbt project '{project_name}' -> {status}")
 
 
@@ -876,46 +1102,47 @@ def cmd_update_dbt(status_path: Path, project_name: str, status: str, reason: st
 # ---------------------------------------------------------------------------
 
 def cmd_init_dbt(status_path: Path, project_name: str, dbt_project_path: Path) -> None:
-    session = load_json(status_path)
-    dbt_projects = session.get("dbt_projects", [])
+    with _locked(status_path):
+        session = load_json(status_path)
+        dbt_projects = session.get("dbt_projects", [])
 
-    found = None
-    for proj in dbt_projects:
-        if proj["name"] == project_name:
-            found = proj
-            break
+        found = None
+        for proj in dbt_projects:
+            if proj["name"] == project_name:
+                found = proj
+                break
 
-    if found is None:
-        print(f"Error: dbt project '{project_name}' not found in session", file=sys.stderr)
-        sys.exit(1)
+        if found is None:
+            print(f"Error: dbt project '{project_name}' not found in session", file=sys.stderr)
+            sys.exit(1)
 
-    models_dir = dbt_project_path / "models"
-    nodes: list[dict] = []
-    if models_dir.is_dir():
-        for sql_file in sorted(models_dir.rglob("*.sql")):
-            rel = str(sql_file.relative_to(dbt_project_path))
-            node_name = sql_file.stem
-            nodes.append({
-                "name": node_name,
-                "path": rel,
-                "status": "pending",
+        models_dir = dbt_project_path / "models"
+        nodes: list[dict] = []
+        if models_dir.is_dir():
+            for sql_file in sorted(models_dir.rglob("*.sql")):
+                rel = str(sql_file.relative_to(dbt_project_path))
+                node_name = sql_file.stem
+                nodes.append({
+                    "name": node_name,
+                    "path": rel,
+                    "status": "pending",
+                })
+
+        found["nodes"] = nodes
+        # Also populate top-level dbt_nodes for validation queries
+        top_nodes = session.setdefault("dbt_nodes", [])
+        # Remove existing nodes for this project (idempotent)
+        top_nodes[:] = [n for n in top_nodes if n.get("project") != project_name]
+        for node in nodes:
+            top_nodes.append({
+                "name": node["name"],
+                "path": node["path"],
+                "status": node["status"],
+                "project": project_name,
+                "phase": None,
             })
-
-    found["nodes"] = nodes
-    # Also populate top-level dbt_nodes for validation queries
-    top_nodes = session.setdefault("dbt_nodes", [])
-    # Remove existing nodes for this project (idempotent)
-    top_nodes[:] = [n for n in top_nodes if n.get("project") != project_name]
-    for node in nodes:
-        top_nodes.append({
-            "name": node["name"],
-            "path": node["path"],
-            "status": node["status"],
-            "project": project_name,
-            "phase": None,
-        })
-    session["last_updated"] = now_iso()
-    save_json(status_path, session)
+        session["last_updated"] = now_iso()
+        save_json(status_path, session)
     print(f"Initialized {len(nodes)} dbt nodes for project '{project_name}'")
 
 
@@ -928,34 +1155,44 @@ def cmd_update_dbt_node(status_path: Path, project_name: str, node_name: str, st
         print(f"Error: invalid dbt node status '{status}'. Valid: {', '.join(sorted(VALID_DBT_NODE_STATUSES))}", file=sys.stderr)
         sys.exit(1)
 
-    session = load_json(status_path)
-    proj = None
-    for p in session.get("dbt_projects", []):
-        if p["name"] == project_name:
-            proj = p
-            break
-    if proj is None:
-        print(f"Error: dbt project '{project_name}' not found", file=sys.stderr)
-        sys.exit(1)
+    with _locked(status_path):
+        session = load_json(status_path)
+        proj = None
+        for p in session.get("dbt_projects", []):
+            if p["name"] == project_name:
+                proj = p
+                break
+        if proj is None:
+            print(f"Error: dbt project '{project_name}' not found", file=sys.stderr)
+            sys.exit(1)
 
-    nodes = proj.get("nodes", [])
-    found = None
-    for node in nodes:
-        if node["name"] == node_name:
-            found = node
-            break
-    if found is None:
-        print(f"Error: node '{node_name}' not found in project '{project_name}'", file=sys.stderr)
-        sys.exit(1)
+        nodes = proj.get("nodes", [])
+        found = None
+        for node in nodes:
+            if node["name"] == node_name:
+                found = node
+                break
+        if found is None:
+            print(f"Error: node '{node_name}' not found in project '{project_name}'", file=sys.stderr)
+            sys.exit(1)
 
-    found["status"] = status
-    if reason is not None:
-        found["reason"] = reason
-    elif "reason" in found and status not in ("failed", "skipped", "unverified"):
-        del found["reason"]
+        found["status"] = status
+        if reason is not None:
+            found["reason"] = reason
+        elif "reason" in found and status not in ("failed", "skipped", "unverified"):
+            del found["reason"]
 
-    session["last_updated"] = now_iso()
-    save_json(status_path, session)
+        for top_node in session.get("dbt_nodes", []):
+            if top_node.get("project") == project_name and top_node.get("name") == node_name:
+                top_node["status"] = status
+                if reason is not None:
+                    top_node["reason"] = reason
+                elif "reason" in top_node and status not in ("failed", "skipped", "unverified"):
+                    del top_node["reason"]
+                break
+
+        session["last_updated"] = now_iso()
+        save_json(status_path, session)
     print(f"Updated node '{node_name}' in '{project_name}' -> {status}")
 
 
@@ -1097,6 +1334,35 @@ def main() -> None:
             sys.exit(1)
 
         cmd_assign_phases(status_path, phase, element_names, strategy)
+
+    elif command == "assign-dbt-phase":
+        if len(sys.argv) < 3:
+            print("Usage: python track_status.py assign-dbt-phase <session_status.json> --phase <N> --project <name>", file=sys.stderr)
+            sys.exit(1)
+        status_path = Path(sys.argv[2])
+        if not status_path.is_file():
+            print(f"Error: '{status_path}' not found", file=sys.stderr)
+            sys.exit(1)
+
+        phase = None
+        project = None
+        i = 3
+        while i < len(sys.argv):
+            if sys.argv[i] == "--phase" and i + 1 < len(sys.argv):
+                phase = parse_int(sys.argv[i + 1], "phase")
+                i += 2
+            elif sys.argv[i] == "--project" and i + 1 < len(sys.argv):
+                project = sys.argv[i + 1]
+                i += 2
+            else:
+                print(f"Error: unexpected argument '{sys.argv[i]}'", file=sys.stderr)
+                sys.exit(1)
+
+        if phase is None or project is None:
+            print("Error: --phase and --project are required", file=sys.stderr)
+            sys.exit(1)
+
+        cmd_assign_dbt_phase(status_path, phase, project)
 
     elif command == "batch-assign-phases":
         if len(sys.argv) < 3:
