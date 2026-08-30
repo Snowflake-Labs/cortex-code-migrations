@@ -134,7 +134,7 @@ These are built-in tools invoked through the tool-use interface, the same way yo
 | `snowflake_sql_execute` | Run SQL against Snowflake | SQL string, connection |
 | `ask_user_question` | Ask the user a question | question text, options |
 
-**`agent_output`** — documented in CoCo guides but not reliably available. Do not attempt to call it — failed attempts waste a turn. Use **automatic task notifications** as the only mechanism for receiving background agent results (see Agent Wait Protocol in SKILL.md).
+**`agent_output`** — documented in CoCo guides but not reliably available. Do not attempt to call it — failed attempts waste a turn. Use the **Agent Wait Protocol** in SKILL.md. Never tell the user a subagent is running unless this turn's spawn tool results include live agent ids.
 
 #### How to reference tools in this skill
 

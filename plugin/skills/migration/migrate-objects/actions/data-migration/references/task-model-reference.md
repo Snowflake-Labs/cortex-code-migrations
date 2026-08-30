@@ -51,18 +51,46 @@ Validation adds L1/L2/L3 chains with Snowpipe drain barriers when `useSnowpipeFo
 
 ## Scope grammar
 
-Scopes are hierarchical strings used for filtering and pause/cancel operations:
+Every task has a `SCOPE`: a hierarchical string of `::`-joined fragments, ordered least → most specific, describing the task's purpose and target. Scopes drive prefix queries, **rate limiting** (`RATE_LIMIT.SCOPE_PATTERN`), and the pause/resume/cancel procedures — all match `SCOPE` with SQL `LIKE`. The owning workflow is tracked separately in `TASK_QUEUE.WORKFLOW_ID` (not embedded in table/partition scopes).
+
+### Data migration scopes
 
 | Pattern | Meaning |
 |---------|---------|
-| `Table[DB.SCHEMA.TABLE]::Preprocessing` | Table setup phase |
-| `Table[DB.SCHEMA.TABLE]::Partition[N]::Extraction` | Partition extraction |
-| `Table[DB.SCHEMA.TABLE]::Partition[N]::Loading` | Partition load |
-| `preflight::<workflowId>::schema_drop` | Preflight cleanup |
+| `Table[DB.SCHEMA.TABLE]::Preprocessing` | Table setup phase (metadata + partition strategy) |
+| `Table[DB.SCHEMA.TABLE]::Partition[N]::Extraction` | Partition extraction (DEA) |
+| `Table[DB.SCHEMA.TABLE]::Partition[N]::DeletionKeysExtraction` | Primary-key extraction for `trackDeletions` (distinct from `Extraction`) |
+| `Table[DB.SCHEMA.TABLE]::Partition[N]::Loading` | Partition load (`COPY INTO` / Snowpipe) |
+| `Table[DB.SCHEMA.TABLE]::Preprocessing::SnowpipeSetup` / `::SnowpipeTeardown` | Snowpipe pipe create / drop |
+| `Table[DB.SCHEMA.TABLE]::Preprocessing::PreflightSetup` | Preflight (bounded dry-run) setup |
+| `preflight::<workflowId>::schema_drop` | Drop transient `PREFLIGHT_<workflowId>` schema |
+| `workflow::<workflowId>::transient_cleanup` | Clean up transient resources at workflow end |
 
-Query tasks by scope prefix:
+The table identifier in `Table[...]` is the **normalized source FQN** (for example `MY_DB.DBO.CUSTOMERS`).
+
+### Data validation scopes
+
+Validation tasks are prefixed with `DV::` so they never collide with migration scopes.
+
+| Pattern | Meaning |
+|---------|---------|
+| `DV::Table[ID]::Preprocessing` | Validation metadata / table prep |
+| `DV::Table[ID]::SchemaValidation` | L1 schema validation |
+| `DV::Table[ID]::Partition[N]::MetricsValidation` | L2 metrics validation |
+| `DV::Table[ID]::Partition[N]::RowValidation` | L3 row-hash validation |
+| `DV::Table[ID]::Partition[N]::CellDrilldown` | Hybrid L3 cell drill-down (may carry `Batch[k]` before the op) |
+| `DV::Table[ID]::Partition[N]::WriteResults[row\|cell]` | Write results (row-hash or cell); batched as `...::Batch[k]::WriteResults[cell]` |
+| `DV::Table[ID]::Evaluate[LEVEL]` | Evaluate a completed level |
+| `DV::Table[ID]::ReconcilePossibleMismatches` | Post-drilldown reconcile of `POSSIBLE_MISMATCH` |
+| `DV::Table[ID]::L3EarlyStopMonitor` | Periodic L3 early-stop monitor |
+| `DV::Table[ID]::DetectionComplete` / `::SyncBaseline` / `::SyncFinalize` | Incremental validation bookkeeping |
+| `DV::Pipe[KEY]::SnowpipeSetup\|SnowpipeTeardown\|SnowpipeDrain\|SnowpipePrepareDrain` | Snowpipe ops for validation results |
+| `DV::ObjectTypeDetection::Preprocessing` | Object-type dispatch task |
+
+### Querying / matching by scope
 
 ```sql
+-- All tasks for one table (migration):
 SELECT ID, NAME, STATUS, LAST_ERROR_MESSAGE
 FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
 WHERE WORKFLOW_ID = <id>
@@ -70,7 +98,7 @@ WHERE WORKFLOW_ID = <id>
 ORDER BY ID;
 ```
 
-The table identifier in `Table[...]` is the **normalized source FQN** (for example `MY_DB.DBO.CUSTOMERS`).
+The same `LIKE` matching powers rate-limit `SCOPE_PATTERN` rules (e.g. `Table[%]::Loading` caps concurrent loads) and scope-filtered queries or pause/cancel (e.g. `DV::Table[%]::Partition%::RowValidation` selects L3 tasks). See [rate limiting](../../../../data-infrastructure/references/advanced-operations-reference.md#rate-limiting-protect-source-or-shared-resources).
 
 ## Dependency model
 
@@ -138,4 +166,4 @@ Lower number = higher priority. Fan-out / strategy tasks ≈ 1; extraction sprea
 
 - [Troubleshooting reference](./troubleshooting-reference.md)
 - [Workflow config reference](./workflow-config-reference.md)
-- [Data Doctor reference](../../../data-infrastructure/references/data-doctor-reference.md)
+- [Data Doctor reference](../../../../data-infrastructure/references/data-doctor-reference.md)

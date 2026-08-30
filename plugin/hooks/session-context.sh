@@ -2,10 +2,11 @@
 # Copyright 2026 Snowflake Inc.
 # SPDX-License-Identifier: Apache-2.0
 #
-# UserPromptSubmit hook — ONCE per session, injects a single fact (does a
-# migration project exist in this directory?) plus which way to route, so the
-# agent orients on the user's first message. Tool-level instructions
-# (configure, migration_status) belong to the migration skill, not here.
+# UserPromptSubmit hook — ONCE per session, injects the migration-project
+# context plus routing guidance so the agent orients on the user's first
+# message. Dev-channel plugin builds also receive their release-safety
+# guardrail here. Tool-level instructions (configure, migration_status) belong
+# to the migration skill, not here.
 #
 # Why UserPromptSubmit, not SessionStart: coco only logs/displays SessionStart
 # additionalContext (agentService.executeSessionStartHooks logs it; the CLI
@@ -18,6 +19,10 @@
 # re-injecting the same guidance and wasting tokens on every turn.
 
 input="$(cat 2>/dev/null)"
+
+plugin_root="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+manifest="$plugin_root/.cortex-plugin/plugin.json"
+dev_reminder="$plugin_root/hooks/dev-build-reminder.txt"
 
 sid="$(printf '%s' "$input" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)"
 marker=""
@@ -50,6 +55,11 @@ else
 - Otherwise, match the request to the relevant skill.
 </system-reminder>
 EOF
+fi
+
+if [ -r "$dev_reminder" ] && [ -r "$manifest" ] \
+  && grep -Eq '"buildChannel"[[:space:]]*:[[:space:]]*"dev"' "$manifest"; then
+  cat "$dev_reminder"
 fi
 
 # Record that this session has received the context so later turns stay silent.

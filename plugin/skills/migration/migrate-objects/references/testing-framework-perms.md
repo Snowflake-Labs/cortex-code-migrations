@@ -8,7 +8,7 @@ What Snowflake and source-DB privileges the testing framework needs, and what to
 
 When the user opts into testing (answers Q1 in `migrate-objects/SKILL.md` Step 2), `configure(recheck=true)` triggers two probes that may write to Snowflake:
 
-1. **`scai test validate --create-schema`** — installs the `VALIDATION` schema in the configured database. Creates a stage (`@VALIDATION.BASELINES`), a results table (`VALIDATION.RESULTS`), supporting views (`SUMMARY`, `LATEST`, `FAILURES`), and the validation stored procedures (`VALIDATE_SINGLE`, `VALIDATE_BATCH`). Idempotent on the scai side — re-runs against an already-deployed schema are no-ops.
+1. **`scai test validate --create-schema`** — installs the `VALIDATION` schema in the database named by `testing_results_database` in `.scai/settings/test_config.yaml` (the SnowConvert metadata database, not the migration target; projects predating that setting still have it in the target). Creates a stage (`@VALIDATION.BASELINES`), a results table (`VALIDATION.RESULTS`), supporting views (`SUMMARY`, `LATEST`, `FAILURES`), and the validation stored procedures (`VALIDATE_SINGLE`, `VALIDATE_BATCH`). Idempotent on the scai side — re-runs against an already-deployed schema are no-ops.
 2. **`SHOW GRANTS TO ROLE CURRENT_ROLE()`** — read-only check that the active Snowflake role has `CREATE DATABASE on ACCOUNT`, needed for clone-based test isolation during `scai test validate`.
 
 Later, during the deploy-test-fix loop, the framework also:

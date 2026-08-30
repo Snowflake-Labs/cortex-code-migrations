@@ -115,36 +115,41 @@ Use the `files.source.path` from Step 2. Internalize:
 | Complexity | Signals | Agents to spawn |
 |---|---|---|
 | **Simple** | 1–3 params, straightforward logic | 3 (one of each type) |
-| **Complex** | 4+ params, multiple branches, table lookups, OUT params | 6 (two of each type — see A/B split in each agent file) |
+| **Complex** | 4+ params, multiple branches, table lookups, OUT params | 6 (two of each type — pass `split: A` and `split: B`) |
 
 ### 5.3 — Spawn agents in parallel
 
-Use the Task tool. Each agent reads its own instruction file; do **not** paste instructions inline.
+Use the Task tool. Spawn each as its `subagent_type` with a facts-only
+prompt — the agent definition is the contract. Do not paste instructions
+inline and do not tell it to read a path.
 
-| Agent | Instruction file | Needs source DB | Focus |
+| Agent | `subagent_type` | Needs source DB | Focus |
 |---|---|---|---|
-| **Data-Driven** (most important) | `agents/data_driven.md` | Yes (or testbed CSVs as fallback) | Real parameter values from actual data |
-| **Edge Cases & Boundaries** | `agents/edge_cases.md` | No | NULLs, zeros, type limits, overflow |
-| **Business Logic** | `agents/business_logic.md` | No | Branch coverage from source SQL analysis |
-
-Spawn prompt for each agent:
+| **Data-Driven** (most important) | [`data_driven`](../../../../agents/data_driven.md) | Yes (or testbed CSVs as fallback) | Real parameter values from actual data |
+| **Edge Cases & Boundaries** | [`edge_cases`](../../../../agents/edge_cases.md) | No | NULLs, zeros, type limits, overflow |
+| **Business Logic** | [`business_logic`](../../../../agents/business_logic.md) | No | Branch coverage from source SQL analysis |
 
 ```
-Read the instructions at <baseline_capture_dir>/agents/<agent_type>.md
-then produce test_cases for <object_name>.
+Produce test_cases for this object, following your agent definition.
 
-Object signature: <signature>
-Source code: <source_code>
-Referenced tables: <table_list>            # data-driven only
-Source connection name: <source_connection>  # data-driven only
-Project directory: <project_dir>
+object_name:         <object_name>
+signature:           <signature>
+source_code:         <source_code>
+project_dir:         <project_dir>
+referenced_tables:   <table_list>            # data_driven only
+source_connection:   <source_connection>     # data_driven only
+split:               A|B                     # complex only
 ```
 
-For **complex** objects spawn 2 agents per type — the agent files describe the A/B split.
+For **complex** objects spawn 2 of each type, one with `split: A` and
+one with `split: B`.
 
 ### 5.4 — Collect, dedupe, target 15–25 rows
 
-Each agent writes its rows to `<project_dir>/.scai/tmp/<object_name>_<agent_type>.yml` (also prints them to stdout as a backup). After all agents complete:
+Each agent writes its rows to
+`<project_dir>/.scai/tmp/<object_name>_<data_driven|edge_cases|business_logic>.yml`
+(or `_*_a.yml` / `_*_b.yml` when `split` was set; also prints them to
+stdout as a backup). After all agents complete:
 
 1. Read each tmp file. Fall back to stdout parsing if a tmp file is missing.
 2. Concatenate `test_cases:` lists. Drop exact duplicates.

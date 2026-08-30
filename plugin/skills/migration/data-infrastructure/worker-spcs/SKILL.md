@@ -84,6 +84,8 @@ Note the exact secret names — they are referenced in Step 4.
 
 **Wait for the user to confirm the secrets are created before continuing.**
 
+> **Non-SPCS / local workers:** Snowflake Secrets above apply to SPCS container services only. For external vaults, AWS Secrets Manager REST providers, or `$(...)` command substitution in worker TOML, see [Advanced: Secrets management](../references/worker-config-reference.md#advanced-secrets-management).
+
 **Oracle and Teradata only:** The container requires outbound network access for two destinations: the source database host and the NuGet driver download endpoint. Ask the user to provide an `EXTERNAL_ACCESS_INTEGRATION` covering both. If they do not have one, show:
 
 ```sql

@@ -175,6 +175,7 @@ pending — do not invent completion from chat history.
 | 1 | oracle-connection | `../connection/oracle-connection/SKILL.md` |
 | 1 | teradata-connection | `../connection/teradata-connection/SKILL.md` |
 | 1 | postgresql-connection | `../connection/postgresql-connection/SKILL.md` |
+| 1 | db2-connection | `../connection/db2-connection/SKILL.md` |
 | — | midway-entry (existing project with pre-converted code; SQL Server/Redshift only) | `./midway-entry.md` |
 | 3 | register-code-units | `../register-code-units/SKILL.md` |
 | 4 | convert | `../convert/SKILL.md` |
@@ -187,6 +188,7 @@ pending — do not invent completion from chat history.
 | — | data-migration-setup | `../migrate-objects/actions/data-migration/SKILL.md` |
 | — | data-validation-setup | `./data-validation/SKILL.md` |
 | — | data-infrastructure-teardown | `../data-infrastructure/teardown/SKILL.md` |
+| — | discover-extras (custom assets the engine doesn't generate — FiveTran, SSAS, Oracle PACKAGE, scripts) | `./discover-extras/SKILL.md` |
 
 ## Rules
 

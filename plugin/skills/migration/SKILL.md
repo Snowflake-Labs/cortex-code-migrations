@@ -73,6 +73,7 @@ Present the narrative summary followed by the progress checklist, then continue 
 
 ## Prescribed Path
 
+<prescribed-path>
 Use `routing` from the status JSON to delegate to the next step:
 
 | Condition | Sub-skill |
@@ -83,6 +84,7 @@ Use `routing` from the status JSON to delegate to the next step:
 | `routing.assessed` = true | Load `./migrate-objects/SKILL.md` |
 
 Each sub-skill handles its own internal routing based on the full `routing` object.
+</prescribed-path>
 
 ---
 
@@ -95,7 +97,9 @@ These answer common questions about project state without loading a sub-skill:
 
 - **"Show me objects that match rule X"** — Load `./migrate-objects/rule-engine/propagate/SKILL.md`.
 
-- **"How do I extend / customize the migration plugin?"** / **"How do I override task X?"** — Load `./extensibility/TASKS.md` for the full reference: overridable task ids, per-task contracts, and the project-local + `$AIM_SKILL_EXT_DIR` paths. Optionally call `migration_status(mode='extensions')` to show which overrides are active.
+- **"How do I extend / customize the migration plugin?"** / **"How do I override task X?"** — Load `./extensibility/TASKS.md` for the full reference: overridable task ids, per-task contracts, the project-local + `$AIM_SKILL_EXT_DIR` paths, and registering code units with `kind=custom` plus a free-form `customKind` discriminator. Optionally call `migration_status(mode='extensions')` to show which overrides are active.
+
+- **"My migration also has FiveTran / SSAS / dbt / Airflow / Oracle PACKAGE bodies / scripts the engine doesn't generate"** / **"How do I track <non-built-in asset> in the migration?"** — Load `./setup/discover-extras/SKILL.md`. Registers each asset as a code unit with `kind=custom` and a `customKind` discriminator, then writes a `.scai/skills/<customKind>.md` cookbook with the customer so every object of that kind runs the same playbook (see `./extensibility/TASKS.md` → "Custom code units").
 
 ---
 
@@ -110,10 +114,18 @@ Match the user's request to the most relevant skill and load it.
 - If the request is ambiguous between siblings, ask one clarifying question.
 - If no skill matches, fall back to the section below.
 
+### SAS (Preview — parallel track, not SnowConvert)
+- **sas** (Preview) — SAS → Snowflake: assess portfolios, convert `.sas` programs, or load `.sas7bdat` from a stage → `./sas/SKILL.md`
+  - **assess-sas-migration** — portfolio complexity, dependency DAG, migration waves → `./sas/assess-sas-migration/SKILL.md`
+  - **convert-sas-to-snowflake** — convert SAS programs to Snowflake SQL / stored procedures → `./sas/convert-sas-to-snowflake/SKILL.md`
+  - **migrate-sas7bdat-to-snowflake** — bulk-load `.sas7bdat` from a stage into tables → `./sas/migrate-sas7bdat-to-snowflake/SKILL.md`
+  - **validate-sas-conversion** — validate an existing SAS conversion → `./sas/convert-sas-to-snowflake/validate-sas-conversion/SKILL.md`
+
 ### Setup & onboarding
 - **setup** — full setup, steps 1–5: connect, init, register, convert, assess → `./setup/SKILL.md`
   - **midway-entry** — existing project with source + pre-converted Snowflake SQL (SQL Server / Redshift only) → `./setup/midway-entry.md`
   - **configure-snowflake-target** — set or change the Snowflake connection and target database for object migration. Triggers: "change the target database", "deploy to a different database", "switch Snowflake connection" → `./setup/configure-snowflake-target.md`
+  - **snowflake-connection** — create or repair a Snowflake target authenticator. Use for Microsoft Entra ID / Azure AD / OIDC (`oauth_authorization_code`); do not use `externalbrowser` for Entra → `./connection/snowflake-connection/SKILL.md`
   - **configure-testing** — pick or change the testing path (source-data vs synthetic) for procedure/function equivalence tests. Triggers: "change testing path", "switch to synthetic tests", "use query logs" → `./setup/configure-testing.md`
   - **data-validation-setup** — configure cloud data validation: schema, metrics, row-level checks → `./setup/data-validation/SKILL.md`
   - **data-infrastructure-teardown** — suspend SPCS service + compute pool, stop local worker (cost-saving) → `./data-infrastructure/teardown/SKILL.md`
@@ -145,6 +157,7 @@ Match the user's request to the most relevant skill and load it.
 
 ### Customization
 - **task-overrides** — replace the skill that runs for any built-in task with the user's own `SKILL.md`, scoped to the project or to a global directory via `$AIM_SKILL_EXT_DIR`. Triggers: "extend the plugin", "customize task X", "swap out the skill for Y", "override registerCode/convertCode/deploy/...". Reference: `./extensibility/TASKS.md`
+- **discover-extras** — register assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, Informatica, SSAS cubes, Oracle PACKAGE bodies, custom shell scripts) as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved `databaseObject` / `script` / `etl` / `custom` set) so they flow through orchestration alongside built-in units. Triggers: "I have FiveTran / SSAS / dbt / a script that touches the database", "register custom asset", "track <non-built-in> in the migration". Skill: `./setup/discover-extras/SKILL.md`. Reference: `./extensibility/TASKS.md` (Custom code units).
 
 ## Fallback
 

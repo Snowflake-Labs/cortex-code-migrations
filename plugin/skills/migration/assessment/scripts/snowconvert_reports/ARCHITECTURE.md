@@ -282,7 +282,7 @@ ETL doesn't subclass `Element`. It composes a richer domain model:
 |---|---|---|
 | CSV parsing, encoding | `snowconvert_reports/loaders/csv_reader.py` | Single implementation for all sub-skills |
 | Report file discovery | `snowconvert_reports/services/report_finder.py` | Consistent glob patterns |
-| Project facts (`project_name`) | `snowconvert_reports/loaders/project_config.py` | Reads `.scai/config/project.yml`, which scai owns and writes. Duplicates the flat-YAML scan in `effort_estimation.py` rather than sharing it — that module deliberately imports nothing from here (`ai/CLAUDE.md` pitfall #8) |
+| Project facts (`project_name`) | `snowconvert_reports/loaders/project_config.py` | Reads the scai-owned `.scai/config/project.yml` for assessment-name fallback and metadata tooling |
 | Report display name (`assessment.json`) | `snowconvert_reports/services/assessment_metadata.py` | Composes both sources behind `resolve_assessment_name()`, so the name offered at the `SKILL.md` prompt and the name rendered in the report cannot disagree. The only module here that **writes** |
 | Data models (raw rows) | `snowconvert_reports/models/` | One frozen dataclass per CSV file type |
 | Effort calculation | `snowconvert_reports/services/issue_effort_service.py` | Unified EWI/non-EWI logic |

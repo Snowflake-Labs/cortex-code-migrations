@@ -14,9 +14,8 @@ How the migration plugin manages git for multi-user concurrent migrations.
 1. Files for the finished objects are committed on top of `origin/main` using pure git plumbing (the working tree stays on your branch).
 2. The commit is pushed to the remote. If a teammate pushed in between, the plugin re-fetches, checks for overlapping files, rebuilds, and retries (up to 3 times).
 3. Your branch is rebased onto the updated `main`, pulling in teammates' merged work.
-4. Dependency-blocked objects that depended on the just-finished objects are unblocked.
 
-All of these steps are reported in the response's `git_activity` array.
+All of these steps are reported in the response's `git_activity` array. Dependents waiting on the finished objects are offered again on the next walk — that is derived, not a finish-time stamp clear.
 
 ## What Happens During `migration_status`
 

@@ -7,11 +7,11 @@ User says: "Fix this ETL package at /data/packages/SalesLoad"
 Actions:
 1. No STATE.md found → run Planning Workflow
 2. Scan package, initialize tracking, gather test env (user provides DATABASE with CREATE SCHEMA privileges)
-3. Use the `task` tool to spawn `name="context-mapper"` with `run_in_background=false` (no team during planning) → wait for task notification → verify `orchestration-context.md` and `dbt-context.md`
+3. Use the `task` tool to spawn `name="context-mapper"` with `run_in_background=false` (no team during planning) → process the tool result in this turn → verify `orchestration-context.md` and `dbt-context.md`
 4. Author ROADMAP.md from template (Write tool) with 3 phases (2 orchestration + 1 final validation), each with task definitions (task table, element-to-task assignments, schema names)
 5. Register phases in `artifacts/tracking/session_status.json` via `init-roadmap --phases-json`, assign elements via `assign-phases`
 6. Present ROADMAP for approval → user approves
-7. Execute Phase 1:
+7. **Same turn:** Execution Step 2 (cortex task) + `start-phase` + Phase 1 Setup. Do not spawn an orchestrator subagent and wait.
    - Create schemas: `ETL_FIX_P1_B1`, `ETL_FIX_P1_B2`, `ETL_FIX_P1_B3` (batches B1.1, B1.2, B1.3)
    - Use `team_create` tool: team_name="etl-fix-SalesLoad-p1"
    - Use `task` tool to spawn 3 test-gen agents in single message: `orchestration-test-gen-B1.1`, `orchestration-test-gen-B1.2`, `orchestration-test-gen-B1.3`

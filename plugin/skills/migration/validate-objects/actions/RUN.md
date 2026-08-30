@@ -4,7 +4,11 @@ Guide for the `validateData` task — validate the batch of tables the machine h
 
 ## 1. Choose validation scope (once per batch, if not already set)
 
-If validation type / sync strategy haven't been chosen for this run, call `progress_setup(mode="data_validation")` (full vs incremental, sync strategy). The choice is persisted as session defaults — skip if already set.
+Validation type / sync strategy were chosen during setup and persist across
+objects. Do not ask or run setup here. If they are missing, or the user asks
+to change them, return the request to the main agent so it can update setup
+once through [`../../data-infrastructure/SKILL.md`](../../data-infrastructure/SKILL.md),
+which owns any setup delegation.
 
 ## 2. Generate the workflow
 
@@ -12,7 +16,13 @@ Call `validate_data(mode="setup", where=<the batch's object filter>)`. It writes
 
 ## 3. Dispatch
 
-Call `validate_data(mode="run", workflow_path=<path from setup>)` — **pure dispatch** against the already-running infrastructure. If the response is a `remediation` saying infrastructure is not up, **stop here — dispatch does not bring infrastructure up.** Hand back to [`../../data-infrastructure/SKILL.md`](../../data-infrastructure/SKILL.md): it is the single place the shared orchestrator + worker come up, and the only place the **local vs SPCS** placement is confirmed. Once it reports ready, retry this dispatch. Use `validate_data(mode="revalidate", workflow_name=<finished parent>)` to retry only the failed partitions of a finished run.
+Call `validate_data(mode="run", workflow_path=<path from setup>)` — **pure
+dispatch** against the already-running infrastructure. If the response says
+infrastructure is not up, stop and return that remediation to the main agent.
+Do not call `data_infrastructure` from this subagent; the main agent resumes
+the persisted setup and redispatches the task. Use
+`validate_data(mode="revalidate", workflow_name=<finished parent>)` to retry
+only failed partitions of a finished run.
 
 The response carries a `monitor` block (a `job_id` and a ready-made `watch_command`).
 
@@ -22,4 +32,10 @@ Arm the `monitor.watch_command` with the Monitor tool, or call `job_status(job_i
 
 ## When it finishes
 
-Completion stamps the registry field `extensions.dataValidation`, which advances the machine. Present the error-first validation report (`validate_tables.md` Step 5) and offer re-validation when eligible.
+The machine reads live `DATA_VALIDATION.TABLE_PROGRESS_DETAIL` — do not stamp the registry. Present the error-first validation report (`validate_tables.md` Step 5) and offer re-validation when eligible.
+
+Offer re-validation only after the report identifies a changed input or a transient
+condition that has cleared. A repeatable source/target row mismatch, schema drift,
+or invalid identifier / compilation error in generated validation SQL is
+deterministic: park it with the exact evidence and required repair instead of
+dispatching the same workflow again.

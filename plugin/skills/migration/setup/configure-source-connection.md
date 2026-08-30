@@ -29,6 +29,7 @@ the configured dialect. Safe to repeat — it only reads.
   - `oracle` → `../connection/oracle-connection/SKILL.md`
   - `teradata` → `../connection/teradata-connection/SKILL.md`
   - `postgresql` → `../connection/postgresql-connection/SKILL.md`
+  - `db2` → `../connection/db2-connection/SKILL.md`
 
 ## If the user pushes back
 

@@ -10,7 +10,7 @@ These control **which checks run** for every table in the workflow YAML.
 |-------|------------|--------------|----------------|
 | **Schema** | `schema_validation` | on (`true`) | Column **definitions** on source vs Snowflake: names, types, nullability, order. Does **not** compare cell values. |
 | **Metrics** | `metrics_validation` | off (`false`) | **Aggregate statistics** per column (e.g. min, max, count, avg) on source vs Snowflake. Opt-in — enable only when the user wants this extra check. |
-| **Row** | `row_validation` | on (`true`) | **Row-by-row** value comparison on matched keys. Expensive at scale; requires `index_column_list` (and related fields) per table. |
+| **Row** | `row_validation` | on (`true`) | **Row-by-row** value comparison on matched keys. Expensive at scale; requires `indexColumnList` (and `targetIndexColumnList` when names differ) per table. Snake_case `index_column_list` / `target_index_column_list` still accepted in YAML. |
 
 Do **not** prompt the user to enable metrics unless they ask for aggregate-statistics comparison.
 
