@@ -34,6 +34,7 @@ Auto-compact may have occurred since the last action. Re-read canonical state be
 > **Batch ID format:** `B{P}.{M}` (e.g., `B1.1` = Phase 1 Batch 1). The `{B}` placeholder throughout this document represents the full phase-qualified batch ID.
 
 **Resume logic:**
+- If `STATE.md` says "Ready to execute" and this phase has no `start-phase` / no artifacts yet → you are stalled after ROADMAP approval. Run SKILL.md Execution Step 2 in this turn. Do not wait for a subagent.
 - If `baseline_batch_*.md` files already exist for all tasks → skip step b (test-gen already ran), proceed to step c
 - If `batch_*.md` files already exist for all tasks → skip steps b-e (fixes already ran), proceed to step f
 - If `apply_report.md` exists → skip steps b-f, proceed to step g

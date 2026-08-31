@@ -116,17 +116,19 @@ Tasks the machine routes through, in order:
 | `chooseEntryMode`                | inline prompt (queued; nothing queues after it — it routes by dialect) |
 | `midwayEntry`                    | sub-skill: `setup/midway-entry.md`                                |
 | `chooseCodeSource`               | inline prompt (`next_prompt`) — extract vs. local files; each answer carries its `then` |
-| `configureSourceConnection`      | sub-skill: `setup/configure-source-connection.md` (extract path only) |
+| `configureSourceConnectionExtract`      | sub-skill: `setup/configure-source-connection.md` (extract path only) |
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
 | `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
 | `continueToMigration`            | inline prompt (`next_prompt`) — the post-assessment gate; each answer carries its `then` |
 | `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md`                  |
-| `setupDataInfrastructure`        | sub-skill: `data-infrastructure/SKILL.md`                         |
-| `dataStrategy`            | sub-skill: `setup/data-strategy/SKILL.md`                         |
+| `configureSourceConnectionTesting` | sub-skill: `setup/configure-source-connection.md` (source-data testing path only) |
 | `configureTesting`               | sub-skill: `setup/configure-testing.md`                           |
 | `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (synthetic testing path only) |
+| `configureSourceConnectionData`  | sub-skill: `setup/configure-source-connection.md` (data infrastructure path only) |
+| `setupDataInfrastructure`        | sub-skill: `data-infrastructure/SKILL.md`                         |
+| `dataStrategy`            | sub-skill: `setup/data-strategy/SKILL.md`                         |
 
 Conversion and assessment come first on purpose: neither needs a Snowflake
 target, so a user reaches their assessment report without picking a
@@ -175,6 +177,7 @@ pending — do not invent completion from chat history.
 | 1 | oracle-connection | `../connection/oracle-connection/SKILL.md` |
 | 1 | teradata-connection | `../connection/teradata-connection/SKILL.md` |
 | 1 | postgresql-connection | `../connection/postgresql-connection/SKILL.md` |
+| 1 | db2-connection | `../connection/db2-connection/SKILL.md` |
 | — | midway-entry (existing project with pre-converted code; SQL Server/Redshift only) | `./midway-entry.md` |
 | 3 | register-code-units | `../register-code-units/SKILL.md` |
 | 4 | convert | `../convert/SKILL.md` |
@@ -187,6 +190,7 @@ pending — do not invent completion from chat history.
 | — | data-migration-setup | `../migrate-objects/actions/data-migration/SKILL.md` |
 | — | data-validation-setup | `./data-validation/SKILL.md` |
 | — | data-infrastructure-teardown | `../data-infrastructure/teardown/SKILL.md` |
+| — | discover-extras (custom assets the engine doesn't generate — FiveTran, SSAS, Oracle PACKAGE, scripts) | `./discover-extras/SKILL.md` |
 
 ## Rules
 

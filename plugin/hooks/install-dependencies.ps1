@@ -40,11 +40,28 @@ if (!(Test-Path $VersionFile)) {
 }
 $Version = (Get-Content $VersionFile -Raw).Trim()
 
-if (-not $env:SCAI_CHANNEL) { $env:SCAI_CHANNEL = "preview" }
+if (-not $env:SCAI_CHANNEL) { $env:SCAI_CHANNEL = "stable" }
 
 Log "SessionStart hook running (v$Version, plugin root: $PluginRoot)"
 $cortexCh = if ($env:CORTEX_CHANNEL) { $env:CORTEX_CHANNEL } else { "(not set)" }
 Log "SCAI_CHANNEL=$($env:SCAI_CHANNEL), CORTEX_CHANNEL=$cortexCh"
+
+# Optional runtime override (opt-in): pin a specific scai version via the shared
+# config file. Absent config = default behavior (update to the channel's latest).
+$ScaiVersionPin = ""
+$MigrationConfig = Join-Path $env:USERPROFILE ".snowflake\migration-plugin\config.json"
+if (Test-Path $MigrationConfig) {
+    try {
+        $cfg = Get-Content $MigrationConfig -Raw | ConvertFrom-Json
+        $v = $cfg.scai.version
+        if ($v -is [string] -and $v) {
+            $ScaiVersionPin = $v
+            Log "Config pins scai.version=$ScaiVersionPin"
+        }
+    } catch {
+        Log "WARNING: could not parse $MigrationConfig — ignoring, using default scai version"
+    }
+}
 
 # System dependencies
 
@@ -81,16 +98,32 @@ if (Get-Command "brew" -ErrorAction SilentlyContinue) {
 # scai CLI (bundles the migration MCP server binary)
 $start = Get-Date
 if (Get-Command "scai" -ErrorAction SilentlyContinue) {
-    Log "scai already installed, running explicit update..."
-    try {
-        scai update 2>&1 | ForEach-Object { Log $_ }
-    } catch {
-        Log "scai update failed: $_"
+    if ($ScaiVersionPin) {
+        Log "scai already installed, pinning to v$ScaiVersionPin..."
+        try {
+            scai update $ScaiVersionPin 2>&1 | ForEach-Object { Log $_ }
+        } catch {
+            Log "scai pin to v$ScaiVersionPin failed: $_"
+        }
+        $elapsed = [math]::Round(((Get-Date) - $start).TotalSeconds)
+        Log "scai pinned to v$ScaiVersionPin (${elapsed}s)"
+    } else {
+        Log "scai already installed, running explicit update..."
+        try {
+            scai update 2>&1 | ForEach-Object { Log $_ }
+        } catch {
+            Log "scai update failed: $_"
+        }
+        $elapsed = [math]::Round(((Get-Date) - $start).TotalSeconds)
+        Log "scai up to date (${elapsed}s)"
     }
-    $elapsed = [math]::Round(((Get-Date) - $start).TotalSeconds)
-    Log "scai up to date (${elapsed}s)"
 } else {
-    Log "Installing scai CLI..."
+    if ($ScaiVersionPin) {
+        Log "Installing scai CLI (pinned v$ScaiVersionPin)..."
+        $env:SCAI_VERSION = $ScaiVersionPin
+    } else {
+        Log "Installing scai CLI..."
+    }
     try {
         irm https://snowconvert.snowflake.com/storage/windows/prod/cli/install.ps1 | iex
         $elapsed = [math]::Round(((Get-Date) - $start).TotalSeconds)

@@ -1,15 +1,25 @@
 {
   "name": "snowflake-migration",
-  "version": "2.41.0",
-  "description": "End-to-end database migration to Snowflake — assessment, conversion, validation, and deployment",
-  "author": { "name": "db-eng-migrations" },
-  "skills": ["skills/migration"],
+  "version": "2.42.5",
+  "description": "End-to-end database migration to Snowflake \u2014 assessment, conversion, validation, and deployment",
+  "author": {
+    "name": "db-eng-migrations"
+  },
+  "skills": [
+    "skills/migration"
+  ],
   "mcpServers": {
     "mcp": {
       "type": "stdio",
       "command": "scai",
-      "args": ["mcp", "run"],
-      "env": { }
+      "args": [
+        "mcp",
+        "run"
+      ],
+      "env": {
+        "CUSTOM_SNOWCONVERT_DATABASE": "${CUSTOM_SNOWCONVERT_DATABASE:-}",
+        "CUSTOM_SNOWFLAKE_DATABASE_FOR_METADATA": "${CUSTOM_SNOWFLAKE_DATABASE_FOR_METADATA:-}"
+      }
     }
   },
   "hooks": {
@@ -35,5 +45,6 @@
         "matcher": "*"
       }
     ]
-  }
+  },
+  "buildChannel": "preview"
 }

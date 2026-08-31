@@ -257,11 +257,40 @@ ORDER BY ID;
 
 If metadata/schema extraction completes with **zero rows** but no worker error, compare worker TOML `[connections.source.*].database` against workflow `source.databaseName` (Oracle: service name; Teradata: database name). This is the most common silent failure mode.
 
+### Teradata Error 6701 / 5355 (mixed charsets)
+
+**Symptom:** Extraction task fails on Teradata with Error **6701** or **5355** when the source table has columns in different character sets (for example LATIN + KANJISJIS + GRAPHIC in one row).
+
+**Fix:** Ensure the workflow uses a current orchestrator build with charset-aware Teradata extraction (automatic `<charset>_TO_UNICODE` per column). If the customer still hits untranslatable-byte edge cases, set `onUntranslatable: substitute` (default) or `fail` for strict tables. See `dmvf/docs/data-migration-orchestrator/teradata-charset-extraction.md`.
+
+### Teradata Error 6706 (untranslatable bytes, fail mode)
+
+**Symptom:** Extraction fails with **6706** on a table configured with `onUntranslatable: fail`.
+
+**Fix:** Expected behavior — the table contains bytes that cannot map to Unicode under the chosen charset translation. Either clean/source-fix the data, use `onUntranslatable: substitute` for lossy U+FFFD replacement, or scope `whereClauseCriteria` to exclude bad rows (if acceptable).
+
 ---
 
 ## `POSSIBLE_MISMATCH` after validation completes
 
 Hybrid L3 validation may stop early when `earlyStoppingForRowHashing` or `maxFailedRowsNumber` is reached. A workflow can finish with `POSSIBLE_MISMATCH` result codes — **do not treat as a clean pass**. Review L3 result tables and consider re-running with adjusted early-stop settings or narrower `sourceWhereClause`/`targetWhereClause` filters.
+
+> **Data validation is read-only** — re-running a DV workflow compares source and target; it does not move or duplicate data on either side.
+
+---
+
+## Target has more/duplicate rows after re-running a migration
+
+**Symptom:** Target row count exceeds source (or a prior migration run), or users report duplicate keys/rows after a second `migrate_data(mode="run")`.
+
+**Cause:** The workflow used **non-incremental** sync (`sync_strategy=none`, no `synchronization` block, or `migration_type=full`/`preliminary` without watermark/checksum). Each run extracts and loads **all** matching rows again — `COPY INTO` appends to the target; the orchestrator does not deduplicate on full reload.
+
+**Remediation (careful — do not destroy legitimate data):**
+
+1. **Verify:** Compare source vs target row counts (and sample keys if available). Confirm whether extra rows came from a re-run vs pre-existing target data.
+2. **Confirm with the user** before any destructive action. The target may hold rows that are expected or unrelated to this migration.
+3. **Do not** blindly `TRUNCATE` or bulk-`DELETE` the target. If cleanup is required, scope it (for example delete rows loaded in a specific partition/window, or dedupe by primary key) only after explicit user approval.
+4. **Going forward:** Add `synchronization.strategy: watermark` or `checksum` (with `watermarkColumn`, `checksumExpression`, and `primaryKeyColumns` as needed) so subsequent runs are incremental. See [workflow-config-reference.md](./workflow-config-reference.md#synchronizationstrategy).
 
 ---
 
@@ -324,6 +353,50 @@ ORDER BY WORKFLOW_ID;
 ```
 
 > **Task model:** For scope grammar, dependency chains, and pause/resume/cancel procedures, see [Task model reference](./task-model-reference.md).
+
+---
+
+## Source overloaded or too many concurrent extractions/loads
+
+**Symptom:** Migration or validation is slow; source DBA reports connection pressure; many extraction/load tasks run at once; customer wants to throttle without stopping workers entirely.
+
+**Cause:** Default parallelism (`max_parallel_tasks` per worker × number of workers) may exceed what the source can sustain.
+
+**Fix path (prefer in order):**
+
+1. **Rate limiting (advanced):** Insert rules into `DATA_MIGRATION.RATE_LIMIT` to cap concurrent tasks by scope pattern — see [Advanced operations reference](../../../../data-infrastructure/references/advanced-operations-reference.md#rate-limiting-protect-source-or-shared-resources). This is metadata SQL, not workflow YAML.
+2. Lower `max_parallel_tasks` in worker TOML (per-machine parallelism).
+3. Reduce worker count or pause workers during peak source hours.
+
+Do **not** suggest orchestrator polling-interval env vars as a throttle mechanism.
+
+---
+
+## Tasks stay pending on trial / non-hybrid metadata accounts
+
+**Symptom:** Workers are running, source is healthy, but `TASK_QUEUE` rows remain `pending`; adding more workers does not help or makes it worse.
+
+**Cause:** Snowflake account lacks **Hybrid Table** support — orchestrator metadata fell back to **standard/`TRANSIENT`** tables. Task claiming uses a slower, contention-sensitive path; **too many workers** compete for the same queue rows.
+
+**Agent guidance:**
+
+1. Confirm metadata mode (trial account, `Unsupported feature 'HYBRID TABLE'` at bootstrap, or `SNOWFLAKE_USE_HYBRID_TABLES=0`).
+2. **Reduce** worker count and `max_parallel_tasks` before adding more infrastructure — see [Metadata storage mode reference](../../../../data-infrastructure/references/metadata-storage-mode-reference.md).
+3. Distinguish from source overload ([rate limiting](../../../../data-infrastructure/references/advanced-operations-reference.md#rate-limiting-protect-source-or-shared-resources)) and missing workers (affinity mismatch).
+
+---
+
+## Incremental sync or checksum did not detect a column change
+
+**Symptom:** Customer edited data (especially in `text`/`ntext`/`image`, LOBs, floats, spatial, or high-precision timestamps) but the next incremental migration or incremental validation run did not re-process the partition; checksum unchanged.
+
+**Cause:** Built-in **partition checksums** exclude or normalize some types before hashing. A custom `checksumExpression` only reflects that SQL aggregate. **Watermark** sync ignores columns that are not the watermark. DM checksum and DV L3 row-hash use **different** pipelines — a column skipped from DM checksum may still be compared at L3.
+
+**Agent guidance:**
+
+1. Confirm sync strategy (`checksum` vs `watermark`) and whether the changed column is in the checksum input.
+2. Explain using the skipped/lossy type table — see [Advanced operations reference](../../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
+3. Offer remediation: one-time **full** run; custom **`checksumExpression`**; switch to **watermark** if appropriate; **DV L3** + `validationCustomNormalizationRules` when the issue is compare semantics.
 
 ---
 

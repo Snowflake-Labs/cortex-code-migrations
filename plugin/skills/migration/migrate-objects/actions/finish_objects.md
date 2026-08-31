@@ -22,9 +22,6 @@ The response includes a `git_activity` array of human-readable strings describin
 
 > - Pushed commit abc1234f to origin/main with 3 files (registry/obj-1.json, snowflake/proc_1.sql, snowflake/proc_1_test.sql)
 > - Rebased branch 'migrate-alice' onto origin/main
-> - Unblocked 2 object(s) that depended on the finished objects
-
-
 On error (e.g. merge conflict), attempt to resolve it:
 
 1. Read each conflicted file and decide the correct resolution (accept incoming, keep current, or merge both sides).
@@ -41,8 +38,6 @@ The handler stamps each object done (`isDone`) and closes Snowflake claims. No g
 
 ### After success (both modes)
 
-After the handler succeeds, it automatically scans for objects that were blocked with `error="dependency"` and depend on any of the just-finished objects. Their error stamps are cleared so the next `migration_status` walk picks them up as ready. If the response includes `"woke_dependents": N` (N > 0), tell the user:
+The finish payload is `{status, action, actual_size}` plus git extras (`merge_commit`, `git_activity`, …) or `git_disabled`. It does **not** include `my_objects_summary` — pull claim status with `migration_status(mode="my_objects_summary")` if you need it.
 
-> Also unblocked **N** object(s) that were waiting on these dependencies. They'll appear in your next status check.
-
-Return to [../SKILL.md](../SKILL.md).
+Dependents waiting on these objects are offered again on the next walk — finish does not stamp or clear a dependency wait. Return to [../SKILL.md](../SKILL.md).

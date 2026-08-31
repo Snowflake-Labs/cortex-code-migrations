@@ -61,7 +61,7 @@ Tell the user:
 
 ## Steps
 
-1. Ensure the MCP session is configured: if you were spawned as a sub-agent, call `configure(project_dir=<abs_path>)` first (session state is not inherited).
+1. Ensure the MCP session is configured: if you were spawned as a sub-agent, call `configure(project_dir=<abs_path>)` first (you may be the first to touch the server, and there is no working-directory fallback).
 2. **Mine phase.** Run the driver:
 
    ```
@@ -139,11 +139,43 @@ Runs after the enrich pass and **before compile** (`mine → enrich → compile 
    uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/run_pipeline.py enrich --project-dir {PROJECT_DIR}
    ```
 
+   Between *assemble* and *propose*, the driver runs the **critic station** (the deterministic
+   backbone ① + citation gate ③, SNOW-3717841). On the first pass over a given envelope it runs the
+   backbone and stops with `stop_kind: "critique"`, having written
+   `testbed/enrich/critic/critique-request.json` (the entries that passed the backbone, with the spans
+   to judge). **You then run the critic prompts** — `prompts/critics/joins_critic.md` for the structural
+   arrays, `prompts/critics/spec_critic.md` for the value arrays — and write your verdict to
+   `testbed/enrich/critic/verdict.json` per `prompts/critics/verdict-contract.md`. Re-invoke the driver:
+   with a fresh verdict present (its `envelope_sig` matching the assembled envelope) the driver applies
+   the citation gate and, on all-ACCEPT, proceeds to `propose-enrichments`.
+
 2. **On exit 0:** the driver wrote `testbed/enrich/enrichment-view.json` and the workload is ready — proceed to compile.
 3. **On non-zero exit:** read `testbed/enrich/enrichment-report.json` and act on `stop_kind`:
-   - `reject` — a fragment was malformed. Re-run the prompt named by `prompt_type`, overwrite its fragment file, and re-invoke step 1. Bounded by the per-prompt-type budget.
-   - `iterate` — `validate` is not ready. For each `blocking` issue whose `remediation.enrichment_fixable` is true, re-run the prompt for its `remediation.enrichment_type` (using the `hint`), overwrite the fragment, re-invoke. Bounded by the global iteration budget.
-   - `documented-stop` — a structural gap (e.g. an FK cycle, surfaced at propose-time as `TBD0015`) or CAS-retry exhaustion. Surface the `detail` to the user and stop; do not re-prompt the same edge.
+   - `reject` — a fragment was malformed OR the critic backbone/gate rejected an entry (`reason:
+     critic_backbone` with `citations`, or `reason: critic_reject`). Re-run the prompt named by
+     `prompt_type` (`critic` for a critic rejection), overwrite its fragment, re-invoke step 1. Bounded
+     by the per-prompt-type budget.
+   - `critique` — the backbone passed; the envelope awaits your semantic judgment. Run the two critic
+     prompts against `critique-request.json`, write `verdict.json` (copy `envelope_sig` verbatim), then
+     re-invoke step 1. A `REJECT` needs a verifiable mode-`a` citation; when you can't cite a
+     contradicting span, use `REVISE` (mode `b`). Re-authoring a fragment on REVISE changes the envelope
+     and re-runs the backbone on the new version.
+   - `iterate` — either `validate` is not ready, or the citation gate downgraded a critic `REJECT` to
+     a bounded `REVISE`. When `validate` is not ready, for each `blocking` issue whose
+     `remediation.enrichment_fixable` is true, re-run the prompt for its `remediation.enrichment_type`
+     (using the `hint`), overwrite the fragment, re-invoke. When the stop instead carries `reason:
+     critic_revise` / `prompt_type: critic`, the payload is not the `blocking`/`remediation` shape but
+     `entries[]` — each with `kind`, the offending `table`/`column(s)`, and the critic's `feedback` —
+     so re-author the named fragment(s) per that `feedback` and re-invoke; re-authoring changes the
+     envelope and re-runs the backbone. The two `iterate` causes are bounded by two independent
+     budgets: a not-ready `validate` iterate draws on the global iteration budget
+     (`--max-iterations`, exhausting as `reason: iteration_budget`), while a `critic_revise` iterate
+     draws on the `critic` bucket of the per-prompt-type reject budget
+     (`--max-rejections-per-type`, exhausting as `reason: critic_budget`).
+   - `documented-stop` — a structural gap (FK cycle → `TBD0015`), CAS-retry exhaustion, a **malformed
+     `verdict.json`** (`reason: critic_verdict_malformed`), or a **value cycle** (`reason: value_cycle`
+     — the same value was rejected and re-proposed). Surface the `detail`/`citations` and stop; a human
+     resolves it. The critic never auto-applies an un-critiqued or cyclically-failing entry.
    - `budget-exhausted` — the retry/iterate budget is spent. Surface the report and stop; a human fixes the fragment and re-runs with `--reset-budget`.
 4. **Only after enrich exit 0**, run compile (enrich MUST precede compile). Enrich's terminal `validate ready` is the readiness precondition the downstream `generate` gate checks; the standalone `validate` step above remains a cheap idempotent re-check.
 
@@ -157,4 +189,6 @@ Note: `fk_cycle` and `parent_missing_key` gaps are **advisory** (never blocking)
 - `testbed/compile/clusters-view.json` — the compile deliverable: cluster summary (written by the driver).
 - `testbed/generate/summary-view.json` — the generate deliverable and **task completion predicate**: row counts + CSV/manifest paths (written by the driver).
 - Generated CSVs + provenance `manifest.json` — the `generate` deliverable. Each table's CSV lands under its own object's `<artifacts>/testbed/` folder; the `manifest.json` (beside `state.bin`, at the view's `manifest_path`) lists them as project-root-relative `csv_path` entries. The view's `out_path` is that project root — not a CSV directory. No output dir is passed to `scai testbed generate`.
+- `testbed/enrich/critic/critique-request.json` — the backbone-pass entries + spans the critic judges (written by the driver at the `critique` stop).
+- `testbed/enrich/critic/verdict.json` — the agent-authored critic verdict (`ACCEPT`/`REVISE`/`REJECT` per entry); consumed by the citation gate on re-invocation.
 - `.scai/testbed/run.json` — derived progress ledger (mine/validate/compile/generate status, PENDING records).

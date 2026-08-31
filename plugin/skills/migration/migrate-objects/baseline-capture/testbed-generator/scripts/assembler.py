@@ -36,15 +36,18 @@ def load_fragments(fragments_dir: str) -> list[dict]:
     fragments: list[dict] = []
     for p in sorted(root.glob("*.json")):
         try:
-            frag = json.loads(p.read_text())
+            frag = json.loads(p.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
             # A malformed fragment is a re-promptable reject, not a station crash: name the offending
             # fragment (via prompt_type) so run_enrich emits stop_kind "reject" and the agent knows
             # which prompt to re-run — mirroring assemble()'s flag_for_llm handling.
             raise AssemblyError(p.stem, f"fragment '{p.name}' is not valid JSON: {e}") from e
-        except OSError as e:
-            # Unreadable (removed between glob and read, permissions): same reject class, not a
-            # traceback out of the station — but named honestly as an I/O failure, not bad JSON.
+        except (OSError, UnicodeDecodeError) as e:
+            # Unreadable (removed between glob and read, permissions, or a fragment written mid-
+            # codepoint): same reject class, not a traceback out of the station — but named honestly
+            # as an I/O failure, not bad JSON. UnicodeDecodeError is a ValueError, so it escapes
+            # both arms above unless named here; the explicit utf-8 read is what can raise it,
+            # instead of the locale default silently decoding a fragment to mojibake.
             raise AssemblyError(p.stem, f"fragment '{p.name}' could not be read: {e}") from e
         if not isinstance(frag, dict):
             # Valid JSON but not an object (a bare array/scalar) can't be merged; reject it here so

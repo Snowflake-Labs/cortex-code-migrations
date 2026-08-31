@@ -15,6 +15,8 @@ Drop a `SKILL.md` under either path; the plugin loads it instead of the built-in
 
 Your override SKILL.md is loaded as a normal agent skill — write it the same way you would any other skill. There is no template to subclass and no required imports.
 
+To replace the entire `main` pipeline for one `customKind` (FiveTran, Airflow, …), discovery writes `<project_dir>/.scai/skills/<customKind>.md` with the customer — see [Custom code units](#custom-code-units-kindcustom). That is a file, not a `<task_id>/SKILL.md` directory.
+
 To check what's currently in effect, run:
 
 ```
@@ -48,12 +50,14 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 |---|---|
 | `midwayEntry` | Imports an existing pre-converted Snowflake project to be compatible with AIM projects. |
 | `configureGit` | Configures git integration (main branch, remote, housekeeping commits). |
-| `configureSourceConnection` | Configures the source database connection. |
+| `configureSourceConnectionExtract` | Configures the source database connection. |
 | `registerCode` | Pulls source SQL into the project. |
 | `convertCode` | Runs the source → Snowflake conversion. |
 | `runAssessment` | Generates a migration assessment report. |
-| `configureTesting` | Picks the testing path (source data vs synthetic) and verifies the Snowflake side is ready for it. |
+| `configureSourceConnectionTesting` | Configures the source database connection (needed for source-data testing path). |
+| `configureTesting` | Verifies the Snowflake side is ready for the chosen testing path (source data vs synthetic). |
 | `generateTestbed` | Builds the synthetic testbed for the workload (mine → validate → compile → generate). Reached only on the synthetic testing path. |
+| `configureSourceConnectionData` | Configures the source database connection (needed for data migration/validation infrastructure). |
 | `setupDataInfrastructure` | Configures the shared Data Migration & Validation infrastructure (compute pool for SPCS, or local) and generates the worker config, so it can be brought up at migration time with data_infrastructure(mode="up"). |
 | `dataStrategy` | Captures the project's data migration and validation strategy (migration type, sync strategy, extraction strategy, target table type; validation type + sync strategy) during setup so the choices are committed to the git main branch and shared with the team, instead of being decided ad hoc at first migration/validation. |
 
@@ -75,7 +79,7 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `migrateData` | Migrates data into a deployed table (pure dispatch — requires the shared orchestrator+worker to be up). |
 | `validateData` | Validates migrated data against the source (pure dispatch — requires the shared orchestrator+worker to be up). |
 | `runTests` | Runs the scai test suite for an object. |
-| `verify` | Catch-all verification for a converted object whose type has no deploy/test path of its own (Oracle PACKAGE, PACKAGE_BODY, TYPE, TYPE_BODY, SYNONYM, ...). Reached via convert's unfiltered `completed` transition, which must stay last so every type-gated route wins first. |
+| `verify` | Catch-all verification for a converted object whose type has no deploy/test path of its own (Oracle PACKAGE, PACKAGE_BODY, TYPE, TYPE_BODY, SYNONYM, ...), and for procedures/functions with no source side after they deploy (SnowConvert UDF helpers). Reached via convert's unfiltered `completed` transition (must stay last) or via deploy when `source IS NULL`. |
 | `extractRules` | Extracts reusable migration rules from a fix. |
 | `applyRules` | Applies matched migration rules to an object. |
 | `fixCode` | Diagnoses and fixes a failing object. |
@@ -89,18 +93,18 @@ Every task resolves to one **outcome**. Read-only detection (the resolver seeing
 | Outcome | Meaning |
 |---|---|
 | `completed` | The task finished successfully. |
-| `failed` | The task could not finish; carries an `error` class (below). Routes into the fix loop, or the errored bucket for a dependency block. |
+| `failed` | The task could not finish; carries an `error` class (below). Routes into the fix loop, or the errored bucket. |
 | `excluded` | The task was disabled for this project/object (see [How to exclude a task](#how-to-exclude-a-task)); the machine follows the task's `excluded` branch. |
 | `skipped` | Deferred for now (not disabled) — the task may still run later. |
-| `inProgress` | An async task (`migrateData` / `validateData`) is still running. |
+| `inProgress` | The task has started but has not completed. It remains the current blocking task. |
 
 **`error` classes** (required on `failed`):
 
 | Class | Use for |
 |---|---|
 | `sql` | A SQL/DDL bug the fix loop can address. |
-| `dependency` | Blocked on another object not yet migrated/deployed — lands in the errored bucket, not the fix loop. |
 | `infra` | A transient environment failure (timeout, connection drop, cancelled run) — retry with `reset`. |
+| `human` | Only a person can resolve it. Don't set this class by hand — call `transition_status(status='escalate', task=…, asks=[…])`, which sets it for you. Passing `outcome='failed'` without an error class instead sends the object into the fix loop, where no code change resolves it. A judgment you *can* make is `status='note'` (does not park; review later), not this class. |
 
 ## Per-task contracts
 
@@ -119,10 +123,10 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Done when:** Project is initialized (`.scai/config/project.yml`) and at least one file exists under both `source/**/*.sql` and `snowflake/**/*.sql` (produced by `scai code sync`).
 
 #### `configureGit`
-- **Inputs:** A user who has opted into git. Reached only when askGit answer is true.
+- **Inputs:** A user who has opted into git. Reached only when enableGit answer is true.
 - **Done when:** Session config has `git_main_branch` set.
 
-#### `configureSourceConnection`
+#### `configureSourceConnectionExtract`
 - **Done when:** Session config has `source_connection` set — call `configure(source_connection=...)`.
 
 #### `registerCode`
@@ -137,13 +141,19 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Inputs:** A converted project from the `convertCode` task.
 - **Done when:** At least one assessment report HTML exists under `<project_dir>/**/assessment/**/*report*.html`.
 
+#### `configureSourceConnectionTesting`
+- **Done when:** Session config has `source_connection` set — call `configure(source_connection=...)`.
+
 #### `configureTesting`
-- **Inputs:** A Snowflake connection and target database from `configureSnowflakeTarget`; optionally a query-log CSV.
+- **Inputs:** A Snowflake connection and target database from `configureSnowflakeTarget`; the testing path choice from `chooseTestingPath`; optionally a query-log CSV.
 - **Done when:** Session config has `testing_data_source` set — call `configure(testing_data_source=...)`.
 
 #### `generateTestbed`
 - **Inputs:** A converted, assessed workload with testbed mining artifacts under `artifacts/**/testbed/*.testbed.json`. A source connection is still required downstream.
 - **Done when:** The generate deliverable exists at `**/testbed/generate/summary-view.json` (synthetic-data summary; each table's CSV lands under its object's `<artifacts>/testbed/` folder and `manifest.json` beside `state.bin`).
+
+#### `configureSourceConnectionData`
+- **Done when:** Session config has `source_connection` set — call `configure(source_connection=...)`.
 
 #### `setupDataInfrastructure`
 - **Inputs:** A configured Snowflake target and source connection.
@@ -151,7 +161,7 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `dataStrategy`
 - **Inputs:** A source language chosen in setup and the intent to migrate/validate table data (the data-infrastructure step establishes that intent).
-- **Done when:** Session config has `data_migration_type` (and/or `data_validation_type`) set — the data-migration-setup and data-validation-setup wizards (`progress_setup(mode="data_migration"|"data_validation")`) have run to completion.
+- **Done when:** Session config has both `data_migration_type` and `data_validation_type` set — the data-migration-setup and data-validation-setup wizards (`progress_setup(mode="data_migration"|"data_validation")`) have both run to completion.
 
 ### `main` (per-object migration)
 
@@ -173,7 +183,7 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `etlValidate`
 - **Inputs:** ETL test YAML present (from etlSeed or hand-authored); ETL unit deployed to Snowflake and source/Snowflake connections configured — all enforced via preconditions.
-- **Done when:** Registry field `codeStatus.etlValidate` reads completed.
+- **Done when:** `scai test etl-validate` stamps registry field `codeStatus.etlValidate` completed (failed runs stamp failed + error). Units skipped for a missing YAML stay pending.
 
 #### `generateTestCases`
 - **Inputs:** Object that needs test inputs; configured source connection.
@@ -189,7 +199,7 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `captureBaseline`
 - **Inputs:** Object with seed data; configured source connection.
-- **Done when:** Procedures/functions: the per-object YAML exists (proc seeding captures the baseline into it). BTEQ: `extensions.tasks.captureBaseline` is set — `scai test capture` uploads the baseline to the Snowflake stage and writes no local artifact, so the YAML (which `seedScript` already wrote) cannot signal capture; the agent stamps this after running capture.
+- **Done when:** Procedures/functions: `VALIDATION.BASELINE_METADATA` has a row for the object's target name whose `ROW_COUNTS` sum to more than zero. BTEQ scripts have no rows in that table, so they fall through to registry field `extensions.tasks.captureBaseline`.
 
 #### `deploy`
 - **Inputs:** Converted SQL for the object.
@@ -201,18 +211,18 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `migrateData`
 - **Inputs:** Deployed table; configured source connection; shared data infrastructure brought up once via data_infrastructure(mode="up").
-- **Done when:** Registry field `extensions.dataMigration` reads completed.
+- **Done when:** Live cloud migration job reports the table loaded (DATA_MIGRATION.TABLE_PROGRESS).
 
 #### `validateData`
 - **Inputs:** Object with migrated data; shared data infrastructure brought up once via data_infrastructure(mode="up").
-- **Done when:** Registry field `extensions.dataValidation` reads completed.
+- **Done when:** Live cloud validation job reports every enabled level done (DATA_VALIDATION.TABLE_PROGRESS_DETAIL).
 
 #### `runTests`
 - **Inputs:** Object with a captured baseline; procedures and functions are also deployed first (BTEQ scripts are not).
-- **Done when:** Registry field `codeStatus.testing` reads completed.
+- **Done when:** The latest run of every test case in `VALIDATION.RESULTS` passed. Procedures and functions are judged there; BTEQ scripts have no rows in that table, so they fall through to registry field `codeStatus.testing`.
 
 #### `verify`
-- **Inputs:** A converted object of a type the machine routes nowhere else.
+- **Inputs:** A converted object of a type the machine routes nowhere else, or a deployed procedure/function with no source counterpart.
 - **Done when:** Registry field `extensions.tasks.verify` reads completed.
 
 #### `extractRules`
@@ -228,3 +238,79 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Done when:** Registry field `extensions.tasks.fixCode` is set.
 
 </cntrc>
+
+## Custom code units (`kind=custom`)
+
+Per-task overrides and custom machines are about **how** work runs. Custom code units are about **what** work runs on. The conversion engine generates a known set of object kinds (tables, views, procedures, functions, SSIS packages, …); anything outside that — orchestration tools (FiveTran, Airflow, Informatica), BI assets (SSAS cubes, Tableau extracts, dbt models), object kinds the engine doesn't generate yet (Oracle PACKAGE bodies, SQL Server triggers in some flows), or hand-maintained scripts — won't show up in the registry unless you put it there yourself.
+
+The registry's top-level `kind` is a closed enum with four values: `"databaseObject"`, `"script"`, `"etl"` (the three the conversion engine emits) and `"custom"` (everything else). Custom units carry an additional `customKind` discriminator on `source` and `target` — that's the free-form string the agent uses to group, filter, and route. Each custom unit carries:
+
+- **`kind`** — always `"custom"` for these units. The closed enum keeps registry queries and bindings simple.
+- **`source.customKind` / `target.customKind`** — the free-form discriminator (`"fivetran"`, `"ssasCube"`, `"oraclePackage"`, `"airflowDag"`, …). Pick a stable name; this is what `query_registry where="source.customKind = '<x>'"` filters on. Cannot be one of the four reserved Kind values.
+- **`source.name`** — display name.
+- **`source.objectType`** — *optional*. When the asset maps cleanly to a built-in `ObjectType` (e.g. an Oracle PACKAGE → `package`), set it so the unit groups with its siblings in `migration_status`. `"other"` is fine when nothing fits.
+- **`files.source.path`** — *optional* path to a config file or definition, **relative to the project root** (e.g. `"source/fivetran/orders_sync/connector.py"`). Assets living outside the project must be copied under `<project_dir>/source/` first; an absolute or escaping path is reported in `warnings[]` because it breaks for every other checkout.
+- **`dependencies.dependsOn[]`** — ids of other units (built-in or custom) this one reads/writes. `requiredBy` back-edges and `planning.topologicalRank` are derived from this by the registry on every write — never hand-write either.
+- **`extensions.machine`** — name of the state machine that drives this unit, as a plain string. Only the four compiled-in machines resolve (`main`, `setup`, `data-migration-setup`, `data-validation-setup`); see the gap note below. When unset or unresolvable, a `.scai/skills/<customKind>.md` skill (if present) replaces `main`; otherwise the unit walks `main`.
+
+### Registering custom units
+
+One tool, `register_units`, three shapes. Search that name if the tool is not already loaded — there is no `register_custom_unit` / `register_custom_units_from_manifest`.
+
+| Shape | Call | When |
+|---|---|---|
+| One unit | `register_units(custom_kind, name, ...)` | Walking the user through one item. |
+| A list | `register_units(entries=[...])` | Manifest with many entries (CSV/JSON/YAML the user has on hand). |
+| Findings | `register_units(expected_slugs=[...])` | Investigation agents already wrote `.scai/tmp/extras/findings/<slug>.json`. |
+
+It rejects the four reserved Kind values (`databaseObject`, `script`, `etl`, `custom`) as a `customKind`. Built-in kinds go through the regular `scai code add` / `scai code extract` paths. Per-row failures are collected into `failed[]` rather than aborting the run.
+
+Snake_case (`custom_kind`, `source_path`, `depends_on`, `expected_slugs`) and camelCase (`customKind`, `sourcePath`, `dependsOn`, `expectedSlugs`) both work. `dependsOn` takes either a JSON array of ids or a comma/newline-separated string.
+
+Every shape returns the same envelope — `registered[]` (each row has `id`, `customKind`, `name`, `machine`, `dependsOnResolved`, `dependsOnMissing`, `warnings`) plus `failed[]` / `withMissingDependencies[]` / `withWarnings[]`. Read `dependsOnMissing`: ids in it are recorded but match no unit, which is expected when the dependency is registered later and a typo otherwise. Read `warnings`: an unresolvable machine name (unit uses a `.scai/skills/<customKind>.md` skill if present, otherwise `main`) or a `sourcePath` that isn't repo-relative. Don't re-query to confirm the write — `query_registry`'s default projection is `id` / `source` / `files`, so `dependencies` and `extensions` come back absent and the unit looks empty. Pass `fields=["*"]` if you do need to read them back.
+
+Investigation fans out; the write does not. Investigation agents write one JSON fragment each under `.scai/tmp/extras/findings/<slug>.json`. The orchestrator calls `register_units(expected_slugs=[...])`, which merges those files and registers — it does not concatenate fragments in context. Registry writes take an exclusive lock and each triggers a registry-wide graph refresh, so parallel writes from the agents themselves are slower than one batch and fragment the failure report.
+
+### Per-customKind skills
+
+Discovery writes `<project_dir>/.scai/skills/<customKind>.md` with the customer (one cookbook per kind, reused for every object of that kind). When that file exists, those units skip `main` (register → convert → …) and run the skill as their whole workflow. Completion is the same stamp `verify` already uses:
+
+```
+transition_status(status='advance', task='verify', outcome='completed', where="id IN ('<id>')")
+```
+
+Done when `extensions.tasks.verify` reads completed. `next_objects` / `next_task` carry `skillPath` pointing at the file. The file must be a procedure (On Entry → steps → stamp); see `setup/discover-extras/cookbook-template.md`.
+
+A loaded `extensions.machine` still wins when that name is compiled in. A `verify/SKILL.md` task override does not steal these units.
+
+### Gap: per-customKind machines are not implemented
+
+`Machines` loads only the four machines compiled into the server. Nothing reads `<project_dir>/.scai/machines/`, so a machine file written there is inert, and `extensions.machine` naming it resolves to nothing — `machine_for_unit` then uses a `.scai/skills/<customKind>.md` skill if present, otherwise `main`.
+
+Consequences to keep in mind when extending this area:
+
+- Don't author a per-`customKind` machine file and report the flow as wired. The fallback is silent at resolve time; the only signals are `warnings[]` on each `registered[]` row (`withWarnings[]` on the `register_units` report) and the `Warning:` line from `update_registry(field="extensions.machine", ...)`.
+- The executor kinds are `mcpTool`, `shell`, and `agent`. There is no `manual` kind and no `instructions` field — a machine using them fails to deserialize, which is a second reason a hand-written machine never takes effect.
+- Making this real means loading and validating `.scai/machines/*.json` into `by_name` alongside the built-ins, and threading `project_dir` into the ~15 `Machines::load_builtin()` call sites. That's a feature, not a doc fix.
+
+### Invoking discovery
+
+The skill at `setup/discover-extras/SKILL.md` registers the units, then co-authors a `.scai/skills/<customKind>.md` cookbook per kind with the customer. Load it when the user has extras to register — it is not a step in the compiled `setup` machine.
+
+Re-entering the skill at any time afterward is safe — it picks up where the user left off and lets them add more units.
+
+### Worked example: FiveTran sync depends on a table
+
+1. Register the FiveTran sync as a custom unit pointing at the table it reads from:
+   ```
+   register_units(
+     custom_kind="fivetran",
+     name="orders_sync",
+     source_path="source/fivetran/orders_sync.yaml",
+     depends_on=["<id-of-dbo.Orders-table>"],
+     description="Daily ingest from Shopify",
+   )
+   ```
+   Check `dependsOnMissing` on the registered row — if the table id is in there, look it up again with `query_registry` before moving on. `requiredBy` on the table and `topologicalRank` on the sync are filled in by the registry; don't touch them.
+2. Discovery writes `.scai/skills/fivetran.md` with the customer (what "done" means, how one connector is migrated). Leave `machine` unset — a `fivetran-flow` machine can't load (see the gap above).
+3. Run `migration_status(mode="next_objects")` — once the table the sync depends on is migrated, the FiveTran sync appears in the queue with `skillPath` pointing at that cookbook.

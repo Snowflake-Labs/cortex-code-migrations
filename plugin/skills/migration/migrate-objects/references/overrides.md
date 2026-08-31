@@ -124,17 +124,14 @@ This improves the framework rather than accumulating overrides.
 
 ## Pre-Override Investigation Checklist
 
-Before adding any override, check local results and Snowflake:
-
-```bash
-# 1. Read detailed cell-level diffs
-cat <project_dir>/test-results/results.json
-```
+Before adding any override, read the latest case from Snowflake
+(`<metadata_database>.VALIDATION.LATEST` — not the migration target):
 
 ```sql
--- 2. Get difference details from Snowflake
-SELECT differences FROM VALIDATION.LATEST
-WHERE code_unit_name = 'RPT.Name' AND params_hash = 'abc12345';
+-- Difference details for one case
+SELECT differences, error_message, parameters, status
+FROM <metadata_database>.VALIDATION.LATEST
+WHERE UPPER(procedure_name) = UPPER('RPT.Name') AND params_hash = 'abc12345';
 
 -- 3. Run the procedure to see actual output
 CALL <PREFIX>.Name(param1 => value1, param2 => value2);

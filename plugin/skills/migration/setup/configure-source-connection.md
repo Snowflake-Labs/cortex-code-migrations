@@ -17,6 +17,20 @@ Two ways in, and they differ in whether a connection has already been agreed to:
 
 A user importing local SQL files never reaches this skill from setup.
 
+## Before connecting — tell the user
+
+Before proceeding to connection setup, show the following warning **verbatim** regardless of which entry path brought the user here.
+
+> **What this connection is used for:** This source connection will be used
+> throughout the migration lifecycle for metadata extraction, DDL/code
+> extraction, schema introspection, data migration reads, and validation
+> queries.
+>
+> **Use a non-production instance.** Connect to a dev, test, or sandbox
+> database — not production. Migration operations can introduce significant
+> query load, long-running reads, and potential locking on the source database
+> during data migration and validation phases.
+
 ## Set up the connection
 
 Call `configure(needs_source_connection=true)` to list existing connections for
@@ -29,6 +43,7 @@ the configured dialect. Safe to repeat — it only reads.
   - `oracle` → `../connection/oracle-connection/SKILL.md`
   - `teradata` → `../connection/teradata-connection/SKILL.md`
   - `postgresql` → `../connection/postgresql-connection/SKILL.md`
+  - `db2` → `../connection/db2-connection/SKILL.md`
 
 ## If the user pushes back
 
@@ -38,7 +53,7 @@ don't want to connect now, or the re-entry question above gets a "no".
 **Defer for this run:**
 
 ```
-progress_setup(mode="setup", skip="configureSourceConnection")
+progress_setup(mode="setup", skip="configureSourceConnectionExtract")
 ```
 
 Nothing is persisted, so a later `progress_setup()` — or a re-entry from
@@ -47,7 +62,7 @@ Nothing is persisted, so a later `progress_setup()` — or a re-entry from
 **Permanent opt-out:**
 
 ```
-configure(tasks={"configureSourceConnection": {"enabled": false}})
+configure(tasks={"configureSourceConnectionExtract": {"enabled": false}})
 ```
 
 Say what it costs first: code already in the project still converts and

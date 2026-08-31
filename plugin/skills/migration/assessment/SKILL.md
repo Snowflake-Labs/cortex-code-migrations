@@ -1,6 +1,6 @@
 ---
 name: assessment
-description: Analyzes workloads to be migrated to Snowflake using SnowConvert assessment reports. Routes to specialized sub-skills for high-quality assessments. Use this skill when user wants to do an assessment of their code or ETL workload, waves generation, object exclusion, anti-patterns, sql dynamic and/or ETL analysis (SSIS)
+description: Analyzes workloads to be migrated to Snowflake using SnowConvert assessment reports. Routes to specialized sub-skills for high-quality assessments. Use this skill when user wants to do an assessment of their code or ETL workload, waves generation, object exclusion, effort estimates, anti-patterns, workload insights (SQL Server), sql dynamic and/or ETL analysis (SSIS)
 version: 0.1.0
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -12,7 +12,13 @@ license: Proprietary. See License-Skills for complete terms
 Tell the user:
 > **Migration Assessment** — I'll analyze your converted code to generate a migration plan: dependency waves, object categorization, dynamic SQL patterns, and a summary report. This helps us prioritize what to migrate first.
 
-End-to-end migration assessment. The user only needs to point at the source — this skill detects the project state and, if needed, drives the migration setup (connect → init → register → convert) so that the SnowConvert reports the assessment depends on are produced automatically. The user is **never** asked for CSV paths, registry paths, or output directories.
+End-to-end migration assessment. The user only needs to point at the source — this skill detects the project state and, if needed, drives the migration setup (connect → init → register → convert) so that the SnowConvert reports the assessment depends on are produced automatically. The user is **never** asked for SnowConvert report paths, registry paths, or output directories.
+
+**One exception:** SQL Server **Workload Insights** uses Query Store data, which
+nothing in the conversion pipeline produces. Step 4 first explains what
+Workload Insights adds, then lets the user skip it, provide CSV path(s) now, or
+take the enable/extract SQL and provide the CSV on a later assessment run. Any
+CSV filename works and the file stays in place.
 
 > "I want to assess my workload" → the user provides a source → assessment runs end-to-end. Nothing else is requested.
 
@@ -49,17 +55,19 @@ Show one compact confirmation that lists what will run. This is the **only** con
 I will run:
 1. Waves (dependency analysis + deployment partitioning)
 2. Anti-Patterns  (SQL Server only)
-4. Dynamic SQL Patterns
-5. ETL/SSIS Assessment  (only if present)
-6. Informatica Assessment  (only if present)
-7. HTML Report
+3. Effort Estimates  (SQL Server and Redshift only)
+4. Workload Insights  (SQL Server only)
+5. Dynamic SQL Patterns
+6. ETL/SSIS Assessment  (only if present)
+7. Informatica Assessment  (only if present)
+8. HTML Report
 
 Proceed with all, or pick a subset?
 ```
 
 Wait for "yes" or a subset selection, then run. Do not re-prompt for files or directories at any later point.
 
-**Note:** "Proceed with all" is **not** the last prompt. The next step (Step 4) collects every input the in-scope sub-skills need so they can run as non-interactive sub-agents. After Step 4 the assessment becomes hands-off until results are surfaced in Step 8.
+**Note:** "Proceed with all" includes the Workload Insights **intake step**, but Workload Insights itself runs only when a CSV is supplied. Declining or deferring it does not remove any other selected assessment. "Proceed with all" is **not** the last prompt: Step 4 collects every input the in-scope sub-skills need so they can run as non-interactive sub-agents. After Step 4 the assessment becomes hands-off until results are surfaced in Step 8.
 
 ## Step 4: Gather Sub-Skill Inputs (single batch)
 
@@ -118,11 +126,62 @@ This prompt is **MANDATORY** — do not skip or default. Record `informatica.tar
 
 No prompts. Note the sub-skill is in scope.
 
-### 5.5 Anti-patterns (SQL Server only, no inputs)
+### 5.5 Effort estimate (no inputs)
+
+No prompts. Note the sub-skill is in scope.
+
+### 5.6 Anti-patterns (SQL Server only, no inputs)
 
 No prompts. In scope **only when the project's source dialect is SQL Server** — `scai assessment anti-patterns` self-gates and aborts (error `ASM0024`) on other dialects. For non-SQL-Server projects, treat it as out of scope and synthesize a `"skipped"` result in Step 6.
 
-### 5.6 Snapshot the inputs
+### 5.7 Workload Insights (SQL Server only)
+
+In scope **only when the project's source dialect is SQL Server** — `scai assessment workload-insights` self-gates and aborts (error `ASM0034`) on other dialects. For non-SQL-Server projects, ask **nothing** here, treat it as out of scope, and synthesize a `"skipped"` result in Step 6.
+
+First say this, as a plain message, before you ask anything:
+
+> **Workload Insights** summarizes the SQL activity SQL Server recorded in Query Store: execution volume, statement mix, busiest modules, and costly or occasionally slow query shapes. It is not derived from the converted source. You run the extract we provide and save that result as a CSV. This is optional — you can skip it, or take the SQL now and attach the CSV on a later run.
+
+Then ask this. The disclaimer line and **all three options, in this order and
+with these labels**, must appear in the question itself — never summarize the
+disclaimer away, and never drop, merge, or reword an option. Option 3 is the
+whole reason a user without a CSV can still get Workload Insights:
+
+> Disclaimer: Query Store data, and everything derived from it in this report, is used for reporting purposes only.
+>
+> How do you want to handle Workload Insights?
+>
+> 1. Skip for this run
+> 2. I have the CSV
+> 3. Give me the SQL, I'll provide the CSV later
+
+Map the answers to `workload_insights.mode`: `skip` | `have_extract` | `later`.
+
+**1 — `skip`.** Record empty `days` and `input_paths`, paste no SQL, and continue gathering any remaining assessment inputs.
+
+**2 — `have_extract`.** Ask for one or more paths: one CSV per database, or a single concatenated file. Any filename works. Resolve each answer to an absolute path and record them in `input_paths`. Leave `days` empty. Do **not** `cp` the file, `mkdir` a folder for it, or otherwise move it under the project — `scai` reads it in place. Do **not** ask days-back: the CSV already carries `first_seen` / `last_seen`. If no usable path is supplied, do not dispatch; ask for a path or let the user switch to `skip` / `later`.
+
+**3 — `later`.** Ask this verbatim, offering exactly these two answers — do not
+retitle the question or add other preset windows:
+
+> **Extract window**
+>
+> How many days back should the extract cover?
+>
+> 1. 30 days (recommended)
+> 2. A different number of days
+
+If they pick 2, ask for the number. Validate the answer is an integer `> 0` and re-ask if it is not. Record it as `workload_insights.days` and leave `input_paths` empty. Then, in this same turn, in this order:
+
+- Show this disclaimer verbatim **before** any SQL:
+
+  > Disclaimer: Query Store data, and everything derived from it in this report, is used for reporting purposes only.
+- Paste the enable SQL from `workload-insights/references/enable-query-store.sql`, substituting `STALE_QUERY_THRESHOLD_DAYS = <days>` with the window they just chose so cleanup does not drop that range. Tell users whose Query Store is already on to skip that `ALTER`.
+- Paste the extract SQL from `workload-insights/references/extract.sql` with `DECLARE @Days int = <days>` filled in from their answer.
+- Tell the user to run the database under real traffic, execute the extract **inside each user database** they care about (Query Store is per database — there is no instance-wide extract), save the result as a CSV **with headers included** (`sqlcmd`, or SSMS with headers turned on), one file per database or concatenated, and return on a later assessment run.
+- Explicitly say the current assessment will continue now and will not wait for the capture window.
+
+### 5.8 Snapshot the inputs
 
 Lay out the resolved values in your working context like this (text only — do not write to disk):
 
@@ -136,7 +195,12 @@ assessment_inputs:
     prioritization_globs: [<glob>, ...]
     wave_ordering: category | dependency
   exclusion: {}
+  effort_estimate: {}
   anti_patterns: {}
+  workload_insights:
+    mode: have_extract | skip | later
+    days: <int or empty>
+    input_paths: [<abs>, ...]
   dynamic_sql:
     review_mode: generate-only | auto-review-all | skip
     output_dir: <project_dir>/assessment/json
@@ -212,6 +276,33 @@ Report back JSON only:
   "status": "ok" | "error",
   "output_json": "<abs_path>" | null,
   "summary": "<one-line counts: temp/staging, deprecated, testing, duplicates>",
+  "error": "<message>" | null
+}
+```
+
+### 6.2b effort-estimate-runner prompt
+
+```
+Read and follow plugin/skills/migration/assessment/effort-estimate/SKILL.md.
+You are running in sub-agent mode — do NOT ask the user any questions.
+
+Context (from parent):
+- project_dir: <abs_path>
+
+Steps:
+1. Call configure() with project_dir above. Snowflake credentials are not needed for effort estimate analysis.
+2. Run `scai assessment effort-estimate` from <project_dir>.
+3. Locate the timestamped effort-estimates-*.json the CLI wrote under
+   <project_dir>/artifacts/assessment/. If the CLI aborts because the
+   source dialect is unsupported (error ASM0031), report status "skipped"
+   with that reason — do NOT treat it as an error.
+
+Report back JSON only:
+{
+  "sub_skill": "effort-estimate",
+  "status": "ok" | "skipped" | "error",
+  "output_json": "<abs_path>" | null,
+  "summary": "<one-line: ddl_objects, total_fde_hours>",
   "error": "<message>" | null
 }
 ```
@@ -348,7 +439,37 @@ Report back JSON only:
 }
 ```
 
-### 6.6 Common rules for every dispatch
+### 6.6 workload-insights-runner prompt
+
+Dispatch **only** when all three hold: the project's source dialect is SQL
+Server, `workload_insights.mode == have_extract`, and
+`workload_insights.input_paths` is non-empty. In every other case (other
+dialect, `skip`, `later`, or no paths collected), do **not** dispatch —
+synthesize a `"skipped"` result with `output_json: null` in Step 6. For
+`later`, use `summary: "deferred — extract SQL provided; re-run assessment with
+the CSV"`. For `skip`, use `summary: "skipped by user"`. A skipped Workload
+Insights result does not affect any other assessment result or report
+generation.
+
+```
+Read and follow plugin/skills/migration/assessment/workload-insights/SKILL.md.
+You are running in sub-agent mode — do NOT ask the user any questions.
+
+Context:
+- project_dir: <abs_path>
+- input_paths: <abs csv paths>
+
+Steps:
+1. configure() with project_dir. No Snowflake credentials.
+2. Run `scai assessment workload-insights --input <path> [--input <path>…]` from project_dir, adding exactly one `--input <path>` argument per context path (absolute).
+3. Return JSON only {sub_skill, status, output_json, summary, error}.
+   ASM0034 → skipped. Do not rewrite KPI fields in the JSON.
+   Do not copy the CSV into the project.
+```
+
+A large-extract warning on stdout is **not** a failure: the command still writes the JSON and exits 0, so that run is `"ok"`.
+
+### 6.7 Common rules for every dispatch
 
 1. **One message, multiple Task calls.** Send all in-scope dispatches in a single tool-use turn so the framework can run them in parallel.
 2. **Absolute paths only** in every context block.
@@ -373,7 +494,7 @@ For every dispatched sub-skill, validate:
 
 For sub-skills excluded by the Step 3 scope (or set to `review_mode: skip` in Step 4), synthesize `{status: "skipped", output_json: null, summary: "<reason>"}` so Step 8 has a complete row for every sub-skill.
 
-Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `anti-patterns`, `analyzing-sql-dynamic-patterns`, `etl-assessment`, `informatica-assessment`). Carry it into Step 7 and Step 8.
+Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `effort-estimate`, `anti-patterns`, `workload-insights`, `analyzing-sql-dynamic-patterns`, `etl-assessment`, `informatica-assessment`). Carry it into Step 7 and Step 8.
 
 ## Step 7: Generate Unified HTML Report
 
@@ -432,14 +553,16 @@ If the report command fails, record the failure and proceed to Step 8 anyway —
 
 ## Step 8: Surface Results + Retry
 
-Print a status table from the `results` collected in Step 6, one line per sub-skill, in this order: `waves-generator`, `object-exclusion-detection`, `anti-patterns`, `analyzing-sql-dynamic-patterns`, `etl-assessment`.
+Print a status table from the `results` collected in Step 6, one line per sub-skill, in this order: `waves-generator`, `object-exclusion-detection`, `effort-estimate`, `anti-patterns`, `workload-insights`, `analyzing-sql-dynamic-patterns`, `etl-assessment`.
 
 Format:
 
 ```
 waves-generator                  ok      <output_json basename>   (<summary>)
 object-exclusion-detection       ok      <output_json basename>   (<summary>)
+effort-estimate                  ok      <output_json basename>   (<summary>)
 anti-patterns                    ok      <output_json basename>   (<summary>)
+workload-insights                skip    <reason>
 analyzing-sql-dynamic-patterns   FAIL    <error message>
 etl-assessment                   skip    <reason>
 
@@ -519,9 +642,18 @@ Detect user intent and load the appropriate sub-skill:
 - Triggers: "temporary objects", "staging objects", "deprecated", "exclude objects", "test objects", "cleanup"
 - Load: `object_exclusion_detection/SKILL.md`
 
+**Effort Estimates** - Generate migration effort estimates from SnowConvert reports:
+- Triggers: "effort estimate", "effort estimates", "migration effort", "FDE hours", "how long will migration take"
+- Load: `effort-estimate/SKILL.md`
+
 **Anti-Patterns** - Surface migration converns from existing SnowConvert findings (SQL Server only):
 - Triggers: "anti-patterns", "anti patterns", "risk analysis", "performance risks", "collation risks", "semantic risks", "architecture blockers"
 - Load: `anti-patterns/SKILL.md`
+
+**Workload Insights** - Summarize SQL activity recorded in Query Store (SQL Server only):
+- Triggers: "workload insights", "query logs"
+- Needs a Query Store CSV the customer exports themselves (any filename). No CSV yet → Step 4 § 5.7 hands them the SQL and the assessment continues without it.
+- Load: `workload-insights/SKILL.md`
 
 **Dynamic SQL Analysis** - Classify and score Dynamic SQL patterns:
 - Triggers: "dynamic sql", "sql dynamic patterns"
@@ -818,7 +950,9 @@ If any answer is "No", go back and use the correct script.
 
 - `waves-generator/SKILL.md` - Algorithm details, partition creation
 - `object_exclusion_detection/SKILL.md` - Pattern definitions, naming conventions
+- `effort-estimate/SKILL.md` - FDE hour estimates from SnowConvert reports (SQL Server, Redshift)
 - `anti-patterns/SKILL.md` - Curated SnowConvert issue-code catalog → customer-facing risk buckets (SQL Server only)
+- `workload-insights/SKILL.md` - Query Store CSV extract → workload volume, statement mix, busiest modules, costly and slow shapes (SQL Server only; any CSV filename works); `references/` holds the extract and enable SQL the parent pastes
 - `analyzing-sql-dynamic-patterns/SKILL.md` - Pattern classification, complexity scoring
 - `etl-assessment/SKILL.md` - SSIS package analysis, control flow, data flow pipelines
 

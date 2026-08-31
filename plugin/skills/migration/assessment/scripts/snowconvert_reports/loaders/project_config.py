@@ -32,11 +32,6 @@ def _read_flat_yaml_value(project_dir: Optional[Path], key: str) -> str:
     A line reader rather than a YAML parse because PyYAML is not available —
     ``assessment/pyproject.toml`` declares ``dependencies = []``. Returns ``""``
     on every failure so callers never need a ``try``/``except``.
-
-    ``effort_estimation.py`` holds a near-identical scan for ``source_language``.
-    It is duplicated rather than shared: that module deliberately imports nothing
-    from ``snowconvert_reports`` (``ai/CLAUDE.md`` pitfall #8), and its copy is
-    under test.
     """
     if not project_dir:
         return ""
