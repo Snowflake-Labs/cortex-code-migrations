@@ -11,15 +11,19 @@ import argparse
 import json
 import os
 import re
+import hashlib
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from subcommands import TestbedCli, default_runner, enumerate_artifacts  # noqa: E402
 from recovery import RecoveryClass, classify  # noqa: E402
-from manifest import Manifest  # noqa: E402
+from manifest import Manifest, classify_rejections  # noqa: E402
 from assembler import (  # noqa: E402
     load_fragments, assemble, structural_coverage_warnings, value_conflict_warnings, AssemblyError)
+from critic_index import load_index  # noqa: E402
+from critic_backbone import run_backbone, build_critique_request, reads_column_facts, CheckStatus  # noqa: E402
+from critic_gate import parse_verdict, apply_gate, GateAction  # noqa: E402
 
 STATE_REL = ".scai/testbed/state.bin"  # written by init (opaque; driver never touches)
 VIEW_REL = "testbed/mine/unsolved-view.json"  # non-hidden: it's the state-machine completion predicate
@@ -29,6 +33,9 @@ GENERATE_VIEW_REL = "testbed/generate/summary-view.json"  # non-hidden: the TERM
 ENRICH_VIEW_REL = "testbed/enrich/enrichment-view.json"  # completion predicate: present <=> ready
 ENRICH_REPORT_REL = "testbed/enrich/enrichment-report.json"  # not-ready / reject diagnostics
 FRAGMENTS_DIR_REL = "testbed/enrich/fragments"
+CRITIQUE_REQUEST_REL = "testbed/enrich/critic/critique-request.json"
+CRITIC_VERDICT_REL = "testbed/enrich/critic/verdict.json"
+CRITIC_PROMPT_TYPE = "critic"  # the max_rejections_per_type bucket critic re-author rounds draw down
 QUARANTINE_REL = ".scai/testbed/quarantine"
 MAX_QUARANTINE_ATTEMPTS = 20
 # PENDING key for a malformed whole-workload entry that carries no identity to attribute it to.
@@ -53,7 +60,11 @@ def _write_json(path: Path, obj: dict) -> None:
     # then os.replace (atomic on POSIX).
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(obj, indent=2))
+    # Explicit utf-8, matching every reader of these views. Not a live crash fix: json.dumps
+    # escapes non-ASCII, so this payload is pure ASCII and writes identically under any
+    # ASCII-superset locale codec. The pin declares the views' encoding at the call site instead of
+    # inheriting the host's, which is what the readers below (and the guard test) rely on.
+    tmp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
     os.replace(tmp, path)
 
 
@@ -374,7 +385,7 @@ def _readiness_gate(project_dir: str, ignore_readiness: bool) -> tuple[bool, str
     if not readiness_path.exists():
         return False, "generate blocked: run validate first", False
     try:
-        readiness = json.loads(readiness_path.read_text())
+        readiness = json.loads(readiness_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         # Predicate files are atomic-written, but a crash mid-write (or a hand-edit) can still
         # truncate one — mid-codepoint (UnicodeDecodeError), malformed (JSONDecodeError), or racing
@@ -424,10 +435,14 @@ def _read_json(project_dir, rel):
     if not p.exists():
         return None
     try:
-        return json.loads(p.read_text())
-    except (json.JSONDecodeError, OSError):
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError):
         # Mirror _readiness_gate: a truncated/unreadable predicate (crash mid-write, permissions,
-        # partial write) degrades to None rather than raising straight out of the driver.
+        # partial write) degrades to None rather than raising straight out of the driver --
+        # including the mid-codepoint truncation, which raises UnicodeDecodeError (a ValueError,
+        # so it escapes OSError). The explicit utf-8 is what makes the degrade reachable at all:
+        # on the locale default a non-UTF-8 host decodes an accented view to mojibake without
+        # raising, so nothing degrades and the driver reads names that were never written.
         return None
 
 
@@ -462,6 +477,7 @@ def _commit_enrich_ready(project_dir, manifest, report, applied, warnings, note)
                 {"schema_version": 1, "ready": True, "counts": report.get("counts", {}),
                  "applied": applied, "warnings": warnings, "enrichment": manifest.enrichment})
     _clear_stale_report(project_dir)
+    _clear_critic_state(project_dir)
     manifest.save(project_dir)
     return 0, note
 
@@ -550,12 +566,176 @@ def _enrich_handle_reject(project_dir, manifest, env, warnings, *, cap, cli, env
                         warnings, f"enrich stopped [{env.error.code}]: {env.error.message}")
 
 
-def run_enrich(project_dir, cli, *, max_rejections_per_type=3, max_iterations=3,
+def _envelope_sig(envelope) -> str:
+    # Ties a verdict fragment to the exact envelope it critiqued: if the agent re-authors any fragment,
+    # the sig changes and the stale verdict is ignored (Invocation A re-runs on the new envelope).
+    return hashlib.sha256(json.dumps(envelope, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def _clear_critic_state(project_dir) -> None:
+    for rel in (CRITIC_VERDICT_REL, CRITIQUE_REQUEST_REL):
+        p = Path(project_dir) / rel
+        if p.exists():
+            p.unlink()
+
+
+def _critic_backbone_stop(project_dir, manifest, envelope, index, warnings, sig, *, cap):
+    # Backbone policy, for an envelope with no fresh verdict. A FAIL never reaches the critic: a
+    # re-proposed rejected value escalates, otherwise it spends the reject budget. An all-clear writes
+    # the critique request and stops for the critic's second invocation.
+    checks = run_backbone(envelope, index)
+    fails = [c for c in checks if c.status == CheckStatus.FAIL]
+    if fails:
+        # Same helper the gate's REJECT arm consumes, so "repeat rejection -> escalate as a cycle,
+        # else record it" is decided in one place for both shapes of rejection.
+        cycle, recorded = classify_rejections(
+            ((f.identity.get("table"), f.identity.get("column"), f.identity.get("literal"))
+             for f in fails),
+            manifest.value_previously_rejected)
+        for table, column, value in recorded:
+            manifest.record_rejected_value(table, column, value)
+        citations = [{"identity": f.identity, "citation": f.citation} for f in fails]
+        if cycle:
+            return _enrich_stop(project_dir, manifest, "documented-stop",
+                                {"reason": "value_cycle", "citations": citations}, warnings,
+                                "critic backbone: a previously-rejected value was re-proposed; escalating for human review")
+        manifest.record_rejection(CRITIC_PROMPT_TYPE)
+        if manifest.rejection_budget_exhausted(CRITIC_PROMPT_TYPE, cap):
+            return _enrich_stop(project_dir, manifest, "budget-exhausted",
+                                {"reason": "critic_budget", "prompt_type": CRITIC_PROMPT_TYPE,
+                                 "citations": citations}, warnings,
+                                "critic reject budget exhausted; fix fragments and re-run with --reset-budget")
+        return _enrich_stop(project_dir, manifest, "reject",
+                            {"reason": "critic_backbone", "prompt_type": CRITIC_PROMPT_TYPE,
+                             "citations": citations}, warnings,
+                            "critic backbone rejected an entry; re-prompt the fragment; see enrichment-report.json")
+    request = build_critique_request(checks)
+    request["envelope_sig"] = sig
+    _write_json(Path(project_dir) / CRITIQUE_REQUEST_REL, request)
+    return _enrich_stop(project_dir, manifest, "critique",
+                        {"reason": "await_critic", "critique_request": CRITIQUE_REQUEST_REL,
+                         "entries": len(request["entries"])}, warnings,
+                        "critic backbone passed; run the critic prompt, write verdict.json, then re-run enrich")
+
+
+def _critic_gate_stop(project_dir, manifest, verdict, index, warnings, *, cap):
+    # Gate policy, for a verdict matching the current envelope. Returns None only on accept_all;
+    # reject/revise spend the reject budget, and every other action is a documented stop.
+    decision = apply_gate(verdict, index, manifest.value_previously_rejected)
+    for table, column, value in decision.record_values:
+        manifest.record_rejected_value(table, column, value)
+    if decision.action == GateAction.ACCEPT_ALL:
+        return None
+    if decision.action in (GateAction.REJECT, GateAction.REVISE):
+        manifest.record_rejection(CRITIC_PROMPT_TYPE)
+        if manifest.rejection_budget_exhausted(CRITIC_PROMPT_TYPE, cap):
+            # decision.report carries "reason": f"critic_{action}", so override it AFTER the spread:
+            # a budget-exhausted stop must report critic_budget (as the backbone-reject arm does),
+            # not the underlying critic_revise/critic_reject action.
+            return _enrich_stop(project_dir, manifest, "budget-exhausted",
+                                {**decision.report, "prompt_type": CRITIC_PROMPT_TYPE, "reason": "critic_budget"},
+                                warnings, "critic revise/reject budget exhausted; fix fragments and re-run with --reset-budget")
+        stop_kind = "reject" if decision.action == GateAction.REJECT else "iterate"
+        return _enrich_stop(project_dir, manifest, stop_kind,
+                            {"prompt_type": CRITIC_PROMPT_TYPE, **decision.report}, warnings, decision.message)
+    return _enrich_stop(project_dir, manifest, "documented-stop",
+                        {"prompt_type": CRITIC_PROMPT_TYPE, **decision.report}, warnings, decision.message)
+
+
+def _run_critic_station(project_dir, artifacts_path, manifest, envelope, unsolved, warnings, *, cap):
+    # Two-invocation bridge. Returns None to proceed to propose, else a terminal (rc, msg) stop.
+    sig = _envelope_sig(envelope)
+    verdict_path = Path(project_dir) / CRITIC_VERDICT_REL
+    verdict = None
+    if verdict_path.exists():
+        # A present verdict.json that can't be read or parsed is malformed, not "stale/absent":
+        # surface it rather than silently re-critiquing over a truncated/corrupt handoff (never
+        # auto-apply an un-critiqued envelope). An absent file leaves verdict None -> backbone below.
+        def _malformed(detail):
+            return _enrich_stop(project_dir, manifest, "documented-stop",
+                                {"reason": "critic_verdict_malformed", "detail": detail}, warnings,
+                                "critic verdict.json malformed; a human must review "
+                                "(never auto-apply an un-critiqued envelope)")
+        try:
+            raw = verdict_path.read_text(encoding="utf-8")
+        # read_text raises UnicodeDecodeError on a handoff written mid-codepoint, which is a ValueError
+        # and so escapes OSError -- crashing the run instead of reaching the documented stop above. The
+        # explicit utf-8 is load-bearing for that: on the locale default a non-UTF-8 host mis-decodes
+        # the handoff to mojibake without raising, so a real critique parses as different text.
+        except (OSError, ValueError) as exc:
+            return _malformed(f"verdict.json unreadable: {exc}")
+        verdict = parse_verdict(raw)
+        if not verdict.ok:
+            return _malformed(verdict.error)
+
+    # A re-authored fragment changes the sig, so a stale-but-valid verdict falls through to a fresh
+    # backbone run. Build the read-only facts index once here and share it across both branches -- before
+    # the accept-all fast path, or a run whose only diagnostics are index warnings reports none of them.
+    fresh = verdict is not None and verdict.envelope_sig == sig
+    index = load_index(artifacts_path, unsolved)
+    warnings.extend(f"critic index skipped unreadable artifact {s}" for s in index.skipped)
+    warnings.extend(
+        f"critic index: {a}; entries naming it bare cannot be resolved to one table and are routed "
+        "to the critic instead of checked deterministically" for a in index.ambiguities)
+    # A qualified row the index could not attribute to any captured table. Reported for the same reason
+    # `ambiguities` is: its evidence stops counting toward every other schema's cells, and without this
+    # line nothing explains why (a qualified name is not ambiguous, so `ambiguities` stays empty).
+    warnings.extend(f"critic index: {u}" for u in index.unattributed)
+    # Both index-health diagnostics are recorded before the fast path below, for the same reason the
+    # index is built there: a run whose only diagnostics are these would otherwise report none of them.
+    no_root = not Path(artifacts_path).is_dir()
+    if no_root:
+        warnings.append(f"critic artifacts root {artifacts_path} is not a directory; column-existence "
+                        "checks have no facts to read")
+    elif not index.tables:
+        # Warning, not a stop: a purely procedural envelope over a procedural-only artifact root is
+        # legitimate, so hard-stopping here would be a false positive. It is still worth naming, since
+        # it is the reason every column entry rejects rather than any property of the entries.
+        warnings.append(f"critic index resolved zero TABLE artifacts under {artifacts_path}; "
+                        "column-existence checks cannot pass and every column entry will be rejected")
+    if fresh and not verdict.verdicts:
+        return None
+
+    # An absent root plus at least one entry that would be graded against the column facts. Both halves
+    # are load-bearing, and the finding is only the conjunction: the harm is a manufactured verdict, not a
+    # missing directory. With no facts every column reads as non-existent, so a fact-reading entry draws a
+    # guaranteed-true-shaped FAIL worded identically to a genuinely missing column, and the gate would
+    # adjudicate its citations against nothing.
+    #
+    # `reads_column_facts` is what keeps this from over-reaching. An envelope of only uncovered arrays
+    # reads no facts at all -- the backbone's `_uncovered` inspects the entry's own keys and FLAGs -- so it
+    # is graded identically with or without a root, and stopping it would contradict the reason the
+    # present-but-tableless root above is only a warning: a purely procedural envelope with nothing to look
+    # up is a legitimate steady state, and it stays one when the lookup target is absent rather than merely
+    # empty. Such an envelope keeps its critique handoff, and the warning recorded above is what tells the
+    # operator the root was missing.
+    #
+    # A documented-stop rather than a reject because a misconfigured root is not an entry defect: it spends
+    # no reject budget and writes no rejected-value memo, so fixing the flag is enough to re-run without
+    # --reset-budget. (Absent is a misconfiguration, never a steady state: the mine phase creates the
+    # default root, and --artifacts-path is per-phase, so `mine --artifacts-path /elsewhere` plus a plain
+    # `enrich` lands here.) It sits below the accept-all fast path deliberately -- an already-accepted
+    # verdict consumes no facts either, so stopping it there would be a false positive for the same reason.
+    if no_root and reads_column_facts(envelope):
+        return _enrich_stop(project_dir, manifest, "documented-stop",
+                            {"reason": "critic_no_artifacts", "artifacts_path": str(artifacts_path)},
+                            warnings,
+                            f"critic artifacts root {artifacts_path} is not a directory; pass "
+                            "--artifacts-path (it is not inherited from the mine phase)")
+
+    if not fresh:
+        return _critic_backbone_stop(project_dir, manifest, envelope, index, warnings, sig, cap=cap)
+
+    return _critic_gate_stop(project_dir, manifest, verdict, index, warnings, cap=cap)
+
+
+def run_enrich(project_dir, cli, *, artifacts_path=None, max_rejections_per_type=3, max_iterations=3,
                reset_budget=False) -> tuple[int, str]:
     # Enrich assembles the LLM prompt fragments into one envelope, proposes it to the CLI, then
     # validates readiness. Idempotent: the enrichment view is the completion predicate. state.bin
     # stays opaque — the driver reads only fragments + the machine-readable envelopes.
     project_dir = str(project_dir)
+    artifacts_path = artifacts_path or str(Path(project_dir) / "artifacts")
     if _present(project_dir, ENRICH_VIEW_REL):
         return 0, "enrich already complete (enrichment view present)"
 
@@ -577,6 +757,11 @@ def run_enrich(project_dir, cli, *, max_rejections_per_type=3, max_iterations=3,
         return _enrich_stop(project_dir, manifest, "reject",
                             report={"reason": "assembly_rejected", "prompt_type": e.prompt_type, "detail": e.message},
                             warnings=warnings, msg=f"enrich rejected: {e.message}")
+
+    gate_stop = _run_critic_station(project_dir, artifacts_path, manifest, envelope, unsolved, warnings,
+                                    cap=max_rejections_per_type)
+    if gate_stop is not None:
+        return gate_stop
 
     env = cli.propose_enrichments(project_dir, json.dumps(envelope, sort_keys=True))
     if not env.success:
@@ -666,6 +851,8 @@ def main(argv=None) -> int:
     enr = sub.add_parser("enrich", help="run the enrichment orchestration phase")
     enr.add_argument("--project-dir", required=True)
     enr.add_argument("--scai", default=None, help="override the scai binary")
+    enr.add_argument("--artifacts-path", default=None,
+                     help="per-object testbed JSON root the critic reads (default: <project>/artifacts)")
     enr.add_argument("--reset-budget", action="store_true", help="clear the retry/iterate budget (fresh human run)")
     enr.add_argument("--max-rejections-per-type", type=int, default=3,
                      help="re-prompt reject cap before stopping. v1 buckets every malformed-field reject "
@@ -683,7 +870,7 @@ def main(argv=None) -> int:
         rc, msg = run_generate(args.project_dir, cli, args.rows, args.seed,
                                args.ignore_readiness)
     elif args.phase == "enrich":
-        rc, msg = run_enrich(args.project_dir, cli,
+        rc, msg = run_enrich(args.project_dir, cli, artifacts_path=args.artifacts_path,
                              max_rejections_per_type=args.max_rejections_per_type,
                              max_iterations=args.max_iterations, reset_budget=args.reset_budget)
     else:

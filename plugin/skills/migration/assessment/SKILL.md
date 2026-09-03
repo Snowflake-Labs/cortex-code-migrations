@@ -1,6 +1,6 @@
 ---
 name: assessment
-description: Analyzes workloads to be migrated to Snowflake using SnowConvert assessment reports. Routes to specialized sub-skills for high-quality assessments. Use this skill when user wants to do an assessment of their code or ETL workload, waves generation, object exclusion, anti-patterns, sql dynamic and/or ETL analysis (SSIS)
+description: Analyzes workloads to be migrated to Snowflake using SnowConvert assessment reports. Routes to specialized sub-skills for high-quality assessments. Use this skill when user wants to do an assessment of their code or ETL workload, waves generation, object exclusion, effort estimates, anti-patterns, sql dynamic and/or ETL analysis (SSIS)
 version: 0.1.0
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -49,6 +49,7 @@ Show one compact confirmation that lists what will run. This is the **only** con
 I will run:
 1. Waves (dependency analysis + deployment partitioning)
 2. Anti-Patterns  (SQL Server only)
+3. Effort Estimates  (SQL Server and Redshift only)
 4. Dynamic SQL Patterns
 5. ETL/SSIS Assessment  (only if present)
 6. Informatica Assessment  (only if present)
@@ -118,11 +119,15 @@ This prompt is **MANDATORY** — do not skip or default. Record `informatica.tar
 
 No prompts. Note the sub-skill is in scope.
 
-### 5.5 Anti-patterns (SQL Server only, no inputs)
+### 5.5 Effort estimate (no inputs)
+
+No prompts. Note the sub-skill is in scope.
+
+### 5.6 Anti-patterns (SQL Server only, no inputs)
 
 No prompts. In scope **only when the project's source dialect is SQL Server** — `scai assessment anti-patterns` self-gates and aborts (error `ASM0024`) on other dialects. For non-SQL-Server projects, treat it as out of scope and synthesize a `"skipped"` result in Step 6.
 
-### 5.6 Snapshot the inputs
+### 5.7 Snapshot the inputs
 
 Lay out the resolved values in your working context like this (text only — do not write to disk):
 
@@ -136,6 +141,7 @@ assessment_inputs:
     prioritization_globs: [<glob>, ...]
     wave_ordering: category | dependency
   exclusion: {}
+  effort_estimate: {}
   anti_patterns: {}
   dynamic_sql:
     review_mode: generate-only | auto-review-all | skip
@@ -212,6 +218,33 @@ Report back JSON only:
   "status": "ok" | "error",
   "output_json": "<abs_path>" | null,
   "summary": "<one-line counts: temp/staging, deprecated, testing, duplicates>",
+  "error": "<message>" | null
+}
+```
+
+### 6.2b effort-estimate-runner prompt
+
+```
+Read and follow plugin/skills/migration/assessment/effort-estimate/SKILL.md.
+You are running in sub-agent mode — do NOT ask the user any questions.
+
+Context (from parent):
+- project_dir: <abs_path>
+
+Steps:
+1. Call configure() with project_dir above. Snowflake credentials are not needed for effort estimate analysis.
+2. Run `scai assessment effort-estimate` from <project_dir>.
+3. Locate the timestamped effort-estimates-*.json the CLI wrote under
+   <project_dir>/artifacts/assessment/. If the CLI aborts because the
+   source dialect is unsupported (error ASM0031), report status "skipped"
+   with that reason — do NOT treat it as an error.
+
+Report back JSON only:
+{
+  "sub_skill": "effort-estimate",
+  "status": "ok" | "skipped" | "error",
+  "output_json": "<abs_path>" | null,
+  "summary": "<one-line: ddl_objects, total_estimated_hours>",
   "error": "<message>" | null
 }
 ```
@@ -373,7 +406,7 @@ For every dispatched sub-skill, validate:
 
 For sub-skills excluded by the Step 3 scope (or set to `review_mode: skip` in Step 4), synthesize `{status: "skipped", output_json: null, summary: "<reason>"}` so Step 8 has a complete row for every sub-skill.
 
-Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `anti-patterns`, `analyzing-sql-dynamic-patterns`, `etl-assessment`, `informatica-assessment`). Carry it into Step 7 and Step 8.
+Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `effort-estimate`, `anti-patterns`, `analyzing-sql-dynamic-patterns`, `etl-assessment`, `informatica-assessment`). Carry it into Step 7 and Step 8.
 
 ## Step 7: Generate Unified HTML Report
 
@@ -432,13 +465,14 @@ If the report command fails, record the failure and proceed to Step 8 anyway —
 
 ## Step 8: Surface Results + Retry
 
-Print a status table from the `results` collected in Step 6, one line per sub-skill, in this order: `waves-generator`, `object-exclusion-detection`, `anti-patterns`, `analyzing-sql-dynamic-patterns`, `etl-assessment`.
+Print a status table from the `results` collected in Step 6, one line per sub-skill, in this order: `waves-generator`, `object-exclusion-detection`, `effort-estimate`, `anti-patterns`, `analyzing-sql-dynamic-patterns`, `etl-assessment`.
 
 Format:
 
 ```
 waves-generator                  ok      <output_json basename>   (<summary>)
 object-exclusion-detection       ok      <output_json basename>   (<summary>)
+effort-estimate                  ok      <output_json basename>   (<summary>)
 anti-patterns                    ok      <output_json basename>   (<summary>)
 analyzing-sql-dynamic-patterns   FAIL    <error message>
 etl-assessment                   skip    <reason>
@@ -518,6 +552,10 @@ Detect user intent and load the appropriate sub-skill:
 **Object Exclusion** - Identify objects to exclude from migration:
 - Triggers: "temporary objects", "staging objects", "deprecated", "exclude objects", "test objects", "cleanup"
 - Load: `object_exclusion_detection/SKILL.md`
+
+**Effort Estimates** - Generate migration effort estimates from SnowConvert reports:
+- Triggers: "effort estimate", "effort estimates", "migration effort", "FDE hours", "how long will migration take"
+- Load: `effort-estimate/SKILL.md`
 
 **Anti-Patterns** - Surface migration converns from existing SnowConvert findings (SQL Server only):
 - Triggers: "anti-patterns", "anti patterns", "risk analysis", "performance risks", "collation risks", "semantic risks", "architecture blockers"
@@ -818,6 +856,7 @@ If any answer is "No", go back and use the correct script.
 
 - `waves-generator/SKILL.md` - Algorithm details, partition creation
 - `object_exclusion_detection/SKILL.md` - Pattern definitions, naming conventions
+- `effort-estimate/SKILL.md` - Complexity-banded effort hours from SnowConvert reports (SQL Server, Redshift)
 - `anti-patterns/SKILL.md` - Curated SnowConvert issue-code catalog → customer-facing risk buckets (SQL Server only)
 - `analyzing-sql-dynamic-patterns/SKILL.md` - Pattern classification, complexity scoring
 - `etl-assessment/SKILL.md` - SSIS package analysis, control flow, data flow pipelines
@@ -831,7 +870,7 @@ Present the closing message with: **opening line** (`migration_status.in_scope` 
 > What would you like to do?
 > 1. **Review the report** — open HTML or ask any questions
 > 2. **Modify the assessment** — re-run with changed parameters
-> 3. **Move on to migration** — set up the Snowflake target and start Phase 2
+> 3. **Move on to migration setup** — set up the Snowflake target, testing configuration, and data infrastructure setup
 
 Mark option **(1)** as `(recommended)` when `missing > 0`, otherwise **(3)**. Wait for response.
 

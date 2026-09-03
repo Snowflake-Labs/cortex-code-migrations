@@ -111,35 +111,41 @@ Tasks the machine routes through, in order:
 |----------------------------------|-------------------------------------------------------------------|
 | `validateEmptyDir`               | sub-skill: `setup/validate-empty-dir.md`                          |
 | `confirmProjectDir`              | sub-skill: `setup/confirm-project-dir.md`                         |
+| `enableGit`                      | skipped for a fresh (non-git) directory — git is on by default; otherwise inline prompt |
+| `configureGit`                   | sub-skill: `setup/git.md` (existing repos only; fresh dirs auto-init) |
 | `recommendSafeTools`             | inline prompt — arrives with the next two queued in `then_ask`     |
 | `chooseSourceDialect`            | inline prompt (queued)                                            |
 | `chooseEntryMode`                | inline prompt (queued; nothing queues after it — it routes by dialect) |
 | `midwayEntry`                    | sub-skill: `setup/midway-entry.md`                                |
 | `chooseCodeSource`               | inline prompt (`next_prompt`) — extract vs. local files; each answer carries its `then` |
-| `configureSourceConnection`      | sub-skill: `setup/configure-source-connection.md` (extract path only) |
+| `configureSourceConnectionExtract`      | sub-skill: `setup/configure-source-connection.md` (extract path only) |
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
 | `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
 | `continueToMigration`            | inline prompt (`next_prompt`) — the post-assessment gate; each answer carries its `then` |
-| `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md`                  |
-| `setupDataInfrastructure`        | sub-skill: `data-infrastructure/SKILL.md`                         |
-| `dataStrategy`            | sub-skill: `setup/data-strategy/SKILL.md`                         |
+| `configureSourceConnectionTesting` | sub-skill: `setup/configure-source-connection.md` (source-data testing path only) |
 | `configureTesting`               | sub-skill: `setup/configure-testing.md`                           |
 | `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (synthetic testing path only) |
+| `configureSourceConnectionData`  | sub-skill: `setup/configure-source-connection.md` (data infrastructure path only) |
+| `setupDataInfrastructure`        | sub-skill: `data-infrastructure/SKILL.md`                         |
+| `dataStrategy`            | sub-skill: `setup/data-strategy/SKILL.md`                         |
 
 Conversion and assessment come first on purpose: neither needs a Snowflake
 target, so a user reaches their assessment report without picking a
-connection or database. Everything else — git included — is gated behind the
-`continueToMigration` prompt, so a user who only wanted an assessment is
-never asked to set up a repository. Answer "Not now" and the machine
-finishes at assessment; nothing is persisted for that answer, so the gate is
-offered again on the next run.
+connection or database. Git is enabled by default right after the project
+directory is confirmed — before dialect and code registration — so milestone
+commits can land as each step completes. A fresh directory that is not
+already a git repo is initialized on `main` automatically, without asking.
+An existing repository stops at `configureGit` until the user confirms
+branch and remote settings.
 
-One consequence: the milestone commits (`registerCode`, `convertCode`,
-`runAssessment`) need git, which now comes after the gate. They land together
-on the first `progress_setup()` after `configureGit` rather than one at a
-time, and an assessment-only run makes none of them — it has no repository.
+Object migration setup (Snowflake target, testing, data infrastructure) is
+gated behind the `continueToMigration` prompt. Answer "Not now" and the
+machine finishes at assessment; nothing is persisted for that answer, so the
+gate is offered again on the next run. Pass `configure(git_enabled=false)`
+(or answer Skip if the `enableGit` prompt still appears, for an existing
+repo) to run assessment-only with no repository — milestone commits are skipped.
 
 The `assessment` skill's closing menu asks the same thing the gate asks, so
 on "Move on to migration" it submits
@@ -175,6 +181,8 @@ pending — do not invent completion from chat history.
 | 1 | oracle-connection | `../connection/oracle-connection/SKILL.md` |
 | 1 | teradata-connection | `../connection/teradata-connection/SKILL.md` |
 | 1 | postgresql-connection | `../connection/postgresql-connection/SKILL.md` |
+| 1 | db2-connection | `../connection/db2-connection/SKILL.md` |
+| 1 | bigquery-connection | `../connection/bigquery-connection/SKILL.md` |
 | — | midway-entry (existing project with pre-converted code; SQL Server/Redshift only) | `./midway-entry.md` |
 | 3 | register-code-units | `../register-code-units/SKILL.md` |
 | 4 | convert | `../convert/SKILL.md` |
@@ -187,6 +195,7 @@ pending — do not invent completion from chat history.
 | — | data-migration-setup | `../migrate-objects/actions/data-migration/SKILL.md` |
 | — | data-validation-setup | `./data-validation/SKILL.md` |
 | — | data-infrastructure-teardown | `../data-infrastructure/teardown/SKILL.md` |
+| — | discover-extras (custom assets the engine doesn't generate — FiveTran, SSAS, Oracle PACKAGE, scripts) | `./discover-extras/SKILL.md` |
 
 ## Rules
 

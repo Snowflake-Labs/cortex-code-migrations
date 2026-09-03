@@ -10,13 +10,15 @@ import json
 from pathlib import Path
 
 STRUCTURAL_ARRAYS = ["fk_chains", "correlated_groups", "temporal_alignment", "anti_join_tables"]
-VALUE_ARRAYS = ["column_enrichments", "branch_values"]
+VALUE_ARRAYS = ["column_enrichments", "branch_values", "predicate_fills"]
 # Arrays merged as independent lists (concat + byte-identical dedupe), NOT collapsed by (table, column).
 # branch_values joins the structural arrays here: two branch arms on one column carrying different enums
 # must reach the backend as separate entries so its Decision-5 conflict detector can reject them —
-# pre-unioning would launder that contradiction. Only column_enrichments collapses (to fuse the
+# pre-unioning would launder that contradiction. predicate_fills joins for the same reason, but its identity
+# is fill_id rather than (table, column): two fills keyed to DIFFERENT branches on one column are legal, and
+# the backend adjudicates them on (branch_id, table, column). Only column_enrichments collapses (to fuse the
 # complementary enum / must_include / null_fraction_override fields the per-type prompt fragments contribute).
-_INDEPENDENT_ARRAYS = ["branch_values", *STRUCTURAL_ARRAYS]
+_INDEPENDENT_ARRAYS = ["branch_values", "predicate_fills", *STRUCTURAL_ARRAYS]
 
 # Which structural array a mine `by_kind` gap maps to (SKILL.md §Enrich mapping). enum_domain/check are value-only.
 _KIND_TO_STRUCTURAL = {"fk": "fk_chains", "join_edge": "fk_chains", "branch_predicate": "correlated_groups"}
@@ -36,15 +38,18 @@ def load_fragments(fragments_dir: str) -> list[dict]:
     fragments: list[dict] = []
     for p in sorted(root.glob("*.json")):
         try:
-            frag = json.loads(p.read_text())
+            frag = json.loads(p.read_text(encoding="utf-8"))
         except json.JSONDecodeError as e:
             # A malformed fragment is a re-promptable reject, not a station crash: name the offending
             # fragment (via prompt_type) so run_enrich emits stop_kind "reject" and the agent knows
             # which prompt to re-run — mirroring assemble()'s flag_for_llm handling.
             raise AssemblyError(p.stem, f"fragment '{p.name}' is not valid JSON: {e}") from e
-        except OSError as e:
-            # Unreadable (removed between glob and read, permissions): same reject class, not a
-            # traceback out of the station — but named honestly as an I/O failure, not bad JSON.
+        except (OSError, UnicodeDecodeError) as e:
+            # Unreadable (removed between glob and read, permissions, or a fragment written mid-
+            # codepoint): same reject class, not a traceback out of the station — but named honestly
+            # as an I/O failure, not bad JSON. UnicodeDecodeError is a ValueError, so it escapes
+            # both arms above unless named here; the explicit utf-8 read is what can raise it,
+            # instead of the locale default silently decoding a fragment to mojibake.
             raise AssemblyError(p.stem, f"fragment '{p.name}' could not be read: {e}") from e
         if not isinstance(frag, dict):
             # Valid JSON but not an object (a bare array/scalar) can't be merged; reject it here so
@@ -60,7 +65,7 @@ def assemble(fragments: list[dict]) -> dict:
             # The C# parser rejects a root flag_for_llm anyway; catching it here saves a subprocess and
             # names the offending prompt so the agent re-prompts the right fragment.
             raise AssemblyError("flag_for_llm",
-                                "'flag_for_llm' leaked into a fragment; resolve it into one of the 8 supported types.")
+                                "'flag_for_llm' leaked into a fragment; resolve it into one of the 10 supported types.")
 
     columns: dict[tuple[str, str], dict] = {}
     independent: dict[str, list] = {name: [] for name in _INDEPENDENT_ARRAYS}
@@ -74,6 +79,19 @@ def assemble(fragments: list[dict]) -> dict:
         for entry in frag.get("branch_values", []) or []:
             _require_column_identity(entry, "branch_values")
             _append_unique(independent["branch_values"], seen["branch_values"], entry)
+        # predicate_fills needs its OWN collection loop, not just membership in the list constants above:
+        # assemble() reads exactly the sources enumerated here, VALUE_ARRAYS is consumed only by
+        # structural_coverage_warnings, and _INDEPENDENT_ARRAYS merely chooses dedupe-vs-collapse for arrays
+        # already collected. Registering the name without a loop silently drops every fragment — the live
+        # proof being temporal_window_bindings, which appears in none of the three lists and never reaches
+        # the backend today. Identity is fill_id, not (table, column), so _require_column_identity does not
+        # apply (a non-coverable entry legitimately carries neither column nor value).
+        for entry in frag.get("predicate_fills", []) or []:
+            if not isinstance(entry, dict) or "fill_id" not in entry or "branch_id" not in entry:
+                raise AssemblyError(
+                    "predicate_fills",
+                    f"predicate_fills entry is malformed (needs 'fill_id' and 'branch_id'): {entry!r}")
+            _append_unique(independent["predicate_fills"], seen["predicate_fills"], entry)
         for name in STRUCTURAL_ARRAYS:
             for entry in frag.get(name, []) or []:
                 _append_unique(independent[name], seen[name], entry)

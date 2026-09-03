@@ -249,19 +249,25 @@ The skill maintains context, so you don't need to start over.
 
 ### HTML Report
 
-The generated HTML report opens on the **Migration Journey** page. Its sidebar groups the
-conversion tabs under a **Code/ETL Conversion** section, with the later migration phases as
-top-level entries below it. Tabs appear only when the report has the data to fill them.
+The generated HTML report opens on the **Migration Journey** page. For SQL Server,
+**Workload Insights** appears next, followed by the conversion tabs grouped under
+**Code/ETL Conversion** and the later migration phases. Most tabs appear only when
+the report has data to fill them. Workload Insights is SQL Server only: with a Query
+Store extract it shows observed volume and shapes; without one the tab stays and
+walks through enabling Query Store, exporting CSVs (30 days is suggested; `@Days`
+can be shorter or longer), and re-running the assessment. Other dialects omit the
+tab entirely.
 
 | Tab | Contents |
 |-----|----------|
 | **Migration Journey** | Landing page — what each phase of your migration involves, one card per phase |
+| **Workload Insights** | SQL Server Query Store volume, statement mix, busiest modules, and top costly or occasionally slow query shapes. No extract yet: how-to for Query Store CSV + re-run. Hidden on other dialects. |
 | **Waves** | Deployment sequence with objects per wave, dependencies |
 | **Object Exclusion** | Temporary, staging, deprecated objects identified |
 | **Anti-Patterns** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |
 | **Dynamic SQL** | Patterns found with complexity scores |
 | **SSIS** | Package classifications and migration effort |
-| **Effort Estimates** | Person-day/hour effort for DDL and code conversion, workload tier, and phase budgets (SQL Server) |
+| **Effort Estimates** | Hours for code conversion and testing, priced per object by complexity, plus workload tier and phase budgets. Editable — change an hours-per-object rate and every total updates (SQL Server and Redshift) |
 | **Data Migration & Validation** | Data type coverage for your source platform, per-table readiness, topology and validation guidance, plus reviewed inventory SQL (SQL Server and Redshift) |
 | **Testing** | Procedure/function and ETL readiness ladders — what is testable now, and what each object still needs first |
 

@@ -39,10 +39,35 @@ if [ -z "$VERSION" ]; then
   exit 1
 fi
 
-export SCAI_CHANNEL="${SCAI_CHANNEL:-preview}"
+export SCAI_CHANNEL="${SCAI_CHANNEL:-stable}"
 
 log "SessionStart hook running (v$VERSION, plugin root: $PLUGIN_ROOT)"
 log "SCAI_CHANNEL=$SCAI_CHANNEL, CORTEX_CHANNEL=${CORTEX_CHANNEL:-(not set)}"
+
+# Optional runtime override (opt-in): pin a specific scai version via the shared
+# config file. Absent config = default behavior (update to the channel's latest).
+SCAI_VERSION_PIN=""
+MIGRATION_CONFIG="$HOME/.snowflake/migration-plugin/config.json"
+if [ -f "$MIGRATION_CONFIG" ]; then
+  if command -v python3 &>/dev/null; then
+    # `if VAR=$(...)` keeps `set -e` from aborting when the JSON is unparseable.
+    if SCAI_VERSION_PIN=$(python3 - "$MIGRATION_CONFIG" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    cfg = json.load(f)
+v = (cfg.get("scai") or {}).get("version")
+print(v if isinstance(v, str) else "")
+PY
+    ); then
+      [ -n "$SCAI_VERSION_PIN" ] && log "Config pins scai.version=$SCAI_VERSION_PIN"
+    else
+      SCAI_VERSION_PIN=""
+      log "WARNING: could not parse $MIGRATION_CONFIG — ignoring, using default scai version"
+    fi
+  else
+    log "WARNING: python3 not found — ignoring $MIGRATION_CONFIG, using default scai version"
+  fi
+fi
 
 # System dependencies
 
@@ -73,12 +98,19 @@ fi
 # scai CLI (bundles the migration MCP server binary)
 start=$SECONDS
 if command -v scai &>/dev/null; then
-  log "scai already installed, running explicit update..."
-  scai update 2>&1 | tee -a "$LOG" >&2 || log "scai update failed"
-  log "scai up to date ($(( SECONDS - start ))s)"
+  if [ -n "$SCAI_VERSION_PIN" ]; then
+    log "scai already installed, pinning to v$SCAI_VERSION_PIN..."
+    scai update "$SCAI_VERSION_PIN" 2>&1 | tee -a "$LOG" >&2 || log "scai pin to v$SCAI_VERSION_PIN failed"
+    log "scai pinned to v$SCAI_VERSION_PIN ($(( SECONDS - start ))s)"
+  else
+    log "scai already installed, running explicit update..."
+    scai update 2>&1 | tee -a "$LOG" >&2 || log "scai update failed"
+    log "scai up to date ($(( SECONDS - start ))s)"
+  fi
 else
-  log "Installing scai CLI..."
-  curl -fsSL https://snowconvert.snowflake.com/storage/linux/prod/cli/install.sh | bash 2>&1 | tee -a "$LOG" >&2
+  log "Installing scai CLI${SCAI_VERSION_PIN:+ (pinned v$SCAI_VERSION_PIN)}..."
+  # SCAI_VERSION empty = install latest; set = pin. install.sh honors it.
+  curl -fsSL https://snowconvert.snowflake.com/storage/linux/prod/cli/install.sh | SCAI_VERSION="$SCAI_VERSION_PIN" bash 2>&1 | tee -a "$LOG" >&2
   log "Installed scai CLI ($(( SECONDS - start ))s)"
 fi
 

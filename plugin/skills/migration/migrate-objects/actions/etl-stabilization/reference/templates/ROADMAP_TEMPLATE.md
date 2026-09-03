@@ -139,7 +139,7 @@ Spawn agents (MANDATORY — do NOT skip, do NOT do the work yourself):
     Instruction: Read {SKILL_DIR}/orchestration-test-gen/SKILL.md
 {end for}
 Max 5 agents per wave. If more, spawn first 5, wait, then remaining.
-Wait for all agents: end your turn and wait for automatic task notifications.
+Wait per SKILL.md Agent Wait Protocol. End the turn only if spawn tool results returned live agent ids (`run_in_background=true`). If this turn spawned nothing, do not wait.
   Each notification confirms one agent completed — process its result immediately.
   NEVER use `bash sleep`, `bash_output`, or `cortex agent output` CLI.
 Validate: baseline_batch_{B}.md MUST exist for EVERY batch.
@@ -148,6 +148,7 @@ Validate: baseline_batch_{B}.md MUST exist for EVERY batch.
   After 2 retries: mark remaining elements `failed` reason `context-exhaustion`.
   For partial-completion recovery (agent processed some elements then died):
     see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL — one call per invocation, never batched):
   For each element in baseline summary:
     uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
@@ -163,10 +164,11 @@ Spawn fix agents ONLY for batches where baseline has >=1 failing element:
 {end for}
 For batches where ALL elements passed or skipped: do NOT spawn agent.
   Write minimal batch_{B}.md and empty learnings_batch_{B}.md yourself.
-Wait for all agents via task notifications. Validate: batch_{B}.md AND learnings_batch_{B}.md MUST exist for every batch.
+Wait per SKILL.md Agent Wait Protocol. Validate: batch_{B}.md AND learnings_batch_{B}.md MUST exist for every batch.
   Re-read session_status.json — confirm all fixed elements have terminal status.
   Same retry logic as Step {P}.2 (max 2, then mark failed).
   For partial-completion recovery: see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   For each element in task artifacts:
     uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
@@ -242,6 +244,7 @@ NO test-gen agents — patterns are already proven from the archetype phase.
 Wait + validate: batch_{B}.md AND learnings_batch_{B}.md for every batch.
   Retry logic: max 2 retries per batch, then mark failed.
   For partial-completion recovery: see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   For each element in task artifacts:
     uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
@@ -305,6 +308,11 @@ Register dbt nodes (SEQUENTIAL — one call per project):
   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
     init-dbt {SESSION_JSON} {PROJECT_NAME} {DBT_PROJECT_PATH}
 {end for}
+Assign dbt phase (SEQUENTIAL — one call per project):
+{for each dbt_project:}
+  uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
+    assign-dbt-phase {SESSION_JSON} --phase {P} --project {PROJECT_NAME}
+{end for}
 
 - [ ] **Step {P}.2: dbt-Test-Gen Wave**
 Resume guard: if test_report.md already exists for ALL projects
@@ -320,7 +328,7 @@ Spawn even if: placeholder config, broken macros, missing sources, heavy EWI.
 Test generation IS the assessment — agent documents blockers in test_report.md.
 Early exit WITHOUT test artifacts is a protocol violation.
 Do NOT do this work yourself. Do NOT edit dbt files directly.
-Wait for all agents: end your turn and wait for automatic task notifications.
+Wait per SKILL.md Agent Wait Protocol. End the turn only if spawn tool results returned live agent ids (`run_in_background=true`). If this turn spawned nothing, do not wait.
   NEVER use `bash sleep`, `bash_output`, or `cortex agent output` CLI.
 Validate for EACH project — ALL must exist:
   - stabilization/tests/dbt/{PROJECT}/seeds/ — at least 1 .csv
@@ -328,6 +336,7 @@ Validate for EACH project — ALL must exist:
   - stabilization/tests/dbt/{PROJECT}/test_report.md
 If ANY missing: respawn (max 2 retries), then mark nodes `failed` reason `test-gen-exhaustion`.
   For partial-completion recovery: see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   uv run ... track_status.py update-dbt {SESSION_JSON} {PROJECT} --status dbt-tested
   uv run ... track_status.py update-dbt-node {SESSION_JSON} {PROJECT} {NODE} --status {result}
@@ -344,6 +353,7 @@ Spawn fix agents for projects with: failing tests, compilation errors, or bootst
 Projects where ALL nodes passed and no compilation errors: no agent needed.
   Write minimal dbt_learnings_{project}.md with no-fix-needed.
 Wait + validate: dbt_learnings_{project}.md MUST exist for every project.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   uv run ... track_status.py update-dbt-node per node
   uv run ... track_status.py update-dbt per project
@@ -400,12 +410,13 @@ Spawn proc-test-gen agents (MANDATORY — UNCONDITIONAL — do NOT skip):
       test_schema={SCHEMA}, block FullName(s), ROADMAP_path, SESSION_JSON
 {end for}
 Max 5 agents per wave. If more, spawn first 5, wait, then remaining.
-Wait for all agents: end your turn and wait for automatic task notifications.
+Wait per SKILL.md Agent Wait Protocol. End the turn only if spawn tool results returned live agent ids (`run_in_background=true`). If this turn spawned nothing, do not wait.
   NEVER use `bash sleep`, `bash_output`, or `cortex agent output` CLI.
 Validate for EACH mapping proc — ALL must exist under stabilization/tests/proc/{proc_name}/:
   - {proc_name}.seed.sql, {proc_name}.assert.sql, test_report.md
 If ANY missing: respawn (max 2 retries), then mark the proc `failed` reason `test-gen-exhaustion`.
   For partial-completion recovery: see reference/protocols/phase-execution.md § Partial-Artifact Recovery.
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   uv run ... track_status.py update {SESSION_JSON} {PROC} --status proc-tested
 
@@ -421,9 +432,10 @@ Spawn fix agents ONLY for procs whose baseline did not create-clean or has faili
 Procs whose baseline already creates clean and passes all assertions: no agent needed.
   Write a minimal fix record with Outcome no-fix-needed, then set the proc's status:
   uv run ... track_status.py update {SESSION_JSON} {PROC} --status no-fix-needed
-Wait for all agents via task notifications. Validate: a fix record exists for every proc.
+Wait per SKILL.md Agent Wait Protocol. Validate: a fix record exists for every proc.
   Re-read session_status.json — confirm all fixed procs have terminal status.
   Same retry logic as Step {P}.2 (max 2, then mark failed).
+> **You (the orchestrator) run this — never inside a spawned agent's prompt.** See dbt-fixer/SKILL.md "Do NOT call track_status.py directly."
 Update tracking (SEQUENTIAL):
   uv run ... track_status.py update {SESSION_JSON} {PROC} --status {status_from_artifact}
 

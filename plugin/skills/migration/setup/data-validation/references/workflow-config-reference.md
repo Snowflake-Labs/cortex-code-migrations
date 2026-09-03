@@ -2,7 +2,18 @@
 
 `validate_data(mode="setup")` writes a YAML file with this shape to `artifacts/data_validation/workflows/<hash>.yaml`. The agent edits the file between `mode="setup"` and `mode="run"` for per-table overrides.
 
-> **Field naming:** Prefer **camelCase** for all workflow YAML keys (for example `validationConfiguration`, `sourceWhereClause`, `useSnowpipeForResults`, `indexColumnList`) — that is what `validate_data(mode="setup")` generates and what this reference documents. For index columns, the JSON-contract snake_case name is also accepted in YAML (`index_column_list`, `target_index_column_list`), matching the dual-alias pattern used for `sourceWhereClause` / `whereClause`. If both spellings of an index-column field appear, camelCase wins. Snake_case remains the JSON key the CLI serializes to for the orchestrator.
+> **Field naming:** Prefer **camelCase** for all workflow YAML keys (for example `validationConfiguration`, `sourceWhereClause`, `useSnowpipeForResults`, `indexColumnList`) — that is what `validate_data(mode="setup")` generates and what this reference documents.
+>
+> **Where-clause and index-column aliases:** The orchestrator accepts alternate spellings for backward compatibility. Use camelCase in agent edits; snake_case and legacy names still parse.
+>
+> | Concept | Preferred (YAML) | Also accepted |
+> |---------|------------------|---------------|
+> | Source row filter | `sourceWhereClause` | `whereClause` (legacy), `source_where_clause`, `where_clause` |
+> | Target row filter | `targetWhereClause` | `target_where_clause` |
+> | L3 index columns (source) | `indexColumnList` | `index_column_list` |
+> | L3 index columns (target) | `targetIndexColumnList` | `target_index_column_list` |
+>
+> Set **both** `sourceWhereClause` and `targetWhereClause` when limiting compared rows — filtering one side only compares different subsets. Do **not** supply both `sourceWhereClause` and legacy `whereClause` on the same table (rejected at load time). If both camelCase and snake_case appear for index columns, **camelCase wins**.
 
 ## Top-level properties
 
@@ -20,7 +31,7 @@
 | `objects` | Array | No | Unified table/view entries — additive with `tables`/`views` |
 | `affinity` | String | No | Routes work to workers with matching affinity |
 | `useSnowpipeForResults` | Boolean | `true` | Ingest L2/L3 CSV results via Snowpipe (default). Set `false` for per-partition `COPY INTO`. |
-| `cleanUpTransientResources` | `"never"` \| `"on-success"` \| `"always"` | `"never"` | Delete intermediate DV `TASK_RESULTS` stage files for this workflow after it finishes. Underscores are accepted (`on_success`). |
+| `cleanUpTransientResources` | `"never"` \| `"on-success"` \| `"always"` | `"on-success"` | Delete intermediate DV `TASK_RESULTS` stage files for this workflow after it finishes. Underscores are accepted (`on_success`). Set `"never"` to retain stage files for debugging. |
 | `targetPartitionSizeRows` | Integer | No | Global partition row target (mutually exclusive with `targetPartitionSizeMb`) |
 | `targetPartitionSizeMb` | Integer | No | Global partition size target in MB |
 | `validationCustomTypes` | Object | `{}` | Source datatype normalizations for L1 |
@@ -85,13 +96,13 @@ The four bool toggles can be set via setup-mode params (`schema_validation=`, `m
 | `objectType` | `TABLE` or `VIEW` when known. When omitted, resolved at runtime via dialect detection. |
 | `targetName` | Override target table name |
 | `targetDatabase` / `targetSchema` | Override target location |
-| `sourceWhereClause` | Filter **source** rows. Alias: `whereClause`. **Set together with `targetWhereClause`.** |
-| `targetWhereClause` | Filter **target** rows. Pairs with `sourceWhereClause`. |
+| `sourceWhereClause` | Filter **source** rows. Legacy alias: `whereClause`. Snake_case: `source_where_clause`, `where_clause`. **Set together with `targetWhereClause`.** Do not set both `sourceWhereClause` and `whereClause` on the same entry. |
+| `targetWhereClause` | Filter **target** rows. Snake_case alias: `target_where_clause`. Pairs with `sourceWhereClause`. |
 | `columnSelectionList` | Columns to include (or exclude) |
 | `useColumnSelectionAsExcludeList` | When `true`, `columnSelectionList` is an exclusion list |
 | `columnMappings` | `{"source_col": "TARGET_COL"}` for renamed columns |
-| `indexColumnList` | Row-identity columns for L3 |
-| `targetIndexColumnList` | Target-side index columns when different |
+| `indexColumnList` | Row-identity columns for L3. Snake_case alias: `index_column_list`. |
+| `targetIndexColumnList` | Target-side index columns when different. Snake_case alias: `target_index_column_list`. |
 | `columnNamesToPartitionBy` | Partition columns for large-table validation |
 | `targetPartitionSizeRows` / `targetPartitionSizeMb` | Per-table partition sizing (mutually exclusive) |
 | `isCaseSensitive` | Case-sensitive identifier comparison for this object |
@@ -112,12 +123,16 @@ Like data migration, you can set shared defaults once via top-level `defaultTabl
 
 **Prerequisite:** at least one prior full validation of the table must have completed — that run records the baselines the incremental run diffs against. The first run with `synchronization` set still validates everything (establishing the baseline); subsequent runs are incremental. Requires the table to be partitioned (`columnNamesToPartitionBy`). Unchanged incremental runs may show CLI status **Not validated** (skipped) rather than Valid/Failed.
 
+> **Advanced use case:** When a customer asks to re-run validation without scanning every partition, confirm incremental mode + sync strategy at setup and configure `synchronization` here. Full agent guidance: [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md#incremental-data-validation).
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `strategy` | String | `watermark`, `checksum`, or `none` |
 | `watermarkColumn` | String | Column whose max value marks the high-water mark. **Required** when `strategy: watermark`. |
 | `trackModifications` | Boolean | Watermark only — also reconcile rows modified (not just newly inserted) since the last run. |
-| `checksumExpression` | String | Checksum only — optional SQL aggregate per partition to detect change. Must not contain `;`. |
+| `checksumExpression` | String | Checksum only — optional SQL aggregate per partition to detect change. Must not contain `;`. **Oracle:** built-in incremental checksum is supported; use this field to override with a cheaper probe (for example `MAX(ORA_ROWSCN)`). |
+
+> **Oracle:** `checksum` incremental validation is supported (same as other platforms). Default partition probes hash normalized columns; some types are excluded from the hash — see checksum detection limits below and [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
 
 Global defaults + per-table override (camelCase YAML):
 
@@ -169,6 +184,33 @@ tables:
       checksumExpression: "SUM(AMOUNT)"
 ```
 
+> **Checksum detection limits:** Default partition checksums **exclude or normalize** some column types (for example SQL Server legacy `text`/`ntext`/`image`, Oracle LOBs, float rounding, spatial WKT). A change confined to those columns may **not** trigger incremental re-validation. Custom `checksumExpression` overrides the built-in hash. See [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
+
+## Custom normalization (L3)
+
+Advanced **Data Validation** feature — SQL applied before L3 row-hash and cell compare. **Not** DM `columnTypeMappings` (extraction/load only).
+
+| Field | Level | Purpose |
+|-------|-------|---------|
+| `validationCustomNormalizationRules` | root / `validationConfiguration` / per-table | **Preferred** — `column`, `columnPattern`, or `dataType` + `sourceExpression` / `targetExpression` (`{{ col_name }}` placeholder) |
+| `validationCustomNormalizations` | root / per-table | Legacy datatype-keyed normalization lists |
+| `validationCustomTypes` | root / per-table | L1 source datatype → target type mappings |
+| `validationCustomTypeRules` | root / per-table | Per-column L1 cross-type overrides |
+
+**Requirements:** hybrid L3 needs `schemaValidation: true`. Use `acceptedTransformations` for known source→target value pairs; use normalization **rules** for shared expressions on both sides.
+
+```yaml
+validationCustomNormalizationRules:
+  - column: NOTES
+    sourceExpression: 'TRIM(CAST("{{ col_name }}" AS VARCHAR(4000)))'
+    targetExpression: 'TRIM(TO_VARCHAR("{{ col_name }}"))'
+  - columnPattern: '^GEO_'
+    sourceExpression: 'ST_AsText("{{ col_name }}")'
+    targetExpression: 'TO_VARCHAR("{{ col_name }}")'
+```
+
+When a customer asks about formatting drift, Teradata PERIOD cast strings, or case-only diffs, load [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md#custom-normalization-data-validation-l3).
+
 ## L3 result codes (hybrid mode)
 
 After L3 completes, partition results use standard codes:
@@ -202,7 +244,7 @@ validationCustomMetrics:
 |-------|-------|-------------|
 | `defaultTableConfiguration` | top-level | Shared defaults for every `tables[]` / `views[]` entry (DM parity); `synchronization` deep-merges |
 | `affinity` | top-level | Affinity group — orchestrator only picks up matching workflows |
-| `cleanUpTransientResources` | top-level | Delete intermediate DV stage files after the workflow finishes (`never` / `on-success` / `always`) |
+| `cleanUpTransientResources` | top-level | Delete intermediate DV stage files after the workflow finishes (`never` / `on-success` / `always`; default `on-success`) |
 | `views` | top-level | Array of view validation entries (same schema as `tables`) |
 
 > View validation is handled separately from table validation — see the migrate-objects view validation flow.
@@ -243,7 +285,7 @@ Teradata uses **database.table** naming — omit source `schemaName` (there is n
 
 | Scenario | Fields to edit |
 |----------|----------------|
-| Limit validation to a subset of rows | `sourceWhereClause` + `targetWhereClause` (both sides) |
+| Limit validation to a subset of rows | `sourceWhereClause` + `targetWhereClause` (both sides; snake_case aliases accepted) |
 | Skip expensive L2 on wide tables | `excludeMetrics: true` or disable `metricsValidation` |
 | Keep metrics off (default / user said off) | Leave `metricsValidation: false` — **Full** mode does not mean enable L2 |
 | Exclude columns from L3 row compare (timestamp / audit drift) | Per table: `useColumnSelectionAsExcludeList: true` and `columnSelectionList: [created_at]` (or `CREATED_AT`, `updated_at`, …). Common for SQL Server `DATETIME2` → Snowflake `TIMESTAMP_*` precision or write-time drift. |
