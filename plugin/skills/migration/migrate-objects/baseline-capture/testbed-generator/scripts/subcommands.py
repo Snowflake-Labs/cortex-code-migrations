@@ -52,16 +52,34 @@ def default_runner(scai_bin: str | None = None,
 
     def _run(argv: list[str], cwd: str | None = None,
              stdin: str | None = None) -> subprocess.CompletedProcess:
-        # The two failures that strike before scai can emit an envelope — an
-        # unlaunchable binary and a hang past the bound — become a non-zero
-        # CompletedProcess so _envelope reports EXEC instead of raising or
-        # blocking the whole skill forever.
+        # The failures that strike before scai can emit a parseable envelope — an
+        # unlaunchable binary, a hang past the bound, and I/O that is not valid UTF-8 —
+        # become a non-zero CompletedProcess so _envelope reports EXEC instead of
+        # raising or blocking the whole skill forever.
         try:
+            # encoding= is not optional here. text=True alone decodes stdout/stderr with
+            # locale.getencoding(), and this call is the main ingress for mined identities: scai
+            # writes its --json envelope as UTF-8 (Program.cs pins Console.OutputEncoding) and that
+            # envelope (list-unsolved, propose-enrichments) carries object/column names verbatim.
+            # On a cp1252 host — only five undefined byte values — those bytes decode to mojibake
+            # without raising, so a golden literal false-REJECTs as absent from its own
+            # source_evidence span. Pin the codec instead of inheriting the shell's. The same
+            # keyword pins the stdin encode too, which is contract rather than repair: today's only
+            # caller hands propose-enrichments json.dumps output, already escaped to pure ASCII by
+            # ensure_ascii, so no locale codec can fail on it.
             return subprocess.run(
-                [program, *argv], input=stdin, capture_output=True, text=True, cwd=cwd, timeout=timeout)
+                [program, *argv], input=stdin, capture_output=True, text=True,
+                encoding="utf-8", cwd=cwd, timeout=timeout)
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(
                 [program, *argv], 124, "", f"scai timed out after {timeout}s: {' '.join(argv)}")
+        except UnicodeError as exc:
+            # Pinning the codec converts a silent mis-decode into a raise; keep that raise inside
+            # the seam. UnicodeDecodeError/UnicodeEncodeError subclass ValueError, not OSError, so
+            # without this arm they escape as a traceback out of the driver. Loud EXEC beats both
+            # mojibake (indistinguishable from an object genuinely named that) and a crash.
+            return subprocess.CompletedProcess(
+                [program, *argv], 125, "", f"scai I/O was not valid UTF-8: {exc}")
         except OSError as exc:
             return subprocess.CompletedProcess(
                 [program, *argv], 127, "", f"could not execute scai ({program}): {exc}")
@@ -177,7 +195,12 @@ def enumerate_artifacts(artifacts_path: str) -> list[ArtifactRef]:
 
 def _artifact_ref(path: Path, stem: str) -> ArtifactRef:
     try:
-        doc = json.loads(path.read_text())
+        # The engine writes these artifacts as UTF-8. Decoding with the platform locale instead
+        # (cp1252 on a Windows runner) raises UnicodeDecodeError, which is a ValueError and so is
+        # caught below as if the file were unreadable — silently collapsing a non-ASCII identity
+        # to the bare stem. The stem then never matches an `object` the CLI echoes, so a real
+        # procedure becomes an unresolvable PENDING. Pin the encoding to the one it was written in.
+        doc = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return ArtifactRef(stem, stem, "")
     if not isinstance(doc, dict):

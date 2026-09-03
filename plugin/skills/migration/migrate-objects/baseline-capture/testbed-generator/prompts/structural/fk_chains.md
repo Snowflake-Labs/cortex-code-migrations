@@ -12,6 +12,12 @@ You infer **undeclared foreign-key residuals**: equi-joins the workload relies o
 ## Negative constraint (the one rule)
 Emit **only the undeclared residual** — a `join_edge` where neither side is already a declared key. A column that already has a declared or inferred FK is skipped, not re-emitted. **Never** emit both directions of the same edge: a bidirectional pair closes a reference cycle and is rejected (`TBD0015`). Peer-attribute joins (e.g. `region_code = region_code` between two children) are *not* FKs — those go to `correlated_groups`.
 
+## Work it out before you emit
+Reason in prose first, then emit the fragment as your final output — deciding and formatting in the same
+pass is where accuracy is lost. Per candidate, name the `list-unsolved` row that backs it and why it
+holds, and say what you considered and dropped. Keep that reasoning out of the fragment: it carries only
+the emitted type's own fields, and unknown fields are rejected.
+
 ## Examples
 `SALES.ORDERS.REP_ID` is joined to `SALES.SALES_REP.REP_ID` in `CLASSIFY_ORDER` with no declared FK — the canonical residual:
 

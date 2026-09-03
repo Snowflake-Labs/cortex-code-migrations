@@ -64,6 +64,9 @@ Invoke the **Monitor** tool with `command` set to `monitor.watch_command` verbat
 
 There is no wait for a workflow name: the relay stamps it on when `create-workflow` reports it, and the watch is already armed.
 
+**Then stop.** Arming Monitor ends your turn: no `sleep`, no status call, no
+Bash of any kind until the event fires. The wait is the relay's job.
+
 **A job can already be running when your session begins.** A workflow keeps going in Snowflake across an MCP restart, so `configure` reports any jobs still live and hands you a `watch_command` for each. When it does, arm Monitor from those commands before anything else — that job has been unwatched since the previous session ended.
 
 Tell the user once, in plain language, that validation started and that you will report back when it finishes or if it runs into trouble. Don't make them understand Monitor chrome.
@@ -90,8 +93,10 @@ job that has already stopped.
 
 ### Phase C — On `terminal`
 
-1. Call `job_status(job_id, details=true)` **once** — the report is the source of truth, not the event line.
-2. Apply Step 4.B (finished-but-pending) if needed.
+1. Read `detail.completion` from the terminal event — its verdict, status,
+   counts, failures, and stale-report warning are the source of truth.
+2. If `completion.failed` is true and deeper per-table diagnostics are needed,
+   call `job_status(job_id, details=true)` once, then apply Step 4.B.
 3. Proceed to **Step 5** (error-first summary).
 
 The watch command exits by itself on its job's terminal record, so there is nothing to cancel.

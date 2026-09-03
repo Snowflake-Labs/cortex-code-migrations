@@ -62,5 +62,5 @@ After each successful application:
 >   scai test validate -c <SNOWFLAKE_CONNECTION_NAME> \
 >     --where "source.canonicalName IN (<comma-separated-canonical-names>)"
 >   ```
->   Read `<project_dir>/test-results/results.json` to confirm; the state machine picks up testing status when the agent calls `transition_status(status='advance', task='runTests', outcome=...)` per object.
+>   Confirm in `<metadata_database>.VALIDATION.LATEST`; the state machine picks up testing status from that table when the agent calls `transition_status(status='advance', task='runTests', outcome=...)` per object.
 > - **For any failures, run the full diagnose/fix loop per object** → [../../migrate-object/SKILL.md](../../migrate-object/SKILL.md)

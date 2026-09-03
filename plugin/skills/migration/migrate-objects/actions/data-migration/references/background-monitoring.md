@@ -55,6 +55,9 @@ There is no wait for a workflow name: the relay stamps it on when `create-workfl
 
 Tell the user once, in plain language, that migration started and that you will report back when it finishes or if it runs into trouble.
 
+**Then stop.** Arming Monitor ends your turn: no `sleep`, no status call, no
+Bash of any kind until the event fires. The wait is the relay's job.
+
 **The watch only fires on events worth acting on** — terminal, first failure, a 30-minute stall, or relay error. It deliberately does *not* fire on ordinary progress, which changes on nearly every poll. Progress is still in the log, and `job_status` reports it on demand.
 
 ### Phase B — On Monitor fire
@@ -77,8 +80,10 @@ job that has already stopped.
 
 ### Phase C — On `terminal`
 
-1. Call `job_status(job_id, details=true)` **once** — the report is the source of truth, not the event line.
-2. Apply Step 5.C (finished-but-incomplete) if needed.
+1. Read `detail.completion` from the terminal event — its verdict, status,
+   counts, failures, and stale-report warning are the source of truth.
+2. If `completion.failed` is true and deeper per-table diagnostics are needed,
+   call `job_status(job_id, details=true)` once, then apply Step 5.C.
 3. Proceed to **Step 6** (error-first summary).
 
 The watch command exits by itself on its job's terminal record, so there is nothing to cancel.

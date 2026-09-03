@@ -88,7 +88,9 @@ scai data worker generate-config
 
 Run inside the project (no path argument) — scai writes the project-default `.scai/config/dew_configuration.toml`.
 
-This pre-fills `[connections.source.<engine>]` from the project's scai source connection (host, user, database, port, and engine-specific fields like SQL Server's `trust_server_certificate` and `encrypt`, or Teradata `authentication = "LDAP"` when `--auth ldap`). Pass `--affinity <label>` if your workflow uses one. The CLI will prompt before overwriting an existing file; pass `-y` to overwrite without prompting.
+This pre-fills `[connections.source.<engine>]` from the project's scai source connection (host, user, database, port, and engine-specific fields like SQL Server's `trust_server_certificate` and `encrypt`, or Teradata `authentication = "LDAP"` when `--auth ldap`). The CLI will prompt before overwriting an existing file; pass `-y` to overwrite without prompting.
+
+> **Affinity:** when this flow is driven through the plugin, `data_infrastructure(mode="up")` generates this config. With no explicit override, scai applies the same stable project default used by workflow generation. If `configure(affinity="<label>")` set an override, the plugin passes that label to both generators and regenerates a stale DEW config whose affinity differs. When running `generate-config` yourself, omit `--affinity` to use the project default or pass the same explicit `--affinity <label>` as the workflow. See the [Affinity Reference](../references/affinity-reference.md).
 
 After running, handle the result:
 
@@ -114,6 +116,10 @@ scai data worker start --local
 ```
 
 This command installs the worker if it is not already present, then starts it using the project-default configuration at `.scai/config/dew_configuration.toml`.
+
+Use the status printed by this command. **Never add a Bash `sleep` or shell
+polling loop after startup**; if startup does not report a healthy worker,
+diagnose that result directly.
 
 Tell the user:
 

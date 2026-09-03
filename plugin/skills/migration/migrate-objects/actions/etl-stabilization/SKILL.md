@@ -25,6 +25,18 @@ Fix SnowConvert ETL conversion gaps through phased execution with upfront unit a
 - Active Snowflake connection with a warehouse
 - DATABASE + SCHEMA with write privileges (`CREATE TABLE`, `CREATE FUNCTION`, `CREATE PROCEDURE`)
 
+### When the converted-output folder is not isolated
+
+The default contract above assumes one folder per unit. If instead you're handed a flat, whole-repository conversion output where a dbt project is referenced by more than one sibling unit's orchestration file (e.g. Informatica `SHORTCUT` mappings reused across workflows), do not edit the shared project in place:
+
+1. Stage a real copy of the orchestration file and every dbt project it references under `{PACKAGE_FOLDER}/Output/ETL/{unit}/`. Treat the original location read-only until sync-back.
+2. If a staged dbt project's `packages.yml` has a local `path:` dependency, do **not** edit the path to account for the extra staging depth — that breaks canonical when synced back. Instead, symlink the shared-assets directory into the unit folder at the depth `packages.yml` already expects.
+3. Before syncing any fix back, run the leak gate on every touched file, then diff against the original — test-environment values (schema/database names, credentials) must never reach the canonical copy:
+   ```bash
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/check_sync_leaks.py {SESSION_JSON} <file1> [<file2> ...]
+   ```
+   Do not copy until this exits 0.
+
 ## Persistent Files
 
 All files stored in `{UNIT}/stabilization/`:
@@ -47,14 +59,18 @@ All files stored in `{UNIT}/stabilization/`:
 
 **NEVER use `bash sleep`, `bash_output`, or `cortex agent output` to wait for agents.**
 
-Background agents deliver results via **automatic task notifications** — a new conversation turn arrives when each agent finishes. The correct flow:
+You are the orchestrator. Do **not** spawn a subagent whose job is "run etl-stabilization" or "execute Phase N". Named teammates (context mappers, test-gen, fixer, apply-fixes) are the only valid spawns.
 
-1. Spawn all background agents in a **single message** (parallel tool calls)
-2. **End your turn** — do not issue further tool calls or narrate while waiting
-3. When a notification arrives, process that agent's result
-4. When all notifications have arrived, verify output files exist and continue
+**Claim in-flight work only from this turn's spawn tool results.** If this turn did not return live agent ids, nothing is running. Do not tell the user a subagent is executing.
 
-Do not attempt to call `agent_output` — it may not be available and failed attempts waste a turn. Automatic task notifications are the only reliable mechanism.
+How to wait, by spawn mode:
+
+- **`run_in_background=false`** (planning mappers, and any blocking spawn): results return in **this** turn. Process them here. Do **not** end the turn to wait.
+- **`run_in_background=true`**: spawn all agents in one message (parallel tool calls). Confirm each spawn returned an agent id. **Then** end the turn — no extra tool calls, no "still running" narration. A new turn arrives when each agent finishes. Process that result, then verify output files exist.
+
+Do not attempt to call `agent_output` — it may not be available and failed attempts waste a turn.
+
+**Stall:** If `STATE.md` / phase artifacts have not changed and you have no live agent ids, you are stalled. Resume from `STATE.md` (Execution Workflow) or tell the user it stalled — do not keep claiming work is in progress.
 
 ## Entry Point
 
@@ -67,7 +83,7 @@ On every invocation:
    Store the flavor in session. **dbt flavor** runs the standard path below unchanged. **Scripting flavor** replaces the data-flow half of stabilization with the mapping-procedure pair (proc-test-gen → proc-fixer) while keeping the orchestration half identical — see [Scripting Flavor Routing](#scripting-flavor-routing). In the guided flow, whether a scripting unit reaches this skill is controlled upstream by the migration state machine; when it does — or on direct invocation — proceed with the scripting path.
 1. Check if `{UNIT}/stabilization/tracking/STATE.md` exists
 2. **If no STATE.md** → new unit → run **Planning Workflow**
-3. **If STATE.md exists** → read it → run **Execution Workflow** for next pending phase
+3. **If STATE.md exists** → read it → run **Execution Workflow** for next pending phase. If status is "Ready to execute" (or next-action is Execute Phase N) and Phase N has no cortex task / `start-phase` has not run, that is the post-ROADMAP stall: **start Execution Step 2 in this turn**. Do not wait for a subagent.
 
 ---
 
@@ -117,7 +133,7 @@ cortex ctx step add -t <task_id> \
   "Step 3: Initialize tracking" \
   "Step 4: Configure test environment" \
   "Step 5: Backup and strip dead code" \
-  "Step 6: Context mapping — spawn parallel agents, wait for notifications" \
+  "Step 6: Context mapping — spawn parallel blocking agents, process results this turn" \
   "Step 6b: Classify dbt project readiness" \
   "Step 7: Create ROADMAP (7a-7c)" \
   "Step 8: Create STATE.md" \
@@ -227,7 +243,7 @@ Output: `dbt-context.md` — project health, model inventory, macro inventory, s
 mapping and its defective blocks (block-locate / ewi-extract). The orchestration context mapper still runs for
 the workflow task graph.
 
-**Spawn both agents in a single message** (parallel tool calls), then follow the **Agent Wait Protocol**: end your turn and wait for task notifications. When both notifications arrive, verify both output files exist and are non-empty before continuing.
+**Spawn both agents in a single message** (parallel tool calls) with `run_in_background=false`. Process both tool results in this turn. Verify both output files exist and are non-empty before continuing. Do not end the turn to wait — blocking spawns are not background jobs.
 
 Use `team_delete` tool after verifying outputs.
 
@@ -241,6 +257,7 @@ If `scan.json` contains dbt_projects:
    - **Ready**: `has_valid_config=true`, zero or low EWI count → standard dbt phase
    - **Needs bootstrap**: `has_valid_config=false` or `has_placeholder_config=true` → dbt phase with bootstrap sub-phase (config + macro fixes before model testing)
    - **Heavy EWI**: high EWI count relative to model count → dbt phase with expected baseline failures, longer fix cycle
+   - **Reused (pre-existing) project**: if the dbt project directory predates this unit — more than one sibling unit's orchestration file references it, or `dbt-context.md` shows it wasn't newly generated for this unit — cross-check every var default the models actually read (`sources.yml`, `dbt_project.yml` vars) against *this* unit's own source-XML identity (folder/repository/workflow name), even when `has_valid_config=true`. A previously-stabilized shared project is not a smoke-check target; wrong-but-valid-looking defaults are a silent data-correctness defect, not a compile error.
 
 These classifications inform the ROADMAP phase design in Step 7. Do NOT mark projects as `needs-user` at planning time — that decision is made by the dbt-test-gen agent after attempting test generation.
 
@@ -258,6 +275,7 @@ Using orchestration-context.md, dbt-context.md (if dbt projects exist), and scan
   - **Large item**: a dbt project with >20 models. **Only dbt projects can be classified as large** — orchestration elements are always small-medium
   - **Phase cap**: pack up to **40-50 small-medium items per phase** OR up to **20 large items per phase**
   - **Do NOT mix classes in the same phase** — route small-medium and large items into separate phases so sizing stays predictable
+    *(This mixing rule governs phases approaching the item cap — for a phase with only a handful of items, keep them together even if one crosses a size threshold; splitting a 3-item phase into two is needless fragmentation.)*
   - **Batch cap**: ~10 small-medium items per batch, ~5 large items per batch
   - **Concurrency cap**: max 5 parallel batches per phase regardless of item size
 - Push each phase toward its cap rather than creating many small phases — a 48-project small-medium phase is preferable to two 24-project phases when the items share patterns
@@ -331,7 +349,13 @@ Display the ROADMAP to the user. Highlight:
 
 ### Step 10: Begin Execution
 
-After user approval, proceed to execute Phase 1 using the Execution Workflow below.
+After user approval, **in the same turn** (before any wait, and without spawning an orchestrator subagent):
+
+1. Run Execution Workflow **Step 2** (create/verify the Phase 1 cortex task).
+2. Run `track_status.py start-phase` as Step {1}.1 requires.
+3. Continue Execution Step 3 for Phase 1.
+
+`STATE.md` saying "Ready to execute" is not evidence that work is running. If you stop after Step 8/9 without Step 2, the session is stalled at 0%.
 
 ---
 
@@ -431,6 +455,7 @@ always has a pending task.
 - **Catastrophic file corruption**: Restore from `checkpoints/phase_{N}/` or `original/`.
 - **Snowflake connection failure**: Verify connection. Re-run `track_status.py set-test-env` if credentials changed.
 - **ROADMAP amendment needed**: Log via `track_status.py add-decision`, amend future phases only, document reasoning.
+- **Stalled after ROADMAP / fake subagent progress**: `STATE.md` still "Ready to execute", no new artifacts, agent claiming a subagent is running. Nothing is running. Resume at Execution Step 2 in this turn. Tell the user it stalled if you cannot start.
 
 ---
 
@@ -472,11 +497,13 @@ See [reference/examples.md](reference/examples.md).
 
 See [reference/troubleshooting.md](reference/troubleshooting.md).
 
+`scan_unit.py` fails, or the unit folder doesn't match Prerequisites → check whether the input is a flat, multi-unit conversion output rather than an isolated per-unit folder; see "When the converted-output folder is not isolated" above.
+
 ## Output
 
 - Fixed orchestration `.sql` file with EWI gaps resolved
 - Fixed dbt model files (per sub-project)
 - Test artifacts in `{UNIT}/stabilization/tests/`
 - `{UNIT}/stabilization/report.html` — self-contained HTML report aggregating all artifacts (generated during Final Validation)
-- `artifacts/tracking/fix_log.md` — append-only record of every fix applied
+- `artifacts/tracking/fix_log.md` — append-only record of every fix applied. Each entry carries per-instance anchors (file + stable symbol/tag anchor into the fixed tree and the `stabilization/original/` backup) plus a `Classification` — `engine-defect | conversion-improvement | intentional-decline | context-dependent`. **An `!!!RESOLVE EWI!!!` breaking wrapper (or any correctly emitted supported EWI/FDM) is `intentional-decline`, resolved manually — never log it as `engine-defect`.** See [reference/templates/fix-log-format.md](reference/templates/fix-log-format.md) and [reference/templates/batch-artifacts.md](reference/templates/batch-artifacts.md).
 - `artifacts/phases/phase_{N}/` — per-phase baselines, batch reports, learnings

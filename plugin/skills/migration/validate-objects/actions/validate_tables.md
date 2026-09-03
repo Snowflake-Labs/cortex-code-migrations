@@ -1,24 +1,26 @@
 # Action: Validate Tables
 
-Validate migrated table data between source and Snowflake using cloud validation — **setup → run → monitor → report** (passive Monitor — always prefer it; active polling only when Monitor cannot be invoked).
+Validate migrated table data between source and Snowflake using cloud validation — **setup → run → monitor → report**.
 
 > **Always use the official tooling.** Run validation through `validate_data(mode="setup")` / `validate_data(mode="run")` (backed by `scai data validate`). **Never** suggest ad-hoc scripts to compare source and target data outside the DMVF validation pipeline.
 
 > **Scope is set per call.** `validate_data(mode="run")` validates **every** table listed in the workflow file produced by setup. Pass a `where` filter to setup that matches exactly the tables you intend to validate.
 
-> **Run-only entry:** If you were routed here only to execute `validateData` (registry task) and the workflow YAML already exists, skip Step 1 and complete **Step 2** (display the existing `workflow_path` and offer optional updates) before **Step 3**. You **must** complete **Steps 4–6** (background monitor or poll fallback, error-first validation report, teardown offer) before returning to the parent skill — even when the state machine invoked `validate_data(mode="run")` without walking setup.
+> **Advanced validation (when the customer asks):** [Incremental validation](../../setup/data-validation/references/workflow-config-reference.md#incremental-validation-synchronization) (re-validate changed partitions only), [re-validation](../../data-infrastructure/references/advanced-operations-reference.md#re-validation-retry-failed-partitions) (`validate_data(mode="revalidate")`), [custom L3 normalization](../../data-infrastructure/references/advanced-operations-reference.md#custom-normalization-data-validation-l3), and [checksum/sync blind spots](../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync) (why a column change did not trigger re-sync). Load [Advanced operations reference](../../data-infrastructure/references/advanced-operations-reference.md) for rate limiting and full agent guidance.
+
+> **Run-only entry:** If you were routed here only to execute `validateData` (registry task) and the workflow YAML already exists, skip Step 1 and complete **Step 2** (display the existing `workflow_path` and offer optional updates) before **Step 3**. Complete **Steps 4–5** (background Monitor and error-first validation report), then return the result to the parent. Per-object subagents do not manage shared infrastructure or teardown.
 
 ## Step 1: Choose validation approach + generate workflow
 
 ### 1.A — Validation mode and sync (captured at setup)
 
-Validation mode (full vs incremental) and sync strategy are **captured once at setup** by the `dataStrategy` task (executor [`../../setup/data-strategy/SKILL.md`](../../setup/data-strategy/SKILL.md)) and committed, so they are **already set** when you dispatch — do not re-ask. **Fallback only** (project set up before setup-phase capture): run the `data-validation-setup` wizard as a catch-up — `progress_setup(mode="data_validation")` in a loop until `completed` (idempotent; a no-op once set). The choices:
+Validation mode (full vs incremental) and sync strategy are **captured once at setup** by the `dataStrategy` task (executor [`../../setup/data-strategy/SKILL.md`](../../setup/data-strategy/SKILL.md)) and committed, so they are **already set** when you dispatch — do not re-ask. If they are unexpectedly missing or the user requests a change, return to the main agent; it owns the setup change and redispatch. The choices:
 
 | Choice | Meaning |
 |--------|---------|
 | **Full** | Validate all partitions every run (`synchronization.strategy: none`) |
 | **Incremental** | Re-validate only partitions that changed since the prior baseline |
-| Sync **Checksum** | Hash partitions; re-validate changed ones (not offered for Oracle) |
+| Sync **Checksum** | Hash partitions; re-validate changed ones (supported on all platforms, including Oracle) |
 | Sync **Watermark** | Track a monotonic column; re-validate partitions with newer values |
 
 After the machine completes, confirm with the user:
@@ -91,15 +93,14 @@ The setup response contains:
 > 1. **Proceed**
 > 2. **Change something** (tell me which table, section, or field names)
 
-5. **If the user chooses "Change something":** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (camelCase field names — for example `columnMappings`, `indexColumnList`, `sourceWhereClause` + `targetWhereClause`, `targetDatabase` / `targetSchema` / `targetName`, `synchronization.watermarkColumn`). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **Proceed** or says they are done editing.
+5. **If the user chooses "Change something":** apply the user's requested edits using `../../setup/data-validation/references/workflow-config-reference.md` (prefer camelCase — for example `columnMappings`, `indexColumnList`, `sourceWhereClause` + `targetWhereClause`, `targetDatabase` / `targetSchema` / `targetName`, `synchronization.watermarkColumn`; snake_case aliases such as `index_column_list` and legacy `whereClause` still parse). Re-display the sections you changed. Repeat the question in step 4 until the user chooses **Proceed** or says they are done editing.
 
    **Common scenarios → fields to edit:**
 
    | User goal | Workflow fields |
    |-----------|-----------------|
-   | Limit compared rows | `sourceWhereClause` + `targetWhereClause` (both required) |
+   | Limit compared rows | `sourceWhereClause` + `targetWhereClause` (both required; set matching predicates on each side) |
    | Skip L2 on wide tables | `excludeMetrics` or disable `metricsValidation` |
-   | Exclude drift-prone columns from L3 row compare | `useColumnSelectionAsExcludeList: true` + `columnSelectionList: [<cols>]` on the table (e.g. `created_at` / `CREATED_AT` for SQL Server `DATETIME2` → Snowflake timestamp precision drift) |
    | Whitelist known diffs | `acceptedTransformations` |
    | Rename / remap columns | `columnMappings`, `indexColumnList`, `targetIndexColumnList` |
    | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber` |
@@ -115,19 +116,15 @@ The setup response contains:
    - When incremental: ensure partition columns (`columnNamesToPartitionBy`) are present.
    - Verify `targetDatabase` / per-table targets match the deployed Snowflake objects.
    - Tell the user what you changed and why before confirming.
-8. **Apply user-requested edits before run (hard gate).** If the user already asked to change the workflow (exclude columns, turn metrics off, narrow tables, etc.) — including the audit-timestamp answer in step 9 — those edits are **not optional**:
+8. **Apply user-requested edits before run (hard gate).** If the user already asked to change the workflow (turn metrics off, narrow tables, etc.), those edits are **not optional**:
    - Write them into `workflow_path`, re-display the changed sections, and only then accept “Proceed” / confirmation to run.
-   - **Do not** call `validate_data(mode="run")` while a user-requested edit is still unapplied. Fixing exclusions only *after* a failed row compare — even if you then re-validate to a pass — is a **miss**: the first run must already reflect what the user told you to exclude. "Run with it in, see it fail, exclude, re-run" is the exact anti-pattern to avoid.
+   - **Do not** call `validate_data(mode="run")` while a user-requested edit is still unapplied.
    - **Never flip metrics on for "Full" mode.** If setup wrote `metricsValidation: false` (or the user said metrics off / schema+row only), leave it false — do not set `metricsValidation: true` because the mode is Full or because you want "all three levels." Full vs incremental is orthogonal to schema/metrics/row toggles.
-9. **Timestamp / audit-column drift (ask before first run when relevant).** When `row_validation` is on and tables include typical audit timestamps (`created_at`, `updated_at`, `CREATED_AT`, …) — especially SQL Server `DATETIME2` / `DATETIME` → Snowflake `TIMESTAMP_*` — ask once before run:
-
-   > Row compare often fails on audit timestamps because source and Snowflake can differ by precision or by when each side was written. Exclude `created_at` / similar columns from L3 for this run?
-
-   - **Yes / exclude** — this answer is **binding and part of the hard gate in step 8**: set per table `useColumnSelectionAsExcludeList: true` and `columnSelectionList: [created_at]` (use the real column names from the YAML) **before** the first `validate_data(mode="run")`, re-display the table block, and do **not** run with the column still compared. Running with it in and excluding only after L3 fails is a miss — you already had the answer.
-   - **No / compare them** — only when the user **explicitly** chose to keep them. Leave the columns in; if L3 then fails only on those columns, offer exclude + `validate_data(mode="revalidate")` afterward. Do **not** take this branch when the user asked to exclude.
-
-   Whatever the user answered here is binding: never launch the first run with the **opposite** of their choice. If unsure which branch you're in, re-read your captured answer before running — do not default to comparing.
-10. **Pre-run verification (hard gate).** Before calling `validate_data(mode="run")`, **re-read `workflow_path`** and confirm every user-requested edit from steps 5/8/9 is actually written to the file — in particular that any requested `columnSelectionList` / `useColumnSelectionAsExcludeList` exclusion is present and `metricsValidation` matches the agreed value. If a requested edit is missing, apply it now; do not run until the on-disk YAML matches what the user asked for. Then get **explicit confirmation** to run with the final workflow and continue to Step 3.
+9. **Do not weaken L3 heuristically.** Do not infer exclusions from column
+   names or source/target type pairs. Validate the configured columns and
+   report mismatches. Any deterministic normalization or exclusion belongs in
+   product configuration, not agent guesswork.
+10. **Pre-run verification (hard gate).** Before calling `validate_data(mode="run")`, **re-read `workflow_path`** and confirm every user-requested edit from steps 5/8 is actually written to the file and `metricsValidation` matches the agreed value. If a requested edit is missing, apply it now; do not run until the on-disk YAML matches what the user asked for. Then get **explicit confirmation** to run with the final workflow and continue to Step 3.
 
 **Optional — explain validation levels:** After the “update any fields?” question (or while the user is reviewing), offer a brief explanation unless they are clearly repeating a prior run or only asked to execute:
 
@@ -140,7 +137,10 @@ Also answer ad-hoc questions about levels at any time using the same reference; 
 
 ## Step 2b: Doctor gate (ran at infrastructure bring-up)
 
-The `scai data doctor` gate runs during `data_infrastructure(mode="up")` (the prerequisite), **not** on `validate_data(mode="run")` — dispatch is pure. If `up` reported `doctor_failures`, surface them and fix them (or re-run `data_infrastructure(mode="up", skip_doctor=true)` only after the user explicitly accepts the failures) before dispatching.
+The `scai data doctor` gate runs during `data_infrastructure(mode="up")`
+(the prerequisite), **not** on `validate_data(mode="run")` — dispatch is pure.
+If setup reported `doctor_failures`, do not repair or bypass them here. Return
+the exact remediation to the main agent, which owns infrastructure setup.
 
 ## Step 3: Run validation
 
@@ -156,15 +156,36 @@ On success, returns a `job_id` immediately — validation runs in the background
 
 Retain `workflow_path` for the report in Step 5.
 
-After run starts, go to **Step 4** (do not busy-poll every 30–60s unless you are on the fallback path).
+After run starts, go to **Step 4**.
 
 ---
 
-## Step 4: Wait for completion (Monitor, or poll fallback)
+## Step 4: Wait for completion with Monitor
 
-Load [Background monitoring](./references/background-monitoring.md) and follow it. Summary below; the reference is authoritative for capability checks, event phases, and crash fallback.
+Use Monitor for the asynchronous wait. Its `terminal` event carries the
+authoritative compact result under `detail.completion`; that event ends the
+wait and is sufficient for the final report. `job_status` is for a
+user-requested status, lost-watch recovery, or deeper failure diagnostics —
+not a required second handoff and not a polling loop.
 
-**Status tool** (both paths):
+**Arming Monitor ends your turn.** Say one line to the user and stop. The
+event wakes you; nothing you do in the meantime makes the job finish sooner.
+Between arming Monitor and its event, run **zero** Bash commands.
+
+**Never wait with Bash.** Do not run `sleep`, shell polling loops, or delayed
+shell status checks for a validation job. A long Bash sleep consumes the agent
+turn while bypassing the relay. Arm Monitor instead. If its watch is lost,
+recover it with `job_status(job_id, monitor=true)` as described below; do not
+compensate with `sleep`.
+
+**Never read the reports by hand.** Do not `cat` / `grep` / `head` the CSVs
+under `reports/data-validation/`, and do not query the target with
+`sql_execute`, to decide whether validation finished or passed. Those files
+are side effects of status collection and may be mid-write. The relay fetches
+status and reports when the job becomes terminal, then distills them into
+`detail.completion` on the Monitor event.
+
+**Status tool:**
 
 ```
 job_status(job_id="<JOB_ID>")                 # cheap summary
@@ -175,23 +196,10 @@ job_status(job_id="<JOB_ID>", details=true)   # + full progress and failure repo
 
 `details` may report `details_unavailable` until `create-workflow` returns a workflow name; that is normal early in the run.
 
-### 4.A — Choose path
-
-**Always prefer Monitor when it can be invoked.** Polling is never the better choice while Monitor is available — one relay poller serves every watcher, it wakes you on trouble and not only on completion, and it spends no tool call per check.
-
-| Condition | Path |
-|-----------|------|
-| Monitor tool can be invoked — **the default** | **Background** — Phases A–D in the reference |
-| Monitor genuinely unavailable (absent from the tool list, or invoking it fails) | **Fallback** — active poll below |
-
-If you are unsure whether Monitor is available, **try it** rather than defaulting to the poll. Calling `job_status(job_id)` because the user asked for an update is not the polling path and is always fine.
-
-**One completion owner:** only the background Monitor path **or** the fallback poll may present Step 5 — never both.
-
-### 4.A.1 — Background path (always use this when Monitor is available)
+### 4.A — Background monitoring
 
 1. **Phase A — Monitor:** Start the **Monitor** tool (`persistent: true`) with `monitor.watch_command` from the run response, verbatim, from the project root. No wait for a workflow name, and no hand-built command — the cursor baked into it is what prevents replays and gaps.
-2. **Phase B — Monitor fire:** Branch on the event's `phase`. `failure` / `stalled` / `relay_error` are warnings — surface them and keep watching. On `terminal`: `job_status(job_id, details=true)` once → Step 4.B if needed → **Step 5**.
+2. **Phase B — Monitor fire:** Branch on the event's `phase`. `failure` / `stalled` / `relay_error` are warnings — surface them and keep watching. On `terminal`, read `detail.completion` (`verdict`, `terminal`, `failed`, `summary`, `report_row_counts`, optional `failures` / `stale_reports`) → Step 4.B if failed → **Step 5**. Do not call `job_status` merely to confirm the terminal event.
 
 **No progress loop.** Do not start `/loop` or a cron to poll for progress. The relay emits a `stalled` event once a job has gone **30 minutes** without changing, so a quiet job reports itself. A healthy run is silent by design — progress lands in the log, and `job_status(job_id, details=true)` names the tables in flight whenever the user asks (see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths)).
 
@@ -201,36 +209,17 @@ Tell the user once (plain language) that you'll report back when validation fini
 
 **If the watch goes silent,** re-arm with `job_status(job_id, monitor=true)` — it returns a fresh cursor and watch command and restores the relay's poller if it was lost. With no progress loop there is no second timer cross-checking the watch, so this is the recovery path after a compaction, a session restart, or an answer that looks stale.
 
-### 4.A.2 — Fallback path (last resort — only when Monitor cannot be invoked)
+### 4.A.1 — Health monitoring
 
-Poll until the job is terminal:
+Monitor emits `stalled` and `failure` events. On either event, call
+`job_status(job_id, details=true)` once to inspect the current state, surface
+the warning, and keep the Monitor armed.
 
-- Call `job_status(job_id)` repeatedly until `terminal` is `true` (or when the user asks for an update). A natural gap between turns is enough — **do not insert your own timer**.
-- When `details.progress.output` is present, share a one-line update that **names the tables** currently validating and any that just finished (from `details.progress.output.tableStates`), alongside counts (`validatedTables`/`totalTables`, `failedTables`) — see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths). Don't emit silent, identical-looking repeat calls.
-
-**Never wait with `bash sleep` (or by tailing worker / `scai data validate status` logs) for validation progress.** That burns wall-clock and skips the status tool. The only allowed wait signals are Monitor (preferred) or another `job_status` call. Short `sleep` after killing a process (1–3s) is fine; multi-tens-of-seconds sleeps to "give the workflow time" are not.
-
-**Stop when** `terminal` is `true`.
-
-Then Step 4.B → Step 5.
-
-### 4.A.3 — Health monitoring (while waiting)
-
-On the background path the relay emits a `stalled` event when counters stop moving, so you do not compute stalls yourself. On the fallback path, derive health from consecutive `job_status(job_id, details=true)` responses. Keep the previous response in memory (at least `details.progress.output.validatedTables`, `failedTables`, `totalTables`, and `tableStates`).
-
-**When to run:**
-
-- **Background path:** the relay reports stalls itself; check health when it fires an event or the user asks.
-- **Fallback path:** every **2nd or 3rd** poll, or when the user asks. Skip until `details.progress.output` exists.
-
-**Progress key:** `validatedTables + failedTables`. Record the poll/tick time when this key last increased.
-
-| Signal | Background (relay events) | Fallback (30–60s poll) | Severity |
-|--------|---------------------------|-------------------------|----------|
-| Stall | `stalled` event | Progress key unchanged **≥10 minutes** | **Warning** |
-| Stuck | unchanged across **≥2** ticks | unchanged **≥20 minutes** | **Critical** |
-| Table failures | `failedTables > 0` or failed `tableStates` / `details.reports.files.data_validation_errors` | same | **Warning** (immediate) |
-| Slow start | Progress key still `0` and running **≥30 minutes** | running **≥15 minutes** | **Warning** |
+| Signal | Severity |
+|--------|----------|
+| `stalled` event | **Warning** |
+| Repeated unresolved `stalled` event | **Critical** |
+| `failure` event or failed table state | **Warning** (immediate) |
 
 **What to tell the user** (short; do not block waiting unless they ask to stop):
 
@@ -243,13 +232,16 @@ On the background path the relay emits a `stalled` event when counters stop movi
 
 On **Warning** or **Critical**, point to [Troubleshooting Reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md) (stale `TASK_QUEUE` tasks, worker DB mismatch, affinity). Do **not** auto-cancel the workflow — offer: keep waiting, open troubleshooting, or pause/teardown if the user wants to stop cost.
 
-A stall or stuck warning does **not** end monitoring — only a `terminal` event (or a fallback poll seeing `terminal: true`) does.
+A stall or stuck warning does **not** end monitoring — only a `terminal` event does.
 
 When a job fails before a workflow exists, the failure text is in the job's `summary` — surface it under **Execution** (or **Infrastructure** when no table progress exists) in Step 5.
 
 ### 4.B — Finished workflow with pending tables (anomaly)
 
-After the terminal status (Monitor fire + confirm, or fallback poll), if `details.progress.output.isFinished == true` **and** any of:
+The terminal event already classifies pending tables as `failed`. If
+`detail.completion.failed == true`, call
+`job_status(job_id, details=true)` once for per-table diagnostics, then check
+whether `details.progress.output.isFinished == true` **and** any of:
 
 - `validatedTables + failedTables < totalTables`
 - any `tableStates[].status == "Pending"`
@@ -265,7 +257,11 @@ After the terminal status (Monitor fire + confirm, or fallback poll), if `detail
 
 ## Step 5: Report — data validation summary
 
-**Do not skip.** Present an **error-first** summary in chat (markdown). Build it from `job_status(job_id, details=true)` (`details.progress`, `details.reports`) — **not** a per-table results grid unless the user asks.
+**Do not skip.** Present an **error-first** summary in chat (markdown). Build
+the headline from the Monitor terminal event's `detail.completion`. On
+failure, use the optional `job_status(job_id, details=true)` response
+(`details.progress`, `details.reports`) for deeper classification — **not** a
+per-table results grid unless the user asks.
 
 ### 5.A — Read inputs
 
@@ -273,14 +269,16 @@ Read **`validationConfiguration`** from the workflow YAML (or `defaults` / `appl
 
 | Source | Fields |
 |--------|--------|
-| Status response (top level) | `status`, `error` (if failed before progress) |
+| Monitor terminal `detail.completion` | `verdict`, `status`, `terminal`, `failed`, `summary`, `report_row_counts`, optional `failures` / `stale_reports` |
 | Workflow toggles | `validationConfiguration.metricsValidation` — when **false**, metrics were **not executed**; do not discuss or report them |
-| `details.progress.output` | `workflowName`, `isFinished`, `workflowStatus`, `totalTables`, `validatedTables`, `failedTables`, `tableStates` (`schemaValidated`, `metricsValidated`, `rowsValidated`, `status`, `errorMessage`) |
-| **`details.reports.files`** | `schema_validation_results`, `metrics_validation_results` (only when metrics enabled), `row_validation_summary`, `row_validation_results`, `data_validation_errors`, `results` — PascalCase CSV columns |
+| Optional `job_status` `details.progress.output` | Failure diagnostics: `workflowName`, `isFinished`, `workflowStatus`, `totalTables`, `validatedTables`, `failedTables`, `tableStates` |
+| Optional `job_status` `details.reports.files` | Failure diagnostics: `schema_validation_results`, `metrics_validation_results`, `row_validation_summary`, `row_validation_results`, `data_validation_errors`, `results` |
 
 `metricsValidated`: `true` = passed; `null` = not run (N/A); do **not** treat `null` as a metrics failure when `metrics_validation` was false in the workflow.
 
-`details` is attached by `job_status(job_id, details=true)`, which runs `scai data validate status` (writing CSV under `reports/data-validation/workflow-<timestamp>/`) and parses it.
+`detail.completion` is authoritative and always exists on a terminal event,
+even when the source has no full report. `job_status(job_id, details=true)`
+remains available when a failed completion needs the full per-table report.
 
 ### 5.B — Derive headline **Result** (header only)
 
@@ -413,7 +411,7 @@ Ask verbatim when eligible:
 validate_data(mode="revalidate", workflow_name="<details.progress.output.workflowName>")
 ```
 
-Then repeat **Steps 4–5** (background Monitor or poll fallback with `job_status`, present a new error-first report). Skip Step 6 teardown until the user picks **Stop** or all tables pass. Relay the `cost_reminder` from the revalidate response when infrastructure starts.
+Then repeat **Steps 4–5** (background Monitor, then present a new error-first report). Skip Step 6 teardown until the user picks **Stop** or all tables pass. Relay the `cost_reminder` from the revalidate response when infrastructure starts.
 
 **If the user picks option 2:** guide fixes from `### Suggested fixes`, then offer this menu again when ready.
 
@@ -427,14 +425,19 @@ When all tables passed on the first run, skip 5.G and continue to Step 6.
 
 ## Step 6: Offer to Suspend Infrastructure (Cost Saving)
 
-After presenting the summary, offer to tear down idle infrastructure to save cost (default **Yes**), then **delegate** — do **not** re-derive what is running here:
+This step belongs to the main agent that owns the wave/session, never a
+per-object subagent. A per-object subagent returns its Step 5 report and stops.
 
-- **Local** orchestrator/worker this session started → `data_infrastructure(mode="down")`.
-- **SPCS** orchestrator / compute pool / DEW worker (or any mixed setup) → load [`../../data-infrastructure/teardown/SKILL.md`](../../data-infrastructure/teardown/SKILL.md); it owns the "what's running" detection (its *Which steps apply* table) and runs only the applicable steps.
+After every active slot has returned and the wave's data work is complete, the
+main agent offers to tear down the shared infrastructure to save idle cost — a
+single prompt regardless of placement (default **Yes**):
 
-Nothing auto-resumes — bring infrastructure back for the next wave with `data_infrastructure(mode="up")`.
+> Tear down the shared data infrastructure now to stop accruing SPCS / warehouse cost? Bring it back for the next wave with `data_infrastructure(mode="up")` (dispatch does not auto-resume).
+>
+> 1. **Yes (default)** — call `data_infrastructure(mode="down")`.
+> 2. **No, keep running** — useful if you're starting the next wave immediately and want to avoid the ~60s warm-up.
 
-If the user picks **Yes** (or doesn't respond), run the teardown, then return to the parent skill.
+On **Yes** (or no response), call `data_infrastructure(mode="down")` and relay the returned `execution` + `orchestrator`/`worker` actions. Load `../../data-infrastructure/teardown/SKILL.md` **only** for what the tool can't cover: the cross-machine `TASK_QUEUE` check before suspending shared SPCS, a local process started outside MCP (Ctrl+C / `pkill`), or a `partial` payload with an SPCS privilege failure. Then return to the parent skill.
 
 ---
 
@@ -445,10 +448,11 @@ If the user picks **Yes** (or doesn't respond), run the teardown, then return to
 - [ ] User saw workflow YAML and was offered optional field updates (Step 2)
 - [ ] User confirmed the final workflow YAML and validation toggles before run
 - [ ] validate_data(mode="run") started
-- [ ] Monitor used (the default); active polling only if Monitor could not be invoked (Step 4)
+- [ ] Monitor armed with the run response's watch command (Step 4)
 - [ ] Waited until the job reported a `terminal` event
+- [ ] Read the authoritative verdict from Monitor `terminal.detail.completion`
 - [ ] Finished-but-pending anomaly checked (Step 4.B — do not report passed if tables still Pending)
-- [ ] Health monitoring run while waiting when triggered (Step 4.A.3)
+- [ ] Health monitoring handled when Monitor emitted an event (Step 4.A.1)
 - [ ] Error-first data validation summary presented (Step 5 — Result + Workflow, Errors, Suggested fixes)
 - [ ] Re-validation menu offered when eligible (Step 5.G — before teardown, not on Step 4.B or execution-only failures)
 - [ ] Teardown offered when wave data work is done (Step 6)
@@ -458,6 +462,7 @@ Return control to the parent skill (../SKILL.md).
 
 ## Reference
 
+- [Advanced operations reference](../../data-infrastructure/references/advanced-operations-reference.md) — rate limiting, incremental DV, revalidate
 - [Background monitoring](./references/background-monitoring.md)
 - [Validation levels reference](./references/validation-levels-reference.md) — what schema, metrics, row, and execution mean (setup + report)
 - [Workflow Config Reference](../../setup/data-validation/references/workflow-config-reference.md)

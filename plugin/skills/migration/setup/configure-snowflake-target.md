@@ -27,6 +27,11 @@ response.
 
 If the user wants a different connection, ask for the name and use it.
 
+If they still need a Snowflake connection created, or the current one fails
+SSO against Microsoft Entra ID / Azure AD / OIDC, load
+`../connection/snowflake-connection/SKILL.md` before persisting a name.
+Use `oauth_authorization_code` for Entra OIDC — never `externalbrowser`.
+
 ## Step 2: Target database
 
 This is where the migration tracking database and the converted objects
@@ -74,7 +79,7 @@ The `configure()` response now carries `schema_status_*` and
   > `<db>` doesn't exist yet. Create it, or did you mean a different name?
 
   On confirmation run `CREATE DATABASE <snowflake_database>;`, then
-  `configure(recheck=true)` to refresh.
+  `configure(ensure_metadata_schema=true)` to refresh.
 
 ## If the user won't name a database
 

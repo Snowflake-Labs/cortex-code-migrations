@@ -96,11 +96,12 @@ except ImportError as e:
     print(f"Warning: Anti-patterns report generator not available: {e}", file=sys.stderr)
     ANTI_PATTERNS_SUPPORT = False
 
-# Effort estimation (dialect-gated calculator tab: SQL Server, Redshift)
+# Effort estimation artifact loader and renderers
 try:
     from effort_estimation import (
-        build_effort_assessment,
-        is_effort_estimation_supported,
+        effort_overrides_js as build_effort_overrides_js,
+        load_effort_assessment,
+        load_effort_overrides,
         render_effort_tab_html,
         render_overview_section_b_html,
     )
@@ -108,6 +109,19 @@ try:
 except ImportError as e:
     print(f"Warning: Effort estimation module not available: {e}", file=sys.stderr)
     EFFORT_SUPPORT = False
+
+# Workload Insights artifact loader and renderer
+try:
+    from workload_insights import (
+        is_sql_server,
+        load_workload_insights,
+        render_workload_insights_tab_html,
+        workload_insights_css,
+    )
+    WORKLOAD_INSIGHTS_SUPPORT = True
+except ImportError as e:
+    print(f"Warning: Workload insights module not available: {e}", file=sys.stderr)
+    WORKLOAD_INSIGHTS_SUPPORT = False
 
 # Testing phase tab (optional)
 try:
@@ -134,6 +148,11 @@ except ImportError as e:
 # the reader never sees. Flip to True once the copy is reviewed — the Teradata
 # gate behind it stays exercised by test_multi_report_nav.py meanwhile.
 VIRTUALIZATION_ENABLED = False
+
+# Workload Insights is built but withheld from every report until the product is
+# ready to show it. Flip to True to re-enable — the SQL Server gate behind it
+# stays exercised by test_multi_report_nav.py meanwhile.
+WORKLOAD_INSIGHTS_ENABLED = False
 
 
 def generate_ai_summary(summary: Dict, temp_staging: List, deprecated: List, testing: List) -> str:
@@ -1025,7 +1044,8 @@ def generate_multi_report(
     anti_patterns_json: Path = None,
     informatica_json: Path = None,
     informatica_source_dir: Path = None,
-    base_estimates_csv: Path = None,
+    effort_estimates_json: Path = None,
+    workload_insights_json: Path = None,
     project_dir: Path = None,
 ) -> None:
     """Generate multi-tab HTML report"""
@@ -1056,7 +1076,7 @@ def generate_multi_report(
         else:
             print(f"ERROR: Waves data failed to load from {waves_json}. The Waves tab will be missing from the report.", file=sys.stderr)
             # If waves was the only requested data source, this is a hard failure
-            if not exclusion_json and not dynamic_sql_json and not ssis_json and not informatica_json and not anti_patterns_json:
+            if not exclusion_json and not dynamic_sql_json and not ssis_json and not informatica_json and not anti_patterns_json and not workload_insights_json:
                 raise ValueError(f"Failed to load waves data and no other data sources were provided")
     
     # Load SSIS data
@@ -1097,8 +1117,35 @@ def generate_multi_report(
             print(f"Warning: Could not load anti-patterns data: {e}", file=sys.stderr)
             has_anti_patterns = False
 
-    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns:
-        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, or anti-patterns) must be provided")
+    effort_assessment = None
+    if effort_estimates_json and EFFORT_SUPPORT:
+        print(f"Loading effort estimates data from {effort_estimates_json}...")
+        effort_assessment = load_effort_assessment(effort_estimates_json)
+        if effort_assessment:
+            print(
+                f"  - Effort estimates: {effort_assessment['summary']['total_estimated_hours']:,.1f} "
+                f"hours ({effort_assessment['source_dialect']})"
+            )
+
+    workload_insights_payload = None
+    if workload_insights_json and WORKLOAD_INSIGHTS_SUPPORT:
+        print(f"Loading workload insights data from {workload_insights_json}...")
+        workload_insights_payload = load_workload_insights(workload_insights_json)
+
+    effort_overrides = {}
+    effort_artifact_name = ""
+    if effort_assessment:
+        effort_artifact_name = Path(effort_estimates_json).name
+        overrides_path = Path(effort_estimates_json).parent / "effort-overrides.json"
+        effort_overrides = load_effort_overrides(overrides_path)
+        override_count = len(effort_overrides.get("band_rates") or {}) + len(
+            effort_overrides.get("flat_hours") or {}
+        )
+        if override_count:
+            print(f"  - Effort overrides: {override_count} from {overrides_path.name}")
+
+    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns and not effort_estimates_json and not workload_insights_json:
+        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, anti-patterns, effort estimates, or workload insights) must be provided")
     
     # Process exclusion data — schema produced by `scai assessment object-exclusion`
     # is the single source of truth; field names below match that schema directly.
@@ -1209,30 +1256,6 @@ def generate_multi_report(
             overview_stats['source_dialect'] = scai_lang
             print(f"  - Using source dialect from SQL Dynamic: {scai_lang}")
 
-    # Dialect-gated effort calculator (SQL Server, Redshift). The dialect is read from
-    # {project_dir}/.scai/config/project.yml only, so runs without --project-dir get no effort tab.
-    effort_assessment = None
-    if EFFORT_SUPPORT and snowconvert_reports_dir and project_dir:
-        reports_path = Path(snowconvert_reports_dir)
-        project_path = Path(project_dir)
-        if is_effort_estimation_supported(project_path):
-            effort_assessment = build_effort_assessment(
-                reports_path,
-                base_estimates_csv,  # None → per-dialect bundled CSV is resolved
-                project_dir=project_path,
-            )
-            if effort_assessment:
-                print(
-                    f"  - Effort estimates: {effort_assessment['summary']['total_fde_hours']:,.1f} "
-                    f"FDE hours ({effort_assessment['source_dialect']})"
-                )
-            else:
-                print(
-                    "  - Warning: supported dialect but effort assessment could not be built "
-                    "(missing TopLevelCodeUnits report?)",
-                    file=sys.stderr,
-                )
-
     # Set default tab to overview if available
     if waves_json:
         default_tab = 'overview'
@@ -1304,6 +1327,9 @@ def generate_multi_report(
         overview_stats=overview_stats,
         missing_objects_data=missing_objects_data,
         effort_assessment=effort_assessment,
+        workload_insights_payload=workload_insights_payload,
+        effort_overrides=effort_overrides,
+        effort_artifact_name=effort_artifact_name,
         testing_readiness=testing_readiness,
         data_migration_readiness=data_migration_readiness,
         assessment_name=resolve_assessment_name(project_dir)
@@ -1356,6 +1382,9 @@ def generate_html_template(
     has_anti_patterns: bool = False,
     anti_patterns_json: Path = None,
     effort_assessment: Dict = None,
+    workload_insights_payload: Dict = None,
+    effort_overrides: Dict = None,
+    effort_artifact_name: str = "",
     testing_readiness: Any = None,
     data_migration_readiness: Any = None,
     assessment_name: str = ""
@@ -1567,6 +1596,26 @@ def generate_html_template(
     )
     # An unresolved dialect must hide the phase, so this stays a positive check.
     show_virtualization = VIRTUALIZATION_ENABLED and source_dialect == 'Teradata'
+    show_workload_insights = (
+        WORKLOAD_INSIGHTS_ENABLED
+        and WORKLOAD_INSIGHTS_SUPPORT
+        and is_sql_server(source_dialect)
+    )
+    workload_insights_nav_html = ""
+    workload_insights_html = ""
+    workload_insights_styles = ""
+    if show_workload_insights:
+        workload_insights_nav_html = """
+                <a @click="activeTab = 'workload-insights'" class="nav-section" data-tab="workload-insights" :class="{active: activeTab === 'workload-insights'}">
+                    <span>Workload Insights</span>
+                </a>
+        """
+        workload_insights_html = f"""
+            <div class="tab-content" :class="{{active: activeTab === 'workload-insights'}}">
+                {render_workload_insights_tab_html(workload_insights_payload)}
+            </div>
+        """
+        workload_insights_styles = workload_insights_css()
 
     external_tables_card_html = ''
     objects_by_type = overview_stats.get('objects_by_type', {}) if overview_stats else {}
@@ -1583,6 +1632,11 @@ def generate_html_template(
         render_overview_section_b_html(effort_assessment) if effort_assessment else ""
     )
     effort_tab_html = render_effort_tab_html(effort_assessment) if effort_assessment else ""
+    effort_overrides_js = (
+        build_effort_overrides_js(effort_assessment, effort_overrides, effort_artifact_name)
+        if effort_assessment
+        else ""
+    )
     how_to_use_section_label = "Section C" if effort_assessment else "Section B"
     missing_objects_section_label = "Section D" if effort_assessment else "Section C"
     effort_nav_overview_sublink = ""
@@ -1600,8 +1654,8 @@ def generate_html_template(
         )
         effort_nav_sublist = (
             '<div v-if="activeTab === \'effort-estimates\'" class="nav-sublist">'
-            '<a @click="scrollToSection(\'#effort-ddl-assessment\', \'effort-estimates\')" class="nav-sublink">DDL Assessment</a>'
             '<a @click="scrollToSection(\'#effort-calculator\', \'effort-estimates\')" class="nav-sublink">Calculator</a>'
+            '<a @click="scrollToSection(\'#effort-ddl-assessment\', \'effort-estimates\')" class="nav-sublink">DDL Assessment</a>'
             '<a @click="scrollToSection(\'#effort-top-issues\', \'effort-estimates\')" class="nav-sublink">Top Issues</a>'
             '</div>'
         )
@@ -1749,6 +1803,15 @@ def generate_html_template(
         ('virtualization', 'Virtualization',
          'For Teradata workloads, plan query virtualization and find help designing your Snowflake target.'),
     ]
+    if show_workload_insights:
+        journey_steps.insert(
+            0,
+            (
+                'workload-insights',
+                'Workload Insights',
+                'Insights from the SQL Server Query Store extract: execution volume, statement mix, busiest modules, and the costliest or occasionally slow query shapes.',
+            ),
+        )
     if not show_virtualization:
         journey_steps = [step for step in journey_steps if step[0] != 'virtualization']
     journey_cards_html = "".join(
@@ -2570,6 +2633,87 @@ def generate_html_template(
         .effort-table.compact th, .effort-table.compact td {{ padding: 0.5rem 0.6rem; font-size: 0.8rem; }}
         .effort-table.sticky thead th {{ position: sticky; top: 0; z-index: 1; }}
         .effort-table tr.effort-total td {{ background: #F8FAFC; font-weight: 700; color: #1E252F; }}
+        /* Interactive effort calculator: editable per-band rates and their paired
+           Snowflake values. */
+        .effort-band-legend {{ display: flex; flex-wrap: wrap; gap: 4px 18px; margin-bottom: 12px; color: #5D6A85; font-size: 0.8rem; line-height: 1.5; }}
+        .effort-band-legend-lead {{ flex: 0 0 100%; font-weight: 600; color: #1E252F; }}
+        .effort-toolbar {{ display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }}
+        /* Explanatory prose. Capped only against the extreme: on a wide monitor an
+           uncapped paragraph runs past 180 characters a line, but a cap much below the
+           tables beside it reads as a broken layout rather than a measure. */
+        .effort-lead {{ max-width: min(100%, 110ch); color: #5D6A85; font-size: 0.95rem; line-height: 1.65; margin: 0 0 12px; }}
+        /* One menu instead of three buttons: the file format is ours to know, not the
+           reader's, and each action explains itself in its own sub-label. */
+        .effort-menu-wrap {{ position: relative; }}
+        .effort-menu-btn {{ display: inline-flex; align-items: center; gap: 6px; }}
+        .effort-menu-backdrop {{ position: fixed; inset: 0; z-index: 40; }}
+        .effort-menu {{
+            position: absolute; top: calc(100% + 4px); left: 0; z-index: 41; min-width: 320px;
+            background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 8px; padding: 4px;
+            box-shadow: 0 8px 24px rgba(16, 46, 70, 0.14);
+        }}
+        .effort-menu-item {{
+            display: flex; align-items: flex-start; gap: 10px; width: 100%; text-align: left;
+            background: none; border: 0; border-radius: 6px; padding: 8px 10px; cursor: pointer;
+            font: inherit; color: #102E46;
+        }}
+        .effort-menu-item:hover:not(:disabled) {{ background: #F0F9FF; }}
+        .effort-menu-item:disabled {{ cursor: default; color: #94A3B8; }}
+        .effort-menu-icon {{ display: inline-flex; margin-top: 2px; color: #64748B; }}
+        .effort-menu-danger:not(:disabled) {{ color: #B42318; }}
+        .effort-menu-danger:not(:disabled) .effort-menu-icon {{ color: #B42318; }}
+        .effort-menu-text {{ display: flex; flex-direction: column; gap: 2px; }}
+        .effort-menu-label {{ font-size: 0.85rem; font-weight: 600; }}
+        .effort-menu-sub {{ font-size: 0.78rem; font-weight: 400; color: #64748B; line-height: 1.35; }}
+        .effort-btn {{ background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 12px; font-size: 0.82rem; font-weight: 600; color: #005C8F; cursor: pointer; }}
+        .effort-btn:hover:not(:disabled) {{ background: #F0F9FF; border-color: #005C8F; }}
+        .effort-btn:disabled {{ color: #94A3B8; border-color: #E2E8F0; cursor: default; }}
+        .effort-badge {{ background: #E0F2FE; color: #0369A1; border-radius: 999px; padding: 3px 10px; font-size: 0.78rem; font-weight: 600; }}
+        .effort-notice {{ color: #0369A1; background: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 6px; padding: 8px 12px; font-size: 0.82rem; margin: 0 0 12px; }}
+        .effort-warning {{ color: #92400E; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 6px; padding: 8px 12px; font-size: 0.82rem; margin: 0 0 12px; }}
+        .effort-input {{ width: 84px; text-align: right; padding: 4px 6px; border: 1px solid #CBD5E1; border-radius: 4px; font-size: 0.85rem; font-family: inherit; color: #1E252F; background: #FFFFFF; }}
+        .effort-input:focus {{ outline: 2px solid #93C5FD; outline-offset: 0; border-color: #005C8F; }}
+        .effort-input:disabled {{ background: #F1F5F9; color: #94A3B8; cursor: not-allowed; }}
+        .effort-input-error {{ border-color: #DC2626; background: #FEF2F2; }}
+        .effort-error {{ display: block; color: #B91C1C; font-size: 0.72rem; margin-top: 2px; }}
+        .effort-sf-note {{ display: block; color: #64748B; font-size: 0.72rem; font-weight: 400; margin-top: 2px; white-space: nowrap; }}
+        .effort-table tr.effort-row-overridden td {{ background: #FFFDF5; }}
+        .effort-table tr.effort-row-overridden:hover td {{ background: #FEF9E7; }}
+        /* The rate row belongs to the count row above it, so the border between
+           them is dropped and only the pair is separated from the next object type. */
+        .effort-table tr.effort-rate-row td {{ padding-top: 0; border-bottom-width: 2px; }}
+        .effort-table tr.effort-rate-row {{ background: #FBFDFF; }}
+        .effort-rate-lbl {{ color: #94A3B8; font-size: 0.72rem; white-space: nowrap; }}
+        /* Section banner: the only divider in the table, so a reader can tell at a
+           glance which pricing rule the rows below it follow. */
+        .effort-table th.effort-section {{
+            text-align: left; background: #E0F2FE; padding: 0;
+            border-top: 1px solid #E2E8F0;
+        }}
+        /* The whole banner is the control, so the hit area is the row, not a glyph. */
+        .effort-section-toggle {{
+            display: flex; align-items: center; gap: 8px; width: 100%; background: none;
+            border: 0; padding: 9px 14px; font: inherit; font-size: 0.82rem; font-weight: 700;
+            color: #102E46; text-align: left; cursor: pointer;
+        }}
+        .effort-section-toggle:hover {{ background: #CDEBFB; }}
+        .effort-chevron {{ display: inline-flex; color: #64748B; }}
+        .effort-section-blurb {{ font-weight: 400; color: #64748B; }}
+        /* Trailing edge, so the figure lands near the Est. Hours column it sums and
+           stays readable when the section is closed. */
+        .effort-section-total {{
+            margin-left: auto; display: flex; align-items: baseline; gap: 8px;
+            font-variant-numeric: tabular-nums;
+        }}
+        /* A flat section's own column headers. Lighter than the table head so they
+           read as scoped to the section rather than as a second table. */
+        .effort-table th.effort-subhead {{
+            text-align: left; background: #F8FAFC; color: #64748B; font-size: 0.74rem;
+            font-weight: 600; padding: 6px 14px; border-bottom: 1px solid #E2E8F0;
+            white-space: nowrap;
+        }}
+        .effort-table tr.effort-total td {{ border-top: 2px solid #CBD5E1; }}
+        .effort-muted {{ color: #64748B; font-size: 0.85rem; }}
         .nav-preview-badge {{
             display: inline-block;
             margin-left: 6px;
@@ -2670,6 +2814,11 @@ def generate_html_template(
         .nav-link.active {{
             background: #D6E6FF;
             color: #1A6CE7;
+        }}
+        /* Only nav row carrying a badge: without nowrap the flex label gives way
+           to it and the wrapped line is clipped by the fixed 30px height. */
+        .nav-link[data-tab="effort-estimates"] {{
+            white-space: nowrap;
         }}
         .nav-sublist {{
             padding: 4px 0 8px 0;
@@ -4213,6 +4362,7 @@ def generate_html_template(
 
         /* Anti-patterns report styles (scoped to #anti-patterns-report) */
 {anti_patterns_css}
+{workload_insights_styles}
 {testing_css}
 {data_migration_css}
         .empty-state {{
@@ -5165,6 +5315,7 @@ def generate_html_template(
                 <a @click="activeTab = 'journey'" class="nav-section" data-tab="journey" :class="{{active: activeTab === 'journey'}}">
                     <span>Migration Journey</span>
                 </a>
+                {workload_insights_nav_html}
                 <a class="nav-section" @click="selectSection(codeEtlTabs, '{default_tab}')">
                     <span>Code/ETL Conversion</span>
                 </a>
@@ -5219,6 +5370,7 @@ def generate_html_template(
 
         <div class="content">
             {journey_overview_html}
+            {workload_insights_html}
             {overview_html}
             {effort_tab_html}
             {exclusion_html}
@@ -5231,6 +5383,13 @@ def generate_html_template(
             {virtualization_html}
         </div>
     </div>
+
+    <!-- Effort Estimates interactivity: the shared override module, the baseline
+         payload, and the Vue mixin the root app pulls in. Must load before the
+         app block below, which reads window.__EFFORT_MIXIN__ at createApp time. -->
+    <script>
+        {effort_overrides_js}
+    </script>
 
     <script>
         /**
@@ -5349,6 +5508,7 @@ def generate_html_template(
         const {{ createApp }} = Vue;
 
         createApp({{
+            mixins: window.__EFFORT_MIXIN__ ? [window.__EFFORT_MIXIN__] : [],
             data() {{
                 return {{
                     activeTab: 'journey',
@@ -6501,11 +6661,15 @@ def main():
     )
 
     parser.add_argument(
-        '--base-estimates',
+        '--effort-estimates-json',
         type=Path,
-        help='Path to Base_estimates CSV file with per-object-type hourly rates. '
-             'Defaults to the bundled CSV for the project source dialect '
-             '(Base_estimates.csv for SQL Server, Base_estimates.redshift.csv for Redshift).'
+        help='Path to effort-estimates JSON produced by `scai assessment effort-estimate`.'
+    )
+
+    parser.add_argument(
+        '--workload-insights-json',
+        type=Path,
+        help='Path to workload-insights JSON produced by `scai assessment workload-insights`.'
     )
 
     parser.add_argument(
@@ -6516,6 +6680,8 @@ def main():
     )
 
     args = parser.parse_args()
+    explicit_effort_estimates_json = args.effort_estimates_json
+    explicit_workload_insights_json = args.workload_insights_json
 
     # --project-dir auto-discovery: fill in registry-dir and snowconvert-reports-dir
     # from the conventional layout if they weren't set explicitly.
@@ -6568,6 +6734,30 @@ def main():
                 if ap_candidates:
                     args.anti_patterns_json = ap_candidates[-1]
                     print(f"Using anti-patterns JSON: {args.anti_patterns_json}", file=sys.stderr)
+        if not args.effort_estimates_json:
+            effort_dir = args.project_dir / "artifacts" / "assessment"
+            if effort_dir.is_dir():
+                effort_candidates = sorted(
+                    effort_dir.glob("effort-estimates-*.json")
+                )
+                if effort_candidates:
+                    args.effort_estimates_json = effort_candidates[-1]
+                    print(
+                        f"Using effort estimates JSON: {args.effort_estimates_json}",
+                        file=sys.stderr,
+                    )
+        if not args.workload_insights_json:
+            workload_dir = args.project_dir / "artifacts" / "assessment"
+            if workload_dir.is_dir():
+                workload_candidates = sorted(
+                    workload_dir.glob("workload-insights-*.json")
+                )
+                if workload_candidates:
+                    args.workload_insights_json = workload_candidates[-1]
+                    print(
+                        f"Using workload insights JSON: {args.workload_insights_json}",
+                        file=sys.stderr,
+                    )
         if not args.informatica_json:
             # Check common locations for Informatica analysis output
             candidates = [
@@ -6580,8 +6770,8 @@ def main():
                     print(f"Using Informatica JSON: {args.informatica_json}", file=sys.stderr)
                     break
 
-    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.registry_dir:
-        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
+    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.effort_estimates_json and not args.workload_insights_json and not args.registry_dir:
+        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --effort-estimates-json, --workload-insights-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
         print_usage()
         sys.exit(1)
 
@@ -6605,10 +6795,24 @@ def main():
         print(f"Error: Anti-Patterns JSON file not found: {args.anti_patterns_json}", file=sys.stderr)
         sys.exit(1)
 
-    # Validated here rather than at load time: load_effort_estimate_config() opens the
-    # path unguarded, so a typo reaching the render would abort the whole report.
-    if args.base_estimates and not args.base_estimates.exists():
-        print(f"Error: Base estimates CSV not found: {args.base_estimates}", file=sys.stderr)
+    if (
+        explicit_effort_estimates_json
+        and not explicit_effort_estimates_json.exists()
+    ):
+        print(
+            f"Error: Effort estimates JSON file not found: {explicit_effort_estimates_json}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if (
+        explicit_workload_insights_json
+        and not explicit_workload_insights_json.exists()
+    ):
+        print(
+            f"Error: Workload insights JSON file not found: {explicit_workload_insights_json}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     # Registry-driven waves data. Two modes:
@@ -6669,7 +6873,8 @@ def main():
                 anti_patterns_json=args.anti_patterns_json,
                 informatica_json=args.informatica_json,
                 informatica_source_dir=getattr(args, 'informatica_source_dir', None),
-                base_estimates_csv=getattr(args, 'base_estimates', None),
+                effort_estimates_json=getattr(args, 'effort_estimates_json', None),
+                workload_insights_json=getattr(args, 'workload_insights_json', None),
                 project_dir=getattr(args, 'project_dir', None),
             )
     except Exception as e:

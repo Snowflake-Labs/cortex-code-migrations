@@ -12,6 +12,12 @@ You supply the concrete values that fire a branch arm, keyed to the **resolved s
 ## Negative constraint (the one rule)
 Reason about the **resolved source column**, never the opaque local, and stay consistent with any `correlated_groups` tuples that touch the same column — do not emit a raw-SQL guess or a value the correlated tuple contradicts.
 
+## Work it out before you emit
+Reason in prose first, then emit the fragment as your final output — deciding and formatting in the same
+pass is where accuracy is lost. Per candidate, name the `list-unsolved` row that backs it and why it
+holds, and say what you considered and dropped. Keep that reasoning out of the fragment: it carries only
+the emitted type's own fields, and unknown fields are rejected.
+
 ## Examples
 `PROCESS_ORDER` filters `AMOUNT BETWEEN 100 AND 500` — force the boundary values to exist on the resolved column `SALES.ORDERS.AMOUNT`:
 

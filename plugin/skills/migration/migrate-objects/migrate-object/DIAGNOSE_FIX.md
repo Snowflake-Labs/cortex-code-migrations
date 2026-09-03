@@ -1,314 +1,135 @@
 # Diagnose & Fix
 
-Analyze test failures and fix them. Uses error history from previous iterations, searches for relevant rules by error text, spawns investigation agents in parallel, then applies fixes with confidence-gated review.
+`fixCode` for one object. Read the failures, name a root cause, apply a
+faithful fix or stop. The machine retries the failed task when you stamp
+`completed` — do not jump to [SKILL.md](SKILL.md) by hand.
 
-## Step 1: Accumulate Iteration Context
+You diagnose. Do not spawn a review agent, and do not spawn investigators
+because a later step is titled "swarm". Read `VALIDATION.LATEST`, the source
+SQL, and the converted SQL yourself. The one
+[`test_case_verifier`](../../../../agents/test_case_verifier.md) is spawned
+from `runTests` after you stamp, not from here.
 
-Before investigating, gather context from all previous iterations of this fix loop. This prevents retrying approaches that already failed.
+## Step 1: Iteration context
 
-**Build the iteration log** by recalling from the current session:
-
-- **Iteration number** — which pass through the deploy-test-fix loop is this?
-- **Previous errors** — what errors/failures were seen in earlier iterations?
-- **Previous fix attempts** — what code changes were made, and what was the outcome?
-- **Approaches to avoid** — any fix strategies that were tried and failed?
-
-Structure this as:
+If this is the first pass, skip. Otherwise recall what you already tried
+and do not repeat an unchanged approach.
 
 ```
 Iteration: <N>
-
 Previous attempts:
-- Iteration 1: <what was tried> → <outcome (error text or test diff summary)>
-- Iteration 2: <what was tried> → <outcome>
-...
-
+- Iteration 1: <what> → <error or diff>
 Approaches to avoid:
-- <description of failed approach and why it didn't work>
+- <failed approach>
 ```
 
-**If this is iteration 1**, skip this step — there is no prior context.
-
-## Step 2: Get Current Failure Context
-
-Read local test results for the failing object:
-
-```bash
-cat <project_dir>/test-results/results.json
-```
-
-Filter entries where `code_unit_name` matches `<object_name>` and `status` is `FAIL` or `ERROR`.
-
-Gather from each failing entry:
-- `params_hash` and `params` — input parameters
-- `error` — error message (if ERROR status)
-- `differences` — human-readable diff descriptions
-- `in_memory_diff.cell_diffs` — exact cell-level differences (row, column, baseline value, actual value)
-- `in_memory_diff.row_counts` — baseline vs actual row counts
-- `in_memory_diff.summary_stats` — per-column aggregate mismatches
-
-## Step 2.5: Detect Special Cases
-
-Before the general rule search and investigation swarm, check whether this failure matches a **known error pattern**, involves **dynamic SQL**, or falls under a **documented troubleshooting scenario**. These checks can short-circuit or enrich the diagnosis.
-
-### Check for Known Errors
-
-Scan the error messages and diff descriptions from Step 2 against the patterns in [references/KNOWN_ERRORS.md](references/KNOWN_ERRORS.md).
-
-**If a match is found:** Apply the documented fix directly — skip the investigation swarm and go straight to Step 6 (Apply Fix).
-
-Known patterns include:
-- Error 002232 (invalid virtual column expression) — inline UDF logic
-- Mixed-quote PIVOT column identifiers — fix quoting
-- All-rows-different due to column ordering, case, or formatting — reorder/alias/cast
-- Decimal/rounding and timestamp precision differences — normalize or flag
-
-### Check for Dynamic SQL Issues
-
-If the error message or the converted SQL file contains any of these patterns:
-- `EXECUTE IMMEDIATE`
-- `IDENTIFIER(`
-- `sp_executesql`
-- `EXEC(`
-- `EXEC @`
-
-Then the failure likely involves dynamic SQL conversion. Read the canonical dynamic SQL conversion reference at [../../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md](../../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md) and pass the relevant conversion patterns into the investigation agents (Step 4) as additional context. This reference covers:
-- Variable transformation and identifier quoting
-- `sp_executesql` to `EXECUTE IMMEDIATE ... USING` conversion
-- System catalog mappings (e.g., `sys.tables` to `INFORMATION_SCHEMA`)
-- Temp table transformation in dynamic context
-- Handling of commented-out dynamic SQL (SnowConvert `!!!RESOLVE EWI!!!` markers)
-
-### Check for Test YAML Shape Mismatch
-
-Before assuming the failure is a SQL bug, ask: **does the test YAML's `steps:` block match the actual shape of this procedure?** `scai test seed` and the swarm both produce a default-shape YAML (one CALL step, one return-value comparison). Many procedures don't fit that default and need a different step structure.
-
-Scan the failure context for any of these smells:
-
-| Smell | Likely YAML-shape issue | Recipe |
-|---|---|---|
-| Error mentions multiple result sets, "got N result sets, expected M", or first-RS-only comparison while source proc emits several `SELECT` statements | Default `validate: true` only compares the first RS | [`EDIT_TEST_YAML.md` → Multi-result-set validation](EDIT_TEST_YAML.md#multi-result-set-validation) |
-| Proc has OUT / INOUT params and the diff is on a column that looks like a param name, or "expected non-null, got null" on what should be an output | YAML doesn't emit Output Parameter Comparison step | [`EDIT_TEST_YAML.md` → OUT / INOUT parameter comparison](EDIT_TEST_YAML.md#out--inout-parameter-comparison) |
-| Proc is DML (INSERT / UPDATE / DELETE / MERGE) and result shows "no rows captured" or empty diff | Delta capture not active or no post-condition SELECT in `steps:` | [`EDIT_TEST_YAML.md` → Side-effect-only DML](EDIT_TEST_YAML.md#side-effect-only-dml) |
-| Proc populates a temp table or persistent table and the diff is on that table not being read | YAML missing Table Read Step after the CALL | [`EDIT_TEST_YAML.md` → Table-read assertion](EDIT_TEST_YAML.md#table-read-assertion) |
-| Redshift proc returns a refcursor and the diff is "RESULT_SCAN returned no rows" / "cursor not found" | YAML missing Cursor Read Step | [`EDIT_TEST_YAML.md` → Cursor-read step](EDIT_TEST_YAML.md#cursor-read-step) |
-| Snowflake column name is `"ANONYMOUS BLOCK"` while baseline expects the Redshift param name | Anonymous-block alias missing in `validate:` list | [`EDIT_TEST_YAML.md` → Per-dialect gotchas: Redshift scalar INOUT](EDIT_TEST_YAML.md#redshift-scalar-inout--anonymous-block--column-aliasing) |
-| Teradata proc fails with `Error 5315: does not have SELECT/INSERT access` on the source side | Cross-database GRANT steps missing | [`EDIT_TEST_YAML.md` → Per-dialect gotchas: Teradata cross-database GRANTs](EDIT_TEST_YAML.md#teradata-cross-database-grants-when-using-clone-isolation) |
-
-**If a match is found:** load [`EDIT_TEST_YAML.md`](EDIT_TEST_YAML.md), apply the matching recipe to the failing YAML under `<project_dir>/<files.artifacts.path>/test/` (glob `*.yml` — `files.artifacts.path` from `query_registry`, verbatim; synthetic seeding may write multiple `.0.yml`, `.1.yml` files), then re-run `scai test capture --where "source.canonicalName ILIKE '%<object_name>%'"` to refresh the baseline. Re-run `scai test validate` to confirm — go directly to [SKILL.md](SKILL.md) Step 4 (retest), skipping the investigation swarm. This is **not a SQL fix**, so there is nothing to redeploy.
-
-**If unsure whether the YAML shape is at fault:** prefer to continue with the investigation swarm. Agent 3 (Output Analysis) will surface the same smells with more context, and you can come back to this recipe after seeing its output. False positives here cost a YAML edit that might not be needed; false negatives cost an extra swarm iteration.
-
-### Check Troubleshooting Reference
-
-If none of the above matched, also consult [../references/troubleshooting.md](../references/troubleshooting.md) for common test failure scenarios (wrong schema prefix, missing base data, connection issues, etc.) that may explain the failure without needing the full swarm.
-
----
-
-## Step 3: Search Rules by Error Text
-
-Before spawning the investigation swarm, check if a known rule already addresses this error. This can short-circuit the diagnosis entirely.
-
-Collect the primary error messages from Step 2 (the `error` field from ERROR entries, or the first `differences` entry from FAIL entries). Use `find_similar_rules` with the error text as the query:
-
-Use the `find_similar_rules` tool with `query` set to `"<primary_error_message_or_diff_description>"`.
-
-**If a matching rule is found:**
-
-| Rule's `replacement_mode` | Action |
-|---------------------------|--------|
-| `regex` | Apply `replacement_find` / `replacement_replace` mechanically to the SQL file. Skip to Step 6 (Apply Fix). |
-| `ai` | Read the rule's `ai_context` and `examples`. Pass them into the investigation agents (Step 4) as additional context to guide diagnosis. |
-
-After applying a matched rule (regex mode), record the application: use the `record_rule_application` tool with `rule_id` set to the matched rule's ID, `outcome` set to `"applied"`, and `code_unit_name` set to `<object_name>`.
-
-**If the rule's name starts with `[AVOID]`:** This is a negative rule (anti-pattern). Note the `ai_context` — it describes an approach that was tried before and failed. Add it to the "Approaches to avoid" list from Step 1.
-
-**If no matching rule is found**, proceed to Step 4.
-
-## Step 4: Spawn Investigation Swarm
-
-Launch 3 agents **in parallel** to investigate different causes. Each agent receives the iteration context from Step 1 so it can avoid repeating failed approaches.
-
-### Agent 1: Code Comparison
+## Step 2: Failure context
 
 ```
-Investigate test failures for <object_name> by comparing SOURCE vs TARGET code.
-
-Source (truth): <source_file_path>
-Snowflake target: <target_file_path>
-
-Compare:
-1. Parameter handling - same names, types, defaults?
-2. Business logic - IF/CASE branches match?
-3. Table/view references - correct schema prefixes?
-4. Function calls - source functions converted correctly?
-5. Return values - same columns, same order?
-
-Look for SnowConvert EWI comments (--** SSC-) indicating conversion issues.
-
-Failing tests context:
-<failure_details>
-
-Iteration context (if iteration > 1):
-<iteration_log_from_step_1>
-
-Matching rules context (if any from Step 3):
-<rule_ai_context_and_examples>
-
-IMPORTANT: Do NOT suggest approaches listed under "Approaches to avoid".
-
-Output: List specific code differences that could cause the failures.
+query_registry(where="id = '<objectId>'", fields="id,source,files,target")
 ```
 
-### Agent 2: Data Investigation
+Hold `files.source.path`, `files.converted.path`, `files.artifacts.path`.
+Read `<metadata_database>.VALIDATION.LATEST` (attach names that
+database; it is not the migration target). There is no
+`<project_dir>/test-results/results.json`. For each `FAIL` / `ERROR` on
+this object, take `params_hash`, `parameters`, `error_message`, and
+`differences`. Then read the source SQL and the converted SQL. A deploy
+error is the context when this loop entered from a compile failure.
 
-```
-Investigate test failures for <object_name> by checking UNDERLYING DATA.
+## Step 3: Known shortcuts
 
-Referenced tables/views in the code:
-<list_of_tables>
+Check these before inventing a new theory. A match is a fix (or a stop),
+not a swarm.
 
-For each table, check:
-1. Does it exist in Snowflake with correct schema prefix?
-2. Row counts match between source baseline and Snowflake?
-3. Any data type differences that could affect results?
+**Documented conversion / load errors**
 
-Failing tests context:
-<failure_details>
+- Error 002232 (invalid virtual column) — inline the UDF.
+- Mixed-quote PIVOT identifiers — fix quoting.
+- All-rows-different from column order, case, or formatting — reorder /
+  alias / cast when that still means what the source means.
+- Decimal / rounding / timestamp precision — normalize only when that
+  still means what the source means. A wall-clock expression (`GETDATE`,
+  `CURRENT_TIMESTAMP`, age-from-today) is not a normalize: go to Step 5.
+- Snowflake 001187 (`COPY INTO` refused on CHECK constraints) — delete
+  the `CONSTRAINT … CHECK` clauses from the converted `snowflake/` file,
+  then deploy. Do not `ALTER TABLE … DROP CONSTRAINT` on the live table.
 
-Iteration context (if iteration > 1):
-<iteration_log_from_step_1>
+**Dynamic SQL** in the error or the converted file (`EXECUTE IMMEDIATE`,
+`IDENTIFIER(`, `sp_executesql`, `EXEC(` / `EXEC @`): read
+[../../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md](../../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md)
+and use those patterns in the edit.
 
-IMPORTANT: Do NOT suggest approaches listed under "Approaches to avoid".
+**YAML `steps:` do not match the proc** — this is not a SQL bug. Load
+[`EDIT_TEST_YAML.md`](EDIT_TEST_YAML.md) when the failure smells like:
 
-Run queries to verify data exists:
-- SELECT COUNT(*) FROM <prefix><schema>.<table>
-- Sample rows if needed
+| Smell | Recipe |
+|---|---|
+| Multiple result sets / "got N, expected M" | Multi-result-set validation |
+| OUT / INOUT param column null or missing | OUT / INOUT parameter comparison |
+| DML proc, "no rows captured" | Side-effect-only DML |
+| Proc writes a table the YAML never reads | Table-read assertion |
+| Redshift refcursor / `RESULT_SCAN` empty | Cursor-read step |
+| `"ANONYMOUS BLOCK"` vs Redshift param name | Redshift scalar INOUT aliasing |
+| Teradata 5315 on the source side | Teradata cross-database GRANTs |
 
-Output: List any data issues that could cause the failures.
-```
+Apply the recipe under `<project_dir>/<files.artifacts.path>/test/` (glob
+`*.yml`; `files.artifacts.path` verbatim). Recapture with
+`scai test capture --where "source.canonicalName ILIKE '%<object_name>%'"`,
+then stamp `fixCode` completed so the machine retries `runTests`. Nothing
+to redeploy.
 
-### Agent 3: Output Analysis
+**Rules.** `find_similar_rules` with the primary error or first diff.
+`regex` → apply `replacement_find` / `replacement_replace` and
+`record_rule_application`. `ai` → use `ai_context` as diagnosis, not as
+an accept. A name starting `[AVOID]` is an approach not to repeat.
 
-```
-Investigate test failures for <object_name> by analyzing TEST OUTPUT DIFFERENCES.
+## Step 4: Name the root cause
 
-Failing test details:
-<for each failure: params_hash, input_params, expected_output, actual_output>
+| Finding | Action |
+|---|---|
+| Converted logic ≠ source | Edit converted SQL |
+| Missing schema prefix | Add the prefix |
+| Source function left as T-SQL | Snowflake equivalent |
+| YAML `steps:` mismatch | Step 3 recipe, recapture |
+| Precision / collation / padding, and a CAST or `RTRIM` still means what the source means | Edit converted SQL, then **note** (you chose among meanings) |
+| Diffs are clock drift and the source (or a view it reads) computes from now | Step 5 — do not edit |
+| Dialect error-code / SQLSTATE mismatch (`error_mismatch`) while both sides error | Do not delete the YAML case. Stamp and retry; a second verifier is allowed after a later code change. |
+| Missing object, and `next_task` on that id is not terminal | Do not stamp. The walk derives the wait from that object's status. |
+| Source cannot run as written (INSERT…EXEC column-count, missing source columns, source `EXEC` error) | Escalate. Do not edit converted SQL to invent columns the source file does not have, and do not `ALTER` source. |
+| You cannot name a cause after reading the files and any matching rule | Escalate with the diffs and the readings you cannot choose between |
 
-Analyze:
-1. Row count differences - missing rows? extra rows?
-2. Column value differences - which columns differ? by how much?
-3. Data type/format differences - precision, date formats, case?
-4. Pattern across failures - same issue in all, or different issues?
+Override-accept is last. "The baseline moved by a day" is not enough if
+CAST, a prefix, YAML shape, or a collation/`RTRIM` would make the case
+pass.
 
-Iteration context (if iteration > 1):
-<iteration_log_from_step_1>
+A missing reference is an escalation, not a `-- NEEDS-USER:` comment and
+not a stub (`NULL` / `WHERE FALSE`) or a borrowed object.
 
-IMPORTANT: Do NOT suggest approaches listed under "Approaches to avoid".
+## Step 5: Wall-clock — stop, do not overlay here
 
-Output: 
-- What specifically differs (columns, values, row counts)
-- Pattern analysis (is it the same root cause across all failures?)
-- Likely root cause category (logic bug, precision issue, data issue, etc.)
-```
+When the only remaining failures are clock drift from an expression that
+must stay (`GETDATE`, `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `DATEDIFF`
+against now, age-from-today), a code change would lie. Do not edit. Do
+not call `override_accept_case` yourself. Do not spawn a verifier.
 
-## Step 5: Synthesize & Identify Root Cause
+Stamp `fixCode` completed. The machine retries `runTests`; that guide
+hands every remaining hash to one
+[`test_case_verifier`](../../../../agents/test_case_verifier.md).
+Rejected hashes come back as `error="sql"`.
 
-After agents complete, combine findings:
+## Step 6: Apply a code fix
 
-| Finding | Root Cause | Action |
-|---------|------------|--------|
-| Code logic differs | Conversion bug | Fix the code |
-| Missing schema prefix | Wrong table reference | Add prefix |
-| Function not converted | T-SQL function used | Replace with Snowflake equivalent |
-| Data missing | Table not synced | Sync data or check schema |
-| Precision differs | Type mismatch | Add explicit CAST |
+Edit `files.converted.path` only. Minimal change. Keep source comments.
+Do not strip `EXECUTE AS` or the SnowConvert `COMMENT` provenance block
+unless the error named them.
 
-For common issues and their solutions, also consult [../references/troubleshooting.md](../references/troubleshooting.md).
+Before deploy, also drop a leading `USE DATABASE <source_db>`. Do not
+rewrite the database qualifier to the SNAP / configure name — `deploy -d`
+does that.
 
-## Step 6: Apply Fix
-
-1. **Open the Snowflake SQL file:**
-   ```bash
-   find <project_dir>/snowflake -iname "*<object_name>*" -type f
-   ```
-
-2. **Make the minimal change** to fix the root cause. **Preserve all original source code comments** (synopsis, metadata, author, archive, change log, examples) — do not strip them during fixes or rewrites. Don't stub or delete logic to silence an error (no `NULL`/empty `… WHERE FALSE` bodies), and don't reuse another object or invent a new one for a missing reference — comment the original out with a `-- NEEDS-USER:` note instead.
-
-   Also verify these common conversion issues before redeploying:
-   - `USE DATABASE <source_db>` at the top referencing the source database — remove it.
-   - Object name must be fully qualified with the target database: `<TARGET_DATABASE>.<SCHEMA>.<object_name>`.
-   - Variable binding in LANGUAGE SQL procedures: parameters/variables in SQL statements must use `:param_name` syntax (SnowConvert often omits the colon).
-   - Edit the file in `snowflake/` — do NOT deploy directly without updating the file.
-
-   If the fix was informed by a rule from Step 3, record the application: use the `record_rule_application` tool with `rule_id` set to the rule's ID and `outcome` set to `"applied"`.
-
-3. **Redeploy** → Return to [SKILL.md](SKILL.md) Step 3
-
-4. **Retest** → Return to [SKILL.md](SKILL.md) Step 4
-
-### Common Fixes
-
-Query the rule engine for known fix patterns: `search_rules(description="<description of the root cause and fix needed>")`
-
-## Step 7: Fix Review Agent
-
-After making the fix, spawn a review agent to verify the change:
-
-```
-Review the code fix for <object_name>.
-
-Original issue:
-<root_cause_from_diagnosis>
-
-File changed: <file_path>
-
-Changes made:
-<diff or description of changes>
-
-Source (truth): <source_file_path>
-Snowflake target (fixed): <target_file_path>
-
-Iteration: <N> of fix loop
-
-Checklist:
-1. Does the fix address the specific root cause identified?
-2. Are there any unrelated changes that should be reverted?
-3. Is the SQL syntactically valid (no unclosed parens, missing semicolons)?
-4. Are all schema references correct for the target environment?
-5. Does the fixed code match the source logic for this specific area?
-6. Are there any other instances of the same issue in the file that should also be fixed?
-7. Could this fix introduce any new issues?
-8. Are there any tests hardcoded?
-9. Has this same approach been tried before and failed? (Check iteration context)
-
-Output ONE of:
-- HIGH_CONFIDENCE: Fix directly addresses root cause, syntactically correct, no regressions expected. Ready to deploy.
-- LOW_CONFIDENCE: Fix is plausible but uncertain (e.g., edge cases unclear, partial fix, or similar approach partially failed before). List specific concerns. Deploy but flag for user review.
-- NEEDS_CHANGES: List what needs to be fixed before deploying.
-```
-
-If review agent returns **NEEDS_CHANGES**, address the feedback and re-run the review. **Max 5 review iterations** — if the review agent still returns NEEDS_CHANGES after 5 rounds, present the current state to the user and ask for guidance.
-
-**HIGH_CONFIDENCE** → Proceed to deploy (return to [SKILL.md](SKILL.md) Step 3).
-
-**LOW_CONFIDENCE** → Present the fix and the reviewer's concerns to the user:
-
-> The review agent flagged this fix as **low confidence**:
-> - Concerns: `<reviewer_concerns>`
-> - Changes: `<diff summary>`
->
-> Deploy anyway, or adjust the fix first?
-
-If user approves → deploy. If user wants changes → revise and re-run review.
-
-**NEEDS_CHANGES** → Address the feedback and re-run the review.
-
-## After Review
-
-1. Redeploy → Return to [SKILL.md](SKILL.md) Step 3
-2. Retest → Return to [SKILL.md](SKILL.md) Step 4
-3. If still failing → repeat from Step 1
-4. If all pass → done
+If the edit chose among meanings (CHECK drop so COPY can run, `RTRIM` for
+trailing-space collation), **note** per
+[general-task.md](../../../../agents/general-task.md) §4, then stamp
+`fixCode` completed. The machine's `retryEntry` is the redeploy / retest.
+Do not spawn a reviewer for the note.

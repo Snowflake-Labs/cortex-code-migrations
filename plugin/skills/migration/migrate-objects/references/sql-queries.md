@@ -2,6 +2,11 @@
 
 Queries against the `VALIDATION` schema created by `scai test validate --create-schema`.
 
+The schema lives in the SnowConvert metadata database — attach
+`metadata_database:` / `.scai/config/plugin.yml` (`SNOWCONVERT_AI` unless
+overridden), not the migration target. Qualify every query with that name.
+The examples below leave the database off only as a shorthand.
+
 ## Validation Results
 
 ```sql
@@ -9,7 +14,7 @@ Queries against the `VALIDATION` schema created by `scai test validate --create-
 SELECT * FROM VALIDATION.SUMMARY ORDER BY pass_rate DESC;
 
 -- Latest result per test case
-SELECT * FROM VALIDATION.LATEST ORDER BY code_unit_name;
+SELECT * FROM VALIDATION.LATEST ORDER BY procedure_name;
 
 -- Failures with details
 SELECT * FROM VALIDATION.FAILURES;
@@ -19,30 +24,32 @@ SELECT * FROM VALIDATION.FAILURES;
 
 ```sql
 -- Failures for a specific code unit
-SELECT code_unit_name, params_hash, status, baseline_rows, actual_rows, error_message
+SELECT procedure_name, params_hash, status, baseline_rows, actual_rows, error_message
 FROM VALIDATION.LATEST
-WHERE code_unit_name = '<object_name>'
+WHERE UPPER(procedure_name) = UPPER('<object_name>')
   AND status IN ('FAIL', 'ERROR');
 
--- All results history for a code unit
-SELECT code_unit_name, params_hash, status, match_type, error_message, executed_at
+-- All results history for a code unit (VARIANT `data`; prefer LATEST)
+SELECT data:procedure::VARCHAR, data:params_hash::VARCHAR,
+       data:status::VARCHAR, data:match_type::VARCHAR,
+       data:error::VARCHAR, data:executed_at::TIMESTAMP_TZ
 FROM VALIDATION.RESULTS
-WHERE code_unit_name = '<object_name>'
-ORDER BY executed_at DESC;
+WHERE UPPER(data:procedure::VARCHAR) = UPPER('<object_name>')
+ORDER BY data:executed_at::TIMESTAMP_TZ DESC;
 ```
 
-## Local Results (Preferred)
+## Source of truth
 
-The agent should prefer reading local results from `test-results/results.json` for detailed cell-level diffs that are not stored in Snowflake:
+`scai test validate` writes each case into `VALIDATION.RESULTS`. `VALIDATION.LATEST`
+is the newest run per `(procedure_name, test_name, params_hash)`. Qualify with
+`metadata_database` from attach — not the migration target. There is no
+`<project_dir>/test-results/results.json`.
 
-```bash
-cat <project_dir>/test-results/results.json
-```
-
-Each entry contains:
-- `code_unit_name`, `params_hash`, `status`, `match_type`, `error`
+Each LATEST row has:
+- `procedure_name`, `params_hash`, `status`, `match_type`, `error_message`
+- `parameters` — the case inputs
 - `differences` — human-readable diff descriptions
-- `in_memory_diff` — structured cell-level diffs with `row_counts`, `summary_stats`, `cell_diffs`
+- `baseline_rows`, `actual_rows` — counts (not the row payloads)
 
 ## Available Views
 
