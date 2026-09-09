@@ -13,7 +13,11 @@ those two wizards — it asks no new questions of its own (the questions live in
 no assumptions about who invoked it. Deciding *whether* to capture the strategy is the caller's job; when
 this skill runs, it runs the wizards.
 
-## Step 1 — Migration strategy
+For a Snowflake-source validation-only project, skip Step 1 and run only the
+validation wizard in Step 2. Snowflake is already the source and target, so
+data migration is not available.
+
+## Step 1 — Migration strategy (non-Snowflake sources only)
 
 Drive the `data-migration-setup` machine to completion: call `progress_setup(mode="data_migration")` in a
 loop until the response's `completed` is `true` — ask each response's `next_prompt` (plus any `then_ask`,

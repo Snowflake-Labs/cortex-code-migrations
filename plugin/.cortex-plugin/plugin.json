@@ -1,6 +1,6 @@
 {
   "name": "snowflake-migration",
-  "version": "2.43.0",
+  "version": "2.44.0",
   "description": "Snowflake AIM for Data Warehouses \u2014 end-to-end database migration to Snowflake: assessment, conversion, validation, and deployment",
   "author": {
     "name": "db-eng-migrations"

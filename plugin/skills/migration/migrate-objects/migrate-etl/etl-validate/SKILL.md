@@ -69,9 +69,22 @@ The probe must test the **same** connection the real run in Step 2 will use, so 
 
 | Check | What it tests |
 |---|---|
-| `sql_server_connectivity` | Can reach the source SQL Server instance |
+| `sql_server_connectivity` | Can reach the source SQL Server instance (SSIS) |
+| `teradata_connectivity` | Can reach the source Teradata system (Informatica) |
 | `snowflake_connectivity` | Can reach the Snowflake account |
 | `ssisdb_catalog_access` | Can query `SSISDB.catalog.packages` (SSIS only) |
+| `pmcmd_accessibility` | The `informatica:` section exists and its `pmcmd` binary is present and executable (Informatica only) |
+| `informatica_service_domain` | Every seeded Informatica unit resolves a `pmcmd` integration service + domain (Informatica only) |
+| `mwaa_accessibility` | The MWAA environment named by the `mwaa:` section is reachable (Informatica, when configured) |
+
+`informatica_service_domain` is the one **configuration** check in this set. `scai test seed` no
+longer writes a `service`/`domain` per seeded unit — both are project-wide, so they live once in
+the `informatica:` section of `.scai/settings/test_config.yaml` — and this check resolves that
+section through the same resolver the real run uses, once per seeded unit, so a leftover
+`TODO_INFA_*` sentinel or an unset `${VAR}` is caught here instead of reaching `pmcmd` as a
+literal. It reports the offending files. Fix it by filling the section (see `etl-seed` Step 3b),
+or, for a project whose workflows span more than one Integration Service, by setting `service:` /
+`domain:` under that unit's `pipeline.source`.
 
 With `external_command:` + `side: source`, the probe switches to the platform-agnostic strategy
 **regardless of platform** (including `ssis`): it reports `snowflake_connectivity`, plus source
@@ -81,7 +94,7 @@ demanding them would fail a run that would otherwise work. The source connection
 where it exists because the table comparison reads the source tables through it. With
 `side: target` the source is still native and keeps its native checks, tooling included.
 
-If any check fails: **STOPPING POINT** — surface the failing check name and the error from the output, and help the user fix the live-system issue (start the server, refresh credentials, grant catalog access). Do not proceed to Step 2 with a failing probe. This is a runtime reachability check, not a config gate — a failure here means the environment is down, not that the plugin is misconfigured.
+If any check fails: **STOPPING POINT** — surface the failing check name and the error from the output, and help the user fix the live-system issue (start the server, refresh credentials, grant catalog access). Do not proceed to Step 2 with a failing probe. These are mostly runtime reachability checks, not config gates — a failure usually means the environment is down, not that the plugin is misconfigured. The exception is `informatica_service_domain` (and `pmcmd_accessibility` when it reports a missing section): those *are* configuration gaps, so the fix is an edit to `test_config.yaml`, not a restart.
 
 ## Step 2: Run Live Comparison
 

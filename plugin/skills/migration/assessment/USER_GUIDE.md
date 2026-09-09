@@ -250,18 +250,17 @@ The skill maintains context, so you don't need to start over.
 ### HTML Report
 
 The generated HTML report opens on the **Migration Journey** page. For SQL Server,
-**Workload Insights** appears next, followed by the conversion tabs grouped under
+**Discovery** appears next, followed by the conversion tabs grouped under
 **Code/ETL Conversion** and the later migration phases. Most tabs appear only when
-the report has data to fill them. Workload Insights is SQL Server only: with a Query
-Store extract it shows observed volume and shapes; without one the tab stays and
-walks through enabling Query Store, exporting CSVs (30 days is suggested; `@Days`
-can be shorter or longer), and re-running the assessment. Other dialects omit the
-tab entirely.
+the report has data to fill them. Discovery is SQL Server only: with an Extended
+Events capture it shows observed volume and executions; without one the tab stays
+and walks through starting a capture, copying `.xel` files, and re-running the
+assessment. Other dialects omit the tab entirely.
 
 | Tab | Contents |
 |-----|----------|
 | **Migration Journey** | Landing page — what each phase of your migration involves, one card per phase |
-| **Workload Insights** | SQL Server Query Store volume, statement mix, busiest modules, and top costly or occasionally slow query shapes. No extract yet: how-to for Query Store CSV + re-run. Hidden on other dialects. |
+| **Discovery** | SQL Server Extended Events volume, duration mix, statement types, applications, users, long-running executions, and errors. No capture yet: how-to for the starter session + re-run. Hidden on other dialects. |
 | **Waves** | Deployment sequence with objects per wave, dependencies |
 | **Object Exclusion** | Temporary, staging, deprecated objects identified |
 | **Anti-Patterns** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |

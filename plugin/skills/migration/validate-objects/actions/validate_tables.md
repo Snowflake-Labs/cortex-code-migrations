@@ -38,6 +38,12 @@ For **watermark**, ask which column to use (`watermarkColumn`, e.g. `UPDATED_AT`
 
 Translate the user's choices into a `validate_data(mode="setup", ...)` call.
 
+For a Snowflake-source project, omit `where`.
+`scai data validate generate-config` writes a Snowflake-to-Snowflake template
+from project metadata. Read that template, ask for the source and target fully
+qualified object names and any mappings needed, and fill the YAML before
+running. Do not query or require the Code Unit Registry.
+
 For the `where` filter, in order of preference:
 
 1. **You already have the claimed object IDs** (e.g. from a `transition_status(status="begin", ...)` response). Use them verbatim — `where="id IN ('<id1>', '<id2>', ...)"`.
@@ -148,7 +154,9 @@ the exact remediation to the main agent, which owns infrastructure setup.
 validate_data(mode="run", workflow_path="<path from setup>")
 ```
 
-On success, returns a `job_id` immediately — validation runs in the background via the SPCS validation service and a local Data Exchange Worker.
+On success, returns a `job_id` immediately. Validation runs in the background
+through the orchestrator. Non-Snowflake sources also use a Data Exchange
+Worker; Snowflake-to-Snowflake validation runs in warehouse without one.
 
 **Show the user the `cost_reminder` from the response** (or relay this if absent):
 
@@ -395,6 +403,8 @@ Use [Validation levels reference](./references/validation-levels-reference.md) f
 
 Re-validation retries **failed partitions only** from the finished parent workflow — it is **not** a full re-run of every table. Chain resolution is automatic: pass the workflow name from the run that just finished (`details.progress.output.workflowName`).
 
+By default, schema-failed tables **reuse** the parent's partition metadata and re-run only their failing data partitions (schema is **not** re-checked, so a table whose only failure was schema is skipped). If the failures were schema/target-definition issues you have since fixed and want re-checked, add **`recheck_schema=true`** — it re-runs the full pipeline for schema-failed tables. Leave it off for data-mismatch retries.
+
 Ask verbatim when eligible:
 
 > Some tables still have validation failures. How would you like to proceed?
@@ -410,6 +420,8 @@ Ask verbatim when eligible:
 ```
 validate_data(mode="revalidate", workflow_name="<details.progress.output.workflowName>")
 ```
+
+Add `recheck_schema=true` when the fixes were to schema / target definitions and you want schema re-checked (otherwise schema-failed tables re-run only their failing data partitions and are not schema-checked).
 
 Then repeat **Steps 4–5** (background Monitor, then present a new error-first report). Skip Step 6 teardown until the user picks **Stop** or all tables pass. Relay the `cost_reminder` from the revalidate response when infrastructure starts.
 

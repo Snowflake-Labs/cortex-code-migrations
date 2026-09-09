@@ -74,8 +74,9 @@ scai code extract -s <CONNECTION_NAME> --json
 
 **Multiple databases on one server (SqlServer, AzureSynapse, Redshift, Postgresql, Teradata).**
 A source connection points at one database, but its server may host several. To migrate more
-than one, extract each with `-d <DB>` — the run is repointed at that database without a separate
-connection. Do **not** re-run without `-d`; that only re-pulls the connection's own database.
+than one, pass a comma-separated list with `-d` — the CLI loops internally, continues past a
+single database's failure, and returns one JSON envelope with per-database counts plus the
+aggregate. Do **not** re-run without `-d`; that only re-pulls the connection's own database.
 (Oracle and BigQuery don't bind a swappable database in the connection, so `-d` is rejected there —
 use the connection's own database / schemas.)
 
@@ -86,16 +87,15 @@ use the connection's own database / schemas.)
    - **Teradata:** `SELECT DatabaseName FROM DBC.DatabasesV WHERE DBKind = 'D'`.
 2. **Ask which to extract** via `ask_user_question` (`multiSelect = true`), defaulting to the
    connection's own database.
-3. **Loop the extraction**, once per selected database:
+3. **Run one extraction** with every selected database:
 
 ```bash
-scai code extract -s <CONNECTION_NAME> --database Sales     --json
-scai code extract -s <CONNECTION_NAME> --database Inventory --json
+scai code extract -s <CONNECTION_NAME> -d Sales,Inventory --json
 ```
 
-Output nests each under `source/<database>/…`, and the Code Unit Registry accumulates every
-database (each run re-scans the whole `source/` tree), so all coexist in one project. Omit
-`--database` when the connection's own database is the only target.
+Output nests each under `source/<database>/…`, and the Code Unit Registry is regenerated once
+after the run (the command re-scans the whole `source/` tree), so all coexist in one project.
+Omit `-d` when the connection's own database is the only target.
 
 **Driver note (Oracle / Teradata):** `configure()` seeds the driver cache, so `--driver-path` is normally not needed here. If the cache was missed for any reason, pass `--driver-path <PATH_TO_NUPKG>` on first use; SCAI persists the path machine-wide and reuses it across projects.
 
@@ -184,7 +184,7 @@ Confirm with user:
 
 ## On Completion
 
-After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON envelope returned by `scai code extract --json` (`catalog.{discovered,extracted,failed}`, `byType`, `failures[]`, `executionTimeSeconds`). When you extracted several databases, sum the counts across each run's envelope and report per-database.
+After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON envelope returned by `scai code extract --json` (`catalog.{discovered,extracted,failed}`, `byType`, `databases[]`, `failures[]`, `executionTimeSeconds`). When you extracted several databases, read per-database counts from `databases[]` and the aggregate from `catalog` — do not sum envelopes across runs.
 
 > **Extraction complete.** `<extracted>/<discovered>` objects extracted in `<duration>`, broken down by type (filled from `byType`). Files saved under `source/`.
 > *If `failed > 0`:* `<failed>` failed. Most common error: `<top_failure_reason>`. Full list in the reports.

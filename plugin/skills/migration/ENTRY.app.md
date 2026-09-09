@@ -45,6 +45,7 @@ Use `routing` from the status JSON to delegate to the next step:
 | Condition | Sub-skill |
 |-----------|-----------|
 | `routing.project_exists` = false | Load `./setup/SKILL.md` |
+| `routing.data_validation_only` = true | Load `./validate-objects/SKILL.md` |
 | `routing.code_conversion_only` = true | Load `./code-conversion-only/SKILL.md` |
 | `routing.assessed` = false | Load `./setup/SKILL.md` |
 | `routing.assessed` = true | Load `./migrate-objects/SKILL.md` |
@@ -93,9 +94,10 @@ Match the user's request to the most relevant skill and load it.
 - **register-code-units** — router for getting source code into the project → `./register-code-units/SKILL.md`
   - **extract-code-units** — extract DDL/code from a connected source database → `./register-code-units/extract-code-units/SKILL.md`
   - **add-code-units** — import local SQL files into the project → `./register-code-units/add-code-units/SKILL.md`
-- **convert** — convert source → Snowflake SQL via SnowConvert (incl. optional Power BI `.pbit` repointing) → `./convert/SKILL.md`
+- **convert** — convert source → Snowflake SQL via SnowConvert (incl. optional Power BI `.pbit` and Tableau `.twb`/`.tds` repointing) → `./convert/SKILL.md`
   - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
   - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
+  - **tableau-repointing** — collect `.twb`/`.tds` folder path and `--tableauRepointing` flag for Tableau repointing. Triggers: tableau, tableau migration, tableau repointing, migrate tableau, repoint tableau → `./tableau-repointing/SKILL.md`
 - **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
 
 ### Migration & validation
@@ -103,7 +105,7 @@ Match the user's request to the most relevant skill and load it.
   - **migrate-etl** — claim an ETL code unit, then stabilize it. Entry point for "fix ETL package", "fix SSIS/Informatica conversion", "proceed with stabilization", "resume ETL fixing" — it claims the unit (so it appears in `my_objects_summary` with the current user as owner) before delegating to the phase-based etl-stabilization engine. → `./migrate-objects/migrate-etl/SKILL.md`
   - **data-migration-setup** — choose approach, generate workflow YAML, create target database for `migrate_data` → `./migrate-objects/actions/data-migration/SKILL.md`
   - **testbed-generator** — mine → validate → compile → generate the synthetic testbed for a workload: run/resume each phase, inspect unsolved constraints, readiness, and data-coupling clusters. Triggers: generate testbed, mine testbed, validate testbed, compile testbed, testbed data source → `./migrate-objects/baseline-capture/testbed-generator/SKILL.md`
-- **validate-objects** — validate migrated data between source and Snowflake → `./validate-objects/SKILL.md`
+- **validate-objects** — validate data between a source and Snowflake, including project-based Snowflake-to-Snowflake validation. Triggers: "validate Snowflake to Snowflake", "compare Snowflake tables/databases", "run SF-to-SF DV" → `./validate-objects/SKILL.md`
 
 ### Object metadata
 - **tag-objects** — tag or untag code units with the user's own labels (`extensions.tags`), and find objects by tag. Tags render as chips on the object rows in the Objects panel. Triggers: "tag this table", "label these objects", "untag", "which objects are tagged" → `./tag-objects/SKILL.md`
@@ -123,6 +125,6 @@ If no skill matches, say so explicitly, then help with your own knowledge.
 
 ## Rules
 
-1. **Always detect first** — call `migration_status` before routing.
+1. **Detect migration state first** — call `migration_status` before routing. Snowflake-to-Snowflake validation uses a Snowflake-source project and follows the same project state flow.
 2. **Follow sub-skill instructions** — complete each sub-skill fully before returning.
 3. **Confirm transitions** — ask the user before moving to the next stage.

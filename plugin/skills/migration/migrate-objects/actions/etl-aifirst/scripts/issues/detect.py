@@ -202,7 +202,12 @@ def detect_degraded_to_catch_all(run: RunInputs) -> list[Finding]:
         el = node.get("element") or {}
         kind = el.get("$kind") or ""
         native = el.get("_unsupported")
-        if "Unsupported" not in kind:
+        # A sidecar can overwrite $kind (ExpressionTransformation passthrough) while the
+        # platform table still refuses the native kind. That is the same loss as the
+        # catch-all class: the node is in the graph, the kind's payload is not.
+        authored = any((m.get("path") or "") == "element.$kind"
+                       for m in (node.get("modelAuthored") or []))
+        if "Unsupported" not in kind and not authored:
             continue
         entry = _kind_entry(run.table, native or "")
         found.append(Finding(

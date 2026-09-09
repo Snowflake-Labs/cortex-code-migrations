@@ -40,6 +40,10 @@ QUARANTINE_REL = ".scai/testbed/quarantine"
 MAX_QUARANTINE_ATTEMPTS = 20
 # PENDING key for a malformed whole-workload entry that carries no identity to attribute it to.
 WORKLOAD_PENDING_KEY = "inspect-branches"
+# The validate report's issue buckets, in CLI declaration order. Every consumer enumerates this instead
+# of naming buckets inline: `counts` is copied wholesale so a new CLI tally rides through free, but an
+# array is persisted only if a writer names it — a new bucket would otherwise default to unlisted.
+ISSUE_BUCKETS = ("fk_gaps", "type_conflicts", "unsatisfied_constraints", "overlaps")
 
 
 def _present(project_dir: str, rel: str) -> bool:
@@ -245,9 +249,7 @@ def _write_readiness_view(project_dir: str, result: dict, manifest: Manifest) ->
         "json_schema_version": result.get("json_schema_version"),
         "ready": result.get("ready", False),
         "counts": result.get("counts", {}),
-        "fk_gaps": result.get("fk_gaps", []),
-        "type_conflicts": result.get("type_conflicts", []),
-        "unsatisfied_constraints": result.get("unsatisfied_constraints", []),
+        **{bucket: result.get(bucket, []) for bucket in ISSUE_BUCKETS},
         "pending": manifest.pending,
     }
     p = Path(project_dir) / VALIDATE_VIEW_REL
@@ -258,10 +260,13 @@ def _write_readiness_view(project_dir: str, result: dict, manifest: Manifest) ->
 def _validate_summary(view: dict) -> str:
     c = view["counts"]
     status = "ready" if view["ready"] else "not ready"
+    # Every bucket gets a term, so the terms can never sum below the blocking count the line
+    # announces. They are listed after the tallies rather than parenthesised onto `advisory`: the
+    # terms span both severities, so "0 advisory (2 overlaps)" would read as an advisory breakdown
+    # while naming the very issues that block the run.
+    buckets = ", ".join(f"{c.get(bucket, 0)} {bucket.replace('_', ' ')}" for bucket in ISSUE_BUCKETS)
     return (f"validate complete: {status}; {c.get('blocking', 0)} blocking, "
-            f"{c.get('advisory', 0)} advisory ({c.get('fk_gaps', 0)} fk gaps, "
-            f"{c.get('type_conflicts', 0)} type conflicts, "
-            f"{c.get('unsatisfied_constraints', 0)} unsatisfied constraints)")
+            f"{c.get('advisory', 0)} advisory; by bucket: {buckets}")
 
 
 def _write_summary_view(project_dir: str, result: dict,
@@ -450,7 +455,7 @@ def _blocking_issues(report):
     # Gate on each issue's own severity, not counts.blocking: the tally can disagree with
     # the issues actually present, and it's the per-issue remediation the agent must act on.
     out = []
-    for bucket in ("fk_gaps", "type_conflicts", "unsatisfied_constraints"):
+    for bucket in ISSUE_BUCKETS:
         for issue in report.get(bucket, []):
             if issue.get("severity") == "blocking":
                 out.append({"bucket": bucket, "id": issue.get("id"),

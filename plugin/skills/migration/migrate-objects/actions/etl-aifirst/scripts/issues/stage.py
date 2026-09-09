@@ -98,7 +98,8 @@ def main(argv: list[str]) -> int:
              for a in argv[1:] if a.startswith("--")}
     if len(args) != 4:
         print("usage: stage.py <platform-table.json> <source-document> <ir.json> "
-              "<output-root> [--inventory=DIR] [--engine-issues=N] [--audit]",
+              "<output-root> [--inventory=DIR] [--engine-issues=N] "
+              "[--gate-b-issues=PATH] [--audit]",
               file=sys.stderr)
         return 2
 
@@ -182,11 +183,26 @@ def main(argv: list[str]) -> int:
                                    + "; ".join(x["rule"] for x in ilint["findings"])})
             instances.pop()
 
+    gb = Path(flags.get("--gate-b-issues") or "")
+    if gb.is_file():
+        redirects = inv.promote(by="stage5:gate-b").get("redirects") or {}
+        extra = json.loads(gb.read_text(encoding="utf-8")).get("instances") or []
+        # A Gate B instance's `code` was serialized before this promote() ran, so a
+        # proposal that got redirected to a near-duplicate existing type still carries
+        # its stale pre-promotion id -- remap it or `types-cited.json` silently drops it.
+        for x in extra:
+            if isinstance(x, dict) and x.get("code") in redirects:
+                x["code"] = redirects[x["code"]]
+        seen = {(i.get("code"), i.get("element_id")) for i in instances}
+        instances.extend(x for x in extra
+                         if isinstance(x, dict)
+                         and (x.get("code"), x.get("element_id")) not in seen)
+
     # ---- THE ARTIFACT --------------------------------------------------------------
     dest = Path(out_root) / "Reports" / "AiFirstIssues"
     dest.mkdir(parents=True, exist_ok=True)
     # No issues.csv — product instance rows live in ETL.Issues*.csv (coexistence rewrite below).
-    cited = sorted({i["code"] for i in instances})
+    cited = sorted({i["code"] for i in instances if i.get("code")})
     (dest / "issues.json").write_text(
         scrub(json.dumps({"framework": sigmod.SIG_VERSION,
                           "text_rule": TEXT_RULE_VERSION,
@@ -196,8 +212,8 @@ def main(argv: list[str]) -> int:
                           "refused": refused}, indent=2)) + "\n",
         encoding="utf-8")
     (dest / "types-cited.json").write_text(
-        scrub(json.dumps({tid: inv.types[tid] for tid in cited}, indent=2,
-                         sort_keys=True)) + "\n", encoding="utf-8")
+        scrub(json.dumps({tid: inv.types[tid] for tid in cited if tid in inv.types},
+                         indent=2, sort_keys=True)) + "\n", encoding="utf-8")
 
     # ---- THE VERDICT ---------------------------------------------------------------
     per_type: dict[str, int] = {}
@@ -214,7 +230,10 @@ def main(argv: list[str]) -> int:
               "runs it, or compares it with the source system. It says only that these "
               "detectors found nothing.")
     for tid, n in sorted(per_type.items(), key=lambda kv: (-kv[1], kv[0])):
-        rec = inv.types[tid]
+        rec = inv.types.get(tid)
+        if rec is None:
+            print(f"     {tid} x{n:<3} [untyped] instance whose type is not in this inventory")
+            continue
         print(f"     {tid} x{n:<3} [{rec['impact']}] {rec['title']}")
     print(f"   classified    : {actions['REUSED_EXACT']} reused an existing type "
           f"exactly, {actions['REUSED_NEAR']} redirected to a near duplicate, "

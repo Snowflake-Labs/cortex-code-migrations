@@ -79,7 +79,7 @@ Tell the user:
    uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/run_pipeline.py validate --project-dir {PROJECT_DIR}
    ```
 
-6. **On validate exit code 0:** the driver wrote `testbed/validate/readiness-view.json` and printed a one-line summary. Read the view and present `ready`, `counts` (`blocking`, `advisory`, `fk_gaps`, `type_conflicts`, `unsatisfied_constraints`), and the `fk_gaps` / `type_conflicts` / `unsatisfied_constraints` arrays. **`ready: false` is not an error** — it is a successful report of gaps carried in the view. If not ready, tell the user the blocking issues must be fixed (or explicitly overridden at generate) before data will generate.
+6. **On validate exit code 0:** the driver wrote `testbed/validate/readiness-view.json` and printed a one-line summary. Read the view and present `ready`, `counts` (`blocking`, `advisory`, `fk_gaps`, `type_conflicts`, `unsatisfied_constraints`, `overlaps`), and the `fk_gaps` / `type_conflicts` / `unsatisfied_constraints` / `overlaps` arrays. **`ready: false` is not an error** — it is a successful report of gaps carried in the view. If not ready, tell the user the blocking issues must be fixed (or explicitly overridden at generate) before data will generate. On a package-driven (SSIS) workload, FK-gap checking is suppressed and `overlaps` (Lookup / Merge-Join key domains that provably cannot match) is usually the only populated bucket — so it is the whole answer to "what is blocking this run", and each entry's `remediation.hint` is what the user must act on. Present every bucket the `counts` object reports; if a tally is non-zero and its array is empty, say so rather than reporting no issues.
 7. **On validate non-zero exit:** act on the class (`input_config` `TBD0002`: state missing — re-run mine; `escalate` `TBD0003/4/5`: surface the CLI `suggestion` and stop).
 8. **Enrich phase (after validate exit 0, before compile).** Run the enrichment orchestration — assemble the prompt fragments into one envelope, propose it, and re-validate readiness in a bounded retry/iterate loop:
 
@@ -185,7 +185,7 @@ Note: `fk_cycle` and `parent_missing_key` gaps are **advisory** (never blocking)
 
 - `.scai/testbed/state.bin` — opaque CLI state (mining spec + materialized clusters). Never read or edit it; treat it as a black box owned by `scai testbed`.
 - `testbed/mine/unsolved-view.json` — the mine deliverable (written by the driver).
-- `testbed/validate/readiness-view.json` — the validate deliverable: readiness + fk gaps / type conflicts / unsatisfied constraints (written by the driver).
+- `testbed/validate/readiness-view.json` — the validate deliverable: readiness + `fk_gaps` / `type_conflicts` / `unsatisfied_constraints` / `overlaps` (written by the driver).
 - `testbed/compile/clusters-view.json` — the compile deliverable: cluster summary (written by the driver).
 - `testbed/generate/summary-view.json` — the generate deliverable and **task completion predicate**: row counts + CSV/manifest paths (written by the driver).
 - Generated CSVs + provenance `manifest.json` — the `generate` deliverable. Each table's CSV lands under its own object's `<artifacts>/testbed/` folder; the `manifest.json` (beside `state.bin`, at the view's `manifest_path`) lists them as project-root-relative `csv_path` entries. The view's `out_path` is that project root — not a CSV directory. No output dir is passed to `scai testbed generate`.

@@ -23,7 +23,7 @@ Before starting any configuration, tell the user verbatim:
 
 > **Always use the official tooling for data movement and validation.** Route table migration through `migrate_data` and validation through `validate_data`. Do not suggest ad-hoc extract/copy/compare scripts — the DMVF orchestrator and workers handle partitioning, loading, and multi-level validation.
 
-> **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL
+> **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL, Snowflake (validation only)
 > **Supported target**: Snowflake
 
 ## Architecture
@@ -43,6 +43,9 @@ Before starting any configuration, tell the user verbatim:
 
 - **Orchestrator** runs on SPCS (requires a compute pool) or locally. Handles migration workflows (break into tasks, `COPY INTO`) and validation workflows (schema/metrics/row comparison).
 - **Worker** runs locally. Reads from the source and uploads to a Snowflake stage (migration) or streams rows for comparison (validation). Not needed for most Iceberg migration strategies.
+- **Snowflake-to-Snowflake validation runs in warehouse.** It uses the
+  orchestrator but no Data Exchange Worker. Do not generate worker config,
+  ask for worker placement, or start a worker for a Snowflake source project.
 - **The orchestrator + worker are shared, brought up ONCE, and reused across every `migrate_data` / `validate_data` dispatch** (migrate → validate → revalidate all run against the same infrastructure). Bring it up with `data_infrastructure(mode="up")` and tear it down with `data_infrastructure(mode="down")` (local) or [./teardown/SKILL.md](./teardown/SKILL.md) (SPCS). Dispatch does **not** start or resume infrastructure — if it is not up, `migrate_data` / `validate_data` return a `remediation` pointing back to `data_infrastructure(mode="up")`.
 - **Whenever infrastructure starts**, tell the user that idle infrastructure can accrue Snowflake credits until teardown — the `data_infrastructure(mode="up")` response includes a `cost_reminder` field to relay.
 
@@ -67,7 +70,11 @@ for migration/validation strategy changes. Complete the change once, persist
 it, bring infrastructure up as needed, and only then resume per-object
 dispatch.
 
-If this sub-skill has already been completed in the current project — i.e., the project's `.scai/config/dew_configuration.toml` (path relative to the SCAI project root) exists with no remaining `<placeholder>` values — the infrastructure is **configured**, but that does **not** mean it is **running**. Completion is durable; "up" is ephemeral: an SPCS orchestrator auto-suspends when idle, and a freshly-resumed session owns no local worker process. A config-only check (`scai data doctor` alone) passes while the service is suspended and the worker is dead — so dispatch would then sit at `Tables=0/N` with no error. Do **not** stop at a config check: bring the shared infrastructure back up.
+If this sub-skill has already been completed in the current project — i.e.,
+the project has a recorded orchestrator placement, or (for worker-based
+sources) `.scai/config/dew_configuration.toml` exists with no remaining
+`<placeholder>` values — the infrastructure is **configured**, but that does
+not mean it is **running**. Completion is durable; "up" is ephemeral.
 
 Tell the user verbatim: "Data infrastructure already configured — bringing the shared orchestrator + worker back up (this also runs `scai data doctor` to confirm nothing has drifted)." Say it out loud rather than acting silently, because this runs live checks against Snowflake and the source. Then call `data_infrastructure(mode="up")` — it runs the [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastructure-no-workflow-yaml) gate first (iterate until it stops reporting `doctor_failures`), then starts/resumes the orchestrator and (unless this project runs no local worker) the worker; relay its `cost_reminder`. **Also state the placement it resolved** — the response carries the project's recorded decision: `orchestrator_placement` (`local` = on this machine, no compute pool; `spcs` = SPCS compute pool) and `worker_placement` (`local` | `spcs` | `none` for Iceberg / externally-managed). `up` persists this the first time it resolves it, so on later resumes it is the project's saved choice — relayed consistently rather than re-inferred silently. If `orchestrator_placement` is `local` and they meant SPCS, they can switch by re-running with `compute_pool="<POOL>"`. Return to the caller without re-prompting. Only run a bare Level 1 Data Doctor instead when you specifically need a config-drift check *without* bringing infrastructure up.
 
@@ -101,6 +108,10 @@ Ask:
 | **SPCS** | Now that SPCS is chosen, call `configure(needs_compute_pools=true)` so the response lists the accessible pools, then resolve the pool in **Question 0**. Bring it up with `data_infrastructure(mode="up", compute_pool="<POOL>")`. |
 
 ### 0.c — Where should each worker run?
+
+For a Snowflake source project, skip this question and record
+`start_worker=false`. Continue to Question 1 after resolving the orchestrator
+placement. `data_infrastructure(mode="up")` also enforces this server-side.
 
 The worker reads from your **source** system and moves the data, so it **usually runs on your machine** (or wherever can reach the source) — independent of the orchestrator's placement in 0.b. Ask this **once**; the Worker setup step (Question 3) only acts on the answer and does **not** re-ask:
 
@@ -185,6 +196,10 @@ Ask the user:
 
 ### Question 3: Worker setup
 
+Skip Question 3 for a Snowflake source project. Call
+`data_infrastructure(mode="up", start_worker=false, ...)` and continue to Data
+Doctor; no DEW configuration file is expected.
+
 **Do not ask where the worker runs again** — that was decided in **Step 0.c**. Route to the matching sub-skill; it handles install/start and returns control here:
 
 | Step 0.c answer | Sub-skill |
@@ -193,7 +208,7 @@ Ask the user:
 | **Multiple workers on separate VMs/servers** | → `./worker-distributed-setup/SKILL.md` — affinity config + per-host copy instructions |
 | **Snowpark Container Services (SPCS)** | → `./worker-spcs/SKILL.md` — image selection, Snowflake Secrets, CREATE SERVICE |
 | **Kubernetes (external cluster)** | → `./worker-k8s-external/SKILL.md` — image selection, Kubernetes Secrets, Deployment manifest |
-| **No worker (Iceberg)** | none — set `start_worker=false` on `data_infrastructure(mode="up")` |
+| **No worker (Iceberg or Snowflake-to-Snowflake validation)** | none — set `start_worker=false` on `data_infrastructure(mode="up")` |
 
 **Stop here for worker deployment** — the routed sub-skill handles install/start, then **returns control here**. After it returns (or on the no-worker path), run the Data Doctor section below before returning to the caller.
 
@@ -213,7 +228,7 @@ Run [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastr
 - [ ] Compute pool passed to `data_infrastructure(mode="up", compute_pool=...)` — when using SPCS orchestrator
 - [ ] Snowflake role has DATA_MIGRATION / DATA_VALIDATION usage (and service grants if needed)
 - [ ] Warehouse configured on the Snowflake connection
-- [ ] Worker config complete (no <placeholder> values) — unless pure Iceberg
+- [ ] Worker config complete (no <placeholder> values) — unless pure Iceberg or Snowflake-to-Snowflake validation
 - [ ] Level 1 scai data doctor — no Fail checks
 ```
 
