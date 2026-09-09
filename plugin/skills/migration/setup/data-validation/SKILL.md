@@ -9,14 +9,17 @@ license: Proprietary. See License-Skills for complete terms
 
 One-time infrastructure setup for validating migrated data between a source database and Snowflake using the **Cloud Data Validation** feature via the **scai CLI**.
 
-> **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL
+> **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL, Snowflake
 > **Supported target**: Snowflake
 
 ## Prerequisite
 
 Load `../../data-infrastructure/SKILL.md` first. It handles shared prerequisites, compute pool registration, and worker config (source host/port/credentials, source database, source schema). Return here after it completes.
 
-> Validation additionally requires that target tables are already deployed to Snowflake (run data migration first).
+> For migration-source projects, validation requires target tables to already
+> be deployed to Snowflake. For Snowflake-to-Snowflake validation, the source
+> and target objects must already exist; do not run deployment or data
+> migration first.
 
 ---
 
@@ -40,7 +43,7 @@ This completes infrastructure setup. The actual validation is started later by t
 
 1. `progress_setup(mode="data_validation")` — choose full vs incremental (+ sync strategy).
 2. `validate_data(mode="setup", where=..., validation_type=..., sync_strategy=...)` — generates `artifacts/data_validation/workflows/<hash>.yaml` and patches known toggles / sync strategy.
-3. `data_infrastructure(mode="up")` — bring the shared orchestrator + worker up once (if not already up for this session).
+3. `data_infrastructure(mode="up")` — bring the shared orchestrator + worker up once. Snowflake-source projects bring up only the orchestrator (`start_worker=false`).
 4. Agent edits (e.g. `watermarkColumn`, partition columns) then `validate_data(mode="run", workflow_path=...)` — pure dispatch (`scai data validate create-workflow`) against the already-running infrastructure.
 
 **Do not run `scai data validate create-workflow` directly** — use `validate_data` for dispatch and `data_infrastructure` for the orchestrator/worker lifecycle. **Do not write ad-hoc comparison scripts** — use the validation workflow YAML and `validate_data` instead.
@@ -55,7 +58,7 @@ Shared infrastructure checklist is owned by `../../data-infrastructure/SKILL.md`
 
 ```
 - [ ] Compute pool passed to data_infrastructure(mode="up", compute_pool=...) — SPCS only
-- [ ] Worker config has no remaining <placeholder> values — unless pure Iceberg
+- [ ] Worker config has no remaining <placeholder> values — unless pure Iceberg or Snowflake-to-Snowflake validation
 - [ ] Level 1 scai data doctor — no Fail checks (see data-infrastructure skill)
 - [ ] Data Validation Service running (READY)
 ```

@@ -19,7 +19,7 @@
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `sourcePlatform` | String | (required) | Source dialect id (for example `sqlserver`, `redshift`, `oracle`, `teradata`, `postgresql`) |
+| `sourcePlatform` | String | (required) | Source dialect id (for example `sqlserver`, `redshift`, `oracle`, `teradata`, `postgresql`, `snowflake`) |
 | `targetPlatform` | String | `Snowflake` | Target platform |
 | `targetDatabase` | String | No | Default target database for tables without explicit target |
 | `validationConfiguration` | Object | See below | Global validation level toggles |
@@ -44,6 +44,10 @@
 | `intervalHandling` | `"interval"` \| `"varchar"` | `"interval"` | Interval column mapping mode |
 
 \*At least one entry is required across `tables`, `views`, and `objects`.
+
+For `sourcePlatform: snowflake`, validation runs in warehouse and does not use
+DEW. Leave `affinity` unset and fill the template's source and target fully
+qualified names before running.
 
 ## `validationConfiguration` (global or per-table)
 

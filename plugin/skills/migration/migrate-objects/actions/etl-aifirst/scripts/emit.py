@@ -16,8 +16,12 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from identify import (DERIVED, MISSING, MODEL, NO_SLOT, NO_SLOT_DETAIL_VOCABULARY,
-                      RESIDUE, SOURCE, TABLE, Identification, Port)
+from identify import (CONTAINER_ROLES, DERIVED, MISSING, MODEL, NO_SLOT,
+                      NO_SLOT_DETAIL_VOCABULARY, RESIDUE, SOURCE, TABLE,
+                      Identification, Port)
+from source_sql import attach_source_sql
+
+PLACEHOLDER_KIND = "UnsupportedTransformation"
 
 
 def render_detail(rule: dict, tpl: str, values: dict) -> str:
@@ -412,6 +416,13 @@ class Emitter:
         return placeholder, MISSING, (
             f"{el.role} -> {placeholder}: role_to_node_type states no mapping for "
             f"'{el.role}', so node.type asserts nothing")
+
+    def is_orchestration_container(self, el) -> bool:
+        """True when the table names this kind as a container, not a data-flow gap."""
+        entry = self.table.get("kind_dispatch", {}).get(el.kind_raw)
+        if isinstance(entry, dict) and entry.get("ir_kind") is None and not entry.get("degrade_to"):
+            return True
+        return (el.role or "").upper() in CONTAINER_ROLES
 
     def element_name(self, el) -> str:
         return (el.display_name if self.table["naming_policy"].get("element_name_from")
@@ -1980,12 +1991,14 @@ class Emitter:
         #      NotSupported for the element and the degradation earns no fit credit.
         #   2. `_unsupported` still carries the native kind, so the consumer can name
         #      what it could not translate.
-        # A table entry with NO degrade_to still emits `$kind: null` -- that is the
-        # right answer for a CONTAINER (an SSIS Data Flow Task, a DataStage DSJOB),
-        # which is an orchestration concept that no data-flow class describes.
+        # No degrade_to: containers stay `$kind: null` (no model). A refused
+        # data-flow kind becomes UnsupportedTransformation so a placeholder
+        # model exists for tier-3 fill; the $kind obligation stays MISSING.
         degraded_from = None
         if ir_kind is None:
             degrade = dispatch.get("degrade_to")
+            if not degrade and not self.is_orchestration_container(el):
+                degrade = PLACEHOLDER_KIND
             self.slots.append(Slot(name, "element.$kind", MISSING, "kind_dispatch",
                                    f"'{el.kind_raw}' has no ir_kind; hydrator accepts only "
                                    "SourceQualifier and ExpressionTransformation"
@@ -2144,6 +2157,7 @@ class Emitter:
             body = self.unsupported_body(el)
             if body is not None:
                 node["element"]["_unsupported_body"] = body
+                attach_source_sql(node["element"], body)
 
         # FRAMEWORK CHANGE 59 (ENG-014 spike): EXTERNAL I/O AS TWO ORTHOGONAL FACTS.
         #

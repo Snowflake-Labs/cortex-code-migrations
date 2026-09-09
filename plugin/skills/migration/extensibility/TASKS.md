@@ -59,7 +59,7 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `generateTestbed` | Builds the synthetic testbed for the workload (mine → validate → compile → generate). Reached only on the synthetic testing path. |
 | `configureSourceConnectionData` | Configures the source database connection (needed for data migration/validation infrastructure). |
 | `setupDataInfrastructure` | Configures the shared Data Migration & Validation infrastructure (compute pool for SPCS, or local) and generates the worker config, so it can be brought up at migration time with data_infrastructure(mode="up"). |
-| `dataStrategy` | Captures the project's data migration and validation strategy (migration type, sync strategy, extraction strategy, target table type; validation type + sync strategy) during setup so the choices are committed to the git main branch and shared with the team, instead of being decided ad hoc at first migration/validation. |
+| `dataStrategy` | Captures the project's data migration and validation strategy (migration type, sync strategy, extraction strategy, target table type; validation type + sync strategy) during setup so the choices are committed to the git main branch and shared with the team, instead of being decided ad hoc at first migration/validation. Snowflake-source projects skip the migration wizard and complete on validation type only. |
 
 ### `main` (per-object migration)
 
@@ -161,7 +161,7 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `dataStrategy`
 - **Inputs:** A source language chosen in setup and the intent to migrate/validate table data (the data-infrastructure step establishes that intent).
-- **Done when:** Session config has both `data_migration_type` and `data_validation_type` set — the data-migration-setup and data-validation-setup wizards (`progress_setup(mode="data_migration"|"data_validation")`) have both run to completion.
+- **Done when:** Session config has `data_validation_type` set. Non-Snowflake sources also need `data_migration_type` — the data-migration-setup and data-validation-setup wizards (`progress_setup(mode="data_migration"|"data_validation")`) have both run to completion. Snowflake-source projects skip the migration wizard.
 
 ### `main` (per-object migration)
 

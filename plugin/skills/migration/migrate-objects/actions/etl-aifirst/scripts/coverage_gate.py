@@ -507,15 +507,15 @@ def main(argv):
             if el_kind is None:
                 rows.append((el, node, found, "COVERED",
                              "model present; IR $kind is null (node carries _unsupported)"))
-            elif degrade_to and el_kind == degrade_to and d.get("ir_kind") != el_kind:
+            elif el_kind == "UnsupportedTransformation" or (
+                    degrade_to and el_kind == degrade_to and d.get("ir_kind") != el_kind):
                 # Two different situations, and stating them the same way was misleading: a kind the
                 # table MAPS and that fell back, versus a kind the table never mapped at all and
                 # whose only representation IS degrade_to. Both leave a placeholder model; only the
                 # first is a regression against a supported class.
-                if d.get("ir_kind") is None:
-                    note = ("the table states no ir_kind for this kind, so the node exists only as "
-                            "the degrade_to class %r -- the model is a placeholder by design"
-                            % degrade_to)
+                if d is None or d.get("ir_kind") is None:
+                    note = ("the node exists only as UnsupportedTransformation -- "
+                            "the model is a placeholder, not a conversion")
                 else:
                     note = ("model present but the node fell back from its mapped class %r to the "
                             "table's degrade_to class %r" % (d.get("ir_kind"), degrade_to))

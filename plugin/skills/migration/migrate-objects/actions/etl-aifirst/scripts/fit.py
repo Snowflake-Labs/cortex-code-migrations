@@ -11,16 +11,17 @@ fact the contract cannot hold, or an expression a model must still translate, is
 a real gap in coverage and must show up in the number.
 
 Census gate:
-  NotSupported  element $kind has no door in the hydrator
-  Success       fit == 1.0
-  Partial       0 < fit < 1.0
+  NotSupported  element $kind has no door in the hydrator, OR the table refused
+                the kind and a MODEL assertion of $kind is the only thing filling it
+  Success       fit == 1.0 and $kind was not MODEL-authored over a table refusal
+  Partial       0 < fit < 1.0, including MODEL $kind when other obligations are met
 """
 
 import math
 import re
 from collections import Counter, defaultdict
 
-from identify import DERIVED, MISSING, NO_SLOT, RESIDUE, SOURCE, TABLE
+from identify import DERIVED, MISSING, MODEL, NO_SLOT, RESIDUE, SOURCE, TABLE
 
 # Credential-shaped key patterns for the `report()` choke point only -- the
 # emitted IR and any sidecar are untouched, because neither carries a
@@ -97,11 +98,17 @@ def score(slots) -> dict:
     for el, group in by_el.items():
         sat = sum(1 for s in group if s.satisfied)
         tot = len(group)
-        unsupported = any(s.path == "element.$kind" and s.provenance == MISSING
-                          for s in group)
+        kind_slots = [s for s in group if s.path == "element.$kind"]
+        unsupported = any(s.provenance == MISSING for s in kind_slots)
+        model_kind = any(s.provenance == MODEL for s in kind_slots)
         fit = sat / tot if tot else 0.0
         if unsupported:
             status = "NotSupported"
+        elif model_kind:
+            # MODEL $kind is an assertion, not a table door. Success would report a
+            # conversion the platform table refused. Partial only when other
+            # obligations actually scored; otherwise the refusal stays NotSupported.
+            status = "Partial" if sat > 0 else "NotSupported"
         elif sat == tot:
             status = "Success"
         else:
@@ -128,7 +135,7 @@ def score(slots) -> dict:
 
 def report(scored: dict) -> str:
     lines = []
-    order = [SOURCE, TABLE, DERIVED, RESIDUE, NO_SLOT, MISSING]
+    order = [SOURCE, TABLE, DERIVED, MODEL, RESIDUE, NO_SLOT, MISSING]
     lines.append("=" * 78)
     lines.append("FIT SCORE  (mechanical: field-level completeness x identified provenance)")
     lines.append("=" * 78)

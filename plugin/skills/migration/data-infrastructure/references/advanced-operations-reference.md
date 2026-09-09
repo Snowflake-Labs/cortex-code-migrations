@@ -113,10 +113,15 @@ validate_data(mode="revalidate", workflow_name="<parentWorkflowName>")
 3. Repeat monitor + error-first report (same as `mode="run"`). Shared orchestrator + worker must still be up.
 4. **Not the same as incremental validation** — revalidate retries **failed** work from one run; incremental skips **unchanged** partitions on subsequent scheduled runs.
 5. Task-queue automatic retries (`MAX_RETRIES`, lease expiry) happen inside a single workflow — revalidate is an explicit user/agent action after the parent completes.
+6. **Schema failures, by default, do not force a full re-run.** Re-validation reuses the parent's already-computed partition metadata and re-runs **only the failing data partitions**, skipping schema re-checks — so a table whose *only* failure was schema (its data partitions all passed) is not retried. Pass **`recheck_schema=true`** (CLI `--recheck-schema`) to instead re-run the full pipeline for schema-failed tables so their schema is re-checked. Leave it off (default) when the failures are data mismatches and the schema diff is benign or already understood; turn it on when you fixed the schema/target definitions and want confirmation.
+
+```
+validate_data(mode="revalidate", workflow_name="<parentWorkflowName>", recheck_schema=true)
+```
 
 See [validate_tables.md](../../validate-objects/actions/validate_tables.md) Step 5.G and [background-monitoring.md](../../validate-objects/actions/references/background-monitoring.md).
 
-CLI equivalent: `scai data validate revalidate <WORKFLOW_NAME>`.
+CLI equivalent: `scai data validate revalidate <WORKFLOW_NAME>` (add `--recheck-schema` to re-check schema for schema-failed tables).
 
 ---
 
@@ -167,7 +172,7 @@ Workflow fields: [DV workflow config reference](../../setup/data-validation/refe
 | Float rounding | SQL Server float (`CONVERT(,2)`), Redshift REAL, VECTOR TME | Binary noise or tail bits may not change hash |
 | Timestamp precision | High-precision `datetime2`, Redshift TIMESTAMP | Sub-nanosecond / readback truncation |
 | Spatial as WKT | SQL Server / Redshift / Oracle geometry | Compared as despaced WKT; Oracle L3 WKT truncated at 4000 chars |
-| Redshift `HLLSKETCH` | Redshift only | Extraction normalizes to NULL — changes invisible |
+| Redshift `HLLSKETCH` | Redshift only | Hashed via `HLL_CARDINALITY` — distinct sketches with the same cardinality are invisible |
 | Custom expression only | `checksumExpression: MAX(ORA_ROWSCN)` | Only that expression drives change detection — data edits elsewhere ignored |
 
 **DV vs DM:** DM checksum skipped columns may still appear in **DV L3 row-hash** (different pipeline). Do not tell the user "DV will catch it" without checking column selection and L3 config.

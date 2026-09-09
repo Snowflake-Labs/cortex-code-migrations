@@ -131,6 +131,8 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from identify import CONTAINER_ROLES
+from source_sql import modelsql_has_verb
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRAMEWORK = HERE  # remapped: identify modules live alongside gates in scripts/
@@ -153,11 +155,12 @@ W = 96
 KIND_CONTRACT = {
     "SourceQualifier": {
         "required": (),
-        # Promoted by emit.py from `element_fields` (Informatica's source_table_qualification)
-        # and carried in the IR. The hydrator's SourceQualifier arm reads no property, so this
-        # is accepted and inert -- recorded as such rather than presented as a payload.
+        # TableName is optional on table-mapped sources (SqlCommand / generators may
+        # honestly have none). A model-owned TIER2_KIND SourceQualifier must name it:
+        # the hydrator copies it into sourceRelationsByNodeId, which fills FROM and
+        # ObjectReferences SELECT - FROM.
         "optional": ("TableName", "SchemaName", "Database"),
-        "means": "a read from a relation",
+        "means": "a read from a relation; TableName fills FROM and ObjectReferences SELECT - FROM",
         "renders": "`SELECT <columns> FROM <relation>`",
     },
     "ExpressionTransformation": {
@@ -220,10 +223,8 @@ PAYLOAD_STRING_FIELDS = sorted({f for spec in KIND_CONTRACT.values()
 
 # Container roles. A container node carries `$kind: null` BY DESIGN -- it is the orchestration
 # unit, not a model -- and asking a model to invent a data-flow class for a Kettle
-# <transformation> or a DSJOB would fabricate a model the pipeline does not want. Read off the
-# platform tables' own `role` values, and an unlisted role is ASKED rather than skipped, so a
-# new platform's container shows up as a bad request instead of being silently dropped.
-CONTAINER_ROLES = {"UNIT_OF_WORK", "JOB", "TASK"}
+# <transformation> or a DSJOB would fabricate a model the pipeline does not want. Shared with
+# emit.py via identify.CONTAINER_ROLES so the two gates cannot drift apart again.
 
 
 class ProducerError(Exception):
@@ -522,10 +523,16 @@ def census(table_path, doc_path, tree=None):
             # assertion.
             want = {"shape": TIER2_PAYLOAD, "kind": table_kind, "fields": sorted(set(missing_fields))}
         elif need_kind:
-            want = {"shape": TIER2_KIND, "kind": None, "fields": []}
+            # A kind absent from kind_dispatch is the same refusal as supported=false:
+            # no translator, no hydrator door. Only explicit supported=true may ask for
+            # $kind. Otherwise the C# census scores a hydrator class with no EWI as Success.
+            table_supported = dispatch.get("supported") is True
+            fields = [] if table_supported else ["ModelSql"]
+            want = {"shape": TIER2_KIND, "kind": None, "fields": fields}
 
         if want is not None:
             up, down = _neighbours(ir, node["id"], stems)
+            table_supported = dispatch.get("supported") is True
             requests.append({
                 "element": name,
                 "node_id": node["id"],
@@ -535,6 +542,7 @@ def census(table_path, doc_path, tree=None):
                 "shape": want["shape"],
                 "expected_kind": want["kind"],
                 "needed_fields": want["fields"],
+                "table_supported": table_supported,
                 "deterministic_reasons": kind_declined,
                 "source_text": idn.source_text(el) or el_json.get("_unsupported_body") or "",
                 "upstream": up,
@@ -620,6 +628,7 @@ def census(table_path, doc_path, tree=None):
                 "shape": TIER3_BODY,
                 "expected_kind": el_json.get("$kind"),
                 "needed_fields": ["ModelSql"],
+                "table_supported": idn.dispatch_for(el).get("supported") is True,
                 "deterministic_reasons": [
                     "the engine emitted %s and ai_fill.is_degraded reports it unusable "
                     "(a blocking EWI, or a SELECT that projects nothing)"
@@ -762,6 +771,20 @@ def build_prompt(req, platform, sheet):
             "be an assertion. Supply the payload field(s) and nothing structural.",
             "",
         ]
+    elif req["shape"] == TIER2_KIND and req.get("table_supported") is not True:
+        parts += [
+            "This native kind is **not table-supported** (explicit `supported=false`, or "
+            "absent from `kind_dispatch`). It has no Snowflake translator and `ir_kind` is "
+            "null. Do NOT name a `$kind`. A hydrator class would report the element as converted "
+            "and hide that refusal. If you can lower it, write the whole model body as `ModelSql` "
+            "— Snowflake SQL in dbt syntax, and it must contain a `SELECT` or `WITH`: dbt "
+            "compiles a model from a query, it cannot compile a procedure call or a bare "
+            "mutation. **When the source statement is a procedure invocation (`EXEC` / "
+            "`EXECUTE` / `CALL`), that is NOT a `ModelSql` candidate — abstain** with "
+            "`{\"_abstain\": \"<reason>\"}` rather than writing a `CALL`/`EXECUTE` body; the "
+            "element keeps its honest placeholder instead of a `.sql` file dbt cannot run.",
+            "",
+        ]
     elif req["shape"] == TIER2_KIND:
         parts += [
             "The platform table maps this native kind to NO IR element kind, so the element is "
@@ -808,8 +831,10 @@ def build_prompt(req, platform, sheet):
             "The engine emitted a model for this element and the model is unusable: %s"
             % "; ".join(req["deterministic_reasons"]),
             "",
-            "Write the whole model body as `ModelSql` — a single Snowflake `SELECT` in dbt "
-            "syntax.",
+            "Write the whole model body as `ModelSql` — Snowflake SQL in dbt syntax, and it "
+            "must contain a `SELECT` or `WITH`. If the source statement is a procedure "
+            "invocation (`EXEC`/`EXECUTE`/`CALL`), that is NOT a `ModelSql` candidate — "
+            "abstain instead of writing a `CALL`/`EXECUTE` body dbt cannot compile.",
             "",
         ]
 
@@ -941,8 +966,14 @@ def _schema_example(req):
         for f in req["needed_fields"]:
             ex[f] = "<Snowflake %s>" % f
     elif req["shape"] == TIER2_KIND:
-        ex["$kind"] = "<one of the kinds in the table above>"
-        ex["OutputColumns"] = [{"Name": "<column>", "Expression": "<Snowflake SQL>"}]
+        if req.get("table_supported") is not True:
+            ex["ModelSql"] = "<a single Snowflake SELECT in dbt syntax>"
+        else:
+            ex["$kind"] = "<one of the kinds in the table above>"
+            ex["OutputColumns"] = [{"Name": "<column>", "Expression": "<Snowflake SQL>"}]
+            ex["TableName"] = "<unqualified relation; required when $kind is SourceQualifier>"
+            ex["ModelSql"] = ("<OPTIONAL escape hatch. A whole Snowflake SELECT when no kind "
+                              "above can render this element. Omit $kind if you use this.>")
     else:
         ex["ModelSql"] = "<a single Snowflake SELECT in dbt syntax>"
     if req.get("also_needs_model_body") and "ModelSql" not in ex:
@@ -1113,6 +1144,19 @@ def validate(entry, req):
         return None, ["ABSTAINED: %s" % str(entry.get("_abstain"))[:300]]
 
     kind = entry.get("$kind")
+    # TIER2_KIND prose says "answer with ModelSql" when no hydrator kind can render
+    # (join / GROUP BY / UNION / router). Models obey by setting $kind to "ModelSql".
+    # That name is not a hydrator arm; it is the FIELD ai_fill reads. Coerce.
+    if kind == "ModelSql":
+        sql = entry.get("ModelSql")
+        if isinstance(sql, str) and sql.strip():
+            entry.pop("$kind", None)
+            kind = None
+            body_answer = True
+        else:
+            raise ProducerValidationError(
+                "the response names $kind 'ModelSql' but supplies no ModelSql body. "
+                "Put the SELECT in the ModelSql field and omit $kind.")
     if kind is not None:
         if not isinstance(kind, str) or kind not in KIND_CONTRACT:
             # A BODY IS NOT THROWN AWAY OVER THE LABEL ON IT.
@@ -1157,6 +1201,12 @@ def validate(entry, req):
                 "The request asked for a payload, not a re-classification: the table's mapping is "
                 "a stated platform fact and this would replace it with an assertion."
                 % (kind, req["expected_kind"]))
+        if req.get("table_supported") is not True:
+            raise ProducerValidationError(
+                "the response overrides $kind to %r on an element the platform table declares "
+                "supported=false. A structural re-classification would mask that refusal as a "
+                "hydrator Success. Supply ModelSql if you can lower the element; do not name a "
+                "$kind." % kind)
 
     # QUOTED MIXED-CASE IDENTIFIERS ARE REJECTED: it is a checkable contradiction against the
     # columns the upstreams actually carry, and the failure it produces is a dbt error whose two
@@ -1224,6 +1274,12 @@ def validate(entry, req):
                     "the response asserts $kind %r and supplies %s = %r. A model that names a "
                     "kind owns that kind's required payload: %s."
                     % (effective_kind, f, v, harm))
+        if req["shape"] == TIER2_KIND and effective_kind == "SourceQualifier":
+            v = entry.get("TableName")
+            if not (isinstance(v, str) and v.strip()):
+                raise ProducerValidationError(
+                    "SourceQualifier without TableName emits a dangling FROM and "
+                    "header-only ObjectReferences. Name the relation this element reads.")
 
     allowed = (ENTRY_STRUCTURAL_KEYS | set(contract["required"]) | set(contract["optional"]))
     for k in entry:
@@ -1280,9 +1336,14 @@ def validate(entry, req):
         if "!!!RESOLVE EWI!!!" in sql:
             raise ProducerValidationError("ModelSql carries the engine's blocking-EWI marker, so the fill "
                                 "would replace a degraded model with a degraded model")
-        if not re.search(r"\bSELECT\b", sql, re.I):
-            raise ProducerValidationError("ModelSql contains no SELECT; ai_fill writes it as a dbt model "
-                                "body verbatim")
+        if not modelsql_has_verb(sql):
+            raise ProducerValidationError(
+                "ModelSql has no SELECT/WITH statement dbt can compile as a model body. "
+                "A body whose only verb is EXEC/EXECUTE/CALL/INSERT/UPDATE/DELETE/MERGE is "
+                "not an authored dbt model -- ai_fill writes ModelSql as a model file "
+                "verbatim and dbt has no query to run. If the source statement is a "
+                "procedure invocation, abstain instead: "
+                '{"_abstain": "<one sentence>"}. The element keeps its placeholder.')
         refs = set(re.findall(r"\{\{\s*ref\s*\(\s*['\"]([^'\"]+)['\"]", sql))
         known = {u["dbt_model"] for u in req["upstream"] if u.get("dbt_model")}
         known |= {d["dbt_model"] for d in req["downstream"] if d.get("dbt_model")}

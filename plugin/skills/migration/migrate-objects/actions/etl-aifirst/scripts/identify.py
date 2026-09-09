@@ -56,6 +56,12 @@ MISSING = "MISSING"    # obligation not satisfied
 NO_SLOT = "NO_SLOT"    # source fact identified, contract has no field for it
 RESIDUE = "RESIDUE"    # identified but needs a model to resolve
 MODEL = "MODEL"        # RESOLVED BY A MODEL. Carries the sidecar key it came from.
+
+# Orchestration roles the platform tables declare for a container node -- not a
+# data-flow element, so it must not grow a placeholder model or a ModelSql request.
+# Single source of truth for emit.py and sidecar_producer.py, which both gate on it;
+# a role added on one side and not here used to silently diverge from the other.
+CONTAINER_ROLES = frozenset({"UNIT_OF_WORK", "JOB", "TASK", "CONTAINER", "PACKAGE"})
 #
 # MODEL exists because RESIDUE was a dead end. RESIDUE has always meant "identified
 # but needs a model to resolve" -- the framework had a NAME for facts requiring AI and
@@ -564,7 +570,44 @@ class Identification:
         defn = self.def_node_of(el)
         if defn is not None and defn is not node:
             parts.append(fn(defn) or "")
+        extra = self._reusable_definition_text(el)
+        if extra:
+            parts.append(extra)
         return "\n".join(p for p in parts if p.strip())
+
+    def _reusable_definition_text(self, el: Element) -> str:
+        """Mapplet INSTANCE/@TRANSFORMATION_NAME names a folder-level <MAPPLET>
+        whose internal graph is not the thin TYPE=Mapplet TRANSFORMATION that
+        default_def_site resolves. Without that fragment the sidecar model only
+        sees the INSTANCE and abstains (measured: inf-mapplet mplt_mp1_multi).
+
+        A MAPPLET name is only unique inside its own <FOLDER>: two folders can
+        each declare one named the same. Search the enclosing folder first so a
+        same-named mapplet in a different folder is never picked by mistake;
+        fall back to a document-wide search only when no enclosing folder exists."""
+        if getattr(el, "kind_raw", None) != "Mapplet":
+            return ""
+        node = self.node_of(el)
+        name = None
+        if node is not None:
+            name = node.get("TRANSFORMATION_NAME") or node.get("NAME")
+        name = name or el.instance_name.rsplit("\\", 1)[-1]
+
+        scope = node
+        while scope is not None:
+            if scope.tag.rsplit("}", 1)[-1] == "FOLDER":
+                break
+            scope = self._parent.get(scope)
+        search_roots = [scope] if scope is not None else [self.root]
+
+        for root in search_roots:
+            for cand in root.iter():
+                tag = cand.tag.rsplit("}", 1)[-1]
+                if tag != "MAPPLET" or cand.get("NAME") != name:
+                    continue
+                fn = getattr(self.doc, "source_text", None)
+                return (fn(cand) if fn is not None else "") or ""
+        return ""
 
     def _read_container_name(self) -> str | None:
         """Document-level name. FRAMEWORK CHANGE 1: was
@@ -1429,6 +1472,8 @@ class Identification:
                     "rule": hits[0]["id"],
                     "tag": node.tag,
                     "where": self.at(node, self._projection_path(node)),
+                    "identity": {a: node.get(a) for a in identity_attrs
+                                 if node.get(a) is not None},
                 })
                 continue
             path = self._projection_path(node)

@@ -88,6 +88,10 @@ _NO_ROW_COMPARISON = (
     "if these columns carry business-critical text."
 )
 _NO_SNOWFLAKE_EQUIVALENT = "No Snowflake equivalent, so these columns cannot be compared."
+_HLLSKETCH_CARDINALITY = (
+    "No Snowflake sketch type; stored as <code>HLL_CARDINALITY</code> text "
+    "(VARCHAR). Distinct sketches with the same cardinality compare equal."
+)
 _UNDOCUMENTED = (
     "Migrated by the orchestrator, but not yet covered by the published "
     "type-mapping page. Confirm handling with your migration engineer."
@@ -220,13 +224,7 @@ _REDSHIFT: tuple[TypeCoverage, ...] = (
     _row("GEOMETRY", "GEOGRAPHY", _SCHEMA, _CONTENTS_NEVER_COMPARED),
     _row("GEOGRAPHY", "GEOGRAPHY", _SCHEMA, _CONTENTS_NEVER_COMPARED),
     _row("OID", "NUMBER", VALIDATION_UNDOCUMENTED, _UNDOCUMENTED),
-    TypeCoverage(
-        "HLLSKETCH",
-        "VARCHAR",
-        MIGRATION_UNSUPPORTED,
-        VALIDATION_UNSUPPORTED,
-        _NO_SNOWFLAKE_EQUIVALENT,
-    ),
+    _row("HLLSKETCH", "VARCHAR", _S, _HLLSKETCH_CARDINALITY),
 )
 
 _ORACLE: tuple[TypeCoverage, ...] = (
@@ -305,19 +303,15 @@ COVERAGE: dict[str, tuple[TypeCoverage, ...]] = {
     "azure_synapse": _AZURE_SYNAPSE,
 }
 
-# The six rows where the published page and the shipped orchestrator disagree.
+# The rows where the published page and the shipped orchestrator disagree.
 # Recorded rather than reconciled: the report follows the docs, and the drift
-# guard fails on a seventh.
+# guard fails on a new unrecorded mismatch.
 KNOWN_DMVF_DIVERGENCES: dict[tuple[str, str], str] = {
     ("sqlserver", "BIT"): "docs NUMBER; orchestrator BOOLEAN",
     ("sqlserver", "GEOMETRY"): "docs GEOGRAPHY; orchestrator GEOMETRY",
     ("redshift", "GEOMETRY"): "docs GEOGRAPHY; orchestrator GEOMETRY",
     ("redshift", "TIMETZ"): "docs TIME; orchestrator TIMESTAMP_TZ",
     ("redshift", "TIME WITH TIME ZONE"): "docs TIME; orchestrator TIMESTAMP_TZ",
-    ("redshift", "HLLSKETCH"): (
-        "docs say unsupported for migration; orchestrator maps it to VARIANT, "
-        "so these columns migrate as an opaque blob instead of failing"
-    ),
 }
 
 

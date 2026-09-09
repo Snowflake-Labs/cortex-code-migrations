@@ -11,6 +11,12 @@ license: Proprietary. See License-Skills for complete terms
 Tell the user:
 > **Phase 1: Setup** — I'll walk you through connecting to your source database, initializing the project, registering your objects, converting them to Snowflake SQL, and generating an assessment report. Once you've seen the assessment I'll ask whether you want to go on to migrating objects.
 
+For a Snowflake source, use this instead:
+> **Snowflake Validation Setup** — I'll initialize a Snowflake-source project,
+> configure the Snowflake target and orchestrator, and capture your validation
+> strategy. Snowflake-source projects skip code conversion, assessment,
+> deployment, data migration, testing setup, and the Data Exchange Worker.
+
 ## Flow
 
 Setup is driven by the **`setup` state machine** — the resolver picks
@@ -115,6 +121,7 @@ Tasks the machine routes through, in order:
 | `configureGit`                   | sub-skill: `setup/git.md` (existing repos only; fresh dirs auto-init) |
 | `recommendSafeTools`             | inline prompt — arrives with the next two queued in `then_ask`     |
 | `chooseSourceDialect`            | inline prompt (queued)                                            |
+| Snowflake branch                 | `configureSnowflakeTarget` → `setupDataInfrastructure` → `dataStrategy` |
 | `chooseEntryMode`                | inline prompt (queued; nothing queues after it — it routes by dialect) |
 | `midwayEntry`                    | sub-skill: `setup/midway-entry.md`                                |
 | `chooseCodeSource`               | inline prompt (`next_prompt`) — extract vs. local files; each answer carries its `then` |
@@ -129,7 +136,7 @@ Tasks the machine routes through, in order:
 | `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (synthetic testing path only) |
 | `configureSourceConnectionData`  | sub-skill: `setup/configure-source-connection.md` (data infrastructure path only) |
 | `setupDataInfrastructure`        | sub-skill: `data-infrastructure/SKILL.md`                         |
-| `dataStrategy`            | sub-skill: `setup/data-strategy/SKILL.md`                         |
+| `dataStrategy`                   | sub-skill: `setup/data-strategy/SKILL.md`                         |
 
 Conversion and assessment come first on purpose: neither needs a Snowflake
 target, so a user reaches their assessment report without picking a
@@ -183,6 +190,7 @@ pending — do not invent completion from chat history.
 | 1 | postgresql-connection | `../connection/postgresql-connection/SKILL.md` |
 | 1 | db2-connection | `../connection/db2-connection/SKILL.md` |
 | 1 | bigquery-connection | `../connection/bigquery-connection/SKILL.md` |
+| 1 | snowflake-connection (source and target for validation-only projects) | `../connection/snowflake-connection/SKILL.md` |
 | — | midway-entry (existing project with pre-converted code; SQL Server/Redshift only) | `./midway-entry.md` |
 | 3 | register-code-units | `../register-code-units/SKILL.md` |
 | 4 | convert | `../convert/SKILL.md` |

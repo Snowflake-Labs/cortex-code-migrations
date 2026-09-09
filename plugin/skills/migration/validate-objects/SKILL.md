@@ -15,10 +15,14 @@ Tell the user:
 
 Call `configure()` to retrieve the current configuration.
 
-Check the returned values for `snowflake_connection`, `source_connection`, and `snowflake_database`:
+Check the configured source dialect first.
 
-- **All three set** → confirm them with the user (e.g. "Using snowflake_connection=X, source_connection=Y, database=Z — correct?"). If the user wants changes, call `configure` with the updated values.
-- **Any missing** → ask the user for the missing values, then call `configure` with all of them.
+- **Snowflake source** → require `snowflake_connection` and
+  `snowflake_database`; no separate `source_connection` or DEW is required.
+  Confirm the connection/database with the user.
+- **Other sources** → require `snowflake_connection`, `source_connection`, and
+  `snowflake_database`. Confirm all three; collect and configure any missing
+  values.
 
 Use the shared infrastructure configured during setup. Do not ask local vs
 SPCS again, choose a pool, or start/repair infrastructure from a per-object
@@ -29,7 +33,9 @@ Only an explicit user request changes that persisted setup.
 
 ## Step 2: Validate
 
-Load [actions/validate_tables.md](actions/validate_tables.md) (Steps 4–6: background Monitor, error-first report, main-agent teardown).
+Load [actions/validate_tables.md](actions/validate_tables.md). Snowflake-source
+projects generate a template without a registry filter; the user or agent must
+fill its source and target object names before the run.
 
 ## Step 3: Wave progress
 

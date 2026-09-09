@@ -116,6 +116,7 @@ try:
         is_sql_server,
         load_workload_insights,
         render_workload_insights_tab_html,
+        workload_insights_chart_js,
         workload_insights_css,
     )
     WORKLOAD_INSIGHTS_SUPPORT = True
@@ -149,10 +150,9 @@ except ImportError as e:
 # gate behind it stays exercised by test_multi_report_nav.py meanwhile.
 VIRTUALIZATION_ENABLED = False
 
-# Workload Insights is built but withheld from every report until the product is
-# ready to show it. Flip to True to re-enable — the SQL Server gate behind it
-# stays exercised by test_multi_report_nav.py meanwhile.
-WORKLOAD_INSIGHTS_ENABLED = False
+# Workload Insights is SQL Server-only. Flip to False to hide the tab from every
+# report — the SQL Server gate stays exercised by test_multi_report_nav.py.
+WORKLOAD_INSIGHTS_ENABLED = True
 
 
 def generate_ai_summary(summary: Dict, temp_staging: List, deprecated: List, testing: List) -> str:
@@ -1603,11 +1603,12 @@ def generate_html_template(
     )
     workload_insights_nav_html = ""
     workload_insights_html = ""
+    workload_insights_javascript = ""
     workload_insights_styles = ""
     if show_workload_insights:
         workload_insights_nav_html = """
                 <a @click="activeTab = 'workload-insights'" class="nav-section" data-tab="workload-insights" :class="{active: activeTab === 'workload-insights'}">
-                    <span>Workload Insights</span>
+                    <span>Discovery</span>
                 </a>
         """
         workload_insights_html = f"""
@@ -1615,6 +1616,9 @@ def generate_html_template(
                 {render_workload_insights_tab_html(workload_insights_payload)}
             </div>
         """
+        workload_insights_javascript = workload_insights_chart_js(
+            workload_insights_payload
+        )
         workload_insights_styles = workload_insights_css()
 
     external_tables_card_html = ''
@@ -1808,8 +1812,8 @@ def generate_html_template(
             0,
             (
                 'workload-insights',
-                'Workload Insights',
-                'Insights from the SQL Server Query Store extract: execution volume, statement mix, busiest modules, and the costliest or occasionally slow query shapes.',
+                'Discovery',
+                'Insights from the SQL Server Extended Events capture: execution volume, duration, statement mix, applications, users, long-running executions, and errors.',
             ),
         )
     if not show_virtualization:
@@ -5799,6 +5803,15 @@ def generate_html_template(
                 }}
             }},
             watch: {{
+                activeTab(newTab) {{
+                    if (newTab === 'workload-insights') {{
+                        this.$nextTick(() => {{
+                            if (typeof window.renderWorkloadInsightsCharts === 'function') {{
+                                window.renderWorkloadInsightsCharts();
+                            }}
+                        }});
+                    }}
+                }},
                 filteredCodeUnits(newList) {{
                     // Keep a valid selection as filters/search change
                     if (!Array.isArray(newList) || newList.length === 0) {{
@@ -6458,6 +6471,11 @@ def generate_html_template(
                 setTimeout(() => toast.remove(), 300);
             }}, 3000);
         }}
+    </script>
+
+    <!-- Workload Insights charts are defined after Vue has compiled and mounted the tab. -->
+    <script>
+        {workload_insights_javascript}
     </script>
     
     <!-- SSIS Report JavaScript (package filters) -->

@@ -243,7 +243,8 @@ class Inventory:
 
     def promote(self, by: str = "single-writer") -> dict:
         """SINGLE WRITER. Fold proposals into the inventory, classifying each first."""
-        out = {"minted": [], "reused": [], "refused": [], "already": [], "raced": []}
+        out = {"minted": [], "reused": [], "refused": [], "already": [], "raced": [],
+               "redirects": {}}
         if not self.proposals_dir.is_dir():
             return out
         for p in sorted(self.proposals_dir.glob("AIM-*.json")):
@@ -266,6 +267,13 @@ class Inventory:
             out[{"MINTED": "minted", "REUSED_EXACT": "already",
                  "REUSED_NEAR": "reused", "MINT_RACED": "raced"}[res["action"]]].append(
                      res["id"])
+            # The proposal's own id can differ from res["id"] when classification
+            # redirects it to a near-duplicate that already exists -- a caller who
+            # serialized the proposal's id elsewhere (e.g. into an issues artifact)
+            # before promotion needs this to fix up that stale citation.
+            original_id = proposal.get("id")
+            if original_id and original_id != res["id"]:
+                out["redirects"][original_id] = res["id"]
             p.unlink(missing_ok=True)
         return out
 

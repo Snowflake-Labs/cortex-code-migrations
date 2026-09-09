@@ -325,6 +325,18 @@ sed -n '/^orchestration:/,$p' "$EMITLOG" \
   | grep -E "^orchestration|^  container|^  dbt dir|^orch sql|^lineage rows|^  lineage|^issue rows|^element rows|^  report|^  WARN" \
   | sed 's/^/   | /'
 
+# ---- STAGE 3a: ETL.Elements metadata census ------------------------------------------------------
+# The producer writes graph nodes (and not-in-graph Unsupported). Native ETL.Elements also
+# carries N/A rows for Package/Path/ConnectionManager and Mapping/Workflow/Session. Those
+# records are already in the identification census; Status=N/A keeps conversion-rate exclusions.
+echo "-- stage 3a: ETL.Elements metadata census"
+ELEMENTS_CENSUS=$(python3 "$HERE/etl_elements_census.py" "$TABLE" "$DOC" "$OUT" 2>&1) || true
+printf '%s\n' "$ELEMENTS_CENSUS" | sed 's/^/   | /'
+if ! printf '%s' "$ELEMENTS_CENSUS" | grep -q "metadata rows:"; then
+  echo "   *** ETL.Elements metadata census did not run — graph rows are unchanged."
+  degraded=1
+fi
+
 # ---- STAGE 3b: TIER 3 — fill what the engine could not render ------------------------------------
 # Ordered deliberately BEFORE stage 4, not after. Stage 4 decides the verdict from the artifact, so
 # running the fill first means the verdict describes what actually shipped. Running it after would
@@ -385,6 +397,24 @@ if [ $RELINEAGE_RC -ne 0 ]; then
   echo "       model-authored model is missing from ObjectReferences. The rows from stage 3 are"
   echo "       still there; they describe the tree BEFORE the tier-3 fill."
   printf '%s\n' "$RELINEAGE" | sed -n '1,10p' | sed 's/^/   | /'
+  degraded=1
+fi
+
+# C# --relineage only adds SourceQualifier.TableName and ref()/source() in
+# SSC-AI-AUTHORED models. Table-refused Execute SQL Tasks carry the statement
+# on SqlStatementSource / source_sql and often author a bare FROM or CALL.
+# Without this pass, ssis-execsql ObjectReferences stays the one-line placeholder.
+echo "-- stage 3c2b: source_sql ObjectReferences"
+SRC_SQL=$(python3 "$HERE/source_sql.py" "$IR" "$OUT" "$DOC" 2>&1)
+SRC_SQL_RC=$?
+printf '%s\n' "$SRC_SQL" | sed 's/^/   /'
+if [ $SRC_SQL_RC -ne 0 ]; then
+  # SAME SHAPE AS STAGE 3c2's OWN FAILURE, above: merge_object_references rewrites
+  # ObjectReferences.*.csv wholesale, so a failure here can leave it stale or truncated
+  # while stage 4 still counts rows out of the artifact.
+  echo "   *** SOURCE-SQL LINEAGE NOT MERGED — the refused-task ObjectReferences rows this"
+  echo "       stage exists to add may be missing; pre-existing rows from stage 3/3c2 keep"
+  echo "       the report non-empty."
   degraded=1
 fi
 
@@ -1233,7 +1263,8 @@ echo "-- stage 5: issue framework (ours, not the engine's)"
 # representation-side detectors run against the tree's actual representation instead of silently
 # skipping with "representation unreadable" on every --inspect-only invocation.
 ISSUES=$(python3 "$HERE/issues/stage.py" "$TABLE" "$DOC" "$INTEGRITY_IR" "$OUT" \
-         --engine-issues="${issue_total:-unknown}" 2>&1)
+         --engine-issues="${issue_total:-unknown}" \
+         --gate-b-issues="$GATE_BUNDLES/gateB/AiFirstIssues/issues.json" 2>&1)
 ISSUES_RC=$?
 printf '%s\n' "$ISSUES" | sed 's/^/   /'
 # Same disambiguation the loss ledger and gate A needed, for the same reason: "the stage

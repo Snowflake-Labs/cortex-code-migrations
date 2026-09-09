@@ -59,7 +59,49 @@ Only after the underlying issue is understood should you add a missing pair by h
 - `comparison.index_columns` — the column(s) that uniquely key a row (usually the natural / primary key).
 - `comparison.target_index_columns` — only when the target's key column names differ from the source's.
 
-Then show the user the seeded table pairs and the keys you chose, and ask them to confirm or correct — the CUR can miss dynamically-named or conditionally-written tables. Adjust per their feedback. This is the one stopping point.
+Then show the user the seeded table pairs and the keys you chose, and ask them to confirm or correct — the CUR can miss dynamically-named or conditionally-written tables. Adjust per their feedback. This is a stopping point that needs the user's input — as is Step 3b on an Informatica project.
+
+## Step 3b: Ask for the Informatica `pmcmd` Endpoint (Informatica projects only)
+
+A seeded Informatica unit carries no `service` / `domain` of its own. Neither can be derived from
+the CUR, and both are the same for every unit of a project, so they live **once** in the
+`informatica:` section of `.scai/settings/test_config.yaml` — beside `pmcmd_path` / `username` /
+`password` — which `scai test seed` creates with `TODO_INFA_*` placeholders and warns about:
+
+```yaml
+informatica:
+  pmcmd_path: /opt/informatica/10.5/server/bin/pmcmd
+  username: ${INFORMATICA_USERNAME}
+  password: ${INFORMATICA_PASSWORD}
+  service: IS_EDW_NIGHTLY      # pmcmd -sv: the Integration Service running the workflows
+  domain: Domain_EDW           # pmcmd -d:  the domain that service belongs to
+```
+
+**Ask the user for `service` and `domain`** — and for `pmcmd_path` too if that placeholder is
+still there. As at Step 3, this is a stopping point that needs the user's input, not agent-side
+work: nothing on disk can supply these values (see above), so there is nothing to infer them from.
+Do not invent a plausible-looking Integration Service name, and do not leave a sentinel in place
+expecting `--check-env` to settle it later — the check reports the gap, it cannot fill it. With the
+user's answers in hand, write them in once for the project, then verify **every** seeded unit
+resolves before handing off to `etlValidate`:
+
+```bash
+scai test etl-validate --platform {PLATFORM_ID} --check-env
+```
+
+The `informatica_service_domain` check names any file that still cannot resolve an endpoint. A
+leftover `TODO_INFA_*` there is a failure, not a default — an unresolved sentinel would otherwise
+reach `pmcmd` as a literal `-sv TODO_INFA_SERVICE`.
+
+Two things this does **not** mean:
+
+- **Per-unit `TODO_INFA_FOLDER` / `TODO_INFA_WORKFLOW` are separate.** Those are the only
+  placeholders still emitted into a unit's own YAML, and only when the CUR could not supply them —
+  fill them in that file, not in `test_config.yaml`.
+- **A per-unit override is still available.** A project whose workflows span more than one
+  Integration Service or domain can set `service:` / `domain:` under that unit's `pipeline.source`;
+  a unit-level value wins over the project-wide one. Hand-added overrides survive a re-seed with
+  `--append`.
 
 ## Step 4: Record Completion
 
