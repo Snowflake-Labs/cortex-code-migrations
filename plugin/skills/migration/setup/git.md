@@ -8,6 +8,14 @@ license: Proprietary. See License-Skills for complete terms
 
 The user has chosen to use git. Set up their repository.
 
+This step runs early in setup, right after the project directory is confirmed.
+If the project directory was **not** already a git repository when setup
+started, `progress_setup()` has already initialized a local repo on `main` —
+skip the init paths below and confirm settings with the user only when needed.
+
+If the directory **was** already a git repository, walk the user through the
+steps below before continuing.
+
 ## Step 1: Inspect current git state
 
 Call:

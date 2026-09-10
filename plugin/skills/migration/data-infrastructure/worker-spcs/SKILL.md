@@ -47,15 +47,15 @@ Record that exact version tag (e.g., `1.11.1`). Use it as `<version>` in all sub
 - `<replica_count>` — the instance count the user provides in Step 4
 - `<driver-download-host>` — **(Oracle/Teradata only)** the hostname of the NuGet driver download endpoint; ask the user for this value if they are on Oracle or Teradata
 
-Derive the affinity label from the project directory name: lowercase, spaces replaced with hyphens, special characters stripped.
+Affinity binds this worker to the workflow it should process — see the [Affinity Reference](../references/affinity-reference.md) for the model (and why the orchestrator stays null-affinity). The automatic `scai data worker setup` path uses the project's stable default. The custom service-spec path below needs an explicit label because `AGENT_AFFINITY` must exactly match the workflow.
 
-Example: project at `/migrations/acme corp` → `acme-corp`
+Propose a short, stable label for this source database/server, for example `mdx-salesnorth`.
 
 Tell the user:
 
-> Your affinity label is **`<label>`**. All worker instances will use this label, and you will set the same label in your migration workflow config. Confirm or provide a different label.
+> This custom worker needs an explicit affinity label. Proposed label: **`<label>`**. I will set it once with `configure(affinity="<label>")` and use the same value as the worker's `AGENT_AFFINITY`. Confirm or provide a different label.
 
-Wait for the user to confirm or override. **Note the final label — it is used in Steps 4 and 5 and when configuring the workflow.**
+Wait for the user to confirm or override, then set it: `configure(affinity="<label>")`. **Note the final label — it is used in Steps 4 and 5 as `AGENT_AFFINITY`; it must equal the workflow affinity.**
 
 ## Step 3 — Snowflake Secrets for Source Credentials
 
@@ -83,6 +83,8 @@ Substitute `<username>` with the source database username. For `<password>`: **d
 Note the exact secret names — they are referenced in Step 4.
 
 **Wait for the user to confirm the secrets are created before continuing.**
+
+> **Non-SPCS / local workers:** Snowflake Secrets above apply to SPCS container services only. For external vaults, AWS Secrets Manager REST providers, or `$(...)` command substitution in worker TOML, see [Advanced: Secrets management](../references/worker-config-reference.md#advanced-secrets-management).
 
 **Oracle and Teradata only:** The container requires outbound network access for two destinations: the source database host and the NuGet driver download endpoint. Ask the user to provide an `EXTERNAL_ACCESS_INTEGRATION` covering both. If they do not have one, show:
 

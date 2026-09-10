@@ -20,7 +20,7 @@ Tests follow the **Arrange-Act-Assert (AAA)** pattern: Arrange (dbt seeds), Act 
 
 ## Scope Filtering
 
-> **Concurrent execution note:** You may be spawned concurrently with other agents targeting different dbt projects in the same package. Each agent operates on its own project — do not access or modify files belonging to other dbt projects.
+> **Concurrent execution note:** You may be spawned concurrently with other agents targeting different dbt projects in the same package. Each agent operates on its own project — do not access or modify files belonging to other dbt projects. Writing test/fix artifacts for another agent's project (even to be helpful) breaks that project's own validator lookup and causes a false missing-artifact failure at phase completion.
 
 Read ROADMAP.md for current phase (authored by stabilization with package-specific reasoning). Process only the dbt project(s) assigned to this phase.
 

@@ -6,7 +6,7 @@ After creating the test YAML files, capture baselines from the source database a
 
 ## Step 1: Capture Baselines from Source Database
 
-Baselines upload to the Snowflake stage `@<DATABASE>.VALIDATION.BASELINES`; no copy is kept on the user's laptop (customer data residency).
+Baselines upload to the Snowflake stage `@<TESTING_RESULTS_DATABASE>.VALIDATION.BASELINES` — the database named by `testing_results_database` in `.scai/settings/test_config.yaml`; no copy is kept on the user's laptop (customer data residency).
 
 ```bash
 scai test capture \
@@ -25,26 +25,28 @@ scai test capture \
 List the stage, filtering server-side to just this object's baselines:
 
 ```bash
-snow stage list-files @<DATABASE>.VALIDATION.BASELINES \
+snow stage list-files @<TESTING_RESULTS_DATABASE>.VALIDATION.BASELINES \
   --pattern ".*<schema>\.<object_name>.*" \
   -c <SNOWFLAKE_CONNECTION_NAME>
 ```
 
 ## Step 3 (BTEQ scripts only): mark capture complete
 
-For BTEQ scripts the baseline is uploaded to the stage and nothing is written to the test YAML, so the state machine cannot infer capture from the file — stamp the task explicitly:
+For BTEQ scripts the baseline is uploaded to the stage and `VALIDATION.BASELINE_METADATA` is not written, so the state machine cannot infer capture from Snowflake — stamp the task explicitly:
 
 ```
 transition_status status=advance task=captureBaseline --where "id = '<unit_id>'"
 ```
 
-Procedures/functions skip this — their `captureBaseline` completes from the per-object test YAML.
+Procedures/functions skip this — their `captureBaseline` completes once `VALIDATION.BASELINE_METADATA` has a row for the object whose `ROW_COUNTS` sum to more than zero.
+
+If capture fails because **the source object cannot run as written** (column-count mismatch on `INSERT…EXEC`, missing columns, the object's own SQL errors on `EXEC`), escalate on `captureBaseline`. Do not `ALTER` the source to make the capture green and do not skip ahead to deploy. A person decides whether to fix source, mark the object out of scope, or treat it as always-erroring.
 
 ## CHECKPOINT
 
 Confirm:
 - [ ] Baselines captured for `<object_name>` from source database
-- [ ] Baselines visible on Snowflake stage `@<DATABASE>.VALIDATION.BASELINES`
+- [ ] Baselines visible on Snowflake stage `@<TESTING_RESULTS_DATABASE>.VALIDATION.BASELINES`
 - [ ] At least 15-25 test cases for this object
 
 ## Next Steps

@@ -118,6 +118,42 @@ After user confirms, mark all `EXECUTE DBT PROJECT` elements as `skipped` with r
    ```
    Update status `skipped --reason disabled-in-source`. Continue to next element.
 
+   **Check downstream dependents before moving on.** Search the orchestration SQL for **every**
+   `AFTER` clause that lists this element's Snowflake task name `<T>`. Snowflake never executes a
+   task whose required predecessor is permanently suspended, so each of those tasks (and everything
+   `AFTER` them) would otherwise silently stop running once deployed, with no error anywhere.
+   Fan-out is the common case: several downstream tasks can reference the same disabled `<T>`.
+   Snowflake `AFTER` can list multiple predecessors (`AFTER T1, T2`); when rewriting a clause,
+   replace only `<T>` and preserve every other name already in that list.
+
+   **Detect a real data dependency (required recipe — do not invent a check):**
+   1. From the source definition of disabled `<T>`, collect its write targets. Informatica: the
+      mapping's `TARGETINSTANCE` / `TARGETLOADORDER` names and any `CONNECTOR TOINSTANCE` that
+      lands on a target (see `platforms/informatica/mapping-guide.md`). Other platforms: the
+      equivalent target/output list in the source definition.
+   2. A downstream task **depends** on `<T>` iff its converted body references any of those
+      concrete target names (table, view, or stream identifiers).
+   3. Known limitation: names built via variables / dynamic CTAS, plus secondary effects such as
+      control-table row counts or session variables `<T>` would have set, are **not** covered by
+      step 2. If those are the only signals, treat as a data dependency (`needs-user`) rather
+      than rewiring.
+
+   - **If the downstream task does not depend on `<T>`'s output** — for **every** downstream
+     task whose `AFTER` list contains `<T>`, replace `<T>` in that list with the set of `<T>`'s
+     enabled predecessors (walk further back through any chain of disabled predecessors). If
+     that walk finds no enabled ancestor, mark the downstream element `needs-user` rather than
+     dropping the `AFTER` clause (dropping it would turn a scheduled dependent into a root task
+     the customer never authored). Add a one-line comment explaining the rewire and, if
+     applicable, cite the source `$<task>.PrevTaskStatus` workflow variable's own description
+     (it documents PowerCenter's built-in skip-and-continue semantics for disabled predecessors
+     — check the source XML for a `WORKFLOWVARIABLE` with `DESCRIPTION` containing "not
+     disabled"). This is a required fix, not optional.
+   - **If the downstream task does depend on `<T>`'s output** — do not rewire silently.
+     Mark the downstream element `needs-user`, with a reason describing the data gap (the disabled
+     step's output is missing and the downstream logic needs it). This is a real functional question
+     for the customer, not something to resolve unilaterally.
+
+
 2. **`EXECUTE DBT PROJECT`** — mark `skipped --reason dbt-dependency`. Continue.
 
 3. **Identify issues** — look for `!!!RESOLVE EWI!!!` markers and `--** SSC-*` comments
@@ -401,6 +437,13 @@ If no fixes were applied, write: `No fixes applied in this task.`
 After completing each element, if you feel context pressure (large accumulated outputs, many fix-test iterations), **stop after the current element's artifacts are written** and report partial completion. The orchestrator will spawn a continuation agent.
 
 **Prefer stopping early with artifacts on disk over running to exhaustion.** When stopping early, send a completion message listing: elements completed (with statuses), elements NOT processed, reason: `"partial-completion: context pressure after N elements"`.
+
+Before summarizing, re-read the final state of every file you edited (`dbt_project.yml`, `sources.yml`,
+`profiles.yml`) — confirm placeholder keys were actually renamed (not left alongside a new one), and
+that `profile:` matches this repository's established per-project naming convention (`{project_name}`,
+matching sibling projects). Do not summarize from memory of what you intended to change — the hard
+`models:`/`name:` mismatch check now runs automatically at phase completion, but naming-convention
+drift does not.
 
 ### Team Protocol
 

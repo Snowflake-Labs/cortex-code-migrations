@@ -174,7 +174,7 @@ Apply this to every PIVOT column reference (SELECT list, `NVL`, `CASE`, aliases,
 1. **Find the extra/missing rows:**
    ```sql
    SELECT differences FROM VALIDATION.LATEST
-   WHERE code_unit_name = 'RPT.Name' AND params_hash = 'abc123';
+   WHERE UPPER(procedure_name) = UPPER('RPT.Name') AND params_hash = 'abc123';
    ```
 
 2. **Check for filter differences:**
@@ -228,6 +228,15 @@ Apply this to every PIVOT column reference (SELECT list, `NVL`, `CASE`, aliases,
    ```bash
    ls -la ~/.ssh/rsa_key.p8
    ```
+
+4. **Entra ID / OIDC:** `externalbrowser` is SAML SSO, not OIDC. Use
+   `authenticator = "oauth_authorization_code"` with `user`, client id/secret,
+   both HTTPS endpoints, `oauth_scope`, and a **fixed** loopback
+   `oauth_redirect_uri` registered exactly in Entra. See
+   `../connection/snowflake-connection/SKILL.md` and
+   `Snowflake.SnowConvertDesktop/Snowflake.SnowConvert.Cli/docs/entra-oidc-oauth.md`.
+   Headless/CI cannot complete this flow — switch to PAT or key-pair. Data
+   validation and test generation do not support Authorization Code (`CNX0037`).
 
 ## Test Runner Errors
 
