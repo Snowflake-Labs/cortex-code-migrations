@@ -88,6 +88,10 @@ _NO_ROW_COMPARISON = (
     "if these columns carry business-critical text."
 )
 _NO_SNOWFLAKE_EQUIVALENT = "No Snowflake equivalent, so these columns cannot be compared."
+_HLLSKETCH_CARDINALITY = (
+    "No Snowflake sketch type; stored as <code>HLL_CARDINALITY</code> text "
+    "(VARCHAR). Distinct sketches with the same cardinality compare equal."
+)
 _UNDOCUMENTED = (
     "Migrated by the orchestrator, but not yet covered by the published "
     "type-mapping page. Confirm handling with your migration engineer."
@@ -96,15 +100,35 @@ _ROWVERSION = (
     "SQL Server <code>TIMESTAMP</code> is a synonym for <code>ROWVERSION</code>, "
     "not a datetime; it migrates as BINARY."
 )
-_WIDENED_NUMERIC = (
-    "Precision and scale are widened on the target, so the converted DDL "
-    "deliberately differs from the source."
-)
 _SUB_MICROSECOND = (
     "The 7th fractional-second digit truncates on readback. On high-precision "
     "columns that surfaces as level 2 and 3 differences, which are not data loss."
 )
 _INTERVAL = "Compared as a native INTERVAL by default; the handling is configurable."
+_ORACLE_CHAR_ANTI_CASE = (
+    "Snowflake stores CHAR internally as VARCHAR/TEXT; DM aligns the dict "
+    "target with runtime rather than SCAI's DDL literal."
+)
+_ORACLE_RAW_ANTI_CASE = (
+    "SCAI drops the size when converting RAW; DM keeps catalog "
+    "<code>char_length</code> and emits BINARY(n) because it is strictly more "
+    "informative than SCAI's bare BINARY."
+)
+_ORACLE_BARE_NUMBER = (
+    "SCAI emits NUMBER(38,18) for bare NUMBER; DM cannot distinguish bare "
+    "NUMBER from NUMBER(*) via catalog and keeps the default helper. Per-column "
+    "<code>validationCustomTypeRules</code> is the escape hatch."
+)
+_ORACLE_DATE_AS_TIMESTAMP = (
+    "Oracle DATE carries century/year/month/day/hour/minute/second; Snowflake "
+    "DATE drops the time component, so migrations preserve it as TIMESTAMP_NTZ."
+)
+_ORACLE_FIXED_ROWID_SIZE = (
+    "Emits as VARCHAR(18) per SCAI OraSimpleDataTypeReplacer fixed size."
+)
+_ORACLE_FIXED_UROWID_SIZE = (
+    "Emits as VARCHAR(4000) per SCAI (Oracle SQL Reference default width)."
+)
 
 
 def _row(name: str, target: str, validation: str, note: str = "") -> TypeCoverage:
@@ -120,8 +144,8 @@ _SQLSERVER: tuple[TypeCoverage, ...] = (
     _row("SMALLINT", "NUMBER", _S),
     _row("INT", "NUMBER", _S),
     _row("BIGINT", "NUMBER", _S),
-    _row("DECIMAL", "NUMBER(p+2, s+4)", _S, _WIDENED_NUMERIC),
-    _row("NUMERIC", "NUMBER(p+2, s+4)", _S, _WIDENED_NUMERIC),
+    _row("DECIMAL", "NUMBER", _S),
+    _row("NUMERIC", "NUMBER", _S),
     _row("MONEY", "NUMBER", _S),
     _row("SMALLMONEY", "NUMBER", _S),
     _row("FLOAT", "FLOAT", _S),
@@ -200,33 +224,94 @@ _REDSHIFT: tuple[TypeCoverage, ...] = (
     _row("GEOMETRY", "GEOGRAPHY", _SCHEMA, _CONTENTS_NEVER_COMPARED),
     _row("GEOGRAPHY", "GEOGRAPHY", _SCHEMA, _CONTENTS_NEVER_COMPARED),
     _row("OID", "NUMBER", VALIDATION_UNDOCUMENTED, _UNDOCUMENTED),
-    TypeCoverage(
-        "HLLSKETCH",
-        "VARCHAR",
-        MIGRATION_UNSUPPORTED,
-        VALIDATION_UNSUPPORTED,
-        _NO_SNOWFLAKE_EQUIVALENT,
-    ),
+    _row("HLLSKETCH", "VARCHAR", _S, _HLLSKETCH_CARDINALITY),
 )
+
+_ORACLE: tuple[TypeCoverage, ...] = (
+    _row("NUMBER", "NUMBER", _S, _ORACLE_BARE_NUMBER),
+    _row("INTEGER", "NUMBER", _S),
+    _row("INT", "NUMBER", _S),
+    _row("SMALLINT", "NUMBER", _S),
+    _row("DECIMAL", "NUMBER", _S),
+    _row("NUMERIC", "NUMBER", _S),
+    _row("FLOAT", "FLOAT", _S),
+    _row("REAL", "FLOAT", _S),
+    _row("BINARY_FLOAT", "FLOAT", _S),
+    _row("BINARY_DOUBLE", "FLOAT", _S),
+    _row("CHAR", "VARCHAR", _S, _ORACLE_CHAR_ANTI_CASE),
+    _row("VARCHAR", "VARCHAR", _S),
+    _row("VARCHAR2", "VARCHAR", _S),
+    _row("NCHAR", "VARCHAR", _S),
+    _row("NVARCHAR2", "VARCHAR", _S),
+    _row("CLOB", "VARCHAR", _S),
+    _row("NCLOB", "VARCHAR", _S),
+    _row("LONG", "VARCHAR", _S),
+    _row("RAW", "BINARY", _S, _ORACLE_RAW_ANTI_CASE),
+    _row("LONG RAW", "BINARY", _S),
+    _row("BLOB", "BINARY", _S),
+    _row("BFILE", "VARCHAR", _S),
+    _row("ROWID", "VARCHAR", _S, _ORACLE_FIXED_ROWID_SIZE),
+    _row("UROWID", "VARCHAR", _S, _ORACLE_FIXED_UROWID_SIZE),
+    _row("DATE", "TIMESTAMP_NTZ", _S, _ORACLE_DATE_AS_TIMESTAMP),
+    _row("TIMESTAMP", "TIMESTAMP_NTZ", _S),
+    _row("TIMESTAMP WITH TIME ZONE", "TIMESTAMP_TZ", _S),
+    _row("TIMESTAMP WITH LOCAL TIME ZONE", "TIMESTAMP_LTZ", _S),
+    _row("INTERVAL YEAR TO MONTH", "INTERVAL", _S, _INTERVAL),
+    _row("INTERVAL DAY TO SECOND", "INTERVAL", _S, _INTERVAL),
+    _row("BOOLEAN", "BOOLEAN", _S),
+    _row("BOOL", "BOOLEAN", _S),
+    _row("JSON", "VARIANT", _S),
+    _row("XMLTYPE", "VARIANT", _S),
+    _row("SDO_GEOMETRY", "GEOGRAPHY", _SCHEMA, _CONTENTS_NEVER_COMPARED),
+    _row("VECTOR", "VECTOR", VALIDATION_UNDOCUMENTED, _UNDOCUMENTED),
+)
+
+_AZURE_SYNAPSE: tuple[TypeCoverage, ...] = (
+    _row("BIT", "BOOLEAN", _S),
+    _row("TINYINT", "NUMBER", _S),
+    _row("SMALLINT", "NUMBER", _S),
+    _row("INT", "NUMBER", _S),
+    _row("BIGINT", "NUMBER", _S),
+    _row("DECIMAL", "NUMBER", _S),
+    _row("NUMERIC", "NUMBER", _S),
+    _row("MONEY", "NUMBER", _S),
+    _row("SMALLMONEY", "NUMBER", _S),
+    _row("FLOAT", "FLOAT", _S),
+    _row("REAL", "FLOAT", _S),
+    _row("CHAR", "VARCHAR", _S),
+    _row("VARCHAR", "VARCHAR", _S),
+    _row("NCHAR", "VARCHAR", _S, "Row comparison applies TRIM when the target is VARCHAR."),
+    _row("NVARCHAR", "VARCHAR", _S),
+    _row("SYSNAME", "VARCHAR", _S),
+    _row("DATE", "DATE", _S),
+    _row("TIME", "TIME", _S),
+    _row("DATETIME", "TIMESTAMP_NTZ", _S),
+    _row("SMALLDATETIME", "TIMESTAMP_NTZ", _S),
+    _row("DATETIME2", "TIMESTAMP_NTZ", VALIDATION_DRIFT, _SUB_MICROSECOND),
+    _row("DATETIMEOFFSET", "TIMESTAMP_TZ", VALIDATION_DRIFT, _SUB_MICROSECOND),
+    _row("BINARY", "BINARY", _S),
+    _row("VARBINARY", "BINARY", _S),
+    _row("UNIQUEIDENTIFIER", "VARCHAR", _S,
+         "Stored as an uppercase UUID string, so case-sensitive joins on it need review."),
+)
+
 
 COVERAGE: dict[str, tuple[TypeCoverage, ...]] = {
     "sqlserver": _SQLSERVER,
     "redshift": _REDSHIFT,
+    "oracle": _ORACLE,
+    "azure_synapse": _AZURE_SYNAPSE,
 }
 
-# The six rows where the published page and the shipped orchestrator disagree.
+# The rows where the published page and the shipped orchestrator disagree.
 # Recorded rather than reconciled: the report follows the docs, and the drift
-# guard fails on a seventh.
+# guard fails on a new unrecorded mismatch.
 KNOWN_DMVF_DIVERGENCES: dict[tuple[str, str], str] = {
     ("sqlserver", "BIT"): "docs NUMBER; orchestrator BOOLEAN",
     ("sqlserver", "GEOMETRY"): "docs GEOGRAPHY; orchestrator GEOMETRY",
     ("redshift", "GEOMETRY"): "docs GEOGRAPHY; orchestrator GEOMETRY",
     ("redshift", "TIMETZ"): "docs TIME; orchestrator TIMESTAMP_TZ",
     ("redshift", "TIME WITH TIME ZONE"): "docs TIME; orchestrator TIMESTAMP_TZ",
-    ("redshift", "HLLSKETCH"): (
-        "docs say unsupported for migration; orchestrator maps it to VARIANT, "
-        "so these columns migrate as an opaque blob instead of failing"
-    ),
 }
 
 

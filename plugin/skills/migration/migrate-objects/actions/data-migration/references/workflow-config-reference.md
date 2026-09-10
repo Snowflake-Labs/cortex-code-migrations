@@ -12,8 +12,46 @@
 | `affinity` | String | No | Only orchestrator and worker instances with a matching affinity will process this workflow. If the SPCS orchestrator was started with a specific affinity (visible in service logs as `Orchestrator affinity: <value>`), the workflow **must** set the same value or it will be silently skipped. The worker's `[application].affinity` must also match. Omit from all sides for fresh setups. |
 | `preflight` | Boolean | No | When `true`, cap each table to one partition and run against a transient `PREFLIGHT_<workflowId>` schema (bounded dry-run). Default `false`. |
 | `preflightKeepSchema` | Boolean | No | When `preflight` is `true`, skip cleanup so the transient schema remains for manual inspection. Default `false`. |
-| `cleanUpTransientResources` | `"never"` \| `"on-success"` \| `"always"` | No | Delete intermediate stage files for this workflow after it finishes (`TASK_RESULTS` and any external stages used by extraction). Default `"never"`. Underscores are accepted (`on_success`). |
+| `cleanUpTransientResources` | `"never"` \| `"on-success"` \| `"always"` | No | Delete intermediate stage files for this workflow after it finishes (`TASK_RESULTS` and any external stages used by extraction). Default `"on-success"`. Underscores are accepted (`on_success`). Set `"never"` to retain stage files for debugging. When the orchestrator runs in Iceberg metadata mode, the omitted-key default may be `"always"` instead — check your deployment profile if you rely on the default. |
 | `intervalHandling` | `"interval"` \| `"varchar"` | No | How PostgreSQL/BigQuery mixed-family interval columns are mapped. Default `"interval"`. Can be overridden per table. |
+
+## Preflight (bounded dry-run)
+
+Set top-level `preflight: true` for a **migration smoke test**: each table runs as a single partition; loads go to transient schema `PREFLIGHT_<workflowId>`, not the configured production target. Optional `preflightKeepSchema: true` retains the schema after the workflow for inspection.
+
+**Not the same as** Preliminary migration type (`whereClauseCriteria` loads to real targets) or `scai data doctor` (infra health checks).
+
+When a customer asks for a dry-run or pipeline test before full migration, offer preflight at Step 2a. Full agent guidance: [Advanced operations reference](../../../../data-infrastructure/references/advanced-operations-reference.md#preflight-workflows-bounded-migration-dry-run).
+
+## Teradata: mixed charsets and `onUntranslatable`
+
+**When:** Teradata extraction fails with **6701** / **5355** (mixed charsets in one row), or the customer asks how to handle **untranslatable** non-Unicode bytes during migration.
+
+**Default:** omit `onUntranslatable` or set `"substitute"` under `defaultTableConfiguration` — untranslatable bytes become **U+FFFD** and migration continues.
+
+**Strict mode:** per-table `"onUntranslatable": "fail"` when any untranslatable byte must abort the partition (Teradata **6706**).
+
+Applies to **`regular`**, worker-side **TPT**, and **`write_nos`** (orchestrator-built `SELECT`; no DEA TOML keys). Detail: `dmvf/docs/data-migration-orchestrator/teradata-charset-extraction.md`.
+
+```yaml
+defaultTableConfiguration:
+  onUntranslatable: substitute
+  extraction:
+    strategy: regular   # or write_nos + externalStage
+tables:
+  - source: { databaseName: ecommerce, tableName: mixed_charset_orders }
+    target: { databaseName: TARGET_DB, schemaName: ECOMMERCE_TD, tableName: MIXED_CHARSET_ORDERS }
+    columnNamesToPartitionBy: [order_id]
+  - source: { databaseName: ecommerce, tableName: strict_audit }
+    target: { databaseName: TARGET_DB, schemaName: ECOMMERCE_TD, tableName: STRICT_AUDIT }
+    columnNamesToPartitionBy: [id]
+    onUntranslatable: fail
+```
+
+```yaml
+preflight: true
+preflightKeepSchema: false
+```
 
 ## TableConfiguration
 
@@ -34,6 +72,7 @@
 | `loading` | Object | No | Loading strategy: `warehouse` (default, `COPY INTO`) or `snowpipe`. |
 | `queryModifiers` | Object | No | SQL hints to reduce locking on busy source tables during extraction (see [Query modifiers](#query-modifiers)). |
 | `intervalHandling` | `"interval"` \| `"varchar"` | No | Per-table override of top-level `intervalHandling`. |
+| `onUntranslatable` | `"substitute"` \| `"fail"` | No | **Teradata only.** How non-Unicode string columns handle untranslatable bytes during extraction. Default `"substitute"`. Set under `defaultTableConfiguration` for a workflow-wide default, or per table to override. Use `"fail"` when untranslatable non-Unicode bytes must abort the partition (Error 6706) instead of substituting U+FFFD. Detail: `dmvf/docs/data-migration-orchestrator/teradata-charset-extraction.md`. |
 | `executionTimeoutMinutes` | Integer | No | Wall-clock timeout in minutes for the **Analyze boundaries** DEA task only (orchestrator default is **20** when omitted). Does **not** apply to extraction or load. Use per table for large/slow boundary queries, or under `defaultTableConfiguration` to apply to all tables. |
 
 ## SourceTargetIdentifier
@@ -139,9 +178,13 @@ extraction:
 
 | Strategy | Description | Best for |
 |----------|-------------|----------|
-| `none` (default) | Full extraction every run | Small tables or unpredictable changes |
-| `checksum` | Hash all column values per partition; re-extract changed partitions only | Dimension tables without a monotonic column |
+| `none` (default) | Full extraction every run | One-time loads, or tables you will not re-migrate without clearing the target first |
+| `checksum` | Hash all column values per partition; re-extract changed partitions only | Dimension tables without a monotonic column. **Oracle:** built-in partition checksum is supported (`STANDARD_HASH` over normalized columns); optional `checksumExpression` (for example `MAX(ORA_ROWSCN)`) overrides the default hash. Some Oracle types are excluded from the default hash — see checksum type coverage below. |
 | `watermark` | Track a monotonic column; sync only rows newer than the last observed value | Fact tables, event logs with a reliable `UPDATED_AT` / ID column |
+
+> **Re-running without incremental sync:** With `strategy: none` (or no `synchronization` block), every migration run extracts and loads **all** matching rows again. Re-running the same workflow against a target that already holds data from a prior run **appends duplicate rows** (or loads more data than expected). Use `watermark` or `checksum` for repeatable incremental runs. Do **not** `TRUNCATE` or bulk-`DELETE` the target without explicit user confirmation — the table may legitimately contain pre-existing or expected rows.
+
+> **Checksum type coverage:** Built-in partition checksums **skip or normalize** some types (SQL Server `text`/`ntext`/`image`; Oracle LOBs/`LONG`/`XMLTYPE`/`VECTOR`; float rounding; spatial WKT; Redshift `HLLSKETCH`). Changes only in those columns may **not** change the checksum — no re-extract on the next run. Custom `checksumExpression` (for example `MAX(ORA_ROWSCN)`) only reflects what that expression measures. See [Advanced operations reference](../../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
 
 ```yaml
 synchronization:
@@ -178,18 +221,121 @@ synchronization:
 
 ## Query modifiers
 
-Reduce locking on busy source tables during extraction. Can be set at workflow default, per table, or in worker TOML.
+Reduce locking on busy source tables during extraction. Can be set at the connection layer (worker TOML), workflow default (`defaultTableConfiguration.queryModifiers`), or per table (`tables[].queryModifiers`). Modifiers apply to source queries only — Snowflake target queries never receive them.
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `objectModifier` | String | Hint applied to the table object in `FROM` (for example `WITH (NOLOCK)` on SQL Server) |
-| `selectModifier` | String | Hint after `SELECT` (for example `WITH UR` on Db2). Use `"NONE"` to disable inherited modifiers. |
+| `objectModifier` | String | Hint applied after the source table in `FROM` (for example ` WITH (NOLOCK)` on SQL Server) |
+| `selectModifier` | String | String rendered immediately after `SELECT` in every source query for that table or connection (for example `"/*+ INDEX(t idx_orders_created_at) */"`). Use `"NONE"` to disable (see below). |
 
 ```yaml
 queryModifiers:
-  objectModifier: "WITH (NOLOCK)"
-  selectModifier: "WITH UR"
+  objectModifier: " WITH (NOLOCK)"
+  selectModifier: " /*+ FIRST_ROWS(100) */"
 ```
+
+### selectModifier
+
+#### Configured value
+
+`selectModifier` is a string literal that DMVF renders immediately after `SELECT` in every source query for that table or connection. The resolver ensures a leading space separator between `SELECT` and the modifier; you do not need to include one in the configured value.
+
+```yaml
+# Per-table: apply an Oracle index hint on every extraction SELECT for this table.
+# Rendered: SELECT /*+ INDEX(t idx_orders_created_at) */ "COL1", ... FROM "HR"."ORDERS" t ...
+tables:
+  - source:
+      databaseName: ORCL
+      schemaName: HR
+      tableName: ORDERS
+    queryModifiers:
+      selectModifier: " /*+ INDEX(t idx_orders_created_at) */"
+```
+
+On the DM base-path (extraction, partition-boundary, checksum, watermark probes), DMVF aliases the source table as `t`. Hints referencing the alias should use `t` on this path. Some DV Jinja templates use other aliases (`src`, `rw`) — check the template context if configuring a hint that references the alias.
+
+#### Oracle auto-hint
+
+When all three conditions hold, DMVF auto-generates `/*+ PARALLEL(t, N) */` after `SELECT`:
+
+1. The source platform is Oracle.
+2. `selectModifier` is not configured at any layer (connection, workflow default, or per-table).
+3. The estimated row count yields a computed parallel degree greater than 2.
+
+The degree formula:
+
+```text
+N = min(2 ^ max(floor(log10(row_count + 1)) - 6, 0), 16)
+```
+
+The hint fires only when the computed degree exceeds 2. In practice this means tables of ~100 million rows or more; smaller tables produce degree 1 or 2, which the resolver treats as "no auto-hint" and renders a plain `SELECT`. When the row-count estimate is unavailable (None) the hint also does not fire.
+
+```yaml
+# Oracle source, selectModifier omitted, estimated rows = 120M → degree 4
+# Rendered: SELECT /*+ PARALLEL(t, 4) */ "COL1", ... FROM "HR"."ORDERS" t
+tables:
+  - source:
+      databaseName: ORCL
+      schemaName: HR
+      tableName: ORDERS
+    # queryModifiers omitted → Oracle auto-hint fires if row count is large enough
+```
+
+Auto-hint fires on every DM source-SELECT path: extraction, DV checksum probes, DV watermark probes, and partition-boundary queries. It does not fire on Snowflake-target queries.
+
+#### `"NONE"` opt-out sentinel
+
+Setting `selectModifier: "NONE"` (exact, case-sensitive, upper-case) disables both the configured modifier and the Oracle auto-hint for that table or connection. The rendered `SELECT` has no modifier token.
+
+The sentinel is case-sensitive. `"none"` and `"None"` are **not** opt-outs — they become literal `selectModifier` values rendered into the SQL as-is.
+
+```yaml
+# Disable Oracle auto-hint on one table while leaving other tables unrestricted.
+tables:
+  - source:
+      databaseName: ORCL
+      schemaName: HR
+      tableName: NO_PARALLEL_TABLE
+    queryModifiers:
+      selectModifier: "NONE"
+      # Rendered: SELECT "COL1", ... FROM "HR"."NO_PARALLEL_TABLE" t
+```
+
+#### Precedence
+
+The most-specific non-null value wins across the three config layers:
+
+| Layer | Most specific? | Set in |
+|-------|----------------|--------|
+| `tables[].queryModifiers.selectModifier` | Highest | Workflow YAML per-table |
+| `defaultTableConfiguration.queryModifiers.selectModifier` | Middle | Workflow YAML default |
+| Connection `query_modifiers.selectModifier` | Lowest | Worker TOML (see [`worker-config-reference.md`](../../../../data-infrastructure/references/worker-config-reference.md)) |
+
+An explicit `null` at a higher-specificity layer falls through to the next layer — it does **not** clear an upstream value. To override a connection-layer or workflow-default `selectModifier` for a specific table, set the per-table `selectModifier` to the desired value (or to `"NONE"` to opt out entirely). Setting it to `null` leaves the upstream value in effect.
+
+```yaml
+# Connection layer (worker TOML): selectModifier = " /*+ INDEX(t idx_orders_created_at) */"
+# Workflow default: unset (null) → falls through to connection
+# Per-table override on ORDERS: "NONE" → opt out for this table only
+defaultTableConfiguration:
+  queryModifiers:
+    selectModifier: null          # falls through; connection-layer value applies to most tables
+
+tables:
+  - source:
+      databaseName: ORCL
+      schemaName: HR
+      tableName: ORDERS
+    queryModifiers:
+      selectModifier: "NONE"      # opts out; plain SELECT for this table
+  - source:
+      databaseName: ORCL
+      schemaName: HR
+      tableName: EMPLOYEES
+    # queryModifiers omitted → connection-layer hint applies
+```
+
+See also: `dmvf/docs/data-migration-orchestrator/features/QueryModifiersAntiLockingSpec.md` §8 for the DMVA parity degree formula.
 
 ## Partition sizing and key selection
 

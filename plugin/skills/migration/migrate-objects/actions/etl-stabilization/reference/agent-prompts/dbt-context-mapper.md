@@ -30,6 +30,7 @@ For each project:
 1. Read `dbt_project.yml` — extract: project name, profile name, vars, model-paths, seed-paths
 2. Flag placeholder values (YOUR_PROJECT_NAME, YOUR_PROFILE_NAME) as bootstrap blockers
 3. Check if `vars:` section defines variables used by models
+4. If this project predates the current unit — more than one sibling unit's orchestration file references it, or it wasn't newly generated for this unit — cross-check every var default the models actually read (`sources.yml`, `dbt_project.yml` vars) against *this* unit's own source-XML identity (folder/repository/workflow name), even when `has_valid_config=true`. A previously-stabilized shared project is not a smoke-check target; wrong-but-valid-looking defaults are a silent data-correctness defect, not a compile error. Surface this as a bootstrap blocker with Fix Owner `needs-user` or `dbt-fixer (bootstrap)` as appropriate.
 
 ### 3. Source Definitions
 

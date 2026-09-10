@@ -1,13 +1,13 @@
 ---
 name: migration
-description: End-to-end database migration to Snowflake. Orchestrates the full migration lifecycle from source connection through initial conversion. Triggers: migrate, migration, migrate to snowflake, end to end migration, e2e migration, full migration.
+description: End-to-end database migration and data validation to Snowflake. Orchestrates migrations from source connection through conversion, and project-based in-warehouse validation between Snowflake tables. Triggers: migrate, migration, migrate to snowflake, Snowflake to Snowflake validation, validate Snowflake tables, compare Snowflake databases.
 license: Proprietary. See License-Skills for complete terms
 ---
 
 # Database Migration to Snowflake
 
 Tell the user:
-> **Welcome to the Snowflake AIM Migration Agent.**
+> **Welcome to Snowflake AIM for Data Warehouses.**
 
 On the first message of a session, the plugin injects whether a migration project exists in this directory. If the user's message already states what they want, act on it (Step 1); otherwise begin with Step 0. Either way, do **not** call `migration_status` — `configure` returns the status.
 
@@ -20,10 +20,12 @@ The built-in MCP server has a state machine that will guide you through user flo
 If the user's first message already states what they want (a specific task, or "continue"/"resume"), skip to Step 1. Otherwise greet and ask:
 
 > "What would you like to do? You can:
-> 1. **Continue** — I'll pick up your migration where we left off (or start setup if this is a new project)
+> 1. **Continue** — I'll pick up your migration where we left off
 > 2. **Something specific** — tell me what you need"
 
-- **Continue** (or "continue", "next", "resume", "keep going") → **Step 1**.
+When the injected context says this directory has no project yet, option 1 is **Start a new migration** instead.
+
+- **Continue** (or "start", "continue", "next", "resume", "keep going") → **Step 1**.
 - **Specific request** → **Skill Match** (no forced `configure`).
 
 ## Step 1: Configure — one call, returns status
@@ -48,11 +50,12 @@ Also add the checklist based on the status JSON. On macOS/Linux use `✅` (all d
 
 ```
 <symbol> 1. Connect                  - Connected to <source>
-<symbol> 2. Init                     - Project initialized
+<symbol> 2. Initialize               - Project initialized
 <symbol> 3. Register                 - <registered count> objects registered
-<symbol> 4. Initial Conv             - <converted>/<total> converted
-<symbol> 5. Assess                   - Assessment report generated / not run
-<symbol> 6. Migrate Objects
+<symbol> 4. Code Conversion          - <converted>/<total> converted
+<symbol> 5. Assessment               - Assessment report generated
+<symbol> 6. Migration Setup          - Snowflake target, testing, testbed, and data infra configured
+<symbol> 7. Migrate Objects
    - Tables:      <table.deployed>/<table.total> deployed, <table.data_migrated>/<table.total> with data migrated, <table.data_validated>/<table.total> validated
    - Views:       <view.deployed>/<view.total> deployed
    - Functions:   <function.deployed>/<function.total> deployed, <function.tested>/<function.total> tested
@@ -73,16 +76,19 @@ Present the narrative summary followed by the progress checklist, then continue 
 
 ## Prescribed Path
 
+<prescribed-path>
 Use `routing` from the status JSON to delegate to the next step:
 
 | Condition | Sub-skill |
 |-----------|-----------|
 | `routing.project_exists` = false | Load `./setup/SKILL.md` |
+| `routing.data_validation_only` = true | Load `./validate-objects/SKILL.md` |
 | `routing.code_conversion_only` = true | Load `./code-conversion-only/SKILL.md` |
 | `routing.assessed` = false | Load `./setup/SKILL.md` |
 | `routing.assessed` = true | Load `./migrate-objects/SKILL.md` |
 
 Each sub-skill handles its own internal routing based on the full `routing` object.
+</prescribed-path>
 
 ---
 
@@ -95,7 +101,9 @@ These answer common questions about project state without loading a sub-skill:
 
 - **"Show me objects that match rule X"** — Load `./migrate-objects/rule-engine/propagate/SKILL.md`.
 
-- **"How do I extend / customize the migration plugin?"** / **"How do I override task X?"** — Load `./extensibility/TASKS.md` for the full reference: overridable task ids, per-task contracts, and the project-local + `$AIM_SKILL_EXT_DIR` paths. Optionally call `migration_status(mode='extensions')` to show which overrides are active.
+- **"How do I extend / customize the migration plugin?"** / **"How do I override task X?"** — Load `./extensibility/TASKS.md` for the full reference: overridable task ids, per-task contracts, the project-local + `$AIM_SKILL_EXT_DIR` paths, and registering code units with `kind=custom` plus a free-form `customKind` discriminator. Optionally call `migration_status(mode='extensions')` to show which overrides are active.
+
+- **"My migration also has FiveTran / SSAS / dbt / Airflow / Oracle PACKAGE bodies / scripts the engine doesn't generate"** / **"How do I track <non-built-in asset> in the migration?"** — Load `./setup/discover-extras/SKILL.md`. Registers each asset as a code unit with `kind=custom` and a `customKind` discriminator, then writes a `.scai/skills/<customKind>.md` cookbook with the customer so every object of that kind runs the same playbook (see `./extensibility/TASKS.md` → "Custom code units").
 
 ---
 
@@ -110,10 +118,20 @@ Match the user's request to the most relevant skill and load it.
 - If the request is ambiguous between siblings, ask one clarifying question.
 - If no skill matches, fall back to the section below.
 
+### SAS (Preview — parallel track, not SnowConvert)
+- **sas** (Preview) — SAS → Snowflake: assess portfolios, convert `.sas` programs, or load `.sas7bdat` from a stage → `./sas/SKILL.md`
+  - **assess-sas-migration** — portfolio complexity, dependency DAG, migration waves → `./sas/assess-sas-migration/SKILL.md`
+  - **convert-sas-to-snowflake** — convert SAS programs to Snowflake SQL / stored procedures → `./sas/convert-sas-to-snowflake/SKILL.md`
+  - **migrate-sas7bdat-to-snowflake** — bulk-load `.sas7bdat` from a stage into tables → `./sas/migrate-sas7bdat-to-snowflake/SKILL.md`
+  - **validate-sas-conversion** — validate an existing SAS conversion → `./sas/convert-sas-to-snowflake/validate-sas-conversion/SKILL.md`
+  - **register-sas-source-units** — populate the Code Unit Registry from `.sas` source files so `scai test` can see them → `./sas/register-sas-source-units/SKILL.md`
+  - **register-sas-converted-units** — attach converted `.sql` to the CUR so `scai test` can validate the SAS conversion → `./sas/register-sas-converted-units/SKILL.md`
+
 ### Setup & onboarding
 - **setup** — full setup, steps 1–5: connect, init, register, convert, assess → `./setup/SKILL.md`
   - **midway-entry** — existing project with source + pre-converted Snowflake SQL (SQL Server / Redshift only) → `./setup/midway-entry.md`
   - **configure-snowflake-target** — set or change the Snowflake connection and target database for object migration. Triggers: "change the target database", "deploy to a different database", "switch Snowflake connection" → `./setup/configure-snowflake-target.md`
+  - **snowflake-connection** — create or repair a Snowflake target authenticator. Use for Microsoft Entra ID / Azure AD / OIDC (`oauth_authorization_code`); do not use `externalbrowser` for Entra → `./connection/snowflake-connection/SKILL.md`
   - **configure-testing** — pick or change the testing path (source-data vs synthetic) for procedure/function equivalence tests. Triggers: "change testing path", "switch to synthetic tests", "use query logs" → `./setup/configure-testing.md`
   - **data-validation-setup** — configure cloud data validation: schema, metrics, row-level checks → `./setup/data-validation/SKILL.md`
   - **data-infrastructure-teardown** — suspend SPCS service + compute pool, stop local worker (cost-saving) → `./data-infrastructure/teardown/SKILL.md`
@@ -126,9 +144,10 @@ Match the user's request to the most relevant skill and load it.
 - **register-code-units** — router for getting source code into the project → `./register-code-units/SKILL.md`
   - **extract-code-units** — extract DDL/code from a connected source database → `./register-code-units/extract-code-units/SKILL.md`
   - **add-code-units** — import local SQL files into the project → `./register-code-units/add-code-units/SKILL.md`
-- **convert** — convert source → Snowflake SQL via SnowConvert (incl. optional Power BI `.pbit` repointing) → `./convert/SKILL.md`
+- **convert** — convert source → Snowflake SQL via SnowConvert (incl. optional Power BI `.pbit` and Tableau `.twb`/`.tds` repointing) → `./convert/SKILL.md`
   - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
   - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
+  - **tableau-repointing** — collect `.twb`/`.tds` folder path and `--tableauRepointing` flag for Tableau repointing. Triggers: tableau, tableau migration, tableau repointing, migrate tableau, repoint tableau → `./tableau-repointing/SKILL.md`
 - **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
 
 ### Migration & validation
@@ -136,7 +155,10 @@ Match the user's request to the most relevant skill and load it.
   - **migrate-etl** — claim an ETL code unit, then stabilize it. Entry point for "fix ETL package", "fix SSIS/Informatica conversion", "proceed with stabilization", "resume ETL fixing" — it claims the unit (so it appears in `my_objects_summary` with the current user as owner) before delegating to the phase-based etl-stabilization engine. → `./migrate-objects/migrate-etl/SKILL.md`
   - **data-migration-setup** — choose approach, generate workflow YAML, create target database for `migrate_data` → `./migrate-objects/actions/data-migration/SKILL.md`
   - **testbed-generator** — mine → validate → compile → generate the synthetic testbed for a workload: run/resume each phase, inspect unsolved constraints, readiness, and data-coupling clusters. Triggers: generate testbed, mine testbed, validate testbed, compile testbed, testbed data source → `./migrate-objects/baseline-capture/testbed-generator/SKILL.md`
-- **validate-objects** — validate migrated data between source and Snowflake → `./validate-objects/SKILL.md`
+- **validate-objects** — validate data between a source and Snowflake, including project-based Snowflake-to-Snowflake validation. Triggers: "validate Snowflake to Snowflake", "compare Snowflake tables/databases", "run SF-to-SF DV" → `./validate-objects/SKILL.md`
+
+### Object metadata
+- **tag-objects** — tag or untag code units with the user's own labels (`extensions.tags`), and find objects by tag. Triggers: "tag this table", "label these objects", "untag", "which objects are tagged" → `./tag-objects/SKILL.md`
 
 ### Rules
 - **rule-engine** — search, apply, and manage migration rules → `./migrate-objects/rule-engine/SKILL.md`
@@ -145,6 +167,7 @@ Match the user's request to the most relevant skill and load it.
 
 ### Customization
 - **task-overrides** — replace the skill that runs for any built-in task with the user's own `SKILL.md`, scoped to the project or to a global directory via `$AIM_SKILL_EXT_DIR`. Triggers: "extend the plugin", "customize task X", "swap out the skill for Y", "override registerCode/convertCode/deploy/...". Reference: `./extensibility/TASKS.md`
+- **discover-extras** — register assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, Informatica, SSAS cubes, Oracle PACKAGE bodies, custom shell scripts) as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved `databaseObject` / `script` / `etl` / `custom` set) so they flow through orchestration alongside built-in units. Triggers: "I have FiveTran / SSAS / dbt / a script that touches the database", "register custom asset", "track <non-built-in> in the migration". Skill: `./setup/discover-extras/SKILL.md`. Reference: `./extensibility/TASKS.md` (Custom code units).
 
 ## Fallback
 

@@ -2,13 +2,13 @@
 
 What Snowflake and source-DB privileges the testing framework needs, and what to do when `configure()` reports a `schema_status_validation: error(...)` or `prereq_status_clone_perms: failed(...)`.
 
-> **Not auto-loaded.** The agent surfaces the configure response message verbatim and stops. The user can read this reference to find the GRANTs needed, apply them out-of-band, then say "recheck" / "done" — the agent runs `configure(recheck=true)` to re-verify.
+> **Not auto-loaded.** The agent surfaces the configure response message verbatim and stops. The user can read this reference to find the GRANTs needed, apply them out-of-band, then say "recheck" / "done" — the agent runs `configure(ensure_metadata_schema=true)` to re-verify.
 
 ## What the testing framework does on Snowflake
 
-When the user opts into testing (answers Q1 in `migrate-objects/SKILL.md` Step 2), `configure(recheck=true)` triggers two probes that may write to Snowflake:
+When the user opts into testing (answers Q1 in `migrate-objects/SKILL.md` Step 2), `configure(ensure_metadata_schema=true)` triggers two probes that may write to Snowflake:
 
-1. **`scai test validate --create-schema`** — installs the `VALIDATION` schema in the configured database. Creates a stage (`@VALIDATION.BASELINES`), a results table (`VALIDATION.RESULTS`), supporting views (`SUMMARY`, `LATEST`, `FAILURES`), and the validation stored procedures (`VALIDATE_SINGLE`, `VALIDATE_BATCH`). Idempotent on the scai side — re-runs against an already-deployed schema are no-ops.
+1. **`scai test validate --create-schema`** — installs the `VALIDATION` schema in the database named by `testing_results_database` in `.scai/settings/test_config.yaml` (the SnowConvert metadata database, not the migration target; projects predating that setting still have it in the target). Creates a stage (`@VALIDATION.BASELINES`), a results table (`VALIDATION.RESULTS`), supporting views (`SUMMARY`, `LATEST`, `FAILURES`), and the validation stored procedures (`VALIDATE_SINGLE`, `VALIDATE_BATCH`). Idempotent on the scai side — re-runs against an already-deployed schema are no-ops.
 2. **`SHOW GRANTS TO ROLE CURRENT_ROLE()`** — read-only check that the active Snowflake role has `CREATE DATABASE on ACCOUNT`, needed for clone-based test isolation during `scai test validate`.
 
 Later, during the deploy-test-fix loop, the framework also:
@@ -71,7 +71,7 @@ GRANT CREATE DATABASE ON ACCOUNT TO ROLE <ROLE>;
 GRANT USAGE, OPERATE ON WAREHOUSE <WAREHOUSE> TO ROLE <ROLE>;
 ```
 
-After applying, tell the agent "done" or "recheck" — it will run `configure(recheck=true)` which clears the cached failure and re-probes.
+After applying, tell the agent "done" or "recheck" — it will run `configure(ensure_metadata_schema=true)` which clears the cached failure and re-probes.
 
 ### Why each grant
 
@@ -134,8 +134,8 @@ GRANT CREATE DATABASE ON <PARENT_DATABASE> TO <USER>;
 
 | Error message (verbatim from configure response or scai) | Fix |
 |---|---|
-| `Insufficient privileges to operate on database '<DB>'` | `GRANT USAGE ON DATABASE`, then recheck |
-| `Insufficient privileges to operate on schema 'VALIDATION'` or `not authorized to perform: CREATE SCHEMA` | `GRANT CREATE SCHEMA ON DATABASE`, then recheck. After the deploy succeeds, the schema-bundle grants above are still needed for ongoing test runs. |
+| `Insufficient privileges to operate on database '<DB>'` | `GRANT USAGE ON DATABASE`, then `configure(ensure_metadata_schema=true)` |
+| `Insufficient privileges to operate on schema 'VALIDATION'` or `not authorized to perform: CREATE SCHEMA` | `GRANT CREATE SCHEMA ON DATABASE`, then `configure(ensure_metadata_schema=true)`. After the deploy succeeds, the schema-bundle grants above are still needed for ongoing test runs. |
 | `prereq_status_clone_perms: failed("CREATE DATABASE on ACCOUNT is not granted ...")` | `GRANT CREATE DATABASE ON ACCOUNT`. If your role inherits this via a parent role, the probe may report a false positive — confirm with `SHOW GRANTS ON ROLE <ROLE>` and proceed (the actual clone operation will succeed). |
 | `Object 'VALIDATION.BASELINES' is not owned by ... GRANT WRITE` | `GRANT READ, WRITE ON STAGE` (or grant ownership of the schema) |
 | Source-side: `permission denied on EXECUTE` | Apply the dialect-specific EXECUTE grants above |

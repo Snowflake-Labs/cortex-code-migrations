@@ -1,6 +1,6 @@
 ---
 name: convert
-description: Convert source code to Snowflake SQL using SnowConvert. Transforms full-migration sources and code-conversion-only sources to Snowflake-compatible syntax, and optionally repoints Power BI reports. Triggers: convert, snowconvert, transform code, convert to snowflake, power bi.
+description: Convert source code to Snowflake SQL using SnowConvert. Transforms full-migration sources and code-conversion-only sources to Snowflake-compatible syntax, and optionally repoints Power BI reports and Tableau workbooks. Triggers: convert, snowconvert, transform code, convert to snowflake, power bi, tableau.
 parent_skill: migration
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -26,15 +26,15 @@ assessment's job — do that here only if the user asks a direct question.
 ## Prerequisites
 
 - Migration project initialized (`scai init`)
-- Source code present in the project `source/` directory, either from extraction or `scai code add`
+- Source SQL in `source/` **or** Tableau repointing with `TABLEAU_PATH` set (Tableau-only is allowed with an empty `source/`; Step 3.5 applies the dialect gate)
 
 ## Workflow
 
 ### Step 1: Verify Source Code Exists
 
-Confirm `source/` contains `.sql` files (use whichever portable form fits the host).
+Confirm `source/` contains `.sql` files (use whichever portable form fits the host). Note whether SQL is present; do not stop yet.
 
-If no files are found, the setup state machine should have already routed back to `register-code-units` before you got here. If somehow you arrived with an empty `source/`, return to the parent setup skill so it can re-query `progress_setup()`.
+If `source/` is empty, continue to Steps 2–3.5. After those steps, if there is still no SQL **and** `TABLEAU_PATH` is unset **and** `PBIT_PATH` is unset, return to the parent setup skill so it can re-query `progress_setup()`. Tableau-only conversions (Step 3.5 sets `TABLEAU_PATH`) are allowed with an empty `source/`.
 
 ### Step 2: Check for ETL Code
 
@@ -64,9 +64,21 @@ Ask the user:
 
 If **yes**, load `../powerbi-repointing/SKILL.md`. It collects `PBIT_PATH` and tells you to append `--powerbi-repointing <PBIT_PATH>` to the convert command in Step 4. Return here when complete.
 
-If **no**, proceed to Step 4. `PBIT_PATH` remains unset; do not pass `--powerbi-repointing` to scai.
+If **no**, proceed to Step 3.5. `PBIT_PATH` remains unset; do not pass `--powerbi-repointing` to scai.
 
-### Step 3.5: Offer Custom Conversion Settings
+### Step 3.5: Check for Tableau Workbooks (Oracle only)
+
+Read `source_language` from `configure()` (already called this session). If it is **not** Oracle (compare case-insensitively), skip this step: `TABLEAU_PATH` stays unset; do not pass `--tableauRepointing`.
+
+If it **is** Oracle, ask the user:
+
+> "Do you have Tableau workbooks (`.twb` or `.tds` files) you'd like to repoint to Snowflake?"
+
+If **yes**, load `../tableau-repointing/SKILL.md` in path-only mode. It collects `TABLEAU_PATH` and tells you to append `--tableauRepointing <TABLEAU_PATH>` to the convert command in Step 4. Return here when complete.
+
+If **no**, proceed to Step 3.6. `TABLEAU_PATH` remains unset; do not pass `--tableauRepointing` to scai.
+
+### Step 3.6: Offer Custom Conversion Settings
 
 Keep this quick — most users just want defaults. Ask via `ask_user_question` (`multiSelect = false`):
 
@@ -76,11 +88,11 @@ Keep this quick — most users just want defaults. Ask via `ask_user_question` (
 > 2. **Go with defaults**
 
 - On **Go with defaults**: `<SETTINGS_FLAGS>` stays empty; proceed to Step 4.
-- On **Tailor settings**: load `./recommend-settings/SKILL.md`. It scans the source, proposes dialect-specific settings, and — after the user confirms — returns a flag string. Store it as `<SETTINGS_FLAGS>` for Step 4. If the user declines all suggestions or the catalog can't be loaded, `<SETTINGS_FLAGS>` stays empty. Return here when complete.
+- On **Tailor settings**: load `./recommend-settings/SKILL.md`. It scans the source, proposes dialect-specific settings, and — after the user confirms — returns a flag string. Store it as `<SETTINGS_FLAGS>` for Step 4. If the user declines all suggestions or the catalog can't be loaded, `<SETTINGS_FLAGS>` stays empty. Return here when complete. If `source/` is empty (Tableau-only), skip tailoring and leave `<SETTINGS_FLAGS>` empty.
 
 ### Step 4: Run Conversion
 
-Before running, tell the user what the conversion will cover: the SQL and ETL already in the project (`source/`, plus `source/_etl/` when present), and Power BI repointing if `PBIT_PATH` was set.
+Before running, tell the user what the conversion will cover: the SQL and ETL already in the project (`source/`, plus `source/_etl/` when present), Power BI repointing if `PBIT_PATH` was set, and Tableau repointing if `TABLEAU_PATH` was set. Tableau-only (empty `source/`, `TABLEAU_PATH` set) is valid.
 
 Start from the base command:
 
@@ -88,17 +100,18 @@ Start from the base command:
 scai code convert <SETTINGS_FLAGS> --json
 ```
 
-`--json` is always required so you can parse the result envelope. Substitute `<SETTINGS_FLAGS>` with the confirmed flags from Step 3.5 (or omit the token when empty). Then append one flag per decision already recorded in the steps above — nothing else. Do **not** pass `--etl-replatform-sources-path`; ETL already lives under `source/_etl/` from register.
+`--json` is always required so you can parse the result envelope. Substitute `<SETTINGS_FLAGS>` with the confirmed flags from Step 3.6 (or omit the token when empty). Then append one flag per decision already recorded in the steps above — nothing else. Do **not** pass `--etl-replatform-sources-path`; ETL already lives under `source/_etl/` from register.
 
 | Append | When |
 |--------|------|
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 2 (Informatica target is Snowflake Scripting) |
 | `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set in Step 2 (Informatica target is dbt and the user chose to consolidate model chains) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 3 |
+| `--tableauRepointing <TABLEAU_PATH>` | `TABLEAU_PATH` was set in Step 3.5 |
 
-The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. Either combines with `--powerbi-repointing`. If none of the conditions hold, run the base command as-is.
+The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. Either combines with `--powerbi-repointing` and/or `--tableauRepointing`. If none of the conditions hold, run the base command as-is.
 
-Substitute `<PBIT_PATH>` with the actual path you stored. Do not emit literal placeholder tokens to the shell.
+Substitute `<PBIT_PATH>` and `<TABLEAU_PATH>` with the actual paths you stored. Do not emit literal placeholder tokens to the shell.
 
 ### Step 5: Read the Result Envelope
 
@@ -123,7 +136,7 @@ envelope can't answer.
 | `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; ETL stabilization and deploy are skipped for these units. |
 | `--consolidate-dbt-model-chains` | Consolidate Informatica dbt model chains to reduce the number of generated model files. Applies when the Informatica target is dbt. |
 
-For Power BI options, see `../powerbi-repointing/SKILL.md`.
+For Power BI options, see `../powerbi-repointing/SKILL.md`. For Tableau options, see `../tableau-repointing/SKILL.md`.
 
 **Example with options:**
 ```bash
@@ -173,9 +186,15 @@ reports/
 ├── ArrangeReports/
 └── GenericScanner/
 logs/
+artifacts/
+└── repointing_output/
+    └── tableauResults/                 # Durable repointed .twb/.tds output when Tableau was requested
 ```
 
-For Power BI output paths, see `../powerbi-repointing/SKILL.md`.
+For Power BI output paths, see `../powerbi-repointing/SKILL.md`. For Tableau, use only
+`result.tableauRepointing.outputPath` from the JSON envelope; it resolves to
+`artifacts/repointing_output/tableauResults/`. Never report the temporary
+`.scai/.snowconvert/tableauResults` engine path.
 
 ## CHECKPOINT
 
@@ -183,6 +202,7 @@ The envelope's own status is the check — don't go looking for corroboration.
 
 - [ ] The convert command exited successfully and the envelope reports no conversion errors
 - [ ] If Power BI reports were included, follow the CHECKPOINT addendum in `../powerbi-repointing/SKILL.md`
+- [ ] If Tableau workbooks were included, follow the CHECKPOINT addendum in `../tableau-repointing/SKILL.md`
 
 If the envelope reports errors, surface them verbatim and stop. Otherwise move on
 — don't ask the user to review EWI counts or confirm that files landed.
@@ -193,6 +213,11 @@ Show the JSON envelope from `scai code convert --json` **as-is**, in a fenced
 `json` block, under one line:
 
 > **Conversion complete.** Converted code is in `snowflake/`, reports in `reports/SnowConvert/`.
+
+When Tableau was requested, the envelope's `result.tableauRepointing` block is
+authoritative: success contains `processedFiles` and the durable `outputPath`;
+`{"message":"None found"}` means no Tableau result was processed. Do not construct
+or infer a different output path.
 
 Then one line on what's next, and move on:
 

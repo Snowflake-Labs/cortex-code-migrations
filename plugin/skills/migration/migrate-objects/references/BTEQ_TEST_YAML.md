@@ -58,7 +58,7 @@ A binding used by a single script stays in its per-object YAML; one used by 2+ i
 | `files.writes[]` | `scriptMetadata.IO` `direction:write` — declared target name |
 
 ## Baseline / results
-`scai test capture` writes `baseline_type:"script"` baselines (`exit_code`, `stderr`, `success`, `table_deltas`, `script_io`); `{ eval }` recipes are evaluated at capture and their resolved values pinned into the baseline. `scai test validate` re-runs `snowflake/BTEQ/<name>.sql` and compares (reuse targets take the capture-pinned value); results in `test-results/results.json` with `metadata.kind:"bteq"`.
+`scai test capture` writes `baseline_type:"script"` baselines (`exit_code`, `stderr`, `success`, `table_deltas`, `script_io`); `{ eval }` recipes are evaluated at capture and their resolved values pinned into the baseline. `scai test validate` re-runs `snowflake/BTEQ/<name>.sql` and compares (reuse targets take the capture-pinned value); results land in `<metadata_database>.VALIDATION.RESULTS` with `metadata.kind:"bteq"`.
 
 ## Prerequisites
 - The `bteq` binary (Teradata Tools & Utilities) must be on PATH on the capture host - capture runs the source `.btq` through it.

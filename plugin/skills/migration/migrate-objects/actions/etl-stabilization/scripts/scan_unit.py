@@ -81,7 +81,14 @@ def find_orchestration_file(unit_path: Path) -> Path | None:
     return None
 
 
-PLACEHOLDER_VALUES = {"YOUR_PROJECT_NAME", "YOUR_PROFILE_NAME", "your_project_name", "your_profile_name"}
+PLACEHOLDER_VALUES = {
+    "YOUR_PROJECT_NAME",
+    "YOUR_PROFILE_NAME",
+    "your_project_name",
+    "your_profile_name",
+    "YOUR_SCHEMA",
+    "YOUR_DB",
+}
 
 
 def assess_dbt_health(project_path: Path) -> dict:
@@ -118,6 +125,14 @@ def assess_dbt_health(project_path: Path) -> dict:
             health["has_valid_config"] = False
             health["has_placeholder_config"] = True
             health["health_issues"].append(f"Placeholder '{placeholder}' in dbt_project.yml")
+
+    sources_yml = project_path / "models" / "sources.yml"
+    if sources_yml.is_file():
+        sources_content = sources_yml.read_text(encoding="utf-8", errors="replace")
+        for placeholder in PLACEHOLDER_VALUES:
+            if placeholder in sources_content:
+                health["has_placeholder_config"] = True
+                health["health_issues"].append(f"Placeholder '{placeholder}' in sources.yml")
 
     models_dir = project_path / "models"
     if models_dir.is_dir():

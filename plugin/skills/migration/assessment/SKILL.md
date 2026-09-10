@@ -1,6 +1,6 @@
 ---
 name: assessment
-description: Analyzes workloads to be migrated to Snowflake using SnowConvert assessment reports. Routes to specialized sub-skills for high-quality assessments. Use this skill when user wants to do an assessment of their code or ETL workload, waves generation, object exclusion, anti-patterns, sql dynamic and/or ETL analysis (SSIS)
+description: Analyzes workloads to be migrated to Snowflake using SnowConvert assessment reports. Routes to specialized sub-skills for high-quality assessments. Use this skill when user wants to do an assessment of their code or ETL workload, waves generation, object exclusion, effort estimates, anti-patterns, discovery (SQL Server), sql dynamic and/or ETL analysis (SSIS)
 version: 0.1.0
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -13,6 +13,12 @@ Tell the user:
 > **Migration Assessment** — I'll analyze your converted code to generate a migration plan: dependency waves, object categorization, dynamic SQL patterns, and a summary report. This helps us prioritize what to migrate first.
 
 End-to-end migration assessment. The user only needs to point at the source — this skill detects the project state and, if needed, drives the migration setup (connect → init → register → convert) so that the SnowConvert reports the assessment depends on are produced automatically. The user is **never** asked for CSV paths, registry paths, or output directories.
+
+**One exception:** SQL Server **Discovery** uses Extended Events (`.xel`)
+files, which the conversion pipeline does not produce. Step 4 first explains
+what Discovery adds, then lets the user skip it, provide `.xel` path(s)
+now, or take the capture SQL and provide the files on a later assessment run.
+The files stay in place; never copy them into the project.
 
 > "I want to assess my workload" → the user provides a source → assessment runs end-to-end. Nothing else is requested.
 
@@ -38,7 +44,7 @@ Resolve all inputs from `project_dir`. Do not prompt the user.
 
 Selection rules:
 - **Wave generation is always driven by `scai assessment waves`** — it reads the registry from the current project folder and writes `<project_dir>/assessment/waves_analysis_*.json`. There is no CSV fallback for wave creation.
-- The multi-tab HTML report (`scai assessment report`) takes `--project-dir` (the scai project root) and auto-discovers everything it needs: `registry/`, `reports/`, `assessment/waves_analysis_*.json`, and the exclusion / dynamic-SQL JSONs. The registry is **required** — without it the report cannot enrich the waves JSON (which emits UUIDs) with canonical names, categories, file paths, and conversion status.
+- The multi-tab HTML report (`scai assessment report`) takes `--project-dir` (the scai project root) and auto-discovers everything it needs: `registry/`, `reports/`, `assessment/waves_analysis_*.json`, `workload-insights-*.json`, and the exclusion / dynamic-SQL JSONs. The registry is **required** — without it the report cannot enrich the waves JSON (which emits UUIDs) with canonical names, categories, file paths, and conversion status.
 - If the registry or reports are missing after a successful-looking convert, re-run `../convert/SKILL.md` once and stop if it still produces nothing.
 
 ## Step 3: Confirm Scope (single, short)
@@ -49,10 +55,12 @@ Show one compact confirmation that lists what will run. This is the **only** con
 I will run:
 1. Waves (dependency analysis + deployment partitioning)
 2. Anti-Patterns  (SQL Server only)
+3. Effort Estimates  (SQL Server and Redshift only)
 4. Dynamic SQL Patterns
-5. ETL/SSIS Assessment  (only if present)
-6. Informatica Assessment  (only if present)
-7. HTML Report
+5. Discovery  (SQL Server only — capture files are optional, asked next)
+6. ETL/SSIS Assessment  (only if present)
+7. Informatica Assessment  (only if present)
+8. HTML Report
 
 Proceed with all, or pick a subset?
 ```
@@ -118,11 +126,143 @@ This prompt is **MANDATORY** — do not skip or default. Record `informatica.tar
 
 No prompts. Note the sub-skill is in scope.
 
-### 5.5 Anti-patterns (SQL Server only, no inputs)
+### 5.5 Effort estimate (no inputs)
+
+No prompts. Note the sub-skill is in scope.
+
+### 5.6 Anti-patterns (SQL Server only, no inputs)
 
 No prompts. In scope **only when the project's source dialect is SQL Server** — `scai assessment anti-patterns` self-gates and aborts (error `ASM0024`) on other dialects. For non-SQL-Server projects, treat it as out of scope and synthesize a `"skipped"` result in Step 6.
 
-### 5.6 Snapshot the inputs
+### 5.7 Discovery (SQL Server only)
+
+In scope **only when the project's source dialect is SQL Server**. The command
+self-gates with `ASM0034` on other dialects. For non-SQL-Server projects, ask
+nothing here and synthesize a `"skipped"` result in Step 6.
+
+On SQL Server, **always ask** — never search for `.xel` files and never answer
+for the user. Only the answer below takes Discovery out of scope.
+
+First say this, as one short paragraph:
+
+> **Discovery** summarizes the SQL activity recorded by a SQL Server Extended Events capture: execution volume, duration mix, statement types, applications and users, long-running executions, and errors. It is not derived from converted source. To include it, give me the local path to the `.xel` file(s) from a capture that records the events this report needs. This is optional — you can skip it, provide the paths now, or take the starter SQL that sets up the capture and provide the files on a later assessment run.
+
+Then ask this. Keep the disclaimer and all three choices in the question:
+
+> Disclaimer: captured Extended Events data, including statement text, is used for reporting only. Statement text is read only to classify query type; it is not stored in the artifact or shown in the report.
+>
+> How do you want to handle Discovery?
+>
+> 1. Skip for this run
+> 2. I have the `.xel`
+> 3. Give me the SQL, I'll provide the files later
+
+Map answers to `workload_insights.mode`: `skip` | `have_extract` | `later`.
+
+**1 — `skip`.** Record empty `input_paths`, paste no SQL, and continue gathering
+the remaining inputs.
+
+**2 — `have_extract`.** Ask for one or more absolute `.xel` paths. A folder or
+glob is acceptable only when it resolves to the capture rollover files. Any
+filename works. Record the resolved absolute files in `input_paths`. Do not
+copy, rename, or move them under the project. Do not ask for a database name or
+capture duration. If no usable path is supplied, ask for one or let the user
+switch to `skip` / `later`; never dispatch with an empty list.
+
+**3 — `later`.** This is `skip` **plus the SQL**. Record empty `input_paths`,
+and from here on treat Discovery exactly as if the user had chosen `skip`: it
+is out of scope for this run.
+
+Do not ask for a database name or number of days. **In this same turn**, show
+the guidance below **verbatim** — both lists, every bullet, with the reason
+each setting matters — then paste
+`workload-insights/references/create-extended-events-session.sql` unchanged.
+Do not summarize it, merge the lists, or drop the explanations: this is the same
+review copy the HTML report shows, and the user is about to run this on a
+production instance.
+
+The SQL is delivered **now, during input gathering** — never deferred. Do not
+add a plan or task step such as "provide the capture SQL", do not schedule it
+after the HTML report, and do not mention it again in Step 8 or on completion
+beyond the normal `skipped` row. Capture takes days; the assessment must not
+model it as pending work.
+
+> Disclaimer: captured Extended Events data, including statement text, is used for reporting only. Statement text is read only to classify query type; it is not stored in the artifact or shown in the report.
+>
+> **Review the capture before running it.** SQL Server keeps no history of past
+> queries, so nothing can be reported until a capture is running. This starter
+> script creates a **SQL Server Extended Events** session for one database, but
+> leaves it stopped. While it runs, it records each completed user statement
+> and stored-procedure call that meets the duration filter — duration, CPU,
+> reads, writes, rows, application, and user — plus errors at severity 11 or
+> higher. Statement text is used only to classify the query type. Review every
+> value, replace `YourDatabase` in all three predicates, and uncomment
+> `STATE = START` only when you are ready to begin. The three events
+> and their `ACTION` lists must stay or the report loses columns.
+>
+> **A DBA should own this capture.** Have a DBA set the values, confirm it is
+> safe to run on this instance, and start it. Watch the server once it is
+> running — CPU, disk space, and waits — and stop the session if anything
+> degrades.
+>
+> This capture uses CPU and disk. It is reasonable on a typical host with the
+> defaults below, but it is not free and can compete with the database if the
+> settings are too aggressive. Do not switch `EVENT_RETENTION_MODE` to
+> `NO_EVENT_LOSS` — that can stall user queries.
+>
+> **You can change these to fit the capture:**
+>
+> - **Session name** — default is `WorkloadReport_XE`. Change it if another
+>   session already uses that name; keep the same name in the create, start,
+>   and stop statements.
+> - **Duration threshold** — default is 0.5 seconds
+>   (`[duration] >= 500000`, in microseconds). Raise it to write less; lowering
+>   it captures more and costs more CPU and disk.
+> - **Filters** — default is one database, no system work, no SSMS/telemetry,
+>   and errors at severity 11 or higher. Tighten or loosen as needed. Removing
+>   the database predicate traces the whole instance and is usually too wide.
+>
+> **Set these carefully — they affect the database:**
+>
+> - **`filename`** — replace `<dedicated volume>` with a path on a volume that
+>   has space and is not a data or log disk. SQL Server appends its own suffix
+>   and `.xel`.
+> - **`max_file_size`** (200 MB) and **`max_rollover_files`** (5) — together
+>   they cap disk at 1 GB. Confirm more than that is free before starting.
+>   Smaller caps use less disk; larger caps keep more history.
+> - **`MAX_MEMORY`** (8,192 KB) — how much RAM the session may hold. Raising it
+>   buffers more events; leaving it low keeps it from competing with the buffer
+>   pool.
+> - **`MAX_DISPATCH_LATENCY`** (30 seconds) — how soon events flush to disk.
+>   Lower it to write sooner; higher it to batch more.
+> - **`STARTUP_STATE`** (OFF) — the session does not return after a service
+>   restart. Set it ON only if you want it to resume automatically, and still
+>   stop it when the capture window ends.
+> - **`MEMORY_PARTITION_MODE`** — not set, which is right for a typical host.
+>   On a busy many-core server, set `PER_CPU` (commented in the script) to
+>   reduce contention when many queries finish at once, and raise `MAX_MEMORY`
+>   to 16–32 MB first. Leaving 8,192 KB with `PER_CPU` drops more events.
+
+After the SQL, tell the user:
+
+- `CREATE` leaves the session stopped. Uncomment and run the commented
+  `STATE = START` statement when capture should begin; nothing is recorded
+  before that.
+- Leave it running under representative traffic. Around 30 days is a useful
+  target, but a shorter window still works.
+- Copy every rollover `.xel` file, then **stop the session** with the
+  commented `STATE = STOP` statement. Leaving it running continues to use
+  CPU and disk.
+- Re-run assessment later, choose **I have the `.xel`**, and provide the files.
+- The current assessment continues now and does not wait for the capture.
+
+Do not dispatch `workload-insights` in `later` mode. Continue straight to the
+next input in Step 4, then dispatch the remaining sub-skills in Step 5 as
+usual. In Step 6 synthesize the `"skipped"` result described in §6.6 so Step 8 has its
+row, and generate the HTML report in Step 7 exactly as for `skip` — the
+Discovery tab renders its empty state.
+
+### 5.8 Snapshot the inputs
 
 Lay out the resolved values in your working context like this (text only — do not write to disk):
 
@@ -136,7 +276,11 @@ assessment_inputs:
     prioritization_globs: [<glob>, ...]
     wave_ordering: category | dependency
   exclusion: {}
+  effort_estimate: {}
   anti_patterns: {}
+  workload_insights:
+    mode: have_extract | skip | later
+    input_paths: [<abs .xel path>, ...]
   dynamic_sql:
     review_mode: generate-only | auto-review-all | skip
     output_dir: <project_dir>/assessment/json
@@ -212,6 +356,33 @@ Report back JSON only:
   "status": "ok" | "error",
   "output_json": "<abs_path>" | null,
   "summary": "<one-line counts: temp/staging, deprecated, testing, duplicates>",
+  "error": "<message>" | null
+}
+```
+
+### 6.2b effort-estimate-runner prompt
+
+```
+Read and follow plugin/skills/migration/assessment/effort-estimate/SKILL.md.
+You are running in sub-agent mode — do NOT ask the user any questions.
+
+Context (from parent):
+- project_dir: <abs_path>
+
+Steps:
+1. Call configure() with project_dir above. Snowflake credentials are not needed for effort estimate analysis.
+2. Run `scai assessment effort-estimate` from <project_dir>.
+3. Locate the timestamped effort-estimates-*.json the CLI wrote under
+   <project_dir>/artifacts/assessment/. If the CLI aborts because the
+   source dialect is unsupported (error ASM0031), report status "skipped"
+   with that reason — do NOT treat it as an error.
+
+Report back JSON only:
+{
+  "sub_skill": "effort-estimate",
+  "status": "ok" | "skipped" | "error",
+  "output_json": "<abs_path>" | null,
+  "summary": "<one-line: ddl_objects, total_estimated_hours>",
   "error": "<message>" | null
 }
 ```
@@ -348,7 +519,40 @@ Report back JSON only:
 }
 ```
 
-### 6.6 Common rules for every dispatch
+### 6.6 workload-insights-runner prompt
+
+Dispatch **only** when all three hold: the project's source dialect is SQL
+Server, `workload_insights.mode == have_extract`, and
+`workload_insights.input_paths` is non-empty. In every other case (other
+dialect, `skip`, `later`, or no paths), do not dispatch; synthesize a
+`"skipped"` result in Step 6. For `later`, use
+`summary: "capture SQL provided; re-run assessment with the .xel files"` — the
+SQL was already delivered in Step 4, so this is a closed row, not pending work.
+For `skip`, use `summary: "skipped by user"`.
+
+```
+Read and follow plugin/skills/migration/assessment/workload-insights/SKILL.md.
+You are running in sub-agent mode — do NOT ask the user any questions.
+
+Context (from parent):
+- project_dir: <abs_path>
+- input_paths: <abs .xel paths>
+
+Steps:
+1. Call configure() with project_dir. Snowflake credentials are not needed.
+2. Run `scai assessment workload-insights --input <path> [--input <path>…]`
+   from project_dir, adding exactly one `--input <path>` per context path.
+3. Locate the timestamped `workload-insights-*.json` under
+   `<project_dir>/artifacts/assessment/`.
+4. Return JSON only `{sub_skill, status, output_json, summary, error}`.
+   `ASM0034` means `skipped`. Do not rewrite any JSON fields and do not copy
+   the `.xel` files into the project.
+```
+
+A large-file or long-running parse message on stdout is not a failure. Exit
+code 0 and a written artifact means `"ok"`; include the message in `summary`.
+
+### 6.7 Common rules for every dispatch
 
 1. **One message, multiple Task calls.** Send all in-scope dispatches in a single tool-use turn so the framework can run them in parallel.
 2. **Absolute paths only** in every context block.
@@ -373,7 +577,7 @@ For every dispatched sub-skill, validate:
 
 For sub-skills excluded by the Step 3 scope (or set to `review_mode: skip` in Step 4), synthesize `{status: "skipped", output_json: null, summary: "<reason>"}` so Step 8 has a complete row for every sub-skill.
 
-Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `anti-patterns`, `analyzing-sql-dynamic-patterns`, `etl-assessment`, `informatica-assessment`). Carry it into Step 7 and Step 8.
+Build a `results` table indexed by sub-skill name (`waves-generator`, `object-exclusion-detection`, `effort-estimate`, `anti-patterns`, `analyzing-sql-dynamic-patterns`, `workload-insights`, `etl-assessment`, `informatica-assessment`). Carry it into Step 7 and Step 8.
 
 ## Step 7: Generate Unified HTML Report
 
@@ -423,7 +627,7 @@ scai assessment report \
 ```
 
 **Rules:**
-1. Always pass `--project-dir` — it auto-discovers waves, exclusion, dynamic-SQL, anti-patterns, registry, and reports directories
+1. Always pass `--project-dir` — it auto-discovers waves, exclusion, dynamic-SQL, anti-patterns, `workload-insights` JSON, registry, and reports directories
 2. **Explicitly pass `--ssis-json`** if the `etl-assessment` sub-skill in the `results` table has `status == "ok"` and a valid `output_json` path
 3. **Explicitly pass `--informatica-json`** if the `informatica-assessment` sub-skill in the `results` table has `status == "ok"` and a valid `output_json` path
 4. Do **not** write custom HTML
@@ -432,15 +636,17 @@ If the report command fails, record the failure and proceed to Step 8 anyway —
 
 ## Step 8: Surface Results + Retry
 
-Print a status table from the `results` collected in Step 6, one line per sub-skill, in this order: `waves-generator`, `object-exclusion-detection`, `anti-patterns`, `analyzing-sql-dynamic-patterns`, `etl-assessment`.
+Print a status table from the `results` collected in Step 6, one line per sub-skill, in this order: `waves-generator`, `object-exclusion-detection`, `effort-estimate`, `anti-patterns`, `analyzing-sql-dynamic-patterns`, `workload-insights`, `etl-assessment`.
 
 Format:
 
 ```
 waves-generator                  ok      <output_json basename>   (<summary>)
 object-exclusion-detection       ok      <output_json basename>   (<summary>)
+effort-estimate                  ok      <output_json basename>   (<summary>)
 anti-patterns                    ok      <output_json basename>   (<summary>)
 analyzing-sql-dynamic-patterns   FAIL    <error message>
+workload-insights                skip    <reason>
 etl-assessment                   skip    <reason>
 
 Multi-tab report:  <abs path to multi_report.html>   (or "FAILED — see error above")
@@ -519,6 +725,10 @@ Detect user intent and load the appropriate sub-skill:
 - Triggers: "temporary objects", "staging objects", "deprecated", "exclude objects", "test objects", "cleanup"
 - Load: `object_exclusion_detection/SKILL.md`
 
+**Effort Estimates** - Generate migration effort estimates from SnowConvert reports:
+- Triggers: "effort estimate", "effort estimates", "migration effort", "FDE hours", "how long will migration take"
+- Load: `effort-estimate/SKILL.md`
+
 **Anti-Patterns** - Surface migration converns from existing SnowConvert findings (SQL Server only):
 - Triggers: "anti-patterns", "anti patterns", "risk analysis", "performance risks", "collation risks", "semantic risks", "architecture blockers"
 - Load: `anti-patterns/SKILL.md`
@@ -527,6 +737,14 @@ Detect user intent and load the appropriate sub-skill:
 - Triggers: "dynamic sql", "sql dynamic patterns"
 - Supports: SQL Server, Redshift, Oracle, and Teradata migrations
 - Load: `analyzing-sql-dynamic-patterns/SKILL.md`
+
+**Discovery** - Summarize SQL Server activity recorded by Extended Events:
+- Triggers: "discovery", "workload insights", "query logs", "extended events", "xel"
+- Needs one or more `.xel` files produced by the starter capture session. No
+  files yet → route through this parent skill's Step 4 §5.7 so it can offer
+  skip / files / later and show the review guidance and session SQL.
+- Load `workload-insights/SKILL.md` only after §5.7 has collected non-empty
+  `.xel` paths and the runner is dispatched. The sub-skill is non-interactive.
 
 **ETL/SSIS Assessment** - Analyze SSIS packages for migration complexity:
 - Triggers: "ssis", "etl packages", "ssis analysis"
@@ -754,6 +972,7 @@ When `--project-dir` is provided, the command auto-discovers:
 - `<projectRoot>/registry/` — registry JSONs (REQUIRED for object enrichment: names, categories, files, status, missing-deps, direct dep counts)
 - `<projectRoot>/reports/` — SnowConvert CSVs (for EWI/FDM/PRF counts and severity)
 - `<projectRoot>/artifacts/assessment/object_exclusion_analysis_*.json` — exclusion JSON (latest timestamp)
+- `<projectRoot>/artifacts/assessment/workload-insights-*.json` — Discovery JSON (latest timestamp)
 - `<projectRoot>/assessment/json/sql_dynamic_analysis.json` — dynamic-SQL JSON
 - `<projectRoot>/assessment/waves_analysis_*.json` — waves JSON (latest timestamp)
 
@@ -766,6 +985,7 @@ scai assessment report \
   --waves-json "path/to/waves_analysis_TIMESTAMP.json" \
   --exclusion-json "path/to/object_exclusion.json" \
   --dynamic-sql-json "path/to/sql_dynamic_analysis.json" \
+  --workload-insights-json "path/to/workload-insights-TIMESTAMP.json" \
   --snowconvert-reports-dir "path/to/reports" \
   --ssis-json "path/to/ssis/etl_assessment_analysis.json" \
   --output "path/to/multi_report.html"
@@ -779,6 +999,8 @@ scai assessment report \
 - `--registry-dir`: Path to SnowConvert registry directory containing `*.json` entries. Auto-discovered from `<projectRoot>/registry/` when `--project-dir` is provided.
 - `--exclusion-json`: Path to object exclusion JSON file. Auto-discovered.
 - `--dynamic-sql-json`: Path to dynamic SQL analysis JSON file. Auto-discovered.
+- `--workload-insights-json`: Path to the Discovery JSON (`workload-insights-*.json`) produced from
+  Extended Events. Auto-discovered from `<projectRoot>/artifacts/assessment/`.
 - `--snowconvert-reports-dir`: Path to SnowConvert Reports directory containing `TopLevelCodeUnits.*.csv` and `ObjectReferences.*.csv`. Auto-discovered.
 - `--ssis-json`: Path to SSIS assessment JSON file (etl_assessment_analysis.json from ETL assessment). **MUST be explicitly passed when the etl-assessment sub-skill succeeds.**
 - `--informatica-json`: Path to Informatica Power Center assessment JSON file (informatica_assessment_analysis.json from Informatica assessment). **MUST be explicitly passed when the informatica-assessment sub-skill succeeds.**
@@ -818,7 +1040,12 @@ If any answer is "No", go back and use the correct script.
 
 - `waves-generator/SKILL.md` - Algorithm details, partition creation
 - `object_exclusion_detection/SKILL.md` - Pattern definitions, naming conventions
+- `effort-estimate/SKILL.md` - Complexity-banded effort hours from SnowConvert reports (SQL Server, Redshift)
 - `anti-patterns/SKILL.md` - Curated SnowConvert issue-code catalog → customer-facing risk buckets (SQL Server only)
+- `workload-insights/SKILL.md` - Extended Events `.xel` files → captured
+  workload volume, duration mix, apps/users, long-running executions, and
+  errors (SQL Server only); `references/` holds the starter session SQL the
+  parent pastes.
 - `analyzing-sql-dynamic-patterns/SKILL.md` - Pattern classification, complexity scoring
 - `etl-assessment/SKILL.md` - SSIS package analysis, control flow, data flow pipelines
 
@@ -831,7 +1058,7 @@ Present the closing message with: **opening line** (`migration_status.in_scope` 
 > What would you like to do?
 > 1. **Review the report** — open HTML or ask any questions
 > 2. **Modify the assessment** — re-run with changed parameters
-> 3. **Move on to migration** — set up the Snowflake target and start Phase 2
+> 3. **Move on to migration setup** — set up the Snowflake target, testing configuration, and data infrastructure setup
 
 Mark option **(1)** as `(recommended)` when `missing > 0`, otherwise **(3)**. Wait for response.
 

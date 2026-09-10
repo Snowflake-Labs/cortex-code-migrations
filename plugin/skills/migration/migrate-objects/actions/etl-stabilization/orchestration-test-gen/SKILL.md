@@ -39,8 +39,8 @@ This sub-skill expects:
 
 ```
 <UNIT>/stabilization/tests/orchestration/
-  <task_procedure_name>/
-    <element_name>.sql              # Isolated test (one per element)
+  <schema>/                         # Snowflake schema tests create objects in (typically public)
+    <short_element_name>.sql        # Isolated test (segment after last '.' in session_status name)
     grouped_<group_name>.sql        # Grouped test (shared ARRANGE for group)
     ...
   test_report.md                    # Report consumed by orchestration-fixer
@@ -136,8 +136,12 @@ Read `ROADMAP.md` to identify the current phase number, then scope to the assign
 Read `session_status.json` and filter elements where `phase == <phase_num>`. **Only generate tests for these elements.** Elements from other phases are ignored entirely in this invocation.
 
 Skip test generation for elements that already have test files from a prior phase. Check for existing files at:
-- Isolated: `<UNIT>/stabilization/tests/orchestration/<task_procedure_name>/<element_name>.sql`
-- Grouped: `<UNIT>/stabilization/tests/orchestration/<task_procedure_name>/grouped_<group_name>.sql`
+- Isolated: `<UNIT>/stabilization/tests/orchestration/<schema>/<short_element_name>.sql`
+  (`<schema>` = the Snowflake schema the test objects are created in, typically `public`;
+  `<short_element_name>` = the segment after the last `.` in the element's dotted
+  `session_status.json` name — e.g. `s_m_last_run_date`, not the fully-qualified
+  `f_Warehouse_presentation.wf_bs_facts_fl_to_pl.s_m_last_run_date`)
+- Grouped: `<UNIT>/stabilization/tests/orchestration/<schema>/grouped_<group_name>.sql`
 
 If a test file already exists, mark the element as `already-tested` and skip it.
 
@@ -360,7 +364,7 @@ Categorize each failure:
    - **Baseline Results**: pass/fail per element, test strategy (isolated/grouped), source definition per failure, ACT vs ASSERT failure classification
    - **Coverage Gaps**: elements with external deps, opaque ScriptTasks, File Enumerator loops, ARRANGE:SETUP failures
 
-5. **MANDATORY self-check before returning** — verify that `{UNIT}/stabilization/tests/orchestration/<task_procedure_name>/` contains at least 1 `.sql` test file and `test_report.md` exists. If ANY file is missing, generate it before returning. If you cannot write files, include full contents in your completion message so the orchestrator can write them.
+5. **MANDATORY self-check before returning** — verify that `{UNIT}/stabilization/tests/orchestration/<schema>/` contains at least 1 `.sql` test file and `test_report.md` exists. If ANY file is missing, generate it before returning. If you cannot write files, include full contents in your completion message so the orchestrator can write them.
 
 6. Return to parent skill (stabilization/SKILL.md) for orchestration fixing.
 
@@ -420,7 +424,7 @@ Do NOT include any of these in ARRANGE:SETUP. **SETUP = element-specific DDL onl
 
 ### Output
 
-- Test files: `PACKAGE/stabilization/tests/orchestration/<task_procedure_name>/`
+- Test files: `PACKAGE/stabilization/tests/orchestration/<schema>/`
 - Baseline report: `PHASES_DIR/baseline_batch_{B}.md`
 
 Write artifacts **incrementally** — one element section appended at a time. The orchestrator handles partial artifacts: completed elements are already on disk and will not be re-processed on retry.
@@ -458,7 +462,7 @@ Process one element at a time in the order provided:
    - Use `TASK_SCHEMA` as the test schema (not DATABASE.PUBLIC or any other schema)
    - Use **batched assertion format** (UNION ALL) for all assertions
    - For **clone elements**: adapt the archetype element's test file with appropriate substitutions (schema, table names, parameters) rather than generating from scratch
-   - Write test files to: `PACKAGE/stabilization/tests/orchestration/<task_procedure_name>/`
+   - Write test files to: `PACKAGE/stabilization/tests/orchestration/<schema>/`
    - Follow the Main Mode workflow for ARRANGE:SETUP, ARRANGE:SEED, ACT, and ASSERT generation — applying these overrides:
      - Do NOT call `set-test-env` — use `TASK_SCHEMA` directly
      - ARRANGE:SETUP contains ONLY element-specific DDL (infrastructure is pre-created)

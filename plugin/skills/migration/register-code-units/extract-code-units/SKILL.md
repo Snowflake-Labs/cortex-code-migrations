@@ -45,6 +45,9 @@ Ask the user via `ask_user_question` (`multiSelect = false`):
 
 Allow combining options (e.g. specific types within a specific schema).
 
+If the source server hosts several databases and the user wants more than the connection's
+own, also ask **which databases** — see the multi-database flow in Step 2.
+
 > **Name matching:** `-n` / `--name` is an **exact** case-insensitive match unless the
 > pattern contains `*`. Do **not** pass a bare prefix expecting substring match —
 > that used to pull sibling objects (e.g. `FOO` matching `FOO_SWTCH`). For partial
@@ -61,11 +64,38 @@ Build the `scai code extract` command based on user selections:
 scai code extract -s <CONNECTION_NAME> --json
 
 # Add flags based on user choices:
+#   -d, --database <DATABASE> extract from a specific database on the server,
+#                             overriding the connection's own database
 #   --schema <SCHEMA>        filter by schema
 #   -t TYPE1,TYPE2           filter by object type
 #   -n "Name"                exact name (case-insensitive); use * for wildcards
 #   --driver-path <PATH>     path to driver .nupkg (Oracle only, first use)
 ```
+
+**Multiple databases on one server (SqlServer, AzureSynapse, Redshift, Postgresql, Teradata).**
+A source connection points at one database, but its server may host several. To migrate more
+than one, pass a comma-separated list with `-d` — the CLI loops internally, continues past a
+single database's failure, and returns one JSON envelope with per-database counts plus the
+aggregate. Do **not** re-run without `-d`; that only re-pulls the connection's own database.
+(Oracle and BigQuery don't bind a swappable database in the connection, so `-d` is rejected there —
+use the connection's own database / schemas.)
+
+1. **List the databases** on the connection's server with `query_source` (dialect-specific):
+   - **SqlServer / AzureSynapse:** `SELECT name FROM sys.databases WHERE database_id > 4` (excludes the
+     `master`/`tempdb`/`model`/`msdb` system databases).
+   - **Redshift / Postgresql:** `SELECT datname FROM pg_database WHERE datistemplate = false`.
+   - **Teradata:** `SELECT DatabaseName FROM DBC.DatabasesV WHERE DBKind = 'D'`.
+2. **Ask which to extract** via `ask_user_question` (`multiSelect = true`), defaulting to the
+   connection's own database.
+3. **Run one extraction** with every selected database:
+
+```bash
+scai code extract -s <CONNECTION_NAME> -d Sales,Inventory --json
+```
+
+Output nests each under `source/<database>/…`, and the Code Unit Registry is regenerated once
+after the run (the command re-scans the whole `source/` tree), so all coexist in one project.
+Omit `-d` when the connection's own database is the only target.
 
 **Driver note (Oracle / Teradata):** `configure()` seeds the driver cache, so `--driver-path` is normally not needed here. If the cache was missed for any reason, pass `--driver-path <PATH_TO_NUPKG>` on first use; SCAI persists the path machine-wide and reuses it across projects.
 
@@ -73,6 +103,9 @@ scai code extract -s <CONNECTION_NAME> --json
 ```bash
 # All objects
 scai code extract -s <CONNECTION_NAME> --json
+
+# All objects from a specific database on the server
+scai code extract -s <CONNECTION_NAME> --database Sales --json
 
 # Only tables and views in the dbo schema
 scai code extract -s <CONNECTION_NAME> --schema dbo -t TABLE,VIEW --json
@@ -151,7 +184,7 @@ Confirm with user:
 
 ## On Completion
 
-After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON envelope returned by `scai code extract --json` (`catalog.{discovered,extracted,failed}`, `byType`, `failures[]`, `executionTimeSeconds`).
+After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON envelope returned by `scai code extract --json` (`catalog.{discovered,extracted,failed}`, `byType`, `databases[]`, `failures[]`, `executionTimeSeconds`). When you extracted several databases, read per-database counts from `databases[]` and the aggregate from `catalog` — do not sum envelopes across runs.
 
 > **Extraction complete.** `<extracted>/<discovered>` objects extracted in `<duration>`, broken down by type (filled from `byType`). Files saved under `source/`.
 > *If `failed > 0`:* `<failed>` failed. Most common error: `<top_failure_reason>`. Full list in the reports.

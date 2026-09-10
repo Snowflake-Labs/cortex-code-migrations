@@ -225,4 +225,6 @@ The setup machine treats midway as done only when the project is initialized **a
 > *If `adopted > 0`:* `<W>` adopted.
 > Registration and conversion were skipped because pre-converted code was already present. Next, setup will configure Snowflake (and optional source/git) before assessment.
 
+Before returning, call `configure(code_source="local")` — midway already placed source files on disk, so the setup graph must route past the source-connection step (which only applies to the "extract from database" path).
+
 Return to the parent setup skill and call `progress_setup()` so the state machine picks the next task.

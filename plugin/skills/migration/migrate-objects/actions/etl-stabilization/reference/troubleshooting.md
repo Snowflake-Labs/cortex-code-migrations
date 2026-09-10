@@ -5,6 +5,7 @@
 - Verify source definition file path is correct and readable
 - Verify `uv` is installed: `which uv`
 - If using `--platform`, verify the platform ID matches a directory under `platforms/`
+- Check whether the input is a flat, multi-unit conversion output rather than an isolated per-unit folder; see SKILL.md "When the converted-output folder is not isolated"
 
 ### track_status.py errors
 - Verify `scan.json` exists in `{UNIT}/stabilization/planning/`

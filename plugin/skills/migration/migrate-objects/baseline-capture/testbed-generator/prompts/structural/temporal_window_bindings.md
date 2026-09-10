@@ -15,6 +15,12 @@ All fields required except `parent_filters` (optional). `child_date_column`, `pa
 - `child_date_column`, `parent_from_column`, `parent_to_column` must all be date/int; a string/other-typed column is rejected.
 - `child_key_columns` and `parent_key_columns` must have equal arity and every column (keys and filters) must resolve on its own table.
 
+## Work it out before you emit
+Reason in prose first, then emit the fragment as your final output — deciding and formatting in the same
+pass is where accuracy is lost. Per candidate, name the `list-unsolved` row that backs it and why it
+holds, and say what you considered and dropped. Keep that reasoning out of the fragment: it carries only
+the emitted type's own fields, and unknown fields are rejected.
+
 ## Examples
 `ORDERS.ORDER_DT` clamps into the matching `CUSTOMER` SCD version's `[EFFECTIVE_DT, EXPIRY_DT]` window, keyed by `CUST_ID` (ORDERS has an FK to CUSTOMER), on the active (`STATUS='A'`) version:
 
