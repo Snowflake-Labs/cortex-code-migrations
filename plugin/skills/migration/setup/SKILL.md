@@ -63,10 +63,14 @@ the next step automatically. The flow:
    - Send every answer you collected in **one** call:
      `progress_setup(answers={"<write_to>": "<chosen value>", ...})` —
      keys are each prompt's `write_to`, values the chosen option's
-     `value` verbatim (a string, even for a number or a boolean). That
-     records the answers *and* returns the next step, so for **questions**
-     it replaces both the separate `configure(...)` call and the follow-up
-     `progress_setup()`. Go to step 2 with its response.
+     `value` verbatim (a string, even for a number or a boolean). If they
+     pick **Something else** (or type an answer that is not one of the
+     listed option values), submit what they typed — not the option's
+     `value`. The engine accepts any answer `configure` would take for
+     that `write_to` (`autonomous_max_subagents` is any integer from 1 to
+     50). That records the answers *and* returns the next step, so for
+     **questions** it replaces both the separate `configure(...)` call and
+     the follow-up `progress_setup()`. Go to step 2 with its response.
    - A prompt whose chosen option carries `then` is the other case —
      that answer leads somewhere specific, so you can start on it in the
      same turn (such a prompt never has `then_ask`):
@@ -117,8 +121,6 @@ Tasks the machine routes through, in order:
 |----------------------------------|-------------------------------------------------------------------|
 | `validateEmptyDir`               | sub-skill: `setup/validate-empty-dir.md`                          |
 | `confirmProjectDir`              | sub-skill: `setup/confirm-project-dir.md`                         |
-| `enableGit`                      | skipped for a fresh (non-git) directory — git is on by default; otherwise inline prompt |
-| `configureGit`                   | sub-skill: `setup/git.md` (existing repos only; fresh dirs auto-init) |
 | `recommendSafeTools`             | inline prompt — arrives with the next two queued in `then_ask`     |
 | `chooseSourceDialect`            | inline prompt (queued)                                            |
 | Snowflake branch                 | `configureSnowflakeTarget` → `setupDataInfrastructure` → `dataStrategy` |
@@ -129,39 +131,37 @@ Tasks the machine routes through, in order:
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
 | `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
-| `continueToMigration`            | inline prompt (`next_prompt`) — the post-assessment gate; each answer carries its `then` |
+| `chooseRunMode`                  | inline prompt (`next_prompt`) — pick manual vs autonomous run mode; each answer carries its `then`. AIM currently pre-sets `run_mode=manual` (see `bootConfigureParams`); do not ask this until that default is removed. |
+| `chooseAutonomousSubagentCount`  | inline prompt (`next_prompt`) — autonomous only; persist the project-wide concurrent sub-agent limit |
+| `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md`                  |
+| `configureSandboxProfile`        | sub-skill: `setup/configure-sandbox-profile.md`. AIM currently pre-sets `sandbox_profile=sandbox` (see `bootConfigureParams`); do not ask this until that default is removed. |
 | `configureSourceConnectionTesting` | sub-skill: `setup/configure-source-connection.md` (source-data testing path only) |
 | `configureTesting`               | sub-skill: `setup/configure-testing.md`                           |
-| `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (synthetic testing path only) |
+| `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (testbed path; also the legacy synthetic path) |
 | `configureSourceConnectionData`  | sub-skill: `setup/configure-source-connection.md` (data infrastructure path only) |
 | `setupDataInfrastructure`        | sub-skill: `data-infrastructure/SKILL.md`                         |
 | `dataStrategy`                   | sub-skill: `setup/data-strategy/SKILL.md`                         |
 
 Conversion and assessment come first on purpose: neither needs a Snowflake
-target, so a user reaches their assessment report without picking a
-connection or database. Git is enabled by default right after the project
-directory is confirmed — before dialect and code registration — so milestone
-commits can land as each step completes. A fresh directory that is not
-already a git repo is initialized on `main` automatically, without asking.
-An existing repository stops at `configureGit` until the user confirms
-branch and remote settings.
+target, so a user reaches their assessment report before picking a run mode.
+Everything else — git included — follows the `chooseRunMode` prompt.
 
-Object migration setup (Snowflake target, testing, data infrastructure) is
-gated behind the `continueToMigration` prompt. Answer "Not now" and the
-machine finishes at assessment; nothing is persisted for that answer, so the
-gate is offered again on the next run. Pass `configure(git_enabled=false)`
-(or answer Skip if the `enableGit` prompt still appears, for an existing
-repo) to run assessment-only with no repository — milestone commits are skipped.
+The milestone commits (`registerCode`, `convertCode`, `runAssessment`) need git,
+which now comes after the run-mode choice. They land together on the first
+`progress_setup()` after `configureGit` rather than one at a time when git was
+skipped earlier in the flow.
 
 The `assessment` skill's closing menu asks the same thing the gate asks, so
 on "Move on to migration" it submits
-`progress_setup(answers={"continue_to_migration": "true"})` instead of a bare
+`progress_setup(answers={"run_mode": "manual"})` (or `"autonomous"`) instead of a bare
 call. A bare call there would put the question a second time.
 
-The testing choice also decides the last step: **synthetic** walks into
-`generateTestbed` (synthetic tests need generated data), while
-**source-data** ends setup right after `configureTesting`.
+The testing choice also decides the last step: **testbed** (and legacy
+**synthetic**) walks into `generateTestbed`, while **source-data** ends
+setup right after `configureTesting`. Per-object tests on the testbed
+path use `generateTestCases` (query the loaded catalog), not
+`seedSynthetic`.
 
 If `progress_setup()` returns an unexpected `next_task` not listed above,
 surface the raw response to the user and stop — do not invent a skill
@@ -188,6 +188,7 @@ pending — do not invent completion from chat history.
 | 1 | oracle-connection | `../connection/oracle-connection/SKILL.md` |
 | 1 | teradata-connection | `../connection/teradata-connection/SKILL.md` |
 | 1 | postgresql-connection | `../connection/postgresql-connection/SKILL.md` |
+| 1 | azure-synapse-connection | `../connection/azure-synapse-connection/SKILL.md` |
 | 1 | db2-connection | `../connection/db2-connection/SKILL.md` |
 | 1 | bigquery-connection | `../connection/bigquery-connection/SKILL.md` |
 | 1 | snowflake-connection (source and target for validation-only projects) | `../connection/snowflake-connection/SKILL.md` |
@@ -212,22 +213,14 @@ pending — do not invent completion from chat history.
 
 ## On Completion
 
-When the setup machine reaches `setupComplete`, the closing message depends
-on how the user answered the `continueToMigration` gate.
+When the setup machine reaches `setupComplete`, the closing message reflects
+the chosen `run_mode` (`manual` or `autonomous` in `plugin.yml`). For autonomous
+projects, include the persisted `autonomous_max_subagents` limit.
 
-**If they chose "Not now"** (no Snowflake target configured) — close out
-here without nudging them toward migration:
-> **Assessment complete** — connected to <source_type>, <N> objects
-> registered, code converted, and your assessment report is ready. Every
-> step was committed to git.
->
-> Whenever you want to go on to deploying objects to Snowflake, just say
-> so — I'll pick up right here and set up the Snowflake target then.
+**If setup ended early** (e.g. `chooseRunMode` permanently excluded via
+`configure(tasks=…)`) — close without nudging toward migration.
 
-Then ask what else you can help with, and stop. Do **not** load
-`../migrate-objects/SKILL.md`.
-
-**If they opted in** and the Snowflake target and testing path are set:
+**If they completed migration setup** and the Snowflake target and testing path are set:
 > **Setup complete** — Your migration project is configured: connected to <source_type>, <N> objects registered, code converted, assessment generated, and your Snowflake target (`<snowflake_database>`) and testing path are set. Ready to start migrating objects.
 >
 > Every step along the way was committed to git. This is a good time

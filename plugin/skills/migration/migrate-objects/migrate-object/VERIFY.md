@@ -19,18 +19,19 @@ Open the object's source and converted files (`files.source.path` and `files.con
 
 Use as much evidence as the object gives you. In rough order of strength:
 
-1. **It is already deployed** (source-less helper) → confirm the object exists in Snowflake (`SHOW FUNCTIONS` / `SHOW PROCEDURES` or `DESC`) and is callable with a few smoke inputs. Do not try to seed, capture a source baseline, or author a test YAML.
-2. **It produced deployable DDL** → deploy it and confirm it compiles in Snowflake.
-3. **Its logic moved into referencing units** → list the referencing code units (`dependencies` on the registry entry, or `query_registry` for units that reference this name) and confirm each one converted, and that the packaged logic is present in them. Their own `runTests` results are the real proof the logic survived.
-4. **Nothing was emitted and nothing references it** → confirm that: no referencing unit, no remaining references to the name in the converted SQL.
-5. **Unresolved EWIs on the converted output** → treat as not verified; load [DIAGNOSE_FIX.md](DIAGNOSE_FIX.md).
+1. **Open invalidation** (`invalidation` on `next_task`, or a first-prompt `reason`) → that reason is the defect. Skip the smoke-and-stamp path. Probe the named inputs: `query_source` of the source builtin vs a `SELECT` of this object. Match → Step 3 completed. Mismatch → stamp `verify` `failed` `error="sql"` so the machine enters the fix loop. Do not stamp completed on existence alone. Do not escalate because the file is a SnowConvert template. Matching the waiter-named inputs is enough; do not build a grammar corpus of the builtin.
+2. **It is already deployed** (source-less helper, no open invalidation) → confirm the object exists in Snowflake (`SHOW FUNCTIONS` / `SHOW PROCEDURES` or `DESC`) and is callable with a few smoke inputs. Do not try to seed, capture a source baseline, or author a test YAML.
+3. **It produced deployable DDL** → deploy it and confirm it compiles in Snowflake.
+4. **Its logic moved into referencing units** → list the referencing code units (`dependencies` on the registry entry, or `query_registry` for units that reference this name) and confirm each one converted, and that the packaged logic is present in them. Their own `runTests` results are the real proof the logic survived.
+5. **Nothing was emitted and nothing references it** → confirm that: no referencing unit, no remaining references to the name in the converted SQL.
+6. **Unresolved EWIs on the converted output** → treat as not verified; load [DIAGNOSE_FIX.md](DIAGNOSE_FIX.md).
 
 Report what you checked and what you concluded. Do not claim more than the evidence supports — "the package body was inlined into 3 procedures, all 3 pass their tests" is a verification; "conversion reported success" is not.
 
 ## Step 3: Record the verdict
 
-- **Verified** → `transition_status(task="verify", outcome="completed", where="id IN ('<object_id>')")`. This is the object's last task; it moves to done.
+- **Verified** → `transition_status(task="verify", outcome="completed", where="id IN ('<object_id>')")`. This is the object's last task; it moves to done. After a fix-loop retry, the same named-input probe is the completion test.
 - **Not verifiable / genuinely out of scope** (e.g. the package was fully inlined and the standalone object will never exist in Snowflake) → say so, then mark it out of scope with `update_registry(field="inScope", status="false", objects="<object_id>")` once nothing depends on it.
-- **Converted output is wrong** → load [DIAGNOSE_FIX.md](DIAGNOSE_FIX.md) to fix it, then re-verify.
+- **Converted output is wrong** (including an open invalidation whose named cases still mismatch) → stamp `verify` `failed` `error="sql"`. The machine routes to `applyRules` / `fixCode`; do not load [DIAGNOSE_FIX.md](DIAGNOSE_FIX.md) by hand.
 
 Escalate to the user when you can't tell whether an object matters — a package whose logic went nowhere and whose callers are missing is a migration gap, not a completed object.

@@ -30,8 +30,15 @@ query_registry(where="id = '<objectId>'", fields="id,source,files,target")
 ```
 
 Hold `files.source.path`, `files.converted.path`, `files.artifacts.path`.
-Read `<metadata_database>.VALIDATION.LATEST` (attach names that
-database; it is not the migration target). There is no
+When `files.source` is missing (SnowConvert UDF helper), there is no
+`VALIDATION.LATEST` and no test YAML. The oracle is `invalidation.reason`
+on `next_task` (waiter-named inputs): `query_source` of the source builtin
+vs this helper. Edit `files.converted.path`, `deploy` with no `sandbox`
+(common catalogs), re-probe. Matching those inputs is enough; do not
+build a grammar corpus of the builtin.
+
+Otherwise read `<metadata_database>.VALIDATION.LATEST` (`metadata_database` in
+`.scai/config/plugin.yml`; it is not the migration target). There is no
 `<project_dir>/test-results/results.json`. For each `FAIL` / `ERROR` on
 this object, take `params_hash`, `parameters`, `error_message`, and
 `differences`. Then read the source SQL and the converted SQL. A deploy
@@ -89,6 +96,7 @@ an accept. A name starting `[AVOID]` is an approach not to repeat.
 | Finding | Action |
 |---|---|
 | Converted logic ≠ source | Edit converted SQL |
+| Source-less helper, converted result ≠ source builtin on the named inputs | Edit converted SQL |
 | Missing schema prefix | Add the prefix |
 | Source function left as T-SQL | Snowflake equivalent |
 | YAML `steps:` mismatch | Step 3 recipe, recapture |
@@ -124,12 +132,27 @@ Edit `files.converted.path` only. Minimal change. Keep source comments.
 Do not strip `EXECUTE AS` or the SnowConvert `COMMENT` provenance block
 unless the error named them.
 
-Before deploy, also drop a leading `USE DATABASE <source_db>`. Do not
-rewrite the database qualifier to the SNAP / configure name — `deploy -d`
-does that.
+Do not rewrite the database qualifier to the SNAP / configure name —
+`deploy` substitutes `<%token%>` from the active bindings yaml. Leave a
+leading `USE DATABASE`; the tool comments it out.
 
 If the edit chose among meanings (CHECK drop so COPY can run, `RTRIM` for
 trailing-space collation), **note** per
-[general-task.md](../../../../agents/general-task.md) §4, then stamp
-`fixCode` completed. The machine's `retryEntry` is the redeploy / retest.
-Do not spawn a reviewer for the note.
+[general_task.md](../../../../agents/general_task.md) §4.
+
+Push the edited SQL before you stamp — a leftover sandbox yaml does not
+make disk live. Pick one:
+
+| Need | Call |
+|---|---|
+| This object only into the live sandbox | `deploy(sandbox=true, mode=redeploy_object, where="id = '<objectId>'")` |
+| Closure into the live sandbox (a helper / view / function also changed) | `deploy(sandbox=true, where="id = '<objectId>'")` — omit `mode`. Tables (CSV reload), functions, views, **and this object**. No DROP / CLONE. |
+| This object only onto the common catalogs | `deploy(where="id = '<objectId>'")` — no `sandbox`. `next_task` is `deploy`, or a source-less helper. |
+
+A source `already exists` on the sandbox twin is a skip; Snowflake is
+CREATE OR REPLACE. Do not spawn sandbox_specialist for that. YAML-only
+(Step 3) still has nothing to redeploy.
+
+Then stamp `fixCode` completed. The machine's `retryEntry` reopens the
+failed task (`runTests` / `deploy` / …). Do not spawn a reviewer for
+the note.

@@ -1,6 +1,6 @@
 ---
 name: code-conversion-only
-description: Convert local source code to Snowflake SQL for code-conversion-only source systems such as Sybase IQ, Azure Synapse, Spark SQL, Databricks SQL, Greenplum, Netezza, Vertica, and Hive. Optionally repoints Power BI reports. Use when configure returns project_type code_conversion_only for these sources.
+description: Convert local source code to Snowflake SQL for code-conversion-only source systems such as Sybase IQ, Spark SQL, Databricks SQL, Greenplum, Netezza, Vertica, and Hive. Optionally repoints Power BI reports. Use when configure returns project_type code_conversion_only for these sources.
 parent_skill: migration
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -16,12 +16,11 @@ Guide users through SnowConvert's code-conversion-only path. This path uses loca
 
 ## Supported Sources
 
-If `configure()` does not already have source_language configured, use the CLI dialect directly for `configure(source_language=...)`. Azure Synapse is the exception: it uses `source_language="synapse"` while initializing the CLI dialect as `SqlServer` with `project_type: code_conversion_only`.
+If `configure()` does not already have source_language configured, use the CLI dialect directly for `configure(source_language=...)`.
 
 | User-facing source | `configure(source_language=...)` / CLI dialect |
 |--------------------|-----------------------------------------------|
 | Sybase IQ | `Sybase` |
-| Azure Synapse | `synapse` / `SqlServer` with `project_type: code_conversion_only` |
 | Spark SQL | `Spark` |
 | Databricks SQL | `Databricks` |
 | BigQuery | `BigQuery` |
@@ -34,7 +33,7 @@ If `configure()` does not already have source_language configured, use the CLI d
 
 If the user says "PostgreSQL & Based Languages" but does not specify one, ask whether they mean PostgreSQL, Greenplum, or Netezza.
 
-> **Note on PostgreSQL, IBM DB2, and BigQuery:** New PostgreSQL, DB2, and BigQuery projects default to `project_type: full_migration` and are routed through `setup/SKILL.md`. They appear in this table only for **legacy** projects whose `project.yml` already has `project_type: code_conversion_only` persisted from before full-pipeline support shipped. If you reach this skill for PostgreSQL, DB2, or BigQuery, the legacy project configuration is being honored.
+> **Note on PostgreSQL, IBM DB2, BigQuery, and Azure Synapse:** New PostgreSQL, DB2, BigQuery, and Azure Synapse projects default to `project_type: full_migration` and are routed through `setup/SKILL.md`. They appear in this skill only for **legacy** projects whose `project.yml` already has `project_type: code_conversion_only` persisted from before full-pipeline support shipped. If you reach this skill for PostgreSQL, DB2, BigQuery, or Azure Synapse, the legacy project configuration is being honored.
 
 ## Workflow
 

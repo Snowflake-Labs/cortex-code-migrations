@@ -2,8 +2,8 @@
 
 Queries against the `VALIDATION` schema created by `scai test validate --create-schema`.
 
-The schema lives in the SnowConvert metadata database — attach
-`metadata_database:` / `.scai/config/plugin.yml` (`SNOWCONVERT_AI` unless
+The schema lives in the SnowConvert metadata database —
+`.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
 overridden), not the migration target. Qualify every query with that name.
 The examples below leave the database off only as a shorthand.
 
@@ -42,7 +42,7 @@ ORDER BY data:executed_at::TIMESTAMP_TZ DESC;
 
 `scai test validate` writes each case into `VALIDATION.RESULTS`. `VALIDATION.LATEST`
 is the newest run per `(procedure_name, test_name, params_hash)`. Qualify with
-`metadata_database` from attach — not the migration target. There is no
+`metadata_database` from `.scai/config/plugin.yml` — not the migration target. There is no
 `<project_dir>/test-results/results.json`.
 
 Each LATEST row has:

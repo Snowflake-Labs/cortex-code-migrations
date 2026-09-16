@@ -2,14 +2,45 @@
 
 Guide for the `runTests` task. The machine invokes this after deployment succeeds for procedures and functions, and after baseline capture for BTEQ scripts (which are not deployed).
 
+## Refresh the sandbox before validate
+
+No leftover yaml (`.scai/bindings/sandbox/{hash}.yaml`) → skip this section.
+Tests already bind the common catalogs.
+
+When leftover sandbox yaml exists, tests bind the `AIMSBX_*` copy. Disk
+edits are not live until you push.
+
+If `invalidation` is on `next_task` (or a first-prompt `reason` from a
+`reopened` return): a helper / view / function in the closure changed.
+For each `dependsOn` id, `migration_status(mode="next_task", object_ids=[…])`.
+Any `nextTask` that is not null → **Skip this object.** Report blocked on
+that walk. Else `deploy(sandbox=true, where="id = '<objectId>'")` — omit
+`mode`. Closure (tables from CSVs, functions, views) **and this object**.
+Do not pass `mode=redeploy_object` — that skips the helper.
+
+Else if you edited this object's converted SQL since the pair was filled:
+`deploy(sandbox=true, mode=redeploy_object, where="id = '<objectId>'")`.
+
+Otherwise skip to validation.
+
+Then run validation below.
+
 ## Run validation
 
-The `scai test validate` tool compares Snowflake output against captured baselines. Baselines were captured during the prep phase — this step only re-runs validation.
+Call the `run_tests` MCP tool with `object_name` or `where` (`mode` defaults to
+`validate`). Do **not** pass `--profile`, `--database-bindings`, `--isolation-strategy`,
+or `--restore-from-bindings` — the tool injects `--database-bindings` from that object's
+leftover sandbox yaml when present, else `.scai/bindings/database-bindings.yaml`. Isolation
+`bound` and `--restore-from-bindings` are added only for a procedure sandbox, so cases run in the `AIMSBX_*`
+catalogs and each case's mutated tables are restored from the common catalogs
+(`.scai/bindings/database-bindings.yaml`) before the next one. Capture is the same tool
+with `mode=capture` (no restore).
 
-`scai test validate` writes each case into
+`run_tests` writes each case into
 `<metadata_database>.VALIDATION.RESULTS`. Read the latest run from
-`VALIDATION.LATEST` (attach names `metadata_database` — same catalog as
-ORCHESTRATION, not the migration target). There is no
+`VALIDATION.LATEST` (`.scai/config/plugin.yml` `metadata_database` —
+`SNOWCONVERT_AI` unless overridden; same catalog as ORCHESTRATION, not
+the migration target). There is no
 `<project_dir>/test-results/results.json`.
 
 ```
@@ -74,17 +105,25 @@ Scan the `error` field from failing test entries for these patterns:
 | `query_registry` returned no row | **Skip this object.** Report: "Blocked on `<dependency>` — not in registry." |
 | `errored`, or `blocked: true` | **Skip this object.** Report: "Blocked on `<dependency>` — " plus its error, or the reason on its `blockedOn` entry. |
 | `nextTask` is not null | **Skip this object.** Report: "Blocked on `<dependency>` — still at `<nextTask>`." It has not finished its own walk, so it is not what you should be testing against yet. |
-| `nextTask: null`, not errored, not blocked | The dependency is done. If the FAIL is still a defect **in that code unit** (wrong column type, bad view body, missing CAST on *its* SQL), do **not** patch this procedure around it. Spawn one foreground [`task-invalidate`](../../../../agents/task-invalidate.md) (`subagent_type="task-invalidate"`) with that code unit's `id`, the resume task (`validateView` on a view, `runTests` on a procedure), and why — plus this waiter's `objectId` and `runTests` so its verification is also reopened. Then **return** `result: "reopened"` with `reopenedCodeUnits`. Do not stay in the fix loop. If the dependency's SQL is faithful and the FAIL is in *this* code unit, this is not a dependency failure — proceed to fix the code. |
+| `nextTask: null`, not errored, not blocked | The dependency is done. If the FAIL is still a defect **in that code unit** (wrong column type, bad view body, missing CAST on *its* SQL), do **not** patch this procedure around it. Spawn one foreground [`task_invalidator`](../../../../agents/task_invalidator.md) (`subagent_type="task_invalidator"`) with that code unit's `id` and why — plus this waiter's `objectId` so its verification is also reopened. Omit the resume task; the server picks the verification node. Then **return** `result: "reopened"` with `reopenedCodeUnits`. Do not stay in the fix loop. If the dependency's SQL is faithful and the FAIL is in *this* code unit, this is not a dependency failure — proceed to fix the code. |
 
 If blocked on a dependency, **do not stamp this task**. Name the specific dependency in your user-facing reply so the user knows what to migrate. The next walk derives `blocked` / `blockedOn` from that dependency's live status.
 
 ### If not a dependency failure
 
-Proceed — the machine will route to the fix loop.
+If tests fail only because **this fixture's rows** make the object
+untestable (empty join, concat of legal `VARCHAR(n)` values into a
+narrower temp column, a filter the fixture never produced), spawn
+[`sandbox_specialist`](../../../../agents/sandbox_specialist.md)
+(`subagent_type="sandbox_specialist"`) with `task=runTests`. Do not stamp
+`error=sql`. After `done`, note the reshape and retry. Leftover sandbox
+yaml is the binding.
+
+Otherwise proceed — the machine will route to the fix loop.
 
 ## After tests complete
 
-- **All pass:** call `transition_status(status='advance', task='runTests', outcome='completed')`.
-- **Any fail (not dependency):** call `transition_status(status='advance', task='runTests', outcome='failed', error='sql')` — the machine routes to rule application and the fix loop. Try to make the cases pass there before any overlay. Use `error='sql'` only when the test failure is caused by a SQL/DDL bug the fix loop can address; for transient infrastructure issues (timeouts, connection drops) use `error='infra'` instead.
-- **Still failing after the fix loop, and a code change would be illogical** (source wall-clock expression; freezing "now" would lie): spawn **one** foreground [`test_case_verifier`](../../../../agents/test_case_verifier.md) (`subagent_type="test_case_verifier"`) with fresh context for **all** remaining hashes on this object. Hand `objectId`, `projectDir`, the `params_hash` list, and the RESULTS diffs — not a verdict. That child reads each case and decides. Do **not** call `configure(subagent_mode=true)` for this — that latch is the autonomous orchestrator's, before dispatching walkers. Call it yourself only if the project set `require_independent_override_accept: false`. See [general-task.md](../../../../agents/general-task.md) §4. Do not stamp `runTests` completed and do not delete the YAML case. The oracle joins the overlay on `(procedure, params_hash, target)`; RESULTS still shows FAIL. The call is also a `note` (same unreviewed queue). If that child **rejects** and you then change the converted SQL, a later FAIL on the same hash gets a **new** verifier — the first child judged the pre-fix SQL. A second override-accept is allowed.
+- **All pass:** do not stamp `runTests` or `codeStatus.testing`. The `testValidationResults` oracle reads `VALIDATION.RESULTS`; the next walk already sees completed. Return.
+- **Any fail (not dependency):** do not stamp. The oracle already reads failed (`error='sql'`) and the walk routes to rule application. Continue into the fix loop. Try to make the cases pass there before any overlay. For transient infrastructure issues (timeouts, connection drops) escalate rather than entering the SQL fix loop.
+- **Still failing after the fix loop, and a Snowflake-SQL or YAML change would be illogical** (source wall-clock expression; source-side non-determinism such as `TOP` ties with no unique `ORDER BY`; do not edit source to make a case pass): spawn **one** foreground [`test_case_verifier`](../../../../agents/test_case_verifier.md) (`subagent_type="test_case_verifier"`) with fresh context for **all** remaining hashes on this object. Hand `objectId`, `projectDir`, the `params_hash` list, and the RESULTS diffs — not a verdict. That child reads each case and the human `answered` row (`human: true` is binding override-accept) and decides. Do **not** call `configure(subagent_mode=true)` for this — that latch is the autonomous orchestrator's, before dispatching walkers. Call it yourself only if the project set `require_independent_override_accept: false`. See [general_task.md](../../../../agents/general_task.md) §4. Do not stamp `runTests` completed and do not delete the YAML case. The oracle joins the overlay on `(code_unit_id, params_hash, target)`; RESULTS still shows FAIL. The call is also a `note` (same unreviewed queue). If that child **rejects** and you then change the converted SQL, a later FAIL on the same hash gets a **new** verifier — the first child judged the pre-fix SQL. A second override-accept is allowed.
 - **Never delete a YAML test case** (overflow, short-input, leftover RESULTS FAIL). Keep the row; overlay or fix SQL.

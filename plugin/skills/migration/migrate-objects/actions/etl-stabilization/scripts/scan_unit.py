@@ -55,10 +55,10 @@ RE_END_TAG = re.compile(
     re.IGNORECASE,
 )
 RE_EWI = re.compile(
-    r"!!!RESOLVE EWI!!!\s*/\*\*\*\s*(SSC-\S+)\s*-\s*(.*?)\s*\*\*\*/!!!",
+    r"!!!RESOLVE EWI!!!\s*/\*\*\*\s*((?:SSC|AIM)-\S+)(?:\s+-\s+(.*?))?\s*\*\*\*/!!!",
 )
 RE_FDM = re.compile(
-    r"^--\*\*\s+(SSC-\S+)\s*-\s*(.*?)\s*\*\*$",
+    r"^--\*\*\s+((?:SSC|AIM)-\S+)(?:\s+-\s+(.*?))?\s*\*\*$",
 )
 RE_DBT = re.compile(r"\bEXECUTE\s+DBT\s+PROJECT\b", re.IGNORECASE)
 RE_DBT_PROJECT_NAME = re.compile(r"\bEXECUTE\s+DBT\s+PROJECT\s+'([^']+)'", re.IGNORECASE)
@@ -283,31 +283,81 @@ def find_mapping_procs(unit_path: Path, orch_file: Path | None = None) -> list[d
     return sorted(procs, key=lambda p: p["path"])
 
 
+def _is_ai_first_flat_reports_dir(candidate: Path) -> bool:
+    """True if `candidate` (a `Reports/` directory) directly holds the AI-First
+    producer's flat report layout: `ETL.Elements.*.csv` / `ETL.Issues.*.csv` /
+    `ObjectReferences.*.csv` and/or the `AiFirstIssues/` / `AiFirstRemediation/` /
+    `AiFirstLineage/` subdirectories -- the ground-truth shape confirmed against a
+    real AI-First producer run (`m3-true-e2e-2026-08-18`): no `SnowConvert`
+    subdirectory in this layout, `Reports/` itself is the root. Gated on these
+    markers so an unrelated `Reports/` directory (neither shape) still resolves to
+    "not found", same as today.
+    """
+    if (
+        any(candidate.glob("ETL.Elements.*.csv"))
+        or any(candidate.glob("ETL.Issues.*.csv"))
+        or any(candidate.glob("ObjectReferences.*.csv"))
+    ):
+        return True
+    return any(
+        (candidate / name).is_dir()
+        for name in ("AiFirstIssues", "AiFirstRemediation", "AiFirstLineage")
+    )
+
+
 def find_reports_dir(unit_path: Path) -> Path | None:
-    """Walk upward from unit folder looking for Reports/SnowConvert/."""
+    """Walk upward from the unit folder for the directory that states the ETL assessment.
+
+    Two layouts are real. A native SnowConvert run nests the CSVs under `Reports/SnowConvert/`;
+    other runs, including the AI-First convert path, write them directly into `Reports/`. Looking
+    only for the nested form found nothing in a flat tree, and the scan then reported no reports
+    directory at all -- which reads as "this unit has no assessment" rather than "one layout was
+    searched".
+    """
     current = unit_path.resolve()
     while current != current.parent:
-        candidate = current / "Reports" / "SnowConvert"
-        if candidate.is_dir():
-            return candidate
+        # Only a Reports/ (nested or flat) that actually states elements ends the walk. An
+        # empty or unrelated one must not stop it and mask a real assessment further up.
+        nested = current / "Reports" / "SnowConvert"
+        if nested.is_dir() and any(nested.glob("ETL.Elements.*.csv")):
+            return nested
+        flat = current / "Reports"
+        if flat.is_dir() and any(flat.glob("ETL.Elements.*.csv")):
+            return flat
         current = current.parent
     return None
 
 
-def load_assessment_csv(reports_dir: Path, unit_name: str) -> dict[str, dict] | None:
-    """Load ETL.Elements.*.csv and return a dict keyed by element FullName."""
+def _row_names_this_unit(file_name: str, unit_name: str, source_file_name: str | None) -> bool:
+    """`FileName` states the source document as the converter saw it, extension included."""
+    if source_file_name and file_name == source_file_name:
+        return True
+    # Extension-agnostic: the unit folder is named after the document that produced it.
+    return bool(file_name) and Path(file_name).stem == unit_name
+
+
+def load_assessment_csv(
+    reports_dir: Path, unit_name: str, source_file_name: str | None = None
+) -> dict[str, dict] | None:
+    """Load ETL.Elements.*.csv and return a dict keyed by element FullName.
+
+    Rows were selected by comparing `FileName` against a manufactured `f"{unit_name}.dtsx"`, which
+    only ever matched SSIS. An Informatica `.xml` or an Alteryx `.yxmd` unit dropped every row, so
+    the scan reported zero elements while the CSV in front of it described all of them. Match the
+    real document name when the caller knows it, and otherwise compare stems rather than assuming
+    an extension.
+    """
     csvs = sorted(reports_dir.glob("ETL.Elements.*.csv"))
     if not csvs:
         return None
 
     csv_path = csvs[-1]
-    dtsx_name = f"{unit_name}.dtsx"
     elements: dict[str, dict] = {}
 
     with open(csv_path, encoding="utf-8-sig", newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            if row.get("FileName") != dtsx_name:
+            if not _row_names_this_unit(row.get("FileName") or "", unit_name, source_file_name):
                 continue
             full_name = row.get("FullName", "")
             elements[full_name] = {
@@ -326,22 +376,87 @@ def load_assessment_csv(reports_dir: Path, unit_name: str) -> dict[str, dict] | 
     return elements if elements else None
 
 
+def statements_from_assessment(
+    unit_name: str, assessment: dict[str, dict], dbt_projects: list[dict]
+) -> list[dict]:
+    """Derive the unit's elements from the assessment when there is no orchestration SQL to parse.
+
+    Elements were only ever read out of orchestration markers. A unit whose conversion produced dbt
+    models and no orchestration container -- what the AI-First path emits for a data-flow document
+    -- therefore yielded an empty `statements`, and because tracking builds its element list from
+    `statements[].elements`, every downstream phase saw nothing to work on while the assessment
+    listed the full inventory.
+
+    Shaped as one synthetic statement so no consumer changes: `track_status.py init` already walks
+    `statements[].elements`, and the roadmap is built from what it records.
+    """
+    if not assessment:
+        return []
+
+    project = dbt_projects[0]["name"] if dbt_projects else None
+    elements: list[dict] = []
+    for full_name, meta in assessment.items():
+        entry: dict = {
+            "name": full_name,
+            # The element inventory states status and kind, not EWI text. Issues stay empty here
+            # rather than being invented; a row's own EWIs are carried when the CSV states them.
+            "issues": _issues_from_assessment_row(meta),
+            "has_dbt_project": bool(project),
+            "has_mapping_call": False,
+            "assessment_status": meta.get("status", ""),
+            "assessment_subtype": meta.get("subtype", ""),
+            "assessment_category": meta.get("category", ""),
+        }
+        if project:
+            entry["linked_dbt_project"] = project
+        elements.append(entry)
+
+    return [
+        {
+            "name": unit_name,
+            "type": "DATA_FLOW",
+            "line": None,
+            "issues": [],
+            "has_dbt_project": bool(project),
+            "has_mapping_call": False,
+            "elements": elements,
+            "derived_from": "assessment",
+        }
+    ]
+
+
+def _issues_from_assessment_row(meta: dict) -> list[dict]:
+    """The CSV states EWI/FDM codes as delimited strings with no description column, so a code is
+    all that can honestly be carried; the description is left empty rather than fabricated."""
+    issues: list[dict] = []
+    seen: set[str] = set()
+    for key in ("ewis", "fdms", "prfs"):
+        for code in re.split(r"[,;\s]+", str(meta.get(key) or "")):
+            code = code.strip()
+            if code and code not in seen:
+                seen.add(code)
+                issues.append({"code": code, "description": ""})
+    return issues
+
+
 def collect_issues(lines: list[str]) -> list[dict]:
     """Extract EWI and FDM markers from a set of lines."""
     issues = []
     seen = set()
     for line in lines:
         for m in RE_EWI.finditer(line):
-            key = (m.group(1), m.group(2))
+            code, desc = m.group(1), m.group(2) or ""
+            key = (code, desc)
             if key not in seen:
                 seen.add(key)
-                issues.append({"code": m.group(1), "description": m.group(2)})
+                issues.append({"code": code, "description": desc})
         m = RE_FDM.match(line.strip())
         if m:
-            key = (m.group(1), m.group(2))
+            code, desc = m.group(1), m.group(2) or ""
+            key = (code, desc)
             if key not in seen:
                 seen.add(key)
-                issues.append({"code": m.group(1), "description": m.group(2)})
+                issues.append({"code": code, "description": desc})
     return issues
 
 
@@ -591,11 +706,13 @@ def extract_ewis(sql_path: Path) -> list[dict]:
     markers: list[dict] = []
     for idx, line in enumerate(lines):
         line_no = idx + 1
-        matches = [("EWI", m.group(1), m.group(2), m.start()) for m in RE_EWI.finditer(line)]
+        matches = [
+            ("EWI", m.group(1), m.group(2) or "", m.start()) for m in RE_EWI.finditer(line)
+        ]
         fm = RE_FDM.match(line.strip())
         if fm:
             # RE_FDM matched the stripped line, so "--**" is always present on it
-            matches.append(("FDM", fm.group(1), fm.group(2), line.find("--**")))
+            matches.append(("FDM", fm.group(1), fm.group(2) or "", line.find("--**")))
         for kind, code, desc, col in matches:
             b = containing(line_no)
             markers.append({
@@ -695,6 +812,7 @@ def print_summary(result: dict) -> None:
 
 PLATFORM_EXTENSIONS: dict[str, str] = {
     ".dtsx": "ssis",
+    ".yxmd": "alteryx",
 }
 
 AMBIGUOUS_EXTENSIONS: set[str] = {".xml"}
@@ -720,6 +838,200 @@ def detect_platform(source_path: Path | None, explicit_platform: str | None) -> 
             return None
         return PLATFORM_EXTENSIONS.get(ext)
     return None
+
+
+UNSUPPORTED_PACK_ID = "unsupported"
+
+
+def platforms_dir() -> Path:
+    """`{SKILL_DIR}/platforms/`, resolved relative to this script (which lives in `scripts/`)."""
+    return Path(__file__).resolve().parent.parent / "platforms"
+
+
+def resolve_pack_id(detected_platform: str | None, platforms_root: Path | None = None) -> tuple[str, dict]:
+    """Select the Stabilization pack to use, never leaving a silent `platform_id: null`.
+
+    `findings/61` SS13.2: a named pack is used only when its directory actually exists; anything
+    else (no platform resolved, or a named-but-missing directory) falls back to the agnostic
+    `unsupported` pack. The fallback decision is returned alongside the pack id so the caller can
+    record it loudly (scan.json + tracking), not just act on it silently.
+    """
+    root = platforms_root if platforms_root is not None else platforms_dir()
+    if detected_platform:
+        if (root / detected_platform).is_dir():
+            return detected_platform, {"fallback": False, "reason": None}
+        return UNSUPPORTED_PACK_ID, {
+            "fallback": True,
+            "reason": f"named platform '{detected_platform}' has no pack directory under {root}",
+        }
+    return UNSUPPORTED_PACK_ID, {
+        "fallback": True,
+        "reason": "no named platform resolved (omitted/null platform, or ambiguous source extension)",
+    }
+
+
+def _ai_first_reports_root(reports_dir: Path) -> Path:
+    """The `Reports/` directory that hosts `AiFirstIssues/` / `AiFirstRemediation/` /
+    `AiFirstLineage/` as direct children -- not necessarily `reports_dir` itself.
+
+    Legacy layout: `find_reports_dir` returns `Reports/SnowConvert/`, so the AiFirst*
+    siblings live one level up, in `reports_dir.parent` (== `Reports/`). AI-First flat
+    layout: `find_reports_dir` returns `Reports/` itself (no `SnowConvert` subdirectory),
+    so the AiFirst* siblings are `reports_dir`'s own children. The two shapes are
+    distinguished by `reports_dir`'s own name, which `find_reports_dir` fully determines.
+    """
+    return reports_dir.parent if reports_dir.name == "SnowConvert" else reports_dir
+
+
+def ai_first_issues_path(reports_dir: Path | None) -> Path | None:
+    """`{output_root}/Reports/AiFirstIssues/issues.json` -- the AI-First marker beside `reports_dir`."""
+    if reports_dir is None:
+        return None
+    return _ai_first_reports_root(reports_dir) / "AiFirstIssues" / "issues.json"
+
+
+def remediation_brief_path(reports_dir: Path | None) -> Path | None:
+    """`{output_root}/Reports/AiFirstRemediation/remediation-brief.json` (`findings/61` SS10)."""
+    if reports_dir is None:
+        return None
+    return _ai_first_reports_root(reports_dir) / "AiFirstRemediation" / "remediation-brief.json"
+
+
+def check_unsupported_brief(reports_dir: Path | None) -> str:
+    """Classify brief availability for a unit that selected the `unsupported` pack.
+
+    Returns "missing_required" only when the unit carries AI-First artifacts (Gate A/B + AIM ran)
+    but no remediation brief was written beside them -- that combination must fail loudly rather
+    than let `unsupported` proceed as if it were a known platform (`findings/61` SS13.2 row 3).
+    A unit with no AI-First artifacts at all is not held to that bar: it never had a brief to
+    write, so "not_applicable" is the honest state, not a failure.
+    """
+    brief_path = remediation_brief_path(reports_dir)
+    if brief_path is not None and brief_path.is_file():
+        return "present"
+    issues_path = ai_first_issues_path(reports_dir)
+    if issues_path is not None and issues_path.is_file():
+        return "missing_required"
+    return "not_applicable"
+
+# --------------------------------------------------------------------------- #
+# AI-First element derivation -- an AI-First data-flow unit (one Alteryx .yxmd
+# -> one dbt project) has no orchestration SQL container at all: no block markers,
+# no `---- Start` tags, nothing for `parse_orchestration`/`parse_elements` to walk.
+# `find_orchestration_file` correctly returns None for it every time, so the
+# `if orch_file:` branch in `main()` never populates `statements`, and every
+# downstream consumer (track_status.py init, apply_brief.py) sees zero elements
+# to correlate against -- not a bug in those consumers, a genuine gap here: this
+# platform's structure was never modeled. What *does* exist on disk for this unit
+# is a flat dbt model tree plus the AI-First producer's own reports (ETL.Elements/
+# ETL.Issues CSVs, AiFirstIssues/AiFirstRemediation JSON) -- see
+# platforms/unsupported/element-types.md ("model -- a .sql file under models/").
+# This section derives the same `statements`/`elements` shape `parse_orchestration`
+# produces, but from those artifacts instead of SQL block markers.
+# --------------------------------------------------------------------------- #
+
+RE_DIGIT_TOKEN = re.compile(r"[^A-Za-z0-9]+")
+
+
+def _digit_tokens(text: str) -> set[str]:
+    """Split on non-alphanumeric separators and keep pure-digit tokens -- the same
+    node-id extraction `apply_brief.py`'s `_digit_tokens` uses to correlate a brief
+    item's bare `element_ids` (e.g. ``"2"``) against a dbt model name the emitter
+    derived from it (e.g. ``"m_2"`` splits to tokens ``{"m", "2"}``)."""
+    return {t for t in RE_DIGIT_TOKEN.split(str(text)) if t.isdigit()}
+
+
+def find_ai_first_models(project_path: Path) -> list[dict]:
+    """Enumerate the dbt model files under a project's `models/` dir.
+
+    Each model `.sql` file is the atomic "element" for an AI-First unit -- there is no
+    finer-grained source structure to recover (no orchestration SQL, no block markers).
+    """
+    models_dir = project_path / "models"
+    if not models_dir.is_dir():
+        return []
+    return [
+        {"name": f.stem, "path": str(f)}
+        for f in sorted(models_dir.rglob("*.sql"))
+    ]
+
+
+def load_issues_csv(reports_dir: Path) -> dict[str, list[dict]]:
+    """Load ETL.Issues.*.csv, keyed by `ComponentFullName`.
+
+    Distinct key vocabulary from `load_assessment_csv`'s ETL.Elements.*.csv: Elements rows
+    are keyed by the emitter's bare node id (e.g. ``"2"``), Issues rows are keyed by the dbt
+    model name the emitter attributed the issue to (e.g. ``"m_2"``) -- confirmed against a
+    real AI-First producer run. Using the model name here lets issues attach directly to the
+    model-derived elements without a digit-token join.
+    """
+    csvs = sorted(reports_dir.glob("ETL.Issues.*.csv"))
+    if not csvs:
+        return {}
+
+    issues: dict[str, list[dict]] = {}
+    with open(csvs[-1], encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            component = row.get("ComponentFullName", "")
+            if not component:
+                continue
+            issues.setdefault(component, []).append({
+                "code": row.get("Code", ""),
+                "description": row.get("Description", ""),
+            })
+    return issues
+
+
+def derive_ai_first_statements(
+    dbt_projects: list[dict],
+    unit_path: Path,
+    reports_dir: Path | None,
+    assessment: dict[str, dict] | None = None,
+) -> list[dict]:
+    """Build a `statements`-shaped element list for an AI-First unit, one wrapping
+    "statement" per dbt project and one element per model file -- the AI-First analog of
+    `parse_orchestration`, sourced from artifacts that actually exist for this unit shape
+    (see module note above) instead of SQL block markers.
+
+    `assessment` (ETL.Elements.*.csv, keyed by bare node id) is joined onto a model by
+    digit-token containment when unambiguous, so a model inherits the same EWI/FDM/PRF
+    counts a legacy-platform element would get from `enrich_with_assessment` -- that
+    function's own name-equality lookup never fires here (model names aren't bare node ids).
+    """
+    issues_by_component = load_issues_csv(reports_dir) if reports_dir else {}
+
+    statements: list[dict] = []
+    for project in dbt_projects:
+        project_path = unit_path / project["path"]
+        elements = []
+        for model in find_ai_first_models(project_path):
+            entry: dict = {
+                "name": model["name"],
+                "path": model["path"],
+                "issues": issues_by_component.get(model["name"], []),
+                "has_dbt_project": True,
+                "linked_dbt_project": project["name"],
+            }
+            if assessment:
+                model_tokens = _digit_tokens(model["name"])
+                matches = [
+                    row for full_name, row in assessment.items()
+                    if full_name.isdigit() and full_name in model_tokens
+                ]
+                if len(matches) == 1:
+                    entry["assessment"] = matches[0]
+            elements.append(entry)
+
+        statements.append({
+            "name": project["name"],
+            "type": "DBT_PROJECT",
+            "line": 1,
+            "issues": [],
+            "has_dbt_project": True,
+            "elements": elements,
+        })
+    return statements
 
 
 def main() -> None:
@@ -750,7 +1062,8 @@ def main() -> None:
             print(f"Error: unexpected argument '{sys.argv[i]}'", file=sys.stderr)
             sys.exit(1)
 
-    platform_id = detect_platform(source_path, explicit_platform)
+    detected_platform_id = detect_platform(source_path, explicit_platform)
+    pack_id, platform_selection = resolve_pack_id(detected_platform_id)
 
     unit_name = unit_path.name
 
@@ -764,15 +1077,26 @@ def main() -> None:
 
     reports_dir = find_reports_dir(unit_path)
 
+    assessment = None
+    if reports_dir:
+        source_file_name = source_path.name if source_path else None
+        assessment = load_assessment_csv(reports_dir, unit_name, source_file_name)
+
     statements: list[dict] = []
     if orch_file:
         statements = parse_orchestration(orch_file)
 
-    assessment = None
-    if reports_dir:
-        assessment = load_assessment_csv(reports_dir, unit_name)
-
-    enrich_with_assessment(statements, assessment)
+    if statements:
+        enrich_with_assessment(statements, assessment)
+    elif dbt_projects:
+        # The dbt tree is what conversion actually produced, so it is the better element
+        # inventory when it exists: one element per model file, issues joined from the
+        # issues CSV. `statements_from_assessment` stays the fallback below for a unit
+        # with no dbt project, where the assessment is the only inventory there is.
+        statements = derive_ai_first_statements(dbt_projects, unit_path, reports_dir, assessment)
+        enrich_with_assessment(statements, assessment)
+    else:
+        statements = statements_from_assessment(unit_name, assessment or {}, dbt_projects)
 
     orch_hash = None
     if orch_file:
@@ -780,13 +1104,20 @@ def main() -> None:
 
     source_file_str = str(source_path) if source_path else None
 
+    unsupported_brief_status = None
+    if pack_id == UNSUPPORTED_PACK_ID:
+        unsupported_brief_status = check_unsupported_brief(reports_dir)
+
     result = {
         "unit_name": unit_name,
         "unit_path": str(unit_path),
         "orchestration_file": str(orch_file) if orch_file else None,
         "orchestration_file_hash": orch_hash,
         "source_file_path": source_file_str,
-        "platform_id": platform_id,
+        "platform_id": pack_id,
+        "detected_platform_id": detected_platform_id,
+        "platform_selection": platform_selection,
+        "unsupported_brief_status": unsupported_brief_status,
         "scanned_at": datetime.now(timezone.utc).isoformat(),
         "statements": statements,
         "dbt_projects": dbt_projects,
@@ -804,9 +1135,20 @@ def main() -> None:
     print(f"Scan results written to: {out_file}")
     if source_path:
         print(f"Source file: {source_path}")
-    if platform_id:
-        print(f"Platform: {platform_id}")
+    print(f"Platform: {pack_id}")
+    if platform_selection["fallback"]:
+        print(f"Platform selection: fallback to '{pack_id}' ({platform_selection['reason']})", file=sys.stderr)
     print_summary(result)
+
+    if unsupported_brief_status == "missing_required":
+        print(
+            f"FAIL: unit '{unit_name}' has AI-First artifacts (Reports/AiFirstIssues/issues.json) "
+            f"but no remediation brief at Reports/AiFirstRemediation/remediation-brief.json. "
+            f"Refusing to proceed under 'unsupported' as if this were a known platform "
+            f"-- re-run the AI-First full driver to emit the brief first.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 
 if __name__ == "__main__":

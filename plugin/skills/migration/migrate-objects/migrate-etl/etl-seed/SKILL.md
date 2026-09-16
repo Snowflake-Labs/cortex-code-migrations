@@ -77,6 +77,23 @@ informatica:
   domain: Domain_EDW           # pmcmd -d:  the domain that service belongs to
 ```
 
+> **The recommended route is a registered `scai` connection**, not this block — the seeded comments
+> say `# PREFERRED` for the same reason. It carries the credentials plus `service` / `domain`,
+> survives a new shell, and keeps the secret out of the repository entirely: with one registered
+> these credential fields are unnecessary, not merely overridden. It is not encryption — that file is
+> cleartext too, just machine-level under `~/.snowflake/snowct/` instead of a project file that gets
+> committed and pasted into issues. Say that plainly if the user asks where the password ends up.
+> Do not register one from here: `etl-validate` does, in
+> [Step 1 of `../etl-validate/SKILL.md`](../etl-validate/SKILL.md), and only when its
+> `pmcmd_credentials` check fails — see
+> [`../etl-validate/references/informatica-pmcmd-reference.md`](../etl-validate/references/informatica-pmcmd-reference.md).
+>
+> **Never write a credential value into this file.** `username:` / `password:` stay exactly as
+> seeded: `${...}` are *references*, this file is committed, and nothing downstream catches a literal
+> — `--check-env` passes on one. If the user offers the password it goes to an exported variable or
+> to the connection's own hidden prompt, never here. "Write them in" below means `pmcmd_path`,
+> `service` and `domain`.
+
 **Ask the user for `service` and `domain`** — and for `pmcmd_path` too if that placeholder is
 still there. As at Step 3, this is a stopping point that needs the user's input, not agent-side
 work: nothing on disk can supply these values (see above), so there is nothing to infer them from.

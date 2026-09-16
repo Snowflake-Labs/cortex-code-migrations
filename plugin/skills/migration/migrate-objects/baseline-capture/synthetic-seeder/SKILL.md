@@ -326,8 +326,8 @@ still enrich based on DML in the steps.
 ### 5.2 — Run the enrichment script
 
 ```bash
-python <SKILL_DIR>/enrich_yamls.py <project_dir> "<object_name>" \
-  --extra-tables "<fqn>,<fqn>,..."
+uv run --project <SKILL_DIR> python <SKILL_DIR>/enrich_yamls.py \
+  <project_dir> "<object_name>" --extra-tables "<fqn>,<fqn>,..."
 ```
 
 Where `<SKILL_DIR>` is the directory containing this SKILL.md (use the
