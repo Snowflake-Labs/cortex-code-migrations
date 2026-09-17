@@ -1799,7 +1799,7 @@ def generate_html_template(
 
     journey_steps = [
         ('overview', 'Code/ETL Conversion',
-         'Convert your database code and ETL pipelines to Snowflake. Review conversion readiness, dependencies, object exclusions, dynamic SQL, and anti-patterns.'),
+         'Convert your database code and ETL pipelines to Snowflake. Review conversion readiness, dependencies, object exclusions, dynamic SQL, and optimization opportunities.'),
         ('data-migration', 'Data Migration &amp; Validation',
          'Move your data into Snowflake and validate it row-for-row against the source, so nothing is lost in translation.'),
         ('testing', 'Testing',
@@ -1951,15 +1951,15 @@ def generate_html_template(
             <div class="tab-content" :class="{active: activeTab === 'risks'}">
                 <div style="margin-bottom: 32px;">
                     <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
-                        Anti-Patterns
+                        Optimization Opportunities
                     </h1>
                     <p style="color: #64748B; font-size: 1.1rem;">
-                        Identifies migration anti-patterns (performance, architecture &amp; security, and behavior &amp; semantic) that require manual review before migration.
+                        Identifies migration optimization opportunities (performance, architecture &amp; security, and behavior &amp; semantic) that require manual review before migration.
                     </p>
                 </div>
                 <div class="empty-state">
                     <h3>No Data Available</h3>
-                    <p>Anti-patterns assessment data was not provided. Please provide the JSON file using --anti-patterns-json parameter.</p>
+                    <p>Optimization Opportunities assessment data was not provided. Please provide the JSON file using --anti-patterns-json parameter.</p>
                 </div>
             </div>
         """
@@ -2769,7 +2769,7 @@ def generate_html_template(
             -moz-osx-font-smoothing: grayscale;
         }}
         .sidebar {{
-            width: 248px;
+            width: 268px;
             position: fixed;
             height: 100vh;
             background: #F7F7F7;
@@ -2793,7 +2793,7 @@ def generate_html_template(
             overflow-wrap: break-word;
         }}
         .content {{
-            margin-left: 248px;
+            margin-left: 268px;
             padding: 2rem;
             background: #FFFFFF;
         }}
@@ -2801,7 +2801,7 @@ def generate_html_template(
             display: flex;
             align-items: center;
             gap: 12px;
-            height: 30px;
+            min-height: 30px;
             padding: 0 16px;
             margin: 0 16px;
             border-radius: 4px;
@@ -2819,9 +2819,11 @@ def generate_html_template(
             background: #D6E6FF;
             color: #1A6CE7;
         }}
-        /* Only nav row carrying a badge: without nowrap the flex label gives way
-           to it and the wrapped line is clipped by the fixed 30px height. */
-        .nav-link[data-tab="effort-estimates"] {{
+        /* The badge row would otherwise let the flex label give way to the badge;
+           "Optimization Opportunities" is the longest label and sits ~7px inside
+           the 268px sidebar, close enough that a wider font fallback would wrap it. */
+        .nav-link[data-tab="effort-estimates"],
+        .nav-link[data-tab="risks"] {{
             white-space: nowrap;
         }}
         .nav-sublist {{
@@ -5359,7 +5361,7 @@ def generate_html_template(
                         <a @click="scrollToSection('#informatica-component-breakdown', 'etl')" class="nav-sublink">Component Breakdown</a>
                     </div>
                     <a @click="activeTab = 'risks'" class="nav-link" data-tab="risks" :class="{{active: activeTab === 'risks'}}">
-                        Anti-Patterns
+                        Optimization Opportunities
                     </a>
                 </div>
                 <a @click="activeTab = 'data-migration'" class="nav-section" data-tab="data-migration" :class="{{active: activeTab === 'data-migration'}}">

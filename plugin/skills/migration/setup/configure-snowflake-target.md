@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 # Configure Snowflake target
 
 Invoked by the setup state machine once the user has opted into object
-migration at the `continueToMigration` gate. Conversion and assessment
+migration at the `chooseRunMode` step. Conversion and assessment
 have already run — they don't need a Snowflake target, which is why this
 question waits until now.
 
@@ -35,13 +35,12 @@ Use `oauth_authorization_code` for Entra OIDC — never `externalbrowser`.
 ## Step 2: Target database
 
 This is where the migration tracking database and the converted objects
-will live. Read `snowflake_database` from the same `configure()` response:
+will live. Call `configure()` and look for `active_bindings:`:
 
-- **Already set** — confirm it in the recap below; don't re-ask.
-- **Empty but the connection has a default database** — the `configure()`
-  response reports it as the effective database. Offer it:
-  > Deploy into `<db>` (your connection's current database)?
-- **Empty with no default** — ask:
+- **Present** — Read that YAML. `snow:` values are the Snowflake catalogs
+  convert already bound. Confirm them in the recap; don't re-ask unless
+  the user wants a different database.
+- **Absent** — convert did not write bindings. Ask:
   > Which Snowflake database should I deploy into?
 
 ## Step 3: Confirm everything, then persist
@@ -51,7 +50,8 @@ from the `configure()` response:
 
 > Before we start deploying, here's the setup:
 > - **Snowflake connection:** `<snowflake_connection>`
-> - **Target database:** `<snowflake_database>`
+> - **Target database:** `<snowflake_database>` — from `active_bindings`
+>   `snow:` when that yaml exists, otherwise the name the user just gave
 > - **Source connection:** `<source_connection>` — or "none (synthetic test
 >   data only)" when unset
 > - **Source dialect:** `<source_language>`

@@ -1,6 +1,6 @@
 """Anti-patterns report tab content (Option A: buckets-first drill-down).
 
-Renders the "Anti-Patterns" tab from an anti-patterns-<timestamp>.json artifact
+Renders the "Optimization Opportunities" tab from an anti-patterns-<timestamp>.json artifact
 produced by `scai assessment anti-patterns`. Returns (content_html, js, css)
 strings that generate_multi_report.py drops into the multi-tab report. Uses only
 stdlib.
@@ -30,12 +30,16 @@ _BUCKET_TOOLTIP = {
     "and may change results if migrated verbatim. Click to filter the tables below.",
 }
 
+# Customer-facing product name (HTML report uses Title Case). Identifiers stay anti-patterns.
+_FEATURE_NAME = "Optimization Opportunities"
+_FEATURE_NAME_SINGULAR = "Optimization Opportunity"
+
 # Hover copy for the top-level KPI cards.
 _KPI_TOOLTIP = {
-    "scanned": "Total code units analyzed for anti-patterns.",
-    "affected": "Code units where at least one anti-pattern was detected.",
-    "distinct": "Number of distinct anti-pattern types detected across the project.",
-    "occurrences": "Total anti-pattern instances across all code units.",
+    "scanned": "Total code units analyzed for optimization opportunities.",
+    "affected": "Code units where at least one optimization opportunity was detected.",
+    "distinct": "Number of distinct optimization opportunity types detected across the project.",
+    "occurrences": "Total optimization opportunity instances across all code units.",
 }
 
 # Severity ordering, most dangerous first — drives the code-unit "worst wins"
@@ -89,7 +93,7 @@ _AP_PAGE_INTRO = (
 
 _AP_H1 = (
     '<h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 8px;">'
-    'Anti-patterns</h1>'
+    f'{_FEATURE_NAME}</h1>'
 )
 _AP_INTRO = (
     f'<p style="color: #64748B; font-size: 1rem; line-height: 1.6; margin-bottom: 24px;">'
@@ -107,7 +111,7 @@ def _render_content(summary: Dict, flags: List[Dict], code_units: List[Dict]) ->
         return (
             '<div id="anti-patterns-report">'
             + _render_page_header()
-            + '<div class="ap-empty">No migration anti-patterns were detected in this project.</div>'
+            + '<div class="ap-empty">No migration optimization opportunities were detected in this project.</div>'
             + '</div>'
         )
     return (
@@ -126,7 +130,7 @@ def _render_kpis(summary: Dict) -> str:
     cards = (
         ("scanned", "Code units scanned", summary.get("total_code_units_scanned", 0)),
         ("affected", "Code units affected", summary.get("code_units_with_findings", 0)),
-        ("distinct", "Distinct anti-patterns", summary.get("total_flags_detected", 0)),
+        ("distinct", "Distinct optimization opportunities", summary.get("total_flags_detected", 0)),
         ("occurrences", "Total occurrences", summary.get("total_occurrences", 0)),
     )
     items = "".join(
@@ -154,11 +158,15 @@ def _render_bucket_cards(by_bucket: List[Dict]) -> str:
             f'onclick="apToggleBucket(this)">'
             f'<div class="effort-card-num">{affected}</div>'
             f'<div class="effort-card-lbl">{_bucket_label(b.get("bucket", ""), b.get("label", ""))}</div>'
-            f'<div class="effort-card-lbl">{distinct} anti-patterns &middot; {occ} occurrences</div>'
+            f'<div class="effort-card-lbl">{distinct} opportunities &middot; {occ} occurrences</div>'
             '</div>'
         )
     if not cards:
-        return '<div class="ap-bucket-empty">No anti-patterns were detected in any category.</div>'
+        return (
+            '<div class="ap-bucket-empty">'
+            "No optimization opportunities were detected in any category."
+            "</div>"
+        )
     return (
         '<div class="ap-bucket-caption">Filter by category</div>'
         '<div class="effort-cards ap-bucket-grid" data-role="buckets">' + "".join(cards) + '</div>'
@@ -222,7 +230,7 @@ def _render_flag_catalog(flags: List[Dict]) -> str:
         f'<h2 {_AP_H2}>Flag catalog</h2>'
         '<div class="effort-table-wrap">'
         '<table class="effort-table"><thead><tr>'
-        '<th>Anti-pattern</th><th class="ctr">Severity</th>'
+        f'<th>{_FEATURE_NAME_SINGULAR}</th><th class="ctr">Severity</th>'
         '<th class="num">Code units</th><th class="num">Occurrences</th>'
         '</tr></thead>'
         '<tbody data-role="flags">' + "".join(rows) + '</tbody></table></div>'
@@ -280,7 +288,7 @@ def _render_cu_filters(flags: List[Dict], code_units: List[Dict]) -> str:
         'oninput="apSearchCodeUnits(this.value)"/>'
         + _filter_panel("type", "Type", type_opts)
         + _filter_panel("sev", "Severity", sev_opts)
-        + _filter_panel("ap", "Anti-pattern", "".join(ap_opts))
+        + _filter_panel("ap", _FEATURE_NAME_SINGULAR, "".join(ap_opts))
         + '</div>'
     )
 
@@ -323,7 +331,7 @@ def _render_code_unit_table(code_units: List[Dict], flags: List[Dict]) -> str:
             f'<tr class="details-row ap-cu-detail" id="ap-cu-details-{i}"><td colspan="4">'
             f'<div class="ap-cu-details">'
             f'<div class="ap-cu-canonical"><span>Canonical name</span> {_esc(canonical)}</div>'
-            f'<div class="ap-cu-detail-aps"><span class="ap-cu-detail-title">Anti-patterns</span>'
+            f'<div class="ap-cu-detail-aps"><span class="ap-cu-detail-title">{_FEATURE_NAME}</span>'
             f'<ul class="ap-detail-list">{detail_items}</ul></div>'
             f'</div></td></tr>'
         )
@@ -332,7 +340,7 @@ def _render_code_unit_table(code_units: List[Dict], flags: List[Dict]) -> str:
         + _render_cu_filters(flags, code_units)
         + '<div class="effort-table-wrap ap-table-scroll"><table class="effort-table sticky"><thead><tr>'
         '<th class="ap-col-name">Code unit</th><th class="ap-col-type">Type</th>'
-        '<th class="ap-col-sev ctr">Severity</th><th class="ap-col-aps">Anti-patterns</th>'
+        f'<th class="ap-col-sev ctr">Severity</th><th class="ap-col-aps">{_FEATURE_NAME}</th>'
         '</tr></thead>'
         '<tbody data-role="code-units">' + "".join(rows) + '</tbody></table></div>'
     )

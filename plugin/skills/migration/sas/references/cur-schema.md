@@ -9,7 +9,7 @@ register a SnowConvert dialect or touch the `.NET` `CodeUnitRegistry` engine. Se
 Grounded in two confirmed real fixtures:
 
 - `Snowflake.SnowConvert.Testbed.Test/TestData/workloads/tbg-sales/registry/1891b321-153e-4f2a-9368-e5b8791f3a5f.json` (table)
-- `testing-infrastructure/e2e/sample_data/teradata/result-sets/registry/b2c3d4e5-f6a7-8901-bcde-f12345678901.json` (procedure)
+- `testing-infrastructure/integration/sample_data/teradata/result-sets/registry/b2c3d4e5-f6a7-8901-bcde-f12345678901.json` (procedure)
 
 ## 1. Project-root layout
 

@@ -1,7 +1,7 @@
 [project]
 name = "etl-aifirst"
 version = "0.1.0"
-description = "AI-First ETL convert scripts for SnowConvert AI migrations"
+description = "AI-First ETL convert scripts for Snowflake AIM for Data Warehouses migrations"
 requires-python = ">=3.11"
 dependencies = []
 

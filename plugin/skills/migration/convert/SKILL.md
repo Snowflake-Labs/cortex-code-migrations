@@ -40,11 +40,17 @@ If `source/` is empty, continue to Steps 2–3.5. After those steps, if there is
 
 Any ETL in this project was imported during register (`scai code add`), which arranges the packages into `source/_etl/`. That is where `convert` reads them from.
 
-Check whether `source/_etl/` exists and contains ETL files — `.dtsx` for SSIS, `.xml` for Informatica PowerCenter (use whichever portable form fits the host).
+Check whether `source/_etl/` exists and contains ETL files (use whichever portable form fits the host). Classify the platform from the files when the extensions are decisive — `.dtsx` is **SSIS**, Informatica Power Center repo export is XML, Alteryx is `.yxmd`, DataStage is `.dsx`, Pentaho is `.ktr`/`.kjb`. If the files are ambiguous, ask via `ask_user_question` (`multiSelect = false`):
 
-- If it is **missing or empty**, there is no ETL to convert; proceed to Step 3.
-- If it contains **SSIS** packages only, no conversion-target prompt is needed; proceed to Step 3.
-- If it contains **Informatica** PowerCenter XML, ask the remaining ETL questions up front, in one sequence, before running the conversion:
+> "Which ETL platform is the code from?"
+>
+> 1. **SSIS**
+> 2. **Informatica Power Center**
+> 3. **Something else** — my platform isn't listed (for example DataStage, Pentaho, Azure Data Factory, or Alteryx)
+
+- If `source/_etl/` is **missing or empty**, there is no ETL to convert; proceed to Step 3.
+- If it contains **SSIS** packages only, no conversion-target prompt is needed; proceed to Step 3. Do not route SSIS to AI-First.
+- If it contains **Informatica** Power Center XML, ask the remaining ETL questions up front, in one sequence, before running the conversion:
     1. Conversion target, via `ask_user_question` (`multiSelect = false`):
        > "How should Informatica mappings be converted?
        > 1. **dbt** (default): each mapping becomes a dbt model orchestrated by Snowflake Tasks. Supports ETL stabilization and deploy.
@@ -54,7 +60,8 @@ Check whether `source/_etl/` exists and contains ETL files — `.dtsx` for SSIS,
 
     Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`. When the target is Snowflake Scripting, the `--informatica-to-snowflake-scripting` convert flag in Step 4 additionally records the project-level `etl_target` in `project.yml` that gates the scripting-preview routing.
 
-These questions are still required: the conversion target is not something `scai code add` can infer from the imported files.
+    These questions are still required: the conversion target is not something `scai code add` can infer from the imported files.
+- If it contains **Something else** — Alteryx (`.yxmd`), Azure Data Factory, DataStage (`.dsx`), Pentaho (`.ktr`/`.kjb`), or any other platform that is not SSIS or Informatica — do not hand those files to the native engine. It has no translator for them. Store `source/_etl/` as `<AIFIRST_ETL_PATH>` and route it through Step 4.5 after the SQL conversion in Step 4 finishes. If the unsupported documents were not imported into `source/_etl/` (register only asked about SSIS/Informatica), ask for the filesystem path as `<AIFIRST_ETL_PATH>` instead.
 
 ### Step 3: Check for Power BI Reports
 
@@ -66,11 +73,11 @@ If **yes**, load `../powerbi-repointing/SKILL.md`. It collects `PBIT_PATH` and t
 
 If **no**, proceed to Step 3.5. `PBIT_PATH` remains unset; do not pass `--powerbi-repointing` to scai.
 
-### Step 3.5: Check for Tableau Workbooks (Oracle only)
+### Step 3.5: Check for Tableau Workbooks (Oracle and SQL Server)
 
-Read `source_language` from `configure()` (already called this session). If it is **not** Oracle (compare case-insensitively), skip this step: `TABLEAU_PATH` stays unset; do not pass `--tableauRepointing`.
+Read `source_language` from `configure()` (already called this session). Tableau repointing is supported when `source_language` is **Oracle** or **SqlServer** (compare case-insensitively). If it is any other dialect, skip this step: `TABLEAU_PATH` stays unset; do not pass `--tableauRepointing`.
 
-If it **is** Oracle, ask the user:
+If it **is** Oracle or SqlServer, ask the user:
 
 > "Do you have Tableau workbooks (`.twb` or `.tds` files) you'd like to repoint to Snowflake?"
 
@@ -102,6 +109,8 @@ scai code convert <SETTINGS_FLAGS> --json
 
 `--json` is always required so you can parse the result envelope. Substitute `<SETTINGS_FLAGS>` with the confirmed flags from Step 3.6 (or omit the token when empty). Then append one flag per decision already recorded in the steps above — nothing else. Do **not** pass `--etl-replatform-sources-path`; ETL already lives under `source/_etl/` from register.
 
+When `configure()` reports `subagent_mode` is on, also append `--generate-source-bindable-format --generate-snowflake-bindable-format`. They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Interactive convert omits them so existing projects are not forced onto bindings.
+
 | Append | When |
 |--------|------|
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 2 (Informatica target is Snowflake Scripting) |
@@ -112,6 +121,10 @@ scai code convert <SETTINGS_FLAGS> --json
 The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. Either combines with `--powerbi-repointing` and/or `--tableauRepointing`. If none of the conditions hold, run the base command as-is.
 
 Substitute `<PBIT_PATH>` and `<TABLEAU_PATH>` with the actual paths you stored. Do not emit literal placeholder tokens to the shell.
+
+### Step 4.5: AI-First ETL Migration (Something else only)
+
+Skip this step unless Step 2 set `<AIFIRST_ETL_PATH>`. Load `./etl-aifirst/MIGRATE.md` and follow it — it routes the unsupported ETL document through the AI-First convert action instead of the native engine, reports its exit code, and returns here when done. It does not touch the SQL conversion Step 4 just produced.
 
 ### Step 5: Read the Result Envelope
 
@@ -183,6 +196,8 @@ reports/
 │   ├── Assessment.*.json
 │   ├── ETL.Elements.*.csv             # ETL elements processed (packages, tasks, data flows)
 │   └── ETL.Issues.*.csv               # ETL-specific conversion issues
+├── AiFirstIssues/                     # Present only after Step 4.5 (AI-First "Something else" ETL path)
+│   └── <package_name>/
 ├── ArrangeReports/
 └── GenericScanner/
 logs/
@@ -231,6 +246,8 @@ the reference sections above are for that.
 
 *If `SCRIPTING_MODE` was set*, also tell the user:
 > Informatica mappings were converted to Snowflake Scripting stored procedures (preview). **ETL Stabilization is not supported for Snowflake Scripting conversions (dbt only)**, and deploy is not part of this preview flow - both are skipped for these ETL units. The generated procedures and Task graph are under `snowflake/_etl/` for review.
+
+*If Step 4.5 ran*, its own CHECKPOINT already reported the AI-First exit-code verdict in full — do not repeat or soften it here.
 
 There is now enough converted code for the local dashboard to be worth looking
 at. If `configure` reported a dashboard URL at session start, mention it once:
