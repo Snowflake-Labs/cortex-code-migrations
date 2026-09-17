@@ -1,6 +1,6 @@
 ---
 name: assessment
-description: Analyzes workloads to be migrated to Snowflake using SnowConvert assessment reports. Routes to specialized sub-skills for high-quality assessments. Use this skill when user wants to do an assessment of their code or ETL workload, waves generation, object exclusion, effort estimates, anti-patterns, discovery (SQL Server), sql dynamic and/or ETL analysis (SSIS)
+description: Analyzes workloads to be migrated to Snowflake using SnowConvert assessment reports. Routes to specialized sub-skills for high-quality assessments. Use this skill when user wants to do an assessment of their code or ETL workload, waves generation, object exclusion, effort estimates, optimization opportunities, anti-patterns, discovery (SQL Server), sql dynamic and/or ETL analysis (SSIS)
 version: 0.1.0
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -54,7 +54,7 @@ Show one compact confirmation that lists what will run. This is the **only** con
 ```
 I will run:
 1. Waves (dependency analysis + deployment partitioning)
-2. Anti-Patterns  (SQL Server only)
+2. Optimization Opportunities  (SQL Server only)
 3. Effort Estimates  (SQL Server and Redshift only)
 4. Dynamic SQL Patterns
 5. Discovery  (SQL Server only — capture files are optional, asked next)
@@ -130,7 +130,7 @@ No prompts. Note the sub-skill is in scope.
 
 No prompts. Note the sub-skill is in scope.
 
-### 5.6 Anti-patterns (SQL Server only, no inputs)
+### 5.6 Optimization Opportunities (SQL Server only, no inputs)
 
 No prompts. In scope **only when the project's source dialect is SQL Server** — `scai assessment anti-patterns` self-gates and aborts (error `ASM0024`) on other dialects. For non-SQL-Server projects, treat it as out of scope and synthesize a `"skipped"` result in Step 6.
 
@@ -729,8 +729,8 @@ Detect user intent and load the appropriate sub-skill:
 - Triggers: "effort estimate", "effort estimates", "migration effort", "FDE hours", "how long will migration take"
 - Load: `effort-estimate/SKILL.md`
 
-**Anti-Patterns** - Surface migration converns from existing SnowConvert findings (SQL Server only):
-- Triggers: "anti-patterns", "anti patterns", "risk analysis", "performance risks", "collation risks", "semantic risks", "architecture blockers"
+**Optimization Opportunities** - Surface migration concerns from existing SnowConvert findings (SQL Server only):
+- Triggers: "optimization opportunities", "anti-patterns", "anti patterns", "risk analysis", "performance risks", "collation risks", "semantic risks", "architecture blockers"
 - Load: `anti-patterns/SKILL.md`
 
 **Dynamic SQL Analysis** - Classify and score Dynamic SQL patterns:
@@ -1067,12 +1067,14 @@ If `configure` reported a dashboard URL at session start, add one line before th
 
 Skip it if no URL came back (the user opted out, or the port was busy) — never guess one.
 
-On **(3)**, the user has just answered the setup machine's `continueToMigration`
-gate, so **submit it rather than letting the gate ask again**:
+On **(3)**, the user has just answered the setup machine's `chooseRunMode`
+gate. Submit continue-to-migration rather than letting the gate ask again:
 
 ```
-progress_setup(answers={"continue_to_migration": "true"})
+progress_setup(answers={"run_mode": "manual"})
 ```
+
+Do not submit `"autonomous"` — setup does not offer that mode.
 
 Act on that response as `setup/SKILL.md` describes — it walks git, the Snowflake
 target and the testing choice. Calling a bare `progress_setup()` here instead

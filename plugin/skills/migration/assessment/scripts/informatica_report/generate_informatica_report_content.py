@@ -944,7 +944,7 @@ def _generate_workflow_classification(workflows: List[Dict], output_html_path: P
                 <strong>Classification Guide:</strong>
                 <ul style="margin: 0.5rem 0 0 1.25rem; line-height: 1.6;">
                     <li><strong>Ingestion:</strong> Workflows that extract data from external sources (flat files, APIs, external databases) into the data platform. Consider Snowflake Openflow, Snowpipe, or Fivetran as alternatives.</li>
-                    <li><strong>Data Transformation:</strong> Workflows that transform data between internal layers. Good candidates to migrate with SnowConvert AI to {data_transform_target}.</li>
+                    <li><strong>Data Transformation:</strong> Workflows that transform data between internal layers. Good candidates to migrate with Snowflake AIM for Data Warehouses to {data_transform_target}.</li>
                     <li><strong>Mixed: Ingestion + Transformation:</strong> Workflows combining external data ingestion with internal transformations. Decompose into separate {mixed_target}.</li>
                     <li><strong>Configuration &amp; Control:</strong> Workflows focused on orchestration, timer-based scheduling, or system operations. Migrate to Snowflake Tasks and Snowflake Scripting.</li>
                     <li><strong>Unclassified:</strong> Pending AI analysis.</li>

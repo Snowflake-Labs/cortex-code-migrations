@@ -1,6 +1,6 @@
 ---
 name: migrate-objects-auto
-description: Autonomous version of migrate-objects — dispatches one subagent per ready task group, refills as they finish, and only stops to ask when a subagent is stuck. Triggers: autonomous migration, run unattended, migrate objects automatically, auto-pilot the wave, migrate everything in parallel, swarm the objects.
+description: Autonomous version of migrate-objects — dispatches one subagent per ready task group, refills as they finish, and parks stuck work as an escalation instead of asking in chat. Triggers: autonomous migration, run unattended, migrate objects automatically, auto-pilot the wave, migrate everything in parallel, swarm the objects.
 parent_skill: migrate-objects
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -19,7 +19,8 @@ Tell the user:
 
 ## Step 0: Preflight
 
-1. `configure(project_dir=<project dir>, subagent_mode=true, snowflake_connection=<the configure connection the first prompt named>)`. Read the appended migration-status block. Bring
+1. `configure(project_dir=<project dir>, subagent_mode=true, snowflake_connection=<the user's target connection — the one they named for deployment, NOT the system-reminder "active SQL connection" which is the agent's inference account>)`. Read the appended migration-status block. Autonomous
+   always migrates data — do not ask, and do not skip. Bring
    the shared data infrastructure up: `data_infrastructure(mode="up")`. Relay its
    `cost_reminder`. `status="not_ready"` is not a green light — a first local bring-up 
    runs every schema migration and can need more than one call, so follow its `remediation` 
@@ -30,21 +31,23 @@ Tell the user:
 
 `subagent_mode` attributes writes per Cortex conversation. Set it once here; it lasts the
 life of the server and cannot be turned off. Cortex stamps identity on every MCP call —
-do not pass `agent_id`. The parent hook injects `0000` while this latch is on: park a looping
+do not pass `agent_id`. The parent hook injects the PreToolUse `session_id` while this latch is on: park a looping
 object, reset a remediated transient failure, and relay non-terminal guidance.
 Acknowledge unreviewed notes only in Step 3 (`review`), never in the dispatch
 loop. Object-level outcomes stay parked for a person in an interactive session.
 `deploy`, `migrate_data`, and `validate_data` are not binding-checked — keep
-each agent on its own object.
+each agent on its own object. They do still require the *claim holder's* identity:
+the parent is refused for any object-level action, so these are the walker's calls to
+make, never the orchestrator's.
 
-## Step 1: Ask how many subagents to run at once
+## Step 1: Load the project's subagent limit
 
-Offer 2 / 4 / 6, recommend **4**. State the
-trade-off: more slots finish the wave faster, burn proportionally more tokens,
-and produce more escalations competing for their attention. Call it `N`. Never
-exceed it, and never quietly raise it.
+Read `autonomous_max_subagents` from the `Configured` block returned in Step 0
+and call it `N`. Setup persists this project-wide limit, so every new
+conversation uses the same value. Do not ask for a different limit here.
 
-**Wait for the user's response — do not dispatch until they answer.**
+For a legacy autonomous project where the setting is absent, use `N = 4`
+without asking. Never exceed `N`, and never quietly raise it.
 
 ## Step 2: The loop
 
@@ -67,8 +70,15 @@ migration_status(mode="escalations")
 `my_objects_board` is the only status shape you read for dispatch. Each row is
 one object: `objectId`, `name`, `type`, `agentId`, `bucket`
 (`ready` | `blocked` | `done` | `escalated` | `errored`), and `flight`
-(`running` | `idle` | `none`). `walkerRunning` is the live-child slot count;
-`walkerIdle` is yielded walkers. Do not overlay `hub(mode="status")` for
+(`running` | `idle` | `none`). `flight` is stamped when `task` returns
+(PostToolUse: prompt `objectId` + returned `agentId`), so a just-dispatched
+walker is `running` before its first MCP call. `walkerRunning` is the
+live-child slot count. Stop settles a yielded walker: a
+`waiting` / `partial` / `reopened` / `stuck` waiter stays harvested on the
+ledger (`agentId` remains, `flight` is `none`, not a leftover) until a later
+`task(resume=…)`; `completed` leaves the roster. `flight=idle` is unsettled
+(stop not folded yet) — re-read the board; do not call `agent_output`. Do not overlay
+`hub(mode="status")` for
 dispatch — the board already stamped walker liveness (running wins over idle).
 Two live children on one object are forbidden: if `flight` is `running` or
 `idle`, do not first-send another.
@@ -89,8 +99,8 @@ Re-read both every time a child **returns**.
 A slot is occupied only by a **live Cortex child**. Read that from
 `my_objects_board.walkerRunning`, not from memory. `waiting` on a
 relay job, `stuck` / `escalated` parks, leftover claims from a dead session,
-and `completed` objects do not occupy one — those children are **idle**
-(`flight=idle`) or gone (`flight=none`). `free_slots` is `N` minus
+and `completed` objects do not occupy one — those children are harvested
+(`flight=none` with `agentId`) or gone (`flight=none` without a walker). `free_slots` is `N` minus
 `walkerRunning`. When it is greater than zero, pull:
 
 ```
@@ -104,12 +114,14 @@ back empty. Do not skip this pull because a leftover looks blocked on a
 sibling still in flight. Do not wait for the flight to empty.
 
 `next_objects` also returns `leftover_claims`: open claims with **no walker**
-in the ledger (`flight` would be `none`). Live or parked walkers are omitted —
-those are not leftovers. Each entry is `{object_id, name}` — no `agentId`.
+in the ledger. Live, idle, or harvested (parked) walkers are omitted —
+those are not leftovers. A harvested waiter can show `flight=none` and still
+keep `agentId`; do not first-send it. Each entry is `{object_id, name}` — no `agentId`.
 **Before** waiting, first-send every leftover (a **new** child, no `resume`).
-That child's `begin` reclaims the dead conversation's hold. Do not first-send
-a leftover that already has `flight` running or idle on the board — the
-server already filtered those out. Count those first-sends against
+A harvested waiter is not in that list — it stays claimed until a wake or
+the walk is terminal. That child's `begin` reclaims the dead conversation's hold. Do not
+first-send a leftover that already has `flight` running or idle on the board —
+the server already filtered those out. Count those first-sends against
 `free_slots`, then spawn from `objects` for whatever slots remain.
 
 Each `objects` entry has `object_id`, `name`, `display_name`, and `type`.
@@ -118,11 +130,11 @@ its own object**. You never call `transition_status(status="begin")`
 yourself: the agent that does the work owns the claim. A spawn that dies
 *before* `begin` leaves the object unclaimed (2b will offer it again). A
 child that dies *after* `begin` still has an open claim — first-send a new
-child from `leftover_claims` (or from 2d when the child returns `completed`
-without `done`).
+child from `leftover_claims`.
 
 Keep the pair — object id, Cortex `resume` id — only to match a wake line
-to `task(resume=…)`. Prefer the board `agentId` when `flight` is running or idle.
+to `task(resume=…)`. Prefer the board `agentId` when `flight` is running or
+when a harvested waiter still has one.
 A leftover first-send is a new conversation; do not resume a dead child.
 
 > **Claim narrowly.** [../actions/claim_objects.md](../actions/claim_objects.md)
@@ -134,7 +146,7 @@ A leftover first-send is a new conversation; do not resume a dead child.
 ### 2c. Dispatch
 
 **One object per subagent, and the agent is always
-[`general-task`](../../../../agents/general-task.md).** It walks its object through
+[`general_task`](../../../../agents/general_task.md).** It walks its object through
 every task the machine offers — convert, deploy, tests, fixes — and stops when the
 object is done or needs a human. You do not route by task, and there is no
 per-task agent to choose.
@@ -151,33 +163,34 @@ Migrate this object end-to-end, following your agent definition.
 objectId:           <a single id>
 projectDir:         <absolute project_dir>
 pluginDir:          <absolute plugin root — the directory this skill was loaded from, above skills/migration/>
-snowflakeConnection: <Cortex `sql_execute` `-c` from the first prompt — often a reader account, not the configure connection>
-snowflakeDatabase:  <the session `snowflake_database` from configure — the Snowflake target>
+snowflakeConnection: <the target connection passed to configure(snowflake_connection=…) — NOT the system-reminder "active SQL connection">
 guidance:           <verbatim words from `answered` — only when there are some>
+reason:             <from a `reopened` return — only when there is one>
 ```
 
 `task` returns an `agentId` (UUID). Store it as this object's `resume` id. That
-is the conversation, and it is the `agent_id` you pass to `agent_output` when
-the board later shows `flight=idle`. A later `task(resume=…)` returns a
+is the conversation. A later `task(resume=…)` returns a
 **different** UUID — a wait handle for that send only. Do not overwrite the
-stored `resume` id with it, and do not pass that handle to `agent_output`.
+stored `resume` id with it. Do not call `agent_output`.
 
 One imperative line, then values. The line matters: four bare `key: value` pairs
 read as context rather than a request, and an agent handed only context asks
 what you want — which nobody is there to answer. Say what to do, once, and leave
 what to do it with to the definition.
 
-Those values are the rest of the first prompt. `pluginDir` is among them because
+Those values are the rest of the first prompt. Omit `guidance` and `reason`
+when they are empty — same as today. `pluginDir` is among them because
 `executor.skill` values are relative to the plugin's `skills/migration/` directory and
 the subagent cannot locate that on its own. Do not put `agentId` in the prompt —
-Cortex stamps the child's session id on every MCP call. `snowflakeConnection`
-on the first-send is Cortex `sql_execute` `-c` and may be a **reader** account.
-MCP writes use the parent `configure(snowflake_connection=…)` connection, which
-can differ. Without `snowflakeConnection` the child omits `-c`
-and hits Cortex's default account; without `snowflakeDatabase` it qualifies SQL
-with the source catalog name.
+Cortex stamps the child's session id on every MCP call. `snowflakeConnection` is the target connection — the same value passed to
+`configure(snowflake_connection=…)` in Step 0. It is NOT the system-reminder
+"active SQL connection" (the agent's inference account, a different Snowflake
+account). Without it the child omits `-c` and hits Cortex's default — that
+agent account, which has no deployment privileges. The child's attach
+`active_bindings:` names the YAML; Read `snow:` / `source:` from it to qualify
+SQL. Without that yaml it qualifies SQL with the source catalog name.
 Do not tell the child to load `snowflake-migration:migration` — that is the
-interactive router; its contract is [`general-task`](../../../../agents/general-task.md).
+interactive router; its contract is [`general_task`](../../../../agents/general_task.md).
 The agent definition is the contract — it already carries the loop, the fix-loop
 thresholds, the escalation test, and the return schema — and anything the prompt
 adds competes with it instead of replacing it. A prompt that invents a retry limit,
@@ -189,7 +202,7 @@ converts a decision that needed a human into a silent guess.
 (`waiting` / `partial` / `stuck`) and this conversation still has the walk.
 Call `task` with `resume` set to that stored UUID, `description` set, and a
 prompt that is **only the new line**. Do not repeat `objectId` / `projectDir` /
-`pluginDir` / `snowflakeConnection` / `snowflakeDatabase` / the migrate-this-object line — they are
+`pluginDir` / `snowflakeConnection` / the migrate-this-object line — they are
 already in that conversation. Do not pass `fork_conversation_history`.
 
 ```
@@ -247,40 +260,29 @@ This session is headless: ending the turn exits the process and kills every
 child. Keep it alive with **one wait per turn**, and only after this turn has
 filled every free slot.
 
-**Top off, reap, then wait.** Re-read the board (2a) and pull `next_objects`
-(2b) before every wait — after a child returns, after a wake, after empty
+**Top off, then wait.** Re-read the board (2a) and pull `next_objects`
+(2b) before every wait — after a child yields, after a wake, after empty
 hub wakes. First-send every `leftover_claims` entry (new child, no
-`resume`), then spawn every other first send and every pending wake in
-this turn (background `task` calls). Reap every `flight=idle` row (below)
-before the wait. Do not start a wait while leftovers, free slots, or
-unreaped idle rows remain. A live Cortex child on one object does not
+`resume`) except a harvested waiter (`flight=none` with `agentId`), then spawn every other
+first send and every pending wake in this turn (background `task` calls).
+Do not start a wait while leftovers or free slots remain. A live Cortex child on one object does not
 block filling the other slots. Neither does a `waiting` object or an
-escalation.
+escalation. Do not call `agent_output` — Cortex does not need it to settle
+a yielded child.
 
-**Reap idle children before any wait.** `flight=idle` means the walker has
-yielded and its return JSON is sitting in Cortex. Pull it with:
-
-```
-agent_output(agent_id="<the row's agentId>")
-```
-
-Pass only `agent_id`. Do not pass `wait`. `wait=true` is denied in
-`subagent_mode`: it blocks this session until one child finishes and starves
-the other slots. Omitting `wait` is the reap; `wait=false` is the same.
-
-Call that once per `flight=idle` row **before** `bash sleep` or
-`hub(mode="wait")`. A `Background agent finished` line, a Monitor
-`wake up 0000`, and `bash sleep` are not a reap — they do not return
-`objectId` / `result`. After every reap, 2a and 2b. Helpers
-(`test_case_verifier`, `task-invalidate`) do not stamp `flight` — do not
+A `Background agent finished` line, a Monitor
+`wake up <parent session id>`, and `bash sleep` mean re-read the board (2a/2b).
+Helpers (`cur_reconciler`,
+`test_case_verifier`, `task_invalidator`, `sandbox_specialist`, `edge_cases`,
+`business_logic`, `data_driven`) do not stamp `flight` or occupy slots — do not
 poll them.
 
 Wait once, after this turn has filled every free slot. **Liveness is
 `my_objects_board`, not memory:**
-- If `walkerRunning > 0`: `bash sleep 30`, re-read the board, reap every
-  `flight=idle` row, then 2a/2b. Repeat. Sleep only paces the next board
-  read. Do not call `agent_output` on `flight=running` — that peeks a live
-  transcript.
+- If `walkerRunning > 0`: `bash sleep 30`, then 2a/2b. Repeat. Sleep only paces the next board
+  read. **DO NOT SLEEP MORE THAN 30S IMPORTANT!!!** A longer `bash sleep` stalls
+  the wave while Monitor's wake is already consumed. Never `sleep 60`, `sleep 120`,
+  or any duration over 30.
 - If `walkerRunning` is 0 **and** 2b returned nothing (or `free_slots` is
   0): `hub(mode="wait", confirm=true, cursor=<last>)` instead of ending the
   turn (`job_status(wait=true)` is the same gate). Without `confirm=true`
@@ -295,29 +297,18 @@ Arm **one** Monitor for the wave: `orchestrator_watch.watch_command` from
 
 A wake looks like `wake up 550e8400-e29b-41d4-a716-446655440000 and ask it to check new event from relay. …`.
 That is a later send: `task(resume=<that UUID>)` with the `relay_wake:` line
-(the UUID is the child's `agentId`). Do not spawn a new `general-task`
+(the UUID is the child's `agentId`). Do not spawn a new `general_task`
 for it. That later send is the live child; it occupies a slot only while
-the board lists it `flight=running`. A `wake up 0000 …` line means reap
-every `flight=idle` row with `agent_output(agent_id=…)` (omit `wait`), then
-2a/2b. Do not inspect the event. Sleep is not that reap.
+the board lists it `flight=running`. A wake naming the parent session id means
+2a/2b. Do not inspect the event. Do not call `agent_output`.
 
-When `agent_output` returns, read only these keys from its result JSON:
-`objectId`, `tasksCompleted`, `result`, `reopenedCodeUnits`. Ignore `Recent Output`, `task`,
-`failed`, `blocked`, `evidence`, `asks`, and `notes`. Then 2a and 2b
-**before** you send a wake or wait again.
+Report from the board (`bucket`, leftover, escalations), not from a child's
+final JSON. A harvested waiter with `flight=none` keeps its `resume` id until
+a wake or leftover first-send after the walk is terminal. After `task_invalidator`
+reopens defective units, 2b first-sends them; the waiter stays harvested until
+those walks finish.
 
-Report one line per return (`dbo.Customers: done, 4 tasks`) and the running
-tally.
-
-| `result` | What you do |
-|---|---|
-| `completed` | Re-read the board. `done` → drop the `resume` id. Anything else → the child died holding the claim. First send again (new child, no `resume`). |
-| `partial` | Re-read the board. `blocked` → leave it. `ready` → later send (the machine routed recovery). `escalated` → 2e. |
-| `stuck` | 2e. Do not send again until a person answers. |
-| `waiting` | Keep the `resume` id; drop the slot. The object is on a relay job — its own migrate/validate, or a dependency the machine registered. Later send only on a wake for that stored `resume` id. |
-| `reopened` | Keep the waiter's `resume` id; drop the slot. First-send each id in `reopenedCodeUnits` that is not already `flight` running or idle. Do not later-send the waiter until those walks finish. This is not a 2e interrupt. |
-
-Do not send again for a `partial` whose board bucket is still `blocked`.
+Do not send again for a board `blocked` row.
 
 Reset only from evidence you already have — infrastructure now reports ready,
 or a shared job reached terminal — never from the child's `failed` payload:
@@ -334,14 +325,14 @@ the exact failure and the repair needed before a rerun.
 Deterministic row mismatches, schema drift, invalid identifiers or compilation
 errors in generated SQL, and a tool invocation that fails the same way on repeat are
 not transient infrastructure failures. Park them rather than resetting or
-sending the unchanged task again. `reset` clears both the stamp and escalation
-marker, so using it before remediation erases the durable record of a failure the
+sending the unchanged task again. `reset` clears both the stamp and the Snowflake park (`PARKED`), so using it before remediation erases the durable record of a failure the
 next run will reproduce.
 
 ### 2e. Escalate
 
-Escalation is the only reason to interrupt the user. An escalated object does
-not occupy a slot — keep dispatching up to `N` live children while they read.
+Park first. Do not AskUserQuestion. The Escalations tab (and the inline Main
+card) is the interrupt — an escalated object does not occupy a slot, so keep
+dispatching up to `N` live children while they read.
 
 **Read the queue, don't rely on what came back.** A subagent returning `stuck` is
 one source; the authoritative one is:
@@ -353,70 +344,56 @@ migration_status(mode="escalations")
 Check it on every board read (2a), not only when an agent returns. It is
 project-wide, so it also surfaces escalations raised by another person's agents,
 and answers recorded in an earlier session — including one you were killed in the
-middle of.
+middle of. Do not open `notes` or `overrideAcceptedCases`.
 
-Present each **open** row: object, task, `causeClass` if set, and the numbered
-choices from `asks`. That is the only time you read inside an object. Batch
-them. Do not open `notes` or `overrideAcceptedCases`.
-
-**Record the decision with one call — the user's decision, never your own.** An
-escalation exists because the agent that raised it judged the choice not to be an
-agent's to make, and `answer` records *a person's* choice: the row names who
-decided. Do not settle one by reading the escalating agent's skill and writing
-guidance back yourself. If the queue cannot be answered without the user, the run
-terminates with it open — 2f allows that.
-
-The call closes the escalation *and* un-parks the object:
+If the object is not already parked, park it before you say anything else:
 
 ```
-transition_status(status="answer", where="id IN (...)", task="<task>",
-                  resolution="guidance|decompose|needs_repair",
-                  reason="<the user's words>")
+transition_status(status="escalate", task="<the task it keeps returning on>",
+                  asks=["<choice>", "<choice>"],
+                  cause="<sql|infra, from the agent's failed.error — omit it otherwise>",
+                  reason="<what stopped you>", where="id = '<id>'")
 ```
 
-The parent hook stamps `0000` here, on a remediated `reset`, on `escalate`, and on `review`. That is the id that
-says a person decided — the row records which agent recorded the answer, so
-answering under a subagent's id would attribute the user's decision to the agent that
-asked.
+`asks` is required. Then one line in the transcript
+(`dbo.AuditTrail: parked on migrateData — CLR is not enabled on the source`)
+and back to 2a/2b. Do not number the choices, do not call AskUserQuestion, do
+not wait for a chat answer. A motivated parent that asks in chat instead of
+parking leaves Escalations at 0/0 and the object Open.
 
-| The user says | `resolution` | Then you |
-|---|---|---|
-| Try again, here's how | `guidance` | Later send with their words as the `guidance:` line. `reason` is required. |
-| It's too big — split it | `decompose` | Decompose per [LONG_PROCEDURE.md](../migrate-object/references/LONG_PROCEDURE.md), then later send. |
-| Leave it for a human | `needs_repair` | Nothing. It stays parked but leaves the open queue, so it stops being re-offered every cycle. |
-| Apply an object-level outcome | — | Leave it parked. Putting an object out of scope or accepting its current state belongs to the interactive migration flow. |
+Do not settle an open row yourself. `status='answer'` is refused under
+`subagent_mode` — you are not a person, and a parent write would look like
+one. An interactive session records it (`ANSWERED_BY_AGENT` empty,
+`human: true` on `answered`). When `answered` shows a new human row,
+later-send with `guidance: <their words>` if the resolution was
+`guidance` or `decompose`. `needs_repair` stays parked — do not send
+again. `skip` / object-level outcomes stay parked for the interactive
+session.
 
-`skip` remains a human-interactive out-of-scope action. It is not an autonomous
-`answer` resolution; leave that choice parked for the interactive session.
+**Do not send again without an answer already on the row.** `error="human"` has
+no failure transition, so the object stays parked until the stamp is cleared.
 
-**Do not send again without answering first.** `error="human"` has no failure
-transition, so the object stays parked until the stamp is cleared: `next_task` keeps
-resolving `needsHuman`, and the agent you sent reads that and returns `stuck`
-having done nothing. `guidance` and `decompose` are the two resolutions that un-park;
-the response reports `unparked` so you can tell it happened.
+One thing parked here is not a decision to make: a transient failure whose
+condition has demonstrably cleared. The remediated `reset` in 2d un-parks it
+without recording that anybody chose anything.
 
-One thing parked here is not a decision to make: a transient failure whose condition
-has demonstrably cleared. The remediated `reset` in 2d un-parks it without recording
-that anybody chose anything. Every other way out of the queue is a person answering.
+A missing dependency (`reason: "missing"`) needs the register / stub /
+out-of-scope menu from [../SKILL.md](../SKILL.md) Step 2c. Register and stub
+are work you can dispatch. Keep scope / unmet-requirement choices parked.
 
-A missing dependency (`reason: "missing"`) needs the register / stub / out-of-scope
-menu from [../SKILL.md](../SKILL.md) Step 2c. Register and stub are work you can
-dispatch. Keep choices that determine the object's scope or unmet requirements
-parked for the interactive migration flow.
+Not every escalation is a failure. An agent that stops on a design decision —
+no Snowflake equivalent, a definition missing from the source, two readings
+that differ in row count — has done the right thing. Those arrive with no
+`causeClass`.
 
-Not every escalation is a failure. An agent that stops on a design decision — no
-Snowflake equivalent, a definition missing from the source, two readings that
-differ in row count — has done the right thing and has nothing to show you but the
-ambiguity. Those arrive with no `causeClass`.
-
-**Stop the loop** is still an option at any point: let in-flight agents land, then
-Step 3.
+**Stop the loop** is still an option at any point: let in-flight agents land,
+then Step 3.
 
 ### 2f. Termination
 
 The loop ends when all four hold:
 
-- nothing is in flight (`walkerRunning` is 0, idle walkers reaped,
+- nothing is in flight (`walkerRunning` is 0, no unsettled `flight=idle`,
   and no object `waiting` on a relay job — that job is still the wave, even
   though it does not occupy a slot),
 - the board has no `ready` objects (`escalated` / `blocked` do not block
@@ -427,8 +404,8 @@ The loop ends when all four hold:
   out of scope.
 
 A leftover whose child is gone and whose object is not `done` is
-none of those: first-send a new child (2d `completed`, or `leftover_claims` in
-2b). Do not treat `next_objects.objects` being empty as the wave being empty
+none of those: first-send a new child from `leftover_claims` in
+2b. Do not treat `next_objects.objects` being empty as the wave being empty
 while `leftover_claims` is non-empty or you still hold those pairs.
 Credential / OAuth expiry is not a human question — do not escalate it;
 the run cannot continue until the owner refreshes auth.
@@ -463,10 +440,10 @@ somewhere else, and re-reading beats remembering:
 | What claimed work is ready? | `my_objects_board` → `bucket=ready` |
 | What unclaimed object can take a free slot? | `next_objects` |
 | Which Cortex children are live vs yielded? | `my_objects_board` → `flight` (`running` / `idle` / `none`); `walkerRunning` is the slot count |
-| How to reap a yielded child? | `agent_output(agent_id=<board agentId>)` — omit `wait`. Only `flight=idle`. Sleep / `0000` / `Background agent finished` are not a reap. `wait=true` is denied. |
+| Did a walker yield? | Stop already settled it. `flight=none` with `agentId` is a harvested waiter; without a walker it is gone. Do not call `agent_output`. |
 | What is parked on a person? | `my_objects_board` → `bucket=escalated`, and `escalations` for the asks |
-| What is claimed, by whom? | `my_objects_board` → `agentId` (live walker session when `flight` is not `none`) |
-| Who to wake for a relay event? | The wake line (`resume` that UUID). `0000` → `agent_output(agent_id=…)` on each `flight=idle` row, omit `wait`. Do not read the job. |
+| What is claimed, by whom? | `my_objects_board` → `agentId` (live session when `flight` is `running` / `idle`; harvested waiter when `flight=none` still carries one) |
+| Who to wake for a relay event? | The wake line (`resume` that UUID). A parent-session wake → 2a/2b. Do not read the job. Do not call `agent_output`. |
 | Is an object done? | `bucket=done` — the machine closes a verified terminal (`isDone`) |
 | What is waiting on a human, and what did they decide? | `escalations` → `escalations` and `answered` |
 | Unreviewed judgments (count only, mid-loop) | `escalations` → `unreviewedCount` |
@@ -474,11 +451,11 @@ somewhere else, and re-reading beats remembering:
 Do not call `next_task`, `my_objects_details`, or `task_views`. You do not
 need where an object is in its pipeline or why it failed.
 
-Do not keep a private live-child set. Board `flight=idle` (including a child
-that returned `waiting`) is yielded; counting it as live from memory parks
+Do not keep a private live-child set. Board `flight=idle` is unsettled (stop
+not folded yet); counting a yielded child as live from memory parks
 the wave on sleeps while Monitor's wake is already consumed. A leftover
-first-send vs resume is still: new child when `flight=none`;
-`task(resume=<board agentId>)` when it is idle and a wake names that UUID.
+first-send vs resume is still: new child when `flight=none` and leftover_claims
+lists it; `task(resume=<board agentId>)` when a wake names that UUID.
 
 Escalations survive the session — read them, don't remember them.
 
@@ -499,10 +476,8 @@ adding stage counts together counts one object several times. `objects_done` is
 project-wide, which is what a wave total should be; `doneCount` on
 `my_objects_board` counts only what you hold a claim on.
 
-Build every line the board can confirm from the board. A returning agent's `result`
-is a claim, not a finding: report what you cannot confirm as what that agent said,
-attributed to it, and never let one agent's `completed` become a report line of its
-own. Nothing counts remediated resets for you — take those from the board and
+Build every line the board can confirm from the board. A walker's final JSON
+is not a channel to the dispatcher. Nothing counts remediated resets for you — take those from the board and
 what you recorded when you reset, and if you cannot tell how many there were,
 say what you saw instead of a number.
 

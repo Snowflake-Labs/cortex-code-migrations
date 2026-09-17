@@ -1,6 +1,6 @@
 ---
 name: configure-testing
-description: Verify the Snowflake side is ready for the chosen testing path (source-data or synthetic). The path choice is made by the `chooseTestingPath` prompt node before this skill runs. Persists via `configure(testing_data_source=…)`.
+description: Verify the Snowflake side is ready for the chosen testing path (source-data or testbed). The path choice is made by the `chooseTestingPath` prompt node before this skill runs. Persists via `configure(testing_data_source=…)`.
 license: Proprietary. See License-Skills for complete terms
 ---
 
@@ -20,9 +20,13 @@ logs.
   > Continuing in **source-data mode** with `<test_seed_source>`
   > (`<execution_log_path>` if logs). Say "change testing path" to switch.
 
-  If `testing_data_source == "synthetic"`:
-  > Continuing in **synthetic-data mode**. Say "change testing path" to
+  If `testing_data_source == "testbed"`:
+  > Continuing in **testbed mode**. Say "change testing path" to
   > switch.
+
+  If `testing_data_source == "synthetic"`:
+  > Continuing in **synthetic-data mode** (legacy INSERT-authored tests).
+  > Say "change testing path" to switch.
 
   If the user says "change testing path", clear the existing values and
   re-ask Q1 (query logs, if applicable).
@@ -42,7 +46,7 @@ Show the user this block verbatim:
 
 ## Q1: query logs (source-data only)
 
-If the user picked synthetic, skip this section.
+If the user picked testbed or synthetic, skip this section.
 
 Ask:
 
@@ -97,8 +101,10 @@ configure(tasks={"configureTesting": {"enabled": false}})
 Return to the parent setup skill. The state machine routes to the next
 step based on the testing path:
 
-- **synthetic** → `generateTestbed` → `enableDataMigration`. Synthetic tests
-  need data to run against, so the testbed generator (mine → validate →
-  compile → generate) is the next step. Tell the user that's coming.
-- **source-data** → `enableDataMigration`. The user is asked whether they need
-  data migration/validation infrastructure.
+- **testbed** (and legacy **synthetic**) → `generateTestbed`, then data
+  infrastructure. Tests query the generated catalog, so the testbed
+  generator (mine → validate → compile → generate) is the next step.
+  Tell the user that's coming.
+- **source-data** → data infrastructure. Autonomous skips the opt-in question
+  and always continues to source-connection + sandbox bring-up. Manual is
+  asked whether they need data migration/validation infrastructure.

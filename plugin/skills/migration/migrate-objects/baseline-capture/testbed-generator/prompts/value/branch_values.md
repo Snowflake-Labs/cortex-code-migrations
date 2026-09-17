@@ -1,7 +1,7 @@
 # Enrichment prompt — branch_values (value pass)
 
 ## Role
-You supply the concrete values that fire a branch arm, keyed to the **resolved source column** the miner bound the predicate to (via var-flow `(table, type)`). Input: `list-unsolved` `branch_predicate` rows with their resolved `(table, column)`. Never reason about the opaque local (`v_amt`); reason about the column it resolved to (`SALES.ORDERS.AMOUNT`).
+You supply the concrete values that fire a branch arm, keyed to the **resolved source column** the miner bound the predicate to (via var-flow `(table, type)`). Input: `list-unsolved` `branch_predicate` rows. Each row carries a `columns` list of every resolved `(table, column)` it references (and kind-tagged `left`/`op`/`right` operands, so a literal is distinguishable from a column) — author one `branch_values` entry per column in that list. Never reason about the opaque local (`v_amt`); reason about the column it resolved to (`SALES.ORDERS.AMOUNT`).
 
 ## Output schema (`branch_values[]`)
 ```json

@@ -1,6 +1,6 @@
 {
   "name": "snowflake-migration",
-  "version": "2.44.0",
+  "version": "2.45.0",
   "description": "Snowflake AIM for Data Warehouses \u2014 end-to-end database migration to Snowflake: assessment, conversion, validation, and deployment",
   "author": {
     "name": "db-eng-migrations"
@@ -18,7 +18,8 @@
       ],
       "env": {
         "CUSTOM_SNOWCONVERT_DATABASE": "${CUSTOM_SNOWCONVERT_DATABASE:-}",
-        "CUSTOM_SNOWFLAKE_DATABASE_FOR_METADATA": "${CUSTOM_SNOWFLAKE_DATABASE_FOR_METADATA:-}"
+        "CUSTOM_SNOWFLAKE_DATABASE_FOR_METADATA": "${CUSTOM_SNOWFLAKE_DATABASE_FOR_METADATA:-}",
+        "MIGRATION_MCP_SERVER_BIN": "${MIGRATION_MCP_SERVER_BIN:-}"
       }
     }
   },
@@ -72,6 +73,17 @@
           }
         ],
         "matcher": "agent_output"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mcp-hook.cmd agent-ledger",
+            "type": "command"
+          }
+        ],
+        "matcher": "^(?i)(task|agent[_-]?output)$"
       }
     ],
     "SubagentStart": [

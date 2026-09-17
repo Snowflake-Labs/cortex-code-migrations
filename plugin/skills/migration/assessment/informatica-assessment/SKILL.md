@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 
 # Informatica Power Center Assessment
 
-**SnowConvert AI** migrates Informatica Power Center workflows to Snowflake. This skill analyzes workflows and mappings from their source XML and SnowConvert assessment CSV reports to generate detailed migration analysis including workflow classification and complexity assessment.
+**Snowflake AIM for Data Warehouses** migrates Informatica Power Center workflows to Snowflake. This skill analyzes workflows and mappings from their source XML and SnowConvert assessment CSV reports to generate detailed migration analysis including workflow classification and complexity assessment.
 
 ---
 

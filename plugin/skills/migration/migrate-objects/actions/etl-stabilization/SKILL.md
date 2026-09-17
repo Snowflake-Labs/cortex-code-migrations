@@ -168,12 +168,13 @@ Ask the user for:
 
 ### Step 1b: Detect Platform
 
-1. **Auto-detect from file extension**: `.dtsx` → `ssis`, `.xml` → ask user to confirm platform
+1. **Auto-detect from file extension**: `.dtsx` → `ssis`, `.yxmd` → `alteryx`, `.xml` → ask user to confirm platform
 2. **If ambiguous**, ask the user which platform via `ask_user_question`
-3. **Read the platform profile** from `{SKILL_DIR}/platforms/{PLATFORM_ID}/platform-profile.md`
-4. **Store the platform** in session — subsequent steps use `{PLATFORM_ID}`, `{PLATFORM_DIR}` (`{SKILL_DIR}/platforms/{PLATFORM_ID}`), and `{SOURCE_FILE_PATH}`
+3. **Fallback rule**: if no platform was named (omitted/ambiguous), or a named platform has no `{SKILL_DIR}/platforms/{PLATFORM_ID}/` directory, set `{PLATFORM_ID}` = `unsupported` instead of proceeding with a missing pack. Never carry a null or made-up platform into Step 2 — `scan_unit.py` re-derives and records this same fallback independently.
+4. **Read the platform profile** from `{SKILL_DIR}/platforms/{PLATFORM_ID}/platform-profile.md`
+5. **Store the platform** in session — subsequent steps use `{PLATFORM_ID}`, `{PLATFORM_DIR}` (`{SKILL_DIR}/platforms/{PLATFORM_ID}`), and `{SOURCE_FILE_PATH}`
 
-The platform profile defines: source file label, traceability comment format, guide file paths, dead code stripping script, element classification rules, and platform-specific vocabulary.
+The platform profile defines: source file label, traceability comment format, guide file paths, dead code stripping script, element classification rules, and platform-specific vocabulary. The `unsupported` profile's guides (`brief-guide.md`, `lane-actions-guide.md`) are a brief + lane machine, not source-file navigation.
 
 ### Step 2: Scan Unit
 
@@ -192,6 +193,17 @@ uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py init {SC
 ```
 
 Output: `{UNIT}/stabilization/tracking/progress.json` — all elements start `pending`.
+
+
+### Step 3b: Apply Remediation Brief
+
+When `Reports/AiFirstRemediation/remediation-brief.json` is present, correlate it to the
+tracked elements and persist an honest ledger. Conversion lanes become `return-to-convert`,
+residual / unmatched items stay explicit, and unmatched items are never dropped.
+
+```bash
+uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/apply_brief.py {UNIT_FOLDER}/stabilization/tracking/session_status.json {REPORTS_DIR}/AiFirstRemediation/remediation-brief.json
+```
 
 ### Step 4: Configure Test Environment
 

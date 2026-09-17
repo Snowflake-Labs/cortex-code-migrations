@@ -10,7 +10,7 @@ The SnowConvert Assessment Skill analyzes your database migration workload using
 
 - **Plan deployment waves** - Organize objects into deployment sequences that respect dependencies
 - **Identify exclusions** - Find temporary, staging, and deprecated objects that may not need migration
-- **Surface migration anti-patterns** - Group SnowConvert findings into performance, architecture/security, and behavior/semantic risk buckets (SQL Server)
+- **Surface migration optimization opportunities** - Group SnowConvert findings into performance, architecture/security, and behavior/semantic risk buckets (SQL Server)
 - **Analyze complexity** - Assess Dynamic SQL patterns and SSIS packages for migration effort
 - **Generate reports** - Create interactive HTML reports for stakeholders
 
@@ -176,9 +176,9 @@ Identify temporary and staging objects
 Find deprecated objects that can be excluded
 ```
 
-**Anti-Patterns (SQL Server):**
+**Optimization Opportunities (SQL Server):**
 ```
-Show me the migration anti-patterns in my workload
+Show me the migration optimization opportunities in my workload
 ```
 
 **Dynamic SQL:**
@@ -263,7 +263,7 @@ assessment. Other dialects omit the tab entirely.
 | **Discovery** | SQL Server Extended Events volume, duration mix, statement types, applications, users, long-running executions, and errors. No capture yet: how-to for the starter session + re-run. Hidden on other dialects. |
 | **Waves** | Deployment sequence with objects per wave, dependencies |
 | **Object Exclusion** | Temporary, staging, deprecated objects identified |
-| **Anti-Patterns** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |
+| **Optimization Opportunities** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |
 | **Dynamic SQL** | Patterns found with complexity scores |
 | **SSIS** | Package classifications and migration effort |
 | **Effort Estimates** | Hours for code conversion and testing, priced per object by complexity, plus workload tier and phase budgets. Editable — change an hours-per-object rate and every total updates (SQL Server and Redshift) |

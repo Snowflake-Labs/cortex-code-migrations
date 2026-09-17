@@ -57,6 +57,21 @@ Three things to tell the user when you set this up:
 Without the section every gate stays loud — a mistyped `--platform` is still an error rather than
 a zero-unit run that reads as "everything passed".
 
+## Step 0c: Which `pmcmd` Connection the Run Will Use (Informatica only)
+
+Skip this step entirely unless `{PLATFORM_ID}` is `informatica`.
+
+`scai test etl-validate` launches PowerCenter workflows with `pmcmd`, which needs a repository user
+and password; a registered `scai` connection can supply them, and which connection the run picks up
+is decided by configuration rather than by a flag. Read
+[`./references/informatica-pmcmd-reference.md`](./references/informatica-pmcmd-reference.md) and
+follow its **Which connection the run will use** section — it resolves the selected name, checks
+whether that name is registered, and says what each outcome means for the run. **Register nothing
+from this step**: whether the credentials resolve at all is Step 1's `pmcmd_credentials` check to
+answer, and registering a connection is that check's fix.
+
+Then continue to Step 1.
+
 ## Step 1: Live Environment Pre-flight
 
 The state machine guarantees the connections are *configured*; it cannot know whether the live systems are *reachable*. Run the built-in probe once to catch a down SQL Server, an expired Snowflake token, or a missing SSISDB catalog before starting a long comparison:
@@ -65,7 +80,7 @@ The state machine guarantees the connections are *configured*; it cannot know wh
 scai test etl-validate --platform {PLATFORM_ID} --check-env
 ```
 
-The probe must test the **same** connection the real run in Step 2 will use, so if the session uses named-connection overrides append the identical flags here (`--connection {SNOWFLAKE_CONNECTION}` / `--source-connection {SOURCE_CONNECTION}`) — otherwise the probe green-lights the default connection while Step 2 runs against a different one.
+The probe must test the **same** connection the real run in Step 2 will use, so if the session uses named-connection overrides append the identical flags here (`--connection {SNOWFLAKE_CONNECTION}` / `--source-connection {SOURCE_CONNECTION}`) — otherwise the probe green-lights the default connection while Step 2 runs against a different one. The Informatica pmcmd connection needs nothing appended: it is not selected by a flag on this command (see Step 0c), so the probe and the real run resolve the same name from the same configuration by construction.
 
 | Check | What it tests |
 |---|---|
@@ -74,10 +89,11 @@ The probe must test the **same** connection the real run in Step 2 will use, so 
 | `snowflake_connectivity` | Can reach the Snowflake account |
 | `ssisdb_catalog_access` | Can query `SSISDB.catalog.packages` (SSIS only) |
 | `pmcmd_accessibility` | The `informatica:` section exists and its `pmcmd` binary is present and executable (Informatica only) |
+| `pmcmd_credentials` | The `pmcmd` repository user and password resolve, and which route supplied each (Informatica only) |
 | `informatica_service_domain` | Every seeded Informatica unit resolves a `pmcmd` integration service + domain (Informatica only) |
 | `mwaa_accessibility` | The MWAA environment named by the `mwaa:` section is reachable (Informatica, when configured) |
 
-`informatica_service_domain` is the one **configuration** check in this set. `scai test seed` no
+`informatica_service_domain` is one of two **configuration** checks in this set. `scai test seed` no
 longer writes a `service`/`domain` per seeded unit — both are project-wide, so they live once in
 the `informatica:` section of `.scai/settings/test_config.yaml` — and this check resolves that
 section through the same resolver the real run uses, once per seeded unit, so a leftover
@@ -85,6 +101,15 @@ section through the same resolver the real run uses, once per seeded unit, so a 
 literal. It reports the offending files. Fix it by filling the section (see `etl-seed` Step 3b),
 or, for a project whose workflows span more than one Integration Service, by setting `service:` /
 `domain:` under that unit's `pipeline.source`.
+
+`pmcmd_credentials` is the other configuration check, and the one this skill can fix outright. It
+resolves the username and password through the same resolver the real run uses — so it passes on an
+exported `INFORMATICA_PASSWORD` and fails on an unexported one — and never echoes the password, so
+its output is safe to read back to the user. If it fails, follow the **Fixing a failing
+`pmcmd_credentials`** section of
+[`./references/informatica-pmcmd-reference.md`](./references/informatica-pmcmd-reference.md): it
+gives two fixes to offer, and carries a **STOPPING POINT**, because registering a connection means
+the user answering the CLI's own prompts.
 
 With `external_command:` + `side: source`, the probe switches to the platform-agnostic strategy
 **regardless of platform** (including `ssis`): it reports `snowflake_connectivity`, plus source
@@ -94,7 +119,7 @@ demanding them would fail a run that would otherwise work. The source connection
 where it exists because the table comparison reads the source tables through it. With
 `side: target` the source is still native and keeps its native checks, tooling included.
 
-If any check fails: **STOPPING POINT** — surface the failing check name and the error from the output, and help the user fix the live-system issue (start the server, refresh credentials, grant catalog access). Do not proceed to Step 2 with a failing probe. These are mostly runtime reachability checks, not config gates — a failure usually means the environment is down, not that the plugin is misconfigured. The exception is `informatica_service_domain` (and `pmcmd_accessibility` when it reports a missing section): those *are* configuration gaps, so the fix is an edit to `test_config.yaml`, not a restart.
+If any check fails: **STOPPING POINT** — surface the failing check name and the error from the output, and help the user fix the live-system issue (start the server, refresh credentials, grant catalog access). Do not proceed to Step 2 with a failing probe. These are mostly runtime reachability checks, not config gates — a failure usually means the environment is down, not that the plugin is misconfigured. The exceptions are `informatica_service_domain`, `pmcmd_credentials`, and `pmcmd_accessibility` when it reports a missing section: those *are* configuration gaps, so the fix is an edit to `test_config.yaml`, a registered connection, or an exported variable — not a restart.
 
 ## Step 2: Run Live Comparison
 
