@@ -1,7 +1,7 @@
 [project]
 name = "stabilization"
 version = "1.0.0"
-description = "ETL stabilization fixer scripts for SnowConvert AI migrations"
+description = "ETL stabilization fixer scripts for Snowflake AIM for Data Warehouses migrations"
 requires-python = ">=3.11"
 dependencies = []
 

@@ -154,6 +154,12 @@ data_infrastructure(mode="up", compute_pool="<COMPUTE_POOL>")
 
 > The pool is persisted, so later `up` calls (and `migrate_data`/`validate_data` after them) reuse it without re-passing it. Omit `compute_pool` to run a local orchestrator instead.
 
+**Existing `DATA_MIGRATION_SERVICE` (account-wide, one service):** `up` **resumes** that service in place. You **cannot** `ALTER` it onto another compute pool. If `up` targets pool A but the service already sits on pool B (or another role owns it):
+
+1. **Stop and ask.** Explain it is account-wide, who owns it, and which pool it is on. Do **not** `DROP SERVICE` (or `data_infrastructure(mode="down", drop=true)`) silently.
+2. Default path when another role created it: Question 1 extended grants (`OPERATE` / `MONITOR`) and keep the existing service. Persist the user's **requested** pool on the project, but do not move the live service.
+3. `DROP` + recreate on the user's pool **only** after they explicitly confirm they own that service and accept that every other project on the account loses the old one. Quote the service name and the other pool in the question.
+
 ### Question 1: Snowflake role and privileges
 
 Ask the user:
@@ -164,7 +170,7 @@ Ask the user:
 |-----------|--------|
 | **Role has the required privileges** | Continue to Question 2. |
 | **Role needs grants** | Run the grants below on behalf of the user (or show them to run with an admin role), then continue. |
-| **DATA_MIGRATION_SERVICE already exists (created by another role)** | The executing role also needs OPERATE and MONITOR on the service. Run the extended grants below, then continue. |
+| **DATA_MIGRATION_SERVICE already exists (created by another role)** | The executing role also needs OPERATE and MONITOR on the service. Run the extended grants below, then continue. **Do not DROP it** to pin a different compute pool unless the user confirmed step 3 above. |
 
 **Standard grants:**
 

@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 
 # Informatica Power Center Assessment
 
-**SnowConvert AI** migrates Informatica Power Center workflows to Snowflake. This skill analyzes workflows and mappings from their source XML and SnowConvert assessment CSV reports to generate detailed migration analysis including workflow classification and complexity assessment.
+**Snowflake AIM for Data Warehouses** migrates Informatica Power Center workflows to Snowflake. This skill analyzes workflows and mappings from their source XML and SnowConvert assessment CSV reports to generate detailed migration analysis including workflow classification and complexity assessment.
 
 ---
 
@@ -155,12 +155,16 @@ uv run python -m informatica_assessment_analyzer informatica <JSON_PATH> ai-summ
 ```
 
 **Verification Checklist:**
-- [ ] `ai_informatica_summary.html` file exists
+- [ ] `<output_path>/ai_informatica_summary.html` exists and is non-empty
 - [ ] Summary includes all 7 sections from the guide template
 - [ ] Summary uses specific numbers (not vague terms like "many")
 - [ ] Summary registered with `ai-summary` command
 
 **Completion:**
+Do not report success until every verification item passes. If the HTML file is
+missing or empty, finish Step 4 before returning to the parent. If registration
+fails, report an error instead of `"ok"`.
+
 Report to user:
 - Total workflows analyzed
 - JSON file location: `<output_path>/informatica_assessment_analysis.json`

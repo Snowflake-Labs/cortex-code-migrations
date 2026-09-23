@@ -10,8 +10,9 @@ The SnowConvert Assessment Skill analyzes your database migration workload using
 
 - **Plan deployment waves** - Organize objects into deployment sequences that respect dependencies
 - **Identify exclusions** - Find temporary, staging, and deprecated objects that may not need migration
-- **Surface migration anti-patterns** - Group SnowConvert findings into performance, architecture/security, and behavior/semantic risk buckets (SQL Server)
+- **Surface migration optimization opportunities** - Group SnowConvert findings into performance, architecture/security, and behavior/semantic risk buckets (SQL Server)
 - **Analyze complexity** - Assess Dynamic SQL patterns and SSIS packages for migration effort
+- **Map data lineage** - See sources, pipelines, targets, and reports; include Power BI `.pbit` files when you have a reporting layer to enrich the graph
 - **Generate reports** - Create interactive HTML reports for stakeholders
 
 ## What You Can Do
@@ -176,9 +177,9 @@ Identify temporary and staging objects
 Find deprecated objects that can be excluded
 ```
 
-**Anti-Patterns (SQL Server):**
+**Optimization Opportunities (SQL Server):**
 ```
-Show me the migration anti-patterns in my workload
+Show me the migration optimization opportunities in my workload
 ```
 
 **Dynamic SQL:**
@@ -190,6 +191,32 @@ Analyze Dynamic SQL patterns in my codebase
 ```
 Assess my SSIS packages for migration complexity
 ```
+
+**Data Lineage with Power BI:**
+```
+Include my Power BI reports — here's the folder with the .pbit templates
+```
+
+When Data Lineage is included, the assessment asks whether you have reporting
+files to add. Supply Power BI `.pbit` files or a folder to search; the skill
+copies them into `source/BI/PowerBI`, records which database objects each report
+reads, then builds the Data Lineage graph. Without reporting files, it still
+builds the source, pipeline, and target lanes.
+
+**`.pbix` is not supported.** It is a binary format the assessment cannot read.
+Open the report in Power BI Desktop and use *File → Export → Power BI template*
+to produce a `.pbit`.
+
+An object a report reads that the migration does not convert shows up as a
+missing object rather than being silently dropped — that gap is one of the more
+useful things this analysis surfaces.
+
+**What you get is registry data, not a diagram.** This step records your reports
+and their dependencies alongside every other object in the migration, so they
+show up in planning wherever dependencies matter. It does **not** draw the Data
+Lineage graph — that is a separate report with its own tab. A successful "Power
+BI Lineage Enrichment" line in the summary means the dependencies were recorded,
+not that a lineage diagram was produced.
 
 ## Tips for Best Results
 
@@ -249,21 +276,26 @@ The skill maintains context, so you don't need to start over.
 
 ### HTML Report
 
-The generated HTML report opens on the **Migration Journey** page. For SQL Server,
-**Discovery** appears next, followed by the conversion tabs grouped under
-**Code/ETL Conversion** and the later migration phases. Most tabs appear only when
-the report has data to fill them. Discovery is SQL Server only: with an Extended
-Events capture it shows observed volume and executions; without one the tab stays
-and walks through starting a capture, copying `.xel` files, and re-running the
-assessment. Other dialects omit the tab entirely.
+Before presenting final results, the skill starts or reuses the **live
+dashboard** and opens `/assessment`. A saved dashboard opt-out is respected.
+The skill still writes `assessment/multi_report.html` as a shareable export and
+opens it as the fallback when the dashboard is disabled or unavailable.
+
+The generated HTML report opens on the **Migration Journey** page. For SQL Server
+and Teradata, **Discovery** appears next, followed by the conversion tabs grouped
+under **Code/ETL Conversion** and the later migration phases. Most tabs appear only
+when the report has data to fill them. Discovery uses SQL Server Extended Events
+or a Teradata DBQL metrics export. Without input, the tab stays and explains how
+to collect the appropriate files and re-run the assessment. Other dialects omit
+the tab.
 
 | Tab | Contents |
 |-----|----------|
 | **Migration Journey** | Landing page — what each phase of your migration involves, one card per phase |
-| **Discovery** | SQL Server Extended Events volume, duration mix, statement types, applications, users, long-running executions, and errors. No capture yet: how-to for the starter session + re-run. Hidden on other dialects. |
+| **Discovery** | SQL Server Extended Events or Teradata DBQL volume, duration mix, statement types, applications, users, long-running executions, and errors. No input yet: dialect-specific collection steps and re-run guidance. Hidden on unsupported dialects. |
 | **Waves** | Deployment sequence with objects per wave, dependencies |
 | **Object Exclusion** | Temporary, staging, deprecated objects identified |
-| **Anti-Patterns** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |
+| **Optimization Opportunities** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |
 | **Dynamic SQL** | Patterns found with complexity scores |
 | **SSIS** | Package classifications and migration effort |
 | **Effort Estimates** | Hours for code conversion and testing, priced per object by complexity, plus workload tier and phase budgets. Editable — change an hours-per-object rate and every total updates (SQL Server and Redshift) |

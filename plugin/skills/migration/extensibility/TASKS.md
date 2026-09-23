@@ -35,6 +35,7 @@ configure(tasks={"validateView": false})
 
 The choice persists to `<project_dir>/.scai/config/plugin.yml` under `tasks.*`, so it holds across sessions.
 
+- **Disable per-object tasks before registering any in-scope objects.** `main` tasks such as `validateView`, `migrateData`, and `validateData` are project-wide settings; new exclusions are rejected once an in-scope object is registered, including after a completed wave, so later waves cannot silently inherit them. Re-applying an existing disable is safe. One-time `setup` task exclusions are not subject to this timing guard.
 - **Locked tasks can't be disabled.** Load-bearing steps are marked `locked` in the machine — `configure` rejects disabling them (the core setup steps, plus `registration`, `convert`, `deploy`, `etlStabilization`, `seedSynthetic`, `fixCode`).
 - **Structural nodes can't be disabled.** Internal prompts, routers, and terminals have no executor to override — `configure` rejects attempts to exclude them too.
 
@@ -54,9 +55,10 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `registerCode` | Pulls source SQL into the project. |
 | `convertCode` | Runs the source → Snowflake conversion. |
 | `runAssessment` | Generates a migration assessment report. |
+| `configureSandboxProfile` | Configure a sandbox scai profile binding source and Snowflake target connections for iterative workload conversion. |
 | `configureSourceConnectionTesting` | Configures the source database connection (needed for source-data testing path). |
-| `configureTesting` | Verifies the Snowflake side is ready for the chosen testing path (source data vs synthetic). |
-| `generateTestbed` | Builds the synthetic testbed for the workload (mine → validate → compile → generate). Reached only on the synthetic testing path. |
+| `configureTesting` | Verifies the Snowflake side is ready for the chosen testing path (source data vs testbed). |
+| `generateTestbed` | Builds the synthetic testbed for the workload (mine → validate → compile → generate). Reached on the testbed path, and on the legacy synthetic path so existing projects still generate a catalog. |
 | `configureSourceConnectionData` | Configures the source database connection (needed for data migration/validation infrastructure). |
 | `setupDataInfrastructure` | Configures the shared Data Migration & Validation infrastructure (compute pool for SPCS, or local) and generates the worker config, so it can be brought up at migration time with data_infrastructure(mode="up"). |
 | `dataStrategy` | Captures the project's data migration and validation strategy (migration type, sync strategy, extraction strategy, target table type; validation type + sync strategy) during setup so the choices are committed to the git main branch and shared with the team, instead of being decided ad hoc at first migration/validation. Snowflake-source projects skip the migration wizard and complete on validation type only. |
@@ -66,20 +68,22 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | Task id | What it does |
 |---|---|
 | `registration` | Register (or update) one object's source DDL (per-object). |
-| `convert` | Converts one object via SnowConvert (per-object). |
+| `convert` | Converts one object via SnowConvert (per-object). Always passes `--generate-source-bindable-format --generate-snowflake-bindable-format` (interactive and subagent). Deploy stays legacy-safe when no bindings yaml exists. |
+| `setupSandbox` | Populates the shared source catalog for one read-only object (table, view, function), and only when `configure(subagent_mode=true)`. Deploys the object's source DDL into the source catalog, and for a table also loads its testbed rows (`scai testbed load --source-only`). Interactive sessions skip this task because a live source already holds the objects. Procedures take `deploySandbox` instead — they mutate data, so they set up in a private binding. |
 | `etlStabilization` | Stabilizes a converted ETL code unit (SSIS, Informatica, ...) and validates the functionality. |
 | `etlSeed` | Runs `scai test seed` to generate the per-unit ETL test YAML (pipeline + validation.tables) with the source/target table pairs filled from the Code Unit Registry write-dependencies; the agent fills index_columns and the user confirms before validation runs. |
 | `etlValidate` | Runs `scai test etl-validate --platform <platform>` to compare source package output with the converted Snowflake output. |
-| `generateTestCases` | Generates a per-object test-case YAML from source-connected inputs (via `scai test seed`); reads source to build the cases, never writes to source. |
+| `generateTestCases` | Generates a per-object test-case YAML from source-connected inputs (via `scai test seed`); reads source to build the cases, never writes to source. Used for both live source data and a generated testbed catalog. |
 | `seedSynthetic` | Generates synthetic test inputs. |
 | `seedScript` | Writes a BTEQ script's test YAML, resolving binding values and staging .IMPORT fixtures from the shell script that runs it via `scai test seed --bindings-from`; values that can't be resolved statically become `{ eval }` recipes or stay `__REPLACE_ME__` for manual fill, and bindings shared across scripts are hoisted to the global test_config.yaml. Requires the bteq binary on PATH. |
-| `captureBaseline` | Captures a source object's output as a test baseline (procedures, functions, and BTEQ scripts). |
-| `deploy` | Deploys one object to Snowflake. |
+| `captureBaseline` | Captures a source object's output as a test baseline (procedures, functions, and BTEQ scripts). Call `run_tests(mode=capture)`; the tool injects `--database-bindings` from the object's leftover sandbox yaml after `deploySandbox`, else the project common yaml. |
+| `deploySandbox` | Procedure-only as a machine task, and only when `configure(subagent_mode=true)`. The procedure's first task after convert. Creates the ephemeral `AIMSBX_*` catalogs unless a live leftover yaml already names the pair — then it does not DROP or CLONE. Converted-only procedures (no `source`, e.g. THROW_UDP) get a Snowflake-only binding: no SQL Server catalog and no `-t source`. Otherwise source side DROPs a leftover catalog of the same name first (captured `CREATE TABLE` is not idempotent), clones the closure's tables from the common catalogs named in `.scai/bindings/database-bindings.yaml` (`snow:`; identity stubs use `configure(snowflake_database)`), rebuilds them on the source from captured DDL plus the testbed CSVs, then deploys the closure's functions and views and the procedure itself there, so the binding keeps its keys, identity and computed columns. Closure units with no source (SnowConvert helpers) are Snowflake-only even when the claimed procedure has a source twin. Walker calls: omit `mode` (or `mode=setup`) deploys the transitive closure (tables, functions, views, and this object) into the pair; `mode=redeploy_object` pushes this object only; the later `deploy` task (no `sandbox`) is this object onto the common catalogs. `mode=reload_tables` reloads closure table CSVs into that pair on both sides. Views and functions do not take this machine task; a sandbox_specialist may call `deploy(sandbox=true)` for one of them when fixture data must be reshaped for tests. The leftover yaml under `.scai/bindings/sandbox/{hash}.yaml` is that object's pair (`agent_id` only points at it), so `captureBaseline` and `runTests` both read this binding after MCP restart or a new Cortex child — two procedures never mutate the same rows. Interactive sessions skip this task and deploy to common. |
+| `deploy` | Deploys one object to the common catalogs. After sandbox tests, a procedure returns here as the final deploy. Success is INFORMATION_SCHEMA on those catalogs (`applyActiveBinding` is off so a live sandbox yaml cannot look done). Schema and ETL have no catalog view, so they still complete from the stamp. |
 | `validateView` | Validates a deployed view against its source. |
 | `migrateData` | Migrates data into a deployed table (pure dispatch — requires the shared orchestrator+worker to be up). |
 | `validateData` | Validates migrated data against the source (pure dispatch — requires the shared orchestrator+worker to be up). |
-| `runTests` | Runs the scai test suite for an object. |
-| `verify` | Catch-all verification for a converted object whose type has no deploy/test path of its own (Oracle PACKAGE, PACKAGE_BODY, TYPE, TYPE_BODY, SYNONYM, ...), and for procedures/functions with no source side after they deploy (SnowConvert UDF helpers). Reached via convert's unfiltered `completed` transition (must stay last) or via deploy when `source IS NULL`. |
+| `runTests` | Runs the scai test suite for an object. The `run_tests` tool (`mode=validate`, the default) injects `--profile` and `--database-bindings` from the object's leftover sandbox yaml when present, else the project common yaml. Isolation `--isolation-strategy bound` and `--restore-from-bindings` are added only for a procedure sandbox (the sandbox is the isolation, so nothing is cloned, but each case's mutated tables are restored from the common catalogs named in `.scai/bindings/database-bindings.yaml`). Under `subagent_mode`, procedure tests run in `AIMSBX_*` catalogs and then return to `deploy` (common). Capture is `run_tests(mode=capture)` on the same object pair. |
+| `verify` | Catch-all verification for a converted object whose type has no deploy/test path of its own (Oracle PACKAGE, PACKAGE_BODY, TYPE, TYPE_BODY, SYNONYM, ...), and for procedures/functions with no source side after they deploy (SnowConvert UDF helpers). Reached via convert's unfiltered `completed` transition (must stay last) or via deploy when `source IS NULL`. A SQL failure (including an invalidated helper whose named cases still mismatch the source builtin) enters sqlFixLoop the same way runTests does. |
 | `extractRules` | Extracts reusable migration rules from a fix. |
 | `applyRules` | Applies matched migration rules to an object. |
 | `fixCode` | Diagnoses and fixes a failing object. |
@@ -123,8 +127,8 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Done when:** Project is initialized (`.scai/config/project.yml`) and at least one file exists under both `source/**/*.sql` and `snowflake/**/*.sql` (produced by `scai code sync`).
 
 #### `configureGit`
-- **Inputs:** A user who has opted into git, or a project directory that was already a git repository at setup start.
-- **Done when:** Session config has `git_main_branch` set, or a pending init is parked until `scai init`.
+- **Inputs:** A user who has opted into git. Reached only when enableGit answer is true.
+- **Done when:** Session config has `git_main_branch` set.
 
 #### `configureSourceConnectionExtract`
 - **Done when:** Session config has `source_connection` set — call `configure(source_connection=...)`.
@@ -140,6 +144,9 @@ Every entry below names the task id, what your override needs as input, and the 
 #### `runAssessment`
 - **Inputs:** A converted project from the `convertCode` task.
 - **Done when:** At least one assessment report HTML exists under `<project_dir>/**/assessment/**/*report*.html`.
+
+#### `configureSandboxProfile`
+- **Done when:** Session config has `sandbox_profile` set — call `configure(sandbox_profile=...)` after `scai profile create --sandbox`.
 
 #### `configureSourceConnectionTesting`
 - **Done when:** Session config has `source_connection` set — call `configure(source_connection=...)`.
@@ -173,6 +180,10 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Inputs:** Registered object.
 - **Done when:** Registry field `codeStatus.conversion` reads completed.
 
+#### `setupSandbox`
+- **Inputs:** Converted object whose dependencies have completed their own setupSandbox.
+- **Done when:** `SANDBOX_EVENTS` latest `source_ready` / `source_failed` watermark is `source_ready`.
+
 #### `etlStabilization`
 - **Inputs:** A converted ETL code unit (converted artifacts + source definition resolved from its registry entry); its dependency tables deployed.
 - **Done when:** Registry field `codeStatus.stabilization` reads completed.
@@ -187,11 +198,11 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `generateTestCases`
 - **Inputs:** Object that needs test inputs; configured source connection.
-- **Done when:** Per-object YAML exists at `<project_dir>/<files.artifacts.path>/test/<name>.yml`.
+- **Done when:** Per-object YAML at `<project_dir>/<files.artifacts.path>/test/<name>.yml` contains at least one test case entry.
 
 #### `seedSynthetic`
 - **Inputs:** Object that needs test inputs (no source connection required).
-- **Done when:** Per-object YAML exists at `<project_dir>/<files.artifacts.path>/test/<name>.yml`.
+- **Done when:** Per-object YAML at `<project_dir>/<files.artifacts.path>/test/<name>.yml` contains at least one test case entry.
 
 #### `seedScript`
 - **Inputs:** A converted BTEQ script unit; the shell script(s) that set its variables and run bteq (plus any invocation args); configured source connection; bteq binary installed.
@@ -201,9 +212,13 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Inputs:** Object with seed data; configured source connection.
 - **Done when:** Procedures/functions: `VALIDATION.BASELINE_METADATA` has a row for the object's target name whose `ROW_COUNTS` sum to more than zero. BTEQ scripts have no rows in that table, so they fall through to registry field `extensions.tasks.captureBaseline`.
 
+#### `deploySandbox`
+- **Inputs:** Converted procedure SQL; table dependencies already validated.
+- **Done when:** `live_bindings` returns a binding (`SANDBOX_EVENTS` ready watermark with parseable DETAIL).
+
 #### `deploy`
 - **Inputs:** Converted SQL for the object.
-- **Done when:** Registry field `cloudStatus.deployment` is set, or the deployed-object metadata exists in Snowflake.
+- **Done when:** Snowflake metadata on the common catalogs (schema/ETL: `cloudStatus.deployment`).
 
 #### `validateView`
 - **Inputs:** Deployed view; configured source connection.
@@ -219,7 +234,7 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `runTests`
 - **Inputs:** Object with a captured baseline; procedures and functions are also deployed first (BTEQ scripts are not).
-- **Done when:** The latest run of every test case in `VALIDATION.RESULTS` passed. Procedures and functions are judged there; BTEQ scripts have no rows in that table, so they fall through to registry field `codeStatus.testing`.
+- **Done when:** The latest run of every test case in `VALIDATION.RESULTS` passed. A leftover `codeStatus.testing` stamp is read only as a fallback for legacy projects; nothing writes that field.
 
 #### `verify`
 - **Inputs:** A converted object of a type the machine routes nowhere else, or a deployed procedure/function with no source counterpart.

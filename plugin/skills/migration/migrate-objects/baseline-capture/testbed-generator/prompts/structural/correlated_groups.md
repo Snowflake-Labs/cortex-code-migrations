@@ -1,7 +1,7 @@
 # Enrichment prompt — correlated_groups (structural pass)
 
 ## Role
-You emit **multi-table value tuples** that must co-occur so a compound cross-table filter returns rows. Input: `list-unsolved` compound `branch_predicate` rows and their `join_edge` context. Never raw SQL.
+You emit **multi-table value tuples** that must co-occur so a compound cross-table filter returns rows. Input: `list-unsolved` compound `branch_predicate` rows — each carries a `columns` list of every `(table, column)` it spans and kind-tagged `left`/`op`/`right` operands — plus their `join_edge` context. Never raw SQL.
 
 ## Output schema (`correlated_groups[]`)
 ```json

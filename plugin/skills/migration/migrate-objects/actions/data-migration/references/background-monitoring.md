@@ -98,7 +98,7 @@ So do not wait until you suspect it. **Whenever you call `job_status` for a live
 
 ## Fallback path (last resort — only when Monitor cannot be invoked)
 
-- Call `job_status(job_id)` repeatedly until `terminal` is true (or when the user asks). Do **not** pace yourself with `bash sleep` / wall-clock delays / worker-log tails — those skip the status tool and waste minutes. Short sleeps after killing a process (1–3s) are fine.
+- Call `job_status(job_id)` repeatedly until `terminal` is true (or when the user asks). Do **not** pace yourself with `bash sleep` / wall-clock delays / worker-log tails / `.scai/monitor/relay.jsonl` tails — those skip the status tool and waste minutes. Short sleeps after killing a process (1–3s) are fine, and nothing else earns a longer one.
 - Health every 2nd/3rd poll with **10m / 20m** stall/stuck thresholds (see SKILL Step 5.B fallback column).
 - Stop when `terminal` is true.
 - Then Step 5.C → Step 6.

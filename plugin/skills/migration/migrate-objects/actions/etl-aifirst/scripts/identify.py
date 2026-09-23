@@ -39,7 +39,7 @@ design and `_exclusion_nodes` for the kinds.
 
 import json
 from dataclasses import dataclass, field
-from string import Formatter
+from string import Formatter, ascii_letters
 from typing import Any
 
 import docmodel
@@ -917,7 +917,16 @@ class Identification:
                 ex = ps.get("expression")
                 if ex:
                     if ex["from"] == "ATTR":
-                        expr = f.get(ex["attr"])
+                        # An attribute is never None when stated, so a source that
+                        # writes expression="" to mean "no expression" (Talend
+                        # competence TK-02: an empty-expression tMap output row is a
+                        # same-named passthrough, per tMap.md's own Simple
+                        # Column Pass-Through rule) would otherwise read as a REAL,
+                        # empty expression -- unlike the TEXT branch below, where an
+                        # absent child's own `.text` is already None. Closing that
+                        # asymmetry here, not per-platform, since "an empty stated
+                        # expression is no expression" holds for any ATTR-sourced one.
+                        expr = f.get(ex["attr"]) or None
                         expr_sfx = self.attr_ref(f, ex["attr"])
                     elif ex["from"] == "TEXT":
                         en = f.find(ex["xpath"])
@@ -933,6 +942,15 @@ class Identification:
                     group = f.get(ps["group_attr"])
                 else:
                     group = None
+                # A qualified reference names its holder, not just the field ('src.QTY',
+                # 'Var.lineTotal') -- the holder states that qualifier as ITS OWN
+                # attribute, on the immediate parent, which is a different site than
+                # group_from ANCESTOR's registered-output-group walk.
+                if ps.get("qualifier_source") == "PARENT_ATTR":
+                    parent = self._parent.get(f)
+                    qualifier = parent.get(ps["qualifier_attr"]) if parent is not None else None
+                    if qualifier:
+                        nm = f"{qualifier}{ps.get('qualifier_separator', '')}{nm}"
                 p = Port(
                     name=nm,
                     datatype=f.get(ps.get("datatype_attr") or "", ""),
@@ -1629,6 +1647,190 @@ REQUIRED_STRUCTURE_BLOCK_KEYS = {
     "load_order": ("xpath", "key_attr", "order_attr"),
 }
 
+# Everything a declared `dialect.expression_translation` block may say, and everything one
+# `function_translations` entry may say. Declaring the block at all is optional.
+#
+# WHY AN UNKNOWN KEY HERE HAS TO BE AN ERROR RATHER THAN A NO-OP. Every reader of this
+# block is a `.get`, so a misspelled key is not a smaller declaration -- it is a
+# CONSTRAINT THAT SILENTLY DOES NOT APPLY, on a path whose whole output is
+# plausible-looking SQL. `date_format_arg` instead of `date_format_args` leaves
+# `formatDate` translating with its SOURCE pattern letters, and the emitted
+# `TO_CHAR(d, 'HH:mm:ss')` is valid Snowflake meaning hour, MONTH, second, carrying
+# TABLE provenance and no residue. Nothing downstream can notice that.
+EXPRESSION_TRANSLATION_KEYS = {
+    "null_literal", "max_expression_span_depth", "ternary_operators",
+    "null_comparison_rewrite", "binary_operator_levels", "operator_residue_notes",
+    "unary_operator_forms",
+    "argument_separator", "template_operand_delimiters",
+    "string_concat_operator", "string_concat_target_operator",
+    "string_concat_detection", "string_value_class", "numeric_value_class",
+    "value_class_by_datatype", "leaf_passthrough_characters",
+    "call_name_strip_prefixes", "date_part_literals", "date_format_pattern_map",
+    "date_format_letter_characters", "date_format_literal_characters",
+    "date_format_quote_character", "date_format_quoted_literal_template",
+    "cast_types", "cast_value_classes", "function_translations",
+}
+REQUIRED_EXPRESSION_TRANSLATION_KEYS = ("argument_separator", "function_translations")
+FUNCTION_TRANSLATION_KEYS = {
+    "template", "arity", "returns", "residue_note", "date_part_args",
+    "date_format_args", "argument_adjustments", "unused_arguments",
+}
+REQUIRED_FUNCTION_TRANSLATION_KEYS = ("template", "arity")
+ARGUMENT_ADJUSTMENT_KEYS = {"offset", "source_index_base", "target_index_base",
+                            "argument_coefficients"}
+
+# A function_translations KEY is matched against one scanned identifier token, so it has
+# to be spellable as one: `scan` starts an identifier on a letter or '_' and continues it
+# over letters, digits, '_' and expression_syntax.identifier_extra_chars.
+IDENTIFIER_START_CHARACTERS = set(ascii_letters) | {"_"}
+IDENTIFIER_BODY_CHARACTERS = IDENTIFIER_START_CHARACTERS | set("0123456789")
+
+
+def _validate_function_translation(name, spec, et, extra_chars, prefixes, problems):
+    """Every defect in one `function_translations` entry, appended to `problems`.
+
+    The load-bearing one is ARGUMENT ACCOUNTING. An entry declares `arity`, and every
+    argument position from 0 to arity-1 must be accounted for exactly once -- consumed by
+    a template placeholder (directly, or through an `argument_adjustments` coefficient),
+    or declared in `unused_arguments` with the reason it cannot be represented. An
+    argument that is neither is a SILENT DROP: the template renders, the call looks
+    translated, and one of the source's arguments has no effect on the result. MEASURED
+    before this check existed, `Numeric.sequence(name, start, step)` translated to a bare
+    `ROW_NUMBER() OVER ()` -- start and step both gone, nothing in the slot naming either,
+    so a sequence declared to begin at 100 in steps of 5 emitted 1, 2, 3.
+    """
+    where = f"dialect.expression_translation.function_translations[{name!r}]"
+    if not isinstance(spec, dict):
+        problems.append(f"{where} is {type(spec).__name__}, not an object.")
+        return
+
+    if name[0] not in IDENTIFIER_START_CHARACTERS or not all(
+            c in IDENTIFIER_BODY_CHARACTERS or c in extra_chars for c in name):
+        problems.append(
+            f"{where} cannot be spelled as one scanned identifier: an identifier starts "
+            f"on a letter or '_' and continues over letters, digits, '_' and "
+            f"expression_syntax.identifier_extra_chars ({extra_chars!r}). No call in any "
+            f"document can ever match this key, so the entry is dead.")
+    hit = next((p for p in prefixes if name.startswith(p)), None)
+    if hit:
+        problems.append(
+            f"{where} still carries the {hit!r} prefix that "
+            f"call_name_strip_prefixes removes before the lookup. The stripped name is "
+            f"what is looked up, so this entry is unreachable -- declare it as "
+            f"{name[len(hit):]!r}.")
+
+    unknown = sorted(k for k in spec if not k.startswith("_")
+                     and k not in FUNCTION_TRANSLATION_KEYS)
+    if unknown:
+        problems.append(
+            f"{where} declares {unknown}, which no reader looks for (known: "
+            f"{sorted(FUNCTION_TRANSLATION_KEYS)}). A misspelled constraint key is a "
+            f"constraint that silently does not apply.")
+    absent = [k for k in REQUIRED_FUNCTION_TRANSLATION_KEYS if k not in spec]
+    if absent:
+        problems.append(f"{where} is declared without {absent}, both of which its reader "
+                        f"subscripts outright once the name matches.")
+        return
+
+    arity = spec["arity"]
+    if not isinstance(arity, int) or isinstance(arity, bool) or arity < 0:
+        problems.append(f"{where}.arity is {arity!r}; it must be a non-negative integer, "
+                        f"the EXACT argument count a matching call has to state.")
+        return
+    positions = set(range(arity))
+
+    try:
+        placeholders = {int(n) for _, n, _, _ in Formatter().parse(spec["template"])
+                        if n is not None and n != ""}
+    except ValueError as ex:
+        problems.append(f"{where}.template is not a parseable format string: {ex}")
+        return
+    if not placeholders <= positions:
+        problems.append(
+            f"{where}.template names placeholder(s) {sorted(placeholders - positions)} "
+            f"and arity is {arity}, so rendering it raises IndexError on every matching "
+            f"call.")
+        return
+
+    for key in ("date_part_args", "date_format_args"):
+        stray = sorted(p for p in (spec.get(key) or []) if p not in positions)
+        if stray:
+            problems.append(f"{where}.{key} names argument position(s) {stray} outside "
+                            f"the declared arity of {arity}.")
+        required_map = {"date_part_args": "date_part_literals",
+                        "date_format_args": "date_format_pattern_map"}[key]
+        if spec.get(key) and not et.get(required_map):
+            problems.append(
+                f"{where}.{key} is declared and dialect.expression_translation."
+                f"{required_map} is not, so every matching call declines on an argument "
+                f"there is no map to resolve.")
+    both = set(spec.get("date_part_args") or []) & set(spec.get("date_format_args") or [])
+    if both:
+        problems.append(f"{where} declares argument position(s) {sorted(both)} as BOTH a "
+                        f"date part and a date format pattern.")
+
+    accounted = set()
+    adjustments = spec.get("argument_adjustments") or {}
+    for raw, adj in adjustments.items():
+        at = f"{where}.argument_adjustments[{raw!r}]"
+        if not str(raw).lstrip("-").isdigit() or int(raw) not in placeholders:
+            problems.append(f"{at} adjusts a placeholder the template does not name "
+                            f"(named: {sorted(placeholders)}).")
+            continue
+        if not isinstance(adj, dict):
+            problems.append(f"{at} is {type(adj).__name__}, not an object.")
+            continue
+        stray = sorted(k for k in adj if not k.startswith("_")
+                       and k not in ARGUMENT_ADJUSTMENT_KEYS)
+        if stray:
+            problems.append(f"{at} declares {stray} (known: "
+                            f"{sorted(ARGUMENT_ADJUSTMENT_KEYS)}).")
+        has_offset = "offset" in adj
+        has_bases = "source_index_base" in adj and "target_index_base" in adj
+        if has_offset == has_bases:
+            problems.append(
+                f"{at} must state EXACTLY one of `offset` or the pair "
+                f"(`source_index_base`, `target_index_base`); it states "
+                f"{'both' if has_offset else 'neither'}. The reader computes one "
+                f"constant, and two ways to spell it that disagree cannot both apply.")
+        coefficients = adj.get("argument_coefficients") or {str(int(raw)): 1}
+        for pos, factor in coefficients.items():
+            if not str(pos).lstrip("-").isdigit() or int(pos) not in positions:
+                problems.append(f"{at}.argument_coefficients names {pos!r}, which is not "
+                                f"an argument position below the arity of {arity}.")
+                continue
+            if not isinstance(factor, int) or isinstance(factor, bool):
+                problems.append(f"{at}.argument_coefficients[{pos!r}] is {factor!r}; the "
+                                f"adjustment is linear, so it must be an integer.")
+            accounted.add(int(pos))
+
+    accounted |= {p for p in placeholders if str(p) not in adjustments}
+    for raw in (spec.get("unused_arguments") or {}):
+        if not str(raw).lstrip("-").isdigit() or int(raw) not in positions:
+            problems.append(f"{where}.unused_arguments names {raw!r}, which is not an "
+                            f"argument position below the arity of {arity}.")
+            continue
+        if int(raw) in accounted:
+            problems.append(f"{where} declares argument {int(raw)} unused AND consumes it "
+                            f"through the template.")
+        accounted.add(int(raw))
+    why = {str(k): v for k, v in (spec.get("unused_arguments") or {}).items()}
+    blank = sorted(k for k, v in why.items() if not (isinstance(v, str) and v.strip()))
+    if blank:
+        problems.append(f"{where}.unused_arguments[{blank[0]!r}] states no reason. The "
+                        f"reason is emitted as the call's residue, so an empty one drops "
+                        f"the argument as silently as not declaring it at all.")
+
+    unaccounted = sorted(positions - accounted)
+    if unaccounted:
+        problems.append(
+            f"{where} declares arity {arity} and accounts for argument(s) "
+            f"{sorted(accounted)}: {unaccounted} reach neither a template placeholder "
+            f"(directly or through an argument_adjustments coefficient) nor "
+            f"unused_arguments. A matching call would render as translated with "
+            f"{'that argument' if len(unaccounted) == 1 else 'those arguments'} having "
+            f"no effect on the result and nothing in the slot naming the loss.")
+
 
 def validate_table(table: dict) -> dict:
     """Static table checks: a DECLARED READER MUST BE REACHABLE, and a DECLARABLE
@@ -1752,6 +1954,80 @@ def validate_table(table: dict) -> dict:
                 f"set raises KeyError at emission, not here, unless this check "
                 f"catches it.")
 
+    et = (table.get("dialect") or {}).get("expression_translation")
+    if isinstance(et, dict):
+        unknown = sorted(k for k in et
+                         if not k.startswith("_") and k not in EXPRESSION_TRANSLATION_KEYS)
+        if unknown:
+            problems.append(
+                f"dialect.expression_translation declares {unknown}, which no reader "
+                f"looks for (known: {sorted(EXPRESSION_TRANSLATION_KEYS)}). Sibling "
+                f"documentation goes under a '_'-prefixed key.")
+        absent = [k for k in REQUIRED_EXPRESSION_TRANSLATION_KEYS if k not in et]
+        if absent:
+            problems.append(
+                f"dialect.expression_translation is declared without {absent}. Declaring "
+                f"the block is what turns the structural translator on, and its reader "
+                f"subscripts those the first time an expression reaches it.")
+        # A cast_value_classes key the cast reader never sees is a value class that
+        # silently never applies, and the operand it was authored for goes back to
+        # reading as unstated -- the exact defect the key was added to close.
+        unmatched = sorted(k for k in (et.get("cast_value_classes") or {})
+                           if not k.startswith("_") and k not in (et.get("cast_types") or {}))
+        if unmatched:
+            problems.append(
+                f"dialect.expression_translation.cast_value_classes declares {unmatched}, "
+                f"which cast_types does not, so no cast is ever read as that type and the "
+                f"class never applies. Every key here must name a declared cast type.")
+        # A ternary the table finds a split for and then has no target template for is
+        # the same unreachable-declaration shape as an orphaned def_site: declaring
+        # condition_separator/branch_separator without case_template means the split is
+        # found and there is nowhere to lower it to.
+        tern = et.get("ternary_operators") or {}
+        if (tern.get("condition_separator") or tern.get("branch_separator")) \
+                and not tern.get("case_template"):
+            problems.append(
+                f"dialect.expression_translation.ternary_operators declares "
+                f"condition_separator/branch_separator without a case_template. A "
+                f"ternary the table can split has nowhere to lower to. Declare "
+                f"case_template (e.g. 'CASE WHEN {{0}} THEN {{1}} ELSE {{2}} END') or "
+                f"drop the separators.")
+        # A note keyed by an operator no level declares never fires, and the divergence
+        # it was authored for goes back to shipping silently -- the same failure as an
+        # unmatched cast_value_classes key, one level up.
+        declared_ops = {op for lv in (et.get("binary_operator_levels") or [])
+                        if isinstance(lv, dict) for op in (lv.get("operators") or {})}
+        orphans = sorted(k for k in (et.get("operator_residue_notes") or {})
+                         if not k.startswith("_") and k not in declared_ops)
+        if orphans:
+            problems.append(
+                f"dialect.expression_translation.operator_residue_notes declares "
+                f"{orphans}, which no binary_operator_levels level does, so the reason "
+                f"is never attached to anything. Every key here must name a declared "
+                f"operator.")
+        # The separator between two template arguments is the definitive character
+        # nothing binds across. Leaving it out of the delimiter set does not emit a
+        # wrong value -- the substitution site over-parenthesises rather than
+        # under-parenthesises -- but it does put parentheses round the arguments of
+        # every declared call, so the emitted SQL stops matching the templates these
+        # entries were authored against.
+        delimiters = et.get("template_operand_delimiters") or ""
+        separator = et.get("argument_separator")
+        if delimiters and separator and separator not in delimiters:
+            problems.append(
+                f"dialect.expression_translation.template_operand_delimiters is "
+                f"{delimiters!r}, which does not include the declared "
+                f"argument_separator {separator!r}. A placeholder between two "
+                f"separators is delimited by construction; omitting the separator "
+                f"parenthesises every non-atomic argument of every template.")
+        extra_chars = (table.get("expression_syntax") or {}).get(
+            "identifier_extra_chars") or ""
+        prefixes = et.get("call_name_strip_prefixes") or []
+        for name, spec in sorted((et.get("function_translations") or {}).items()):
+            if name.startswith("_"):
+                continue
+            _validate_function_translation(name, spec, et, extra_chars, prefixes, problems)
+
     if problems:
         if len(problems) == 1:
             raise ValueError(problems[0])
@@ -1805,6 +2081,13 @@ class TableSection(dict):
     def __init__(self, data: dict, table_path: str) -> None:
         super().__init__(data)
         self._table_path = table_path
+
+    @property
+    def table_path(self) -> str:
+        """So a reader that has to derive a section from this one (emit.py strips
+        documentation keys out of one block) can keep the location instead of
+        handing its own readers a plain dict and a bare KeyError."""
+        return self._table_path
 
     def __missing__(self, key):
         declared = sorted(k for k in self if not str(k).startswith("_"))

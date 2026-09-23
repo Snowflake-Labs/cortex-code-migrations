@@ -12,10 +12,12 @@ populates ``modifies_data`` / ``affected_tables`` directly. Remove once
 that lands.
 
 Usage:
-  python enrich_yamls.py <project_root> <object_name> [--extra-tables FQN[,FQN...]]
+  uv run --project <skill_dir> python enrich_yamls.py \
+    <project_root> <object_name> [--extra-tables FQN[,FQN...]]
 
 Example:
-  python enrich_yamls.py /path/to/dutchie "dbo.GetFF(INT,INT,VARCHAR)" \
+  uv run --project <skill_dir> python enrich_yamls.py \
+    /path/to/project "dbo.GetFF(INT,INT,VARCHAR)" \
     --extra-tables "dbo.Customers,dbo.Orders"
 """
 from __future__ import annotations

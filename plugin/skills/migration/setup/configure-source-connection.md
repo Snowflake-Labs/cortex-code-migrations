@@ -45,6 +45,7 @@ the configured dialect. Safe to repeat — it only reads.
   - `postgresql` → `../connection/postgresql-connection/SKILL.md`
   - `db2` → `../connection/db2-connection/SKILL.md`
   - `bigquery` → `../connection/bigquery-connection/SKILL.md`
+  - `synapse` / `azuresynapse` → `../connection/azure-synapse-connection/SKILL.md`
 
 ## If the user pushes back
 

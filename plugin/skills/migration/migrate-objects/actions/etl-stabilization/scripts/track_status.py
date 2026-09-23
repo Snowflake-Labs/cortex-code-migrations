@@ -60,11 +60,12 @@ from path_resolver import (
     tests_dir,
 )
 
-VALID_STATUSES = {"pending", "in_progress", "fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review"}
+VALID_STATUSES = {"pending", "in_progress", "fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review", "return-to-convert", "residual"}
 
 TERMINAL_STATUSES = {
     "fixed", "test-passed", "test-failed", "no-fix-needed",
     "skipped", "needs-user", "auto-fixed-needs-review", "failed",
+    "return-to-convert", "residual",
 }
 
 VALID_SKIP_REASONS = {"disabled-in-source", "container-only", "file-io-noop", "dbt-dependency", "external-dependency"}
@@ -77,8 +78,8 @@ VALID_DBT_STATUSES = {"pending", "in_progress", "dbt-fixed", "dbt-failed", "dbt-
 VALID_DBT_NODE_STATUSES = {"pending", "passing", "fixed", "failed", "skipped", "test-passed", "test-failed", "unverified"}
 
 VALID_TRANSITIONS: dict[str, set[str]] = {
-    "pending": {"in_progress", "fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review"},
-    "in_progress": {"fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review"},
+    "pending": {"in_progress", "fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review", "return-to-convert", "residual"},
+    "in_progress": {"fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review", "return-to-convert", "residual"},
     "orch-tested": {"fixed", "failed", "needs-user", "no-fix-needed", "test-passed", "test-failed", "auto-fixed-needs-review", "in_progress"},
     "proc-tested": {"fixed", "failed", "needs-user", "no-fix-needed", "test-passed", "test-failed", "auto-fixed-needs-review", "in_progress"},
     "fixed": {"test-passed", "test-failed", "in_progress"},
@@ -223,6 +224,10 @@ def cmd_init(scan_path: Path) -> None:
         "elements": elements,
         "dbt_projects": dbt_projects,
     }
+    if "platform_selection" in scan:
+        session["platform_selection"] = scan["platform_selection"]
+    if "unsupported_brief_status" in scan:
+        session["unsupported_brief_status"] = scan["unsupported_brief_status"]
 
     out_dir = scan_path.parent.parent / "tracking"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -260,6 +265,9 @@ def cmd_update(status_path: Path, element_name: str, status: str, reason: str | 
             print(f"Warning: unusual transition '{current}' -> '{status}' for '{element_name}'", file=sys.stderr)
 
         # Validate needs-user requires reason
+        if status in ("return-to-convert", "residual") and reason is None:
+            print(f"Error: '{status}' status requires --reason", file=sys.stderr)
+            sys.exit(1)
         if status == "needs-user" and reason is None:
             print("Error: 'needs-user' status requires --reason documenting prior fix attempts", file=sys.stderr)
             sys.exit(1)
@@ -276,7 +284,7 @@ def cmd_update(status_path: Path, element_name: str, status: str, reason: str | 
         found["status"] = status
         if reason is not None:
             found["reason"] = reason
-        elif "reason" in found and status not in ("skipped", "failed", "needs-user", "test-failed", "orch-tested"):
+        elif "reason" in found and status not in ("skipped", "failed", "needs-user", "test-failed", "orch-tested", "return-to-convert", "residual"):
             del found["reason"]
 
         session["last_updated"] = now_iso()

@@ -22,8 +22,8 @@ Tell the user:
 
 The Snowflake target (connection + database) and the testing path are
 configured by the **`setup` state machine**, not here — they're the last
-steps of setup, gated behind the post-assessment `continueToMigration`
-prompt. A user who stopped at assessment has none of them yet.
+steps of setup, after the post-assessment `chooseRunMode` prompt. A user
+who stopped at assessment has none of them yet.
 
 Call `progress_setup()`.
 
@@ -33,9 +33,10 @@ Call `progress_setup()`.
   back. Don't ask for a connection, database, or testing preference
   yourself — the machine owns those questions and persists the answers.
 
-This is also the path for a user who answered "Not now" at the gate and has
-since changed their mind: the prompt is re-offered, and answering "Yes"
-walks them through the Snowflake target and testing setup.
+This is also the path for a user who skipped migration setup and has since
+changed their mind: the prompt is re-offered, and answering it walks them
+through the Snowflake target and testing setup. Do not submit
+`run_mode=autonomous` — setup does not offer that mode.
 
 ## Advancing and reporting
 
@@ -45,7 +46,7 @@ This rule is the same for **every** task in the loop below — deploy, test, cap
 2. **Ask what's next.** Re-pull `migration_status(mode="my_objects_summary")` (or `migration_status(mode="next_task", object_id="<id>")` for one object). The machine advances you when it can see the work is done — a tool wrote the registry field, the object exists in Snowflake, or the expected file exists.
 3. **Call `transition_status` to report or override:**
    - a **failure** you can't fix — `transition_status(status='advance', task='<task>', outcome='failed', error='<sql|infra>')`;
-   - an outcome the system **can't observe** and you had to judge — e.g. "all tests passed" ([migrate-object/RUN_TESTS.md](migrate-object/RUN_TESTS.md)), view parity ([migrate-object/VALIDATE_VIEW.md](migrate-object/VALIDATE_VIEW.md)), ETL stabilization ([migrate-etl/SKILL.md](migrate-etl/SKILL.md));
+   - an outcome the system **can't observe** and you had to judge — e.g. view parity ([migrate-object/VALIDATE_VIEW.md](migrate-object/VALIDATE_VIEW.md)), ETL stabilization ([migrate-etl/SKILL.md](migrate-etl/SKILL.md)). `runTests` is an oracle (`testValidationResults`); do not stamp it;
    - an **override** — `bypass` a precondition, `reset` an errored task, or `skip`.
 
 The outcome and error vocabulary is defined once in [../extensibility/TASKS.md](../extensibility/TASKS.md#outcome-vocabulary).
@@ -56,7 +57,8 @@ If the user asks to run the wave unattended — "autonomous", "auto-pilot", "jus
 migrate everything", "run objects in parallel" — load
 [autonomous/SKILL.md](autonomous/SKILL.md) instead of the loop below and follow
 it. That skill claims work itself and dispatches one subagent per ready task
-group, up to a parallelism the user picks, escalating only when one gets stuck.
+group, up to the project parallelism configured during setup, escalating only
+when one gets stuck.
 
 Everything below is the interactive loop: one batch at a time, the user picks
 every group and every claim. It stays the default — do not offer autonomous mode
