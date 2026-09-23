@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 
 # SSIS Assessment
 
-**SnowConvert AI** migrates SSIS packages to Snowflake. This skill analyzes packages from their source code and SnowConvert assessment CSV reports to generate detailed migration analysis including package classification and complexity assessment.
+**Snowflake AIM for Data Warehouses** migrates SSIS packages to Snowflake. This skill analyzes packages from their source code and SnowConvert assessment CSV reports to generate detailed migration analysis including package classification and complexity assessment.
 
 ---
 

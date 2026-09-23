@@ -106,6 +106,7 @@ For SQL Server procedures returning multiple result sets. Each list entry maps o
 |---|---|
 | `false` | Skip this result set. |
 | `result` | Compare against the CALL's direct return value on target. |
+| `array_index: N` | Compare against `GET(call_return, N)` — Nth temp table from a `RETURNS ARRAY` proc (0-based). |
 | `table: "name"` | Compare against `SELECT * FROM <name>` on target. |
 | `cursor: "name"` | Compare against the named cursor on target. |
 | `target_query: "SQL"` | Compare against the result of arbitrary SQL on target. |

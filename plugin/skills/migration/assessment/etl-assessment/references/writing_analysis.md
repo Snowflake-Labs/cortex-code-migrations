@@ -4,9 +4,9 @@ This guide defines how to write comprehensive, actionable AI analysis for SSIS p
 
 ---
 
-## Context: SnowConvert AI Migration
+## Context: Snowflake AIM for Data Warehouses Migration
 
-SnowConvert AI processes SSIS packages and converts them to Snowflake-native components:
+Snowflake AIM for Data Warehouses processes SSIS packages and converts them to Snowflake-native components:
 
 | SSIS Component | Snowflake Target | Technology |
 |----------------|------------------|------------|

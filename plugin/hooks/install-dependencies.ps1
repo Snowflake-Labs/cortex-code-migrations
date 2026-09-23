@@ -59,7 +59,7 @@ if (Test-Path $MigrationConfig) {
             Log "Config pins scai.version=$ScaiVersionPin"
         }
     } catch {
-        Log "WARNING: could not parse $MigrationConfig — ignoring, using default scai version"
+        Log "WARNING: could not parse $MigrationConfig -- ignoring, using default scai version"
     }
 }
 

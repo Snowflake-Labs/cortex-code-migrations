@@ -7,42 +7,55 @@ license: Proprietary. See License-Skills for complete terms
 # Configure Snowflake target
 
 Invoked by the setup state machine once the user has opted into object
-migration at the `continueToMigration` gate. Conversion and assessment
+migration at the `chooseRunMode` step. Conversion and assessment
 have already run — they don't need a Snowflake target, which is why this
 question waits until now.
 
 ## Step 1: Snowflake connection
 
-Call `configure()` (no arguments) and read `snowflake_connection` from the
-response.
+Call `configure(needs_snowflake_connections=true)` and read both
+`snowflake_connection` (the one already resolved, from `project.local.yml`
+or `$SNOWFLAKE_CONNECTION`) and `existing_snowflake_connections:` (every
+connection in the user's TOML). Safe to repeat — it only reads.
 
-- **Non-empty** — a connection is already resolved (from
-  `project.local.yml` or `$SNOWFLAKE_CONNECTION`). Confirm rather than
-  re-ask:
-  > I'll deploy through the Snowflake connection `<name>`. Use it?
-- **Empty** — you have an active Snowflake connection in this session.
-  Propose it by name:
-  > I'll deploy through your active Snowflake connection `<name>`. Use it,
-  > or would you rather name a different one?
+Ask via `ask_user_question` (`multiSelect = false`), never by asking the
+user to type a name:
 
-If the user wants a different connection, ask for the name and use it.
+- Options are the names from `existing_snowflake_connections:`, the
+  resolved or active one first and labelled **currently selected**.
+- Leave the `(default)` suffix on whichever name carries it: that marks the
+  TOML default, which may be a different connection. Two names may end up
+  labelled, one per meaning.
+- Add **Create a new connection** as the last option — always, even when
+  the list is long.
 
-If they still need a Snowflake connection created, or the current one fails
-SSO against Microsoft Entra ID / Azure AD / OIDC, load
+`existing_snowflake_connections: none` means there is nothing to offer:
+say so and go straight to creating one — including when
+`snowflake_connection` already resolves, because a name that is in no TOML
+names nothing scai can connect with. `(unavailable: …)` is the opposite
+case: scai did not answer, so propose the resolved or active connection by
+name and let the user correct it; do not tell them they have no
+connections.
+
+On **Create a new connection**, or when the current one fails SSO against
+Microsoft Entra ID / Azure AD / OIDC, load
 `../connection/snowflake-connection/SKILL.md` before persisting a name.
 Use `oauth_authorization_code` for Entra OIDC — never `externalbrowser`.
 
 ## Step 2: Target database
 
 This is where the migration tracking database and the converted objects
-will live. Read `snowflake_database` from the same `configure()` response:
+will live. Call `configure()` and look for `active_bindings:`:
 
-- **Already set** — confirm it in the recap below; don't re-ask.
-- **Empty but the connection has a default database** — the `configure()`
-  response reports it as the effective database. Offer it:
-  > Deploy into `<db>` (your connection's current database)?
-- **Empty with no default** — ask:
-  > Which Snowflake database should I deploy into?
+- **Present** — Read that YAML. `snow:` values are the Snowflake catalogs
+  convert already bound. Confirm them in the recap; don't re-ask unless
+  the user wants a different database.
+- **Absent** — convert did not write bindings. Ask, with the naming rule in
+  the question so it is read before a name is typed:
+  > Which Snowflake database should I deploy into? Use letters, digits and
+  > underscores — a hyphen isn't a Snowflake identifier character, so
+  > `SALES-DB` has to be double-quoted and case-sensitive everywhere it is
+  > referenced.
 
 ## Step 3: Confirm everything, then persist
 
@@ -51,7 +64,8 @@ from the `configure()` response:
 
 > Before we start deploying, here's the setup:
 > - **Snowflake connection:** `<snowflake_connection>`
-> - **Target database:** `<snowflake_database>`
+> - **Target database:** `<snowflake_database>` — from `active_bindings`
+>   `snow:` when that yaml exists, otherwise the name the user just gave
 > - **Source connection:** `<source_connection>` — or "none (synthetic test
 >   data only)" when unset
 > - **Source dialect:** `<source_language>`

@@ -8,6 +8,16 @@ Each subdirectory represents a source ETL platform that the stabilization can pr
 |-----------|----------|-------------|
 | `ssis/` | SQL Server Integration Services | `.dtsx` |
 | `informatica/` | Informatica PowerCenter | `.xml` |
+| `alteryx/` | Alteryx Designer | `.yxmd` |
+
+A `.yxmd` has no orchestration layer — it is a single data-flow canvas whose execution order is
+implied by the connection graph. Units converted from one are a dbt project with no orchestration
+`.sql`, so the scanner derives their elements from the ETL assessment instead of from orchestration
+markers.
+
+## Fallback Pack
+
+`unsupported/` is not a named platform — it is the pack the scanner selects when no named pack applies (platform omitted/ambiguous, or a named platform has no directory here). It is agnostic by design: it navigates the AI-First **remediation brief**, not a source file. A named pack such as `alteryx/` wins when it exists.
 
 ## Adding a New Platform
 

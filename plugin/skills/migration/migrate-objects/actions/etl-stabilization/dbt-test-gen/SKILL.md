@@ -178,7 +178,25 @@ seeds:
 
 ### Step 2.5: Coverage Matrix
 
-Before writing tests, produce a coverage matrix. Every model MUST appear — no skips without justification:
+Before writing tests, produce a coverage matrix. **Every model MUST appear — no model is ever skipped.**
+What varies is test DEPTH, scaled to risk, because hand-deriving expected values for a model that only
+projects columns costs as much as for one that joins and aggregates, and catches far less.
+
+Classify each model first (this is mechanical — run
+`scripts/model_context_bundle.py <project> <out> --source <src>` and read its INDEX, which also gives you
+marker counts and dependency order):
+
+- **Real-logic model** — contains a join, aggregate, CASE, window function, UNION, QUALIFY, DISTINCT, or any
+  filter/routing condition. **Full depth:** hand-derived source-truth expected values plus the
+  discriminating case below. These are where wrong-but-compiles defects live.
+- **Passthrough model** — projects/renames columns with no such construct. **Structural depth:** row count
+  matches upstream, primary key not-null and unique, and the expected column set is present. No
+  hand-derived expected values — there is no transformation to get wrong, and the upstream model that
+  produced the values is itself covered at full depth.
+
+Every model still gets executable tests and still passes the gate. Only the expensive derivation is
+concentrated where it can catch something. Record each model's classification in the matrix so a reviewer
+can challenge it; if a model is ambiguous, classify it as real-logic.
 - Staging: row count + schema tests minimum
 - Intermediate: row count + schema + singular tests per source transformation
 - Mart: row count + schema minimum; add value assertion if mart applies any transformation

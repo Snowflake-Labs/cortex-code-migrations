@@ -242,14 +242,35 @@ def resolve_ewi_guide(
             raise ValueError(f"invalid {label} '{value}': must not contain path separators")
 
     root = Path(skill_dir) if skill_dir else _SKILL_DIR
+    names = [code]
+    family = _code_family(code)
+    if family:
+        names.append(family)
+
     candidates: list[Path] = []
-    if platform:
-        candidates.append(root / "platforms" / platform / "ewi" / f"{code}.md")
-    candidates.append(root / "reference" / "ewi" / f"{code}.md")
+    for name in names:
+        if platform:
+            candidates.append(root / "platforms" / platform / "ewi" / f"{name}.md")
+        candidates.append(root / "reference" / "ewi" / f"{name}.md")
     for candidate in candidates:
         if candidate.is_file():
             return candidate, candidates
     return None, candidates
+
+
+def _code_family(code: str) -> str | None:
+    """The stable part of an AI-First migrator code, or None for an engine code.
+
+    Engine codes are stable identities (`SSC-EWI-SSIS0003`), so one file per code works. An AIM code
+    is `AIM-{category}-{content digest}`: the digest is deliberately per-instance, so two findings of
+    the same kind never share a code and no pre-authored `AIM-EMIT-c585d372314d.md` can ever be hit.
+    The category is the stable identity, so fall back to it -- otherwise every AIM finding resolves
+    to no guidance at all.
+    """
+    if not code or not code.upper().startswith("AIM-"):
+        return None
+    parts = code.split("-")
+    return f"{parts[0]}-{parts[1]}" if len(parts) >= 3 else None
 
 
 def cmd_ewi_guide_resolve(argv: list[str] | None) -> int:

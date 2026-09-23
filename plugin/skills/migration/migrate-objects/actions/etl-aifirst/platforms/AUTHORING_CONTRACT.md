@@ -123,6 +123,106 @@ are not uniformly cased and are not derivable from the platform's name; use the 
 in `REQUEST.md` verbatim, and if it is a platform with no rule yet, say so in
 `authoring_notes.md` rather than inventing a near miss.
 
+## `dialect.expression_translation` — optional, and all-or-nothing
+
+Omit this block and every expression is emitted by the **verbatim flat path**: each scanned token
+is re-emitted as written, column references are resolved, nothing else is rewritten, and the slot
+carries residue naming what was not understood. That is the correct choice for a platform whose
+expressions you have not modelled, and it is what most tables here do.
+
+Declare the block and you turn on a structural translator over the same token stream — ternaries,
+operator precedence levels, unary forms, casts, and function calls. Everything it knows comes from
+this block: it holds **all** source-language vocabulary (operator spellings, type names, function
+names, index bases, format letters) because the reader contains none and branches on no platform.
+
+Keys the reader looks for: `argument_separator` and `function_translations` (required once the
+block exists), plus `null_literal`, `max_expression_span_depth`, `ternary_operators`,
+`null_comparison_rewrite`, `binary_operator_levels`, `operator_residue_notes`,
+`unary_operator_forms`,
+`string_concat_operator`, `string_concat_target_operator`, `string_concat_detection`,
+`string_value_class`, `numeric_value_class`, `value_class_by_datatype`,
+`leaf_passthrough_characters`, `template_operand_delimiters`, `call_name_strip_prefixes`,
+`cast_types`, `cast_value_classes`,
+`date_part_literals`,
+`date_format_pattern_map`, `date_format_letter_characters`, `date_format_literal_characters`,
+`date_format_quote_character`, `date_format_quoted_literal_template`. **Any other key is rejected**,
+because every reader here is a `.get`: a misspelled key is not a smaller declaration, it is a
+constraint that silently does not apply on a path whose entire output is plausible-looking SQL.
+
+An **overloaded additive operator** — one spelling that is arithmetic on numbers and concatenation on
+strings, declared as `string_concat_operator` with its target as `string_concat_target_operator` — is
+resolved one **pairwise step** at a time, left to right, which is what `string_concat_detection:
+"typed_operands_left_associative"` names. So every source statement of a value class matters, and
+there are four: `value_class_by_datatype` over a referenced column's declared type,
+`function_translations[*].returns` for a call this table translates, `cast_value_classes` for an
+explicit cast, and the fold itself for a sub-chain or a parenthesised group. A step whose two classes
+are both stated is emitted as one reading or the other; a step on the overloaded operator the table
+cannot read is emitted as the source spelling **and carries a residue reason**, because those are the
+cases with two readings and nothing to choose between them. There are two of them, and they are
+reported separately because the author's fix differs: a side the table states **no** class for means
+declare the datatype, while two classes that are both stated and give the operator **neither** reading
+— a boolean and a number, a date and a number — means the source expression itself needs a decision.
+Leaving a class undeclared is therefore safe, and declaring a wrong one is not. `cast_value_classes` keys must all
+name declared `cast_types`, or the class is authored for a cast the reader never recognises.
+
+**Write every template as if its `{N}` received a bare operand, and the reader will make that
+true.** One `{N}` — in a `function_translations[*].template`, in a `cast_types` entry, in a
+`unary_operator_forms` entry — is spliced by ONE substitution site, which parenthesises the operand
+unless it is already a single value (one primary, or one numeric literal) or unless the placeholder
+sits between two of the characters `template_operand_delimiters` declares. That set must contain the
+declared `argument_separator`, since a placeholder between two separators is delimited by
+construction; `(` and `)` belong there too. So `F({0}, {1})` never gains a parenthesis, while
+`({1} * {2})` and `{0} IS NULL` group whatever they receive. Do not hand-parenthesise a placeholder
+in a template to compensate — the guard already applies, and the second pair of parentheses is
+noise on every call.
+
+**`operator_residue_notes`** is keyed by a **source operator spelling** and states a divergence that
+survives translating it: the note is attached once per distinct operator wherever a level splits on
+it, including inside a template's operands. Use it for an operator whose target spelling is right and
+whose *meaning* is not exactly the source's — integer division truncating toward zero in the source
+but not in the target is the case it was authored for, where the operands' run-time types decide and
+the document does not state them. Every key must name an operator some `binary_operator_levels` level
+declares, or the note is never attached to anything. Keep a note free of `; `, which separates one
+residue reason from the next.
+
+**Two adjacent values with no operator between them are declined, not joined.** `string_value_class`,
+`numeric_value_class` and `leaf_passthrough_characters` are what let the reader tell one leaf value
+from the next, and a run of them with nothing declared in between is a source the lexer could not
+read: it crosses **verbatim, in the source's own spelling, with a residue reason**, rather than being
+re-quoted or folded into a single value the source never stated. This costs you nothing to declare and
+is the reason a mis-lexed `1 2` cannot ship as `12`.
+
+**A documentation string must never sit inside a map the reader looks a source value up in.** Every
+key of `cast_types`, `cast_value_classes`, `date_part_literals`, `date_format_pattern_map` and
+`function_translations` is
+DATA — a source cast type, a source date part, a source pattern run, a source function name — so an
+inline `"_comment"` is reachable as data. Declare it as a sibling `"_<key>_comment"` instead. A
+`_`-prefixed key is skipped everywhere the block is read and validated.
+
+One `function_translations` entry is keyed by the source call name **after**
+`call_name_strip_prefixes` has been applied, and the key must be spellable as one scanned identifier
+(a letter or `_`, then letters, digits, `_`, and `expression_syntax.identifier_extra_chars`) or no
+call can ever match it. It may declare:
+
+| key | meaning |
+| --- | --- |
+| `template` | required; the target spelling, with `{N}` naming source argument N |
+| `arity` | required; the EXACT argument count. A call stating any other count is emitted untranslated |
+| `returns` | this call's value class, for resolving an overloaded operator around it |
+| `date_part_args` | argument positions holding a source date-part literal, resolved via `date_part_literals` |
+| `date_format_args` | argument positions holding a source date/time pattern, resolved via `date_format_pattern_map` |
+| `argument_adjustments` | per-placeholder linear correction: `offset`, or `source_index_base`+`target_index_base`, plus optional `argument_coefficients` over source positions. Integer-literal arguments fold into the constant; anything else is emitted as explicit arithmetic. An integer literal below the declared `source_index_base` is one the SOURCE rejects, and the shift would map it onto an index the target accepts, so the correction is still emitted and the literal is named in residue |
+| `unused_arguments` | positions the translation does not represent, each with the reason, emitted as residue |
+| `residue_note` | a divergence that survives translation, emitted as residue on every call |
+
+**Every argument position below `arity` must be accounted for exactly once** — reached by a template
+placeholder, referenced by an `argument_adjustments` coefficient, or declared in `unused_arguments`
+with a non-empty reason. The validator refuses an entry that leaves one out, because that entry
+renders as a translated call with one of the source's arguments having no effect on the result and
+nothing in the slot naming the loss. A translation that cannot be written faithfully must **decline**
+— it is emitted with its call name and shape unchanged and a residue reason naming the specific
+cause — never fitted to the template by dropping or inventing an argument.
+
 Write JSON only to `platform_table.json`. The caller validates the table, runs deterministic
 identification over the source, and builds the representation before accepting it. A
 representation that builds is not yet one a consumer can use, so acceptance also asks that the

@@ -1,0 +1,2320 @@
+"""Regenerate `platforms/platform_talend.json` from a checked-in Python literal.
+
+Run from the etl-aifirst directory: `python3 tools/build_talend_table.py`.
+
+Same convention as `build_alteryx_table.py`/`platform_alteryx.json`: this builder is the
+source of record, and the checked-in JSON is its generated output. When the two disagree,
+the JSON is stale -- rerun this file and check in what it writes; do not hand-edit the
+builder to match whatever the file currently contains. `ai/tests/etl-aifirst/
+test_platform_talend_builder.py` runs this file into a temporary directory and asserts the
+bytes match the checked-in table (and the checksum `test_platform_talend_contract.py`
+pins), which is the only thing that keeps the generator honest.
+"""
+import json
+import re
+from pathlib import Path
+
+_TOKEN = "__ONE_LINE__"
+
+
+class _OneLine:
+    """A value the checked-in table states on ONE line. `json.dump(indent=...)` puts every
+    list element on its own line, which is not how the file states its single-element
+    argument-index lists, so those go out as a token the dumped text substitutes back."""
+
+    __slots__ = ("value",)
+
+    def __init__(self, value):
+        self.value = value
+
+
+class _Encoder(json.JSONEncoder):
+    def default(self, o):
+        if isinstance(o, _OneLine):
+            return _TOKEN + json.dumps(o.value) + _TOKEN
+        return super().default(o)
+
+
+table = {
+"platform": "talend",
+"table_version": "adw2017-stage0-provisional.1+joblet-xmi",
+"_comment": (
+    "Provisional Stage 0 table for AdW2017 (primary: dim_employee_0.1.item). Not the "
+    "ProductSampleJob checked-in table. coverage_gate.RULES has no talend key; identity is "
+    "the CLI/request string `talend`."
+),
+"structure": {
+    "unsupported_body_max_chars": 4000,
+    "document_model": {
+        "kind": "LIFT_XML",
+        "_lift_rules_comment": (
+            "Talend <node> states componentName as a REAL attribute (kind_attr) but "
+            "UNIQUE_NAME / TABLE / QUERY live on child <elementParameter name=... "
+            "value=...>. Edge <connection> states source/target as REAL attributes naming "
+            "UNIQUE_NAME, so those are not lifted. ElementTree find supports the [@name=] "
+            "predicate used in from_child."
+        ),
+        "lift_rules": [
+            {
+                "on_tag": "node",
+                "from_child": "elementParameter[@name='UNIQUE_NAME']",
+                "from_attr": "value",
+                "onto_attr": "unique_name"
+            },
+            {
+                "on_tag": "node",
+                "from_child": "elementParameter[@name='TABLE']",
+                "from_attr": "value",
+                "onto_attr": "table_name"
+            },
+            {
+                "on_tag": "node",
+                "from_child": "elementParameter[@name='QUERY']",
+                "from_attr": "value",
+                "onto_attr": "query_text"
+            }
+        ]
+    },
+    "key_scope": None,
+    "detail_max_chars": 120,
+    "attr_where_template": None,
+    "container": {
+        "xpath": ".",
+        "name_attr": "jobType",
+        "_comment": (
+            "ProcessType has no job-name attribute; jobType is 'Standard' on this corpus. "
+            "Real job name is the .item filename, outside the document."
+        )
+    },
+    "levels": [
+        {
+            "_comment": (
+                "Every executable component is a <node> with @componentName. key is lifted "
+                "unique_name (UNIQUE_NAME parameter), which is what <connection "
+                "source/target> cites."
+            ),
+            "name": "components",
+            "elements": ".//node",
+            "key_attr": "unique_name",
+            "kind_attr": "componentName",
+            "role_attr": None,
+            "display_name_attr": "unique_name",
+            "flag_attrs": {}
+        }
+    ],
+    "census": {
+        "_comment": (
+            "Exhaustive identification on a Talend .item: most records are parameters, "
+            "metadata columns, mapper guts, signatures \u2014 not graph elements."
+        ),
+        "identity_attrs": ["unique_name", "componentName", "source", "target", "name", "connectorName"],
+        "exclusions": [
+            {
+                "id": "talend-process-root",
+                "kind": "QUERY",
+                "match": ".",
+                "excludes": "the ProcessType document root",
+                "why": (
+                    "The root is the job envelope (defaultContext, jobType). Components "
+                    "and connections are children classified separately."
+                )
+            },
+            {
+                "id": "talend-context-block",
+                "kind": "QUERY",
+                "match": ".//context",
+                "subtree": True,
+                "excludes": "job context and contextParameter rows",
+                "why": (
+                    "Context is configuration for runtime substitution, not a data-flow "
+                    "element. subtree:true because each contextParameter is a row of that "
+                    "block. REBASED from ./context: a joblet's root is XMI and this block "
+                    "sits under XMI/JobletProcess, so the root-relative query matched "
+                    "nothing in any of the 8 joblets."
+                )
+            },
+            {
+                "id": "talend-job-parameters",
+                "kind": "QUERY",
+                "match": ".//parameters",
+                "subtree": True,
+                "excludes": "job-level elementParameter list",
+                "why": (
+                    "Job properties (implicit context, stats/logs flags, canvas offsets). "
+                    "Not graph nodes. subtree:true covers the large parameter list. "
+                    "REBASED from ./parameters: a joblet's root is XMI and this block sits "
+                    "under XMI/JobletProcess, so the root-relative query matched nothing "
+                    "in any of the 8 joblets."
+                )
+            },
+            {
+                "id": "talend-subjob-boxes",
+                "kind": "QUERY",
+                "match": ".//subjob",
+                "subtree": True,
+                "excludes": "studio subjob grouping boxes",
+                "why": (
+                    "Visual grouping in the Talend Studio canvas, not an engine operator. "
+                    "REBASED from ./subjob: a joblet's root is XMI and this block sits "
+                    "under XMI/JobletProcess, so the root-relative query matched nothing "
+                    "in any of the 8 joblets."
+                )
+            },
+            {
+                "id": "talend-xmldsig",
+                "kind": "QUERY",
+                "match": ".//{http://www.w3.org/2000/09/xmldsig#}Signature",
+                "subtree": True,
+                "excludes": "XML digital signature envelope",
+                "why": (
+                    "Studio signs the .item; subtree:true because "
+                    "SignedInfo/KeyInfo/Object are not ETL elements."
+                )
+            },
+            {
+                "id": "talend-connections-are-edges",
+                "kind": "EDGE_RECORD",
+                "excludes": "connection records already read as edges",
+                "why": (
+                    "structure.edge_levels reads <connection>; those nodes are edges, not "
+                    "a second class of elements."
+                )
+            },
+            {
+                "id": "talend-node-payload",
+                "kind": "QUERY",
+                "match": ".//node/*",
+                "subtree": True,
+                "excludes": "everything nested under a component node",
+                "why": (
+                    "elementParameter, metadata/column, nodeData/tMap guts, "
+                    "routinesParameter live under the node. The node itself is the "
+                    "element; descendants are payload. subtree:true because mapper and "
+                    "metadata trees are deep. The identified <node> is not matched by this "
+                    "query (child axis), so census is not contested."
+                )
+            },
+            {
+                "id": "talend-connection-payload",
+                "kind": "QUERY",
+                "match": ".//connection/*",
+                "subtree": True,
+                "excludes": "elementParameter children of connection records",
+                "why": (
+                    "Each <connection> carries MONITOR_CONNECTION and UNIQUE_NAME "
+                    "parameters. The connection itself is an EDGE_RECORD; these children "
+                    "are payload, not a second element class. subtree:true for any nested "
+                    "values."
+                )
+            },
+            {
+                "id": "talend-joblet-envelope",
+                "kind": "QUERY",
+                "match": "./{http://www.talend.com/joblet.ecore}JobletProcess",
+                "excludes": "the JobletProcess envelope inside an XMI-rooted joblet document",
+                "why": (
+                    "A joblet's document root is {XMI}XMI and JobletProcess is the job "
+                    "envelope one level down (defaultContext, jobType) -- the same role "
+                    "ProcessType plays in a process job, which talend-process-root already "
+                    "excludes. THE TAG IS NAMESPACED (http://www.talend.com/joblet.ecore) "
+                    "and an unnamespaced `./JobletProcess` matches nothing, which is why 8 "
+                    "of these were unclassified. NOT subtree:true: the components and "
+                    "connections underneath are the elements this migration exists to read."
+                )
+            },
+            {
+                "id": "talend-joblet-canvas-image",
+                "kind": "QUERY",
+                "match": ".//{http://www.talend.org/properties}ByteArray",
+                "excludes": "the base64 PNG screenshot of the Studio canvas",
+                "why": (
+                    "Studio stores a picture of the diagram in the .item as "
+                    "ByteArray/@innerContent, one per joblet. It is an image OF the job, "
+                    "not a statement about it, and nothing in a Snowflake target can "
+                    "consume it. Namespaced under http://www.talend.org/properties."
+                ),
+                "subtree": True
+            },
+            {
+                "id": "talend-context-document",
+                "kind": "QUERY",
+                "match": ".//{platform:/resource/org.talend.model/model/TalendFile.xsd}ContextType",
+                "excludes": "a context document's ContextType blocks and their contextParameter rows",
+                "why": (
+                    "The two files under context/ are CONFIGURATION INPUTS, not jobs: each "
+                    "states a named context (Default, Prod) and the parameters a job "
+                    "substitutes at runtime. They declare no component and no connection. "
+                    "subtree:true because each contextParameter is a row of that block. "
+                    "Excluding them is the same decision the census makes when it classes "
+                    "those two documents as configuration rather than migratable units -- "
+                    "stated in the table so the two agree by rule instead of by "
+                    "coincidence."
+                ),
+                "subtree": True
+            },
+            {
+                "id": "talend-canvas-notes",
+                "kind": "QUERY",
+                "match": ".//note",
+                "excludes": "Studio canvas sticky notes and their presentation parameters",
+                "why": (
+                    "A <note> is a comment box the developer dragged onto the diagram; its "
+                    "elementParameter children are font, colour, opacity and anchor. "
+                    "subtree:true because those children are presentation payload of the "
+                    "note. This is where ALL 43 previously-unmatched elementParameter "
+                    "records live -- under note and jobletNodes, not under the job-level "
+                    "parameters block, which .//parameters already covers."
+                ),
+                "subtree": True
+            },
+            {
+                "id": "talend-joblet-trigger-boundary",
+                "kind": "QUERY",
+                "match": ".//jobletNodes",
+                "excludes": "the joblet's TRIGGER_INPUT / TRIGGER_OUTPUT call-boundary markers",
+                "why": (
+                    "These declare WHERE a calling job's trigger enters and leaves the "
+                    "joblet. They are not operators: they run nothing and transform no "
+                    "row. Excluded as interface declaration -- AND THIS IS A NAMED "
+                    "LIMITATION, not a neutral exclusion: the emitted artifact therefore "
+                    "does not model the joblet's trigger boundary as a node. subtree:true "
+                    "because their elementParameter children are the marker's own geometry."
+                ),
+                "subtree": True
+            }
+        ]
+    },
+    "load_order": None,
+    "ref_attrs": ["unique_name"],
+    "lineage": None,
+    "edge_levels": [
+        {
+            "_comment": (
+                "Talend states dataflow as sibling <connection> elements with "
+                "source/target = UNIQUE_NAME. Those attributes are flat on <connection>; "
+                "no lift required."
+            ),
+            "name": "connections",
+            "xpath": ".//connection",
+            "endpoint_kind": "PORT_REF",
+            "from_attr": "source",
+            "to_attr": "target",
+            "label_attr": "label"
+        }
+    ],
+    "default_def_site": "SELF",
+    "def_sites": {},
+    "self_def_site": {
+        "_comment": (
+            "Output schema is <metadata>/<column> under the node. tMap often uses nodeData "
+            "instead; those columns stay residue/unknown-as-payload (already excluded as "
+            "node descendants)."
+        ),
+        "port_sites": [
+            {
+                "id": "talend_metadata_column",
+                "xpath": "./metadata/column",
+                "porttype": "OUTPUT",
+                "name_attr": "name",
+                "datatype_attr": "type",
+                "precision_attrs": ["length"],
+                "scale_attrs": ["precision"],
+                "default_attr": None
+            }
+        ],
+        "group_site": None,
+        "attr_site": {"value_from": "SELF_ATTRS"}
+    },
+    "self_def_sites": {
+        "tmap": {
+            "_comment": (
+                "TalendMapper nodeData: <outputTables name=X><mapperTableEntries "
+                "expression=E name=N type=T/></outputTables> is tMap's REAL output schema "
+                "(metadata/column is not populated for tMap on this corpus). port_sites "
+                "are relative to the tMap <node> itself (def_site SELF), so a sibling "
+                "tMap's own outputTables/varTables/inputTables can never be read here -- "
+                "MEASURED on the synthesized fixture used to prove this table: six tMap "
+                "instances in one document, each carrying only its own columns. "
+                "`tmap_output`'s group_from ANCESTOR resolves each row to the "
+                "<outputTables> it sits under, which is what lets "
+                "port_policy.exclude_port_groups_name_matches drop a reject-shaped output "
+                "group without a Talend-specific branch in Python. `tmap_var` and "
+                "`tmap_input` read <varTables>/<inputTables> mapperTableEntries the "
+                "identical way, with porttype LOCAL / INPUT (port_policy."
+                "local_variable_porttype / input_porttypes) rather than OUTPUT, so neither "
+                "is ever itself emitted as a projected column -- both are real structure "
+                "(a Port), not no_slot_facts residue. Each row's qualified lexeme ('src."
+                "QTY', 'Var.lineTotal') is composed here too, via qualifier_source "
+                "PARENT_ATTR reading the immediate <inputTables>/<varTables> holder's own "
+                "@name -- the SAME shape `_resolve_ident_or_ref` and the value-class "
+                "reading share, so a qualified reference is one extraction, not a second "
+                "one restating the same nodeData a Talend-specific way. An inputTables "
+                "row's own `expression` (a join/lookup key, e.g. 'orders.CUSTOMER_ID') is "
+                "still never read as IR by anything that resolves an INPUT port -- join "
+                "semantics stay residue (talend_tmap_join_key_expression), only its "
+                "IDENTITY and DECLARED TYPE become a Port. MEASURED: every varTables in "
+                "the 34-item AdW2017 corpus is declared empty (`<varTables "
+                "minimized=\"true\" name=\"Var\" .../>`, no children) -- this reads a "
+                "real, populated one only on the synthesized fixture; the capability is "
+                "unexercised on this corpus, not unimplemented."
+            ),
+            "port_sites": [
+                {
+                    "id": "tmap_output",
+                    "xpath": "./nodeData/outputTables/mapperTableEntries",
+                    "porttype": "OUTPUT",
+                    "name_attr": "name",
+                    "datatype_attr": "type",
+                    "expression": {"from": "ATTR", "attr": "expression"},
+                    "group_from": "ANCESTOR"
+                },
+                {
+                    "id": "tmap_var",
+                    "xpath": "./nodeData/varTables/mapperTableEntries",
+                    "porttype": "LOCAL",
+                    "name_attr": "name",
+                    "datatype_attr": "type",
+                    "expression": {"from": "ATTR", "attr": "expression"},
+                    "qualifier_source": "PARENT_ATTR",
+                    "qualifier_attr": "name",
+                    "qualifier_separator": "."
+                },
+                {
+                    "id": "tmap_input",
+                    "xpath": "./nodeData/inputTables/mapperTableEntries",
+                    "porttype": "INPUT",
+                    "name_attr": "name",
+                    "datatype_attr": "type",
+                    "expression": {"from": "ATTR", "attr": "expression"},
+                    "qualifier_source": "PARENT_ATTR",
+                    "qualifier_attr": "name",
+                    "qualifier_separator": "."
+                }
+            ],
+            "group_site": {"xpath": "./nodeData/outputTables", "name_attr": "name"}
+        }
+    }
+},
+"kind_dispatch": {
+    "_comment": (
+        "Talend node/@componentName -> IR $kind. Primary validator job (dim_employee) uses "
+        "tOracleInput, tMysqlInput, tMap, tMysqlOutput. The other 23 names are corpus "
+        "kinds from covering jobs, declared so kind_dispatch is closed over the 27-kind "
+        "AdW2017 census. Honest nulls beat invented IR kinds."
+    ),
+    "tOracleInput": {
+        "ir_kind": "SourceQualifier",
+        "role": "SOURCE",
+        "supported": True,
+        "def_site": "SELF",
+        "note": (
+            "JDBC/Oracle input. Kind and UNIQUE_NAME are on the <node>; TABLE/QUERY live "
+            "on child elementParameter and are lifted."
+        ),
+        "element_fields": {"TableName": {"rule": "talend_table_name", "required": False}}
+    },
+    "tMysqlInput": {
+        "ir_kind": "SourceQualifier",
+        "role": "SOURCE",
+        "supported": True,
+        "def_site": "SELF",
+        "note": "MySQL input. Same shape as tOracleInput.",
+        "element_fields": {"TableName": {"rule": "talend_table_name", "required": False}}
+    },
+    "tMSSqlInput": {
+        "ir_kind": "SourceQualifier",
+        "role": "SOURCE",
+        "supported": True,
+        "def_site": "SELF",
+        "note": (
+            "SQL Server input. Present in covering joblets and some load jobs, not in "
+            "dim_employee."
+        ),
+        "element_fields": {"TableName": {"rule": "talend_table_name", "required": False}}
+    },
+    "tFileInputDelimited": {
+        "ir_kind": "SourceQualifier",
+        "role": "SOURCE",
+        "supported": True,
+        "def_site": "SELF",
+        "note": (
+            "Delimited file source. Covering: dimdatemysql. File path is not "
+            "UNQUALIFIED_TAIL'd."
+        ),
+        "element_fields": {"TableName": {"rule": "talend_table_name", "required": False}}
+    },
+    "tFileInputExcel": {
+        "ir_kind": "SourceQualifier",
+        "role": "SOURCE",
+        "supported": True,
+        "def_site": "SELF",
+        "note": "Excel file source. Covering: dim_rejectcodes.",
+        "element_fields": {"TableName": {"rule": "talend_table_name", "required": False}}
+    },
+    "tMap": {
+        "ir_kind": "ExpressionTransformation",
+        "role": "TRANSFORMATION",
+        "supported": True,
+        "def_site": "SELF",
+        "self_def_site": "tmap",
+        "note": (
+            "Row mapper. IR ExpressionTransformation is the only transform door that "
+            "carries columns; Talend tMap join/lookup semantics are residue, not invented "
+            "join IR."
+        )
+    },
+    "tJavaRow": {
+        "ir_kind": "ExpressionTransformation",
+        "role": "TRANSFORMATION",
+        "supported": True,
+        "def_site": "SELF",
+        "note": (
+            "Per-row Java. Mapped as expression-shaped because it sits on a row buffer; "
+            "Java body is residue."
+        )
+    },
+    "tMysqlOutput": {
+        "ir_kind": "TargetTransformation",
+        "role": "TARGET",
+        "supported": True,
+        "def_site": "SELF",
+        "note": "MySQL target. dim_employee writes here.",
+        "element_fields": {"TableName": {"rule": "talend_table_name", "required": False}}
+    },
+    "tMSSqlOutput": {
+        "ir_kind": "TargetTransformation",
+        "role": "TARGET",
+        "supported": True,
+        "def_site": "SELF",
+        "note": "SQL Server target. Covering joblets.",
+        "element_fields": {"TableName": {"rule": "talend_table_name", "required": False}}
+    },
+    "tMysqlSCD": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Slowly-changing-dimension writer. No IR kind models "
+            "SCD type-1/2 merge; TargetTransformation would drop the SCD contract."
+        ),
+        "role": "TARGET",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Covering: dimproductcosthistory_Copy1."
+    },
+    "tRunJob": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Orchestration / catcher / joblet wrapper: the IR is a "
+            "flat data-flow graph of "
+            "SourceQualifier/ExpressionTransformation/TargetTransformation. This native "
+            "kind does not state a row-level transform in the primary job's dataflow "
+            "vocabulary."
+        ),
+        "role": "TASK",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Child job invocation. Covering: Product_SubJobs."
+    },
+    "tParallelize": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Orchestration / catcher / joblet wrapper: the IR is a "
+            "flat data-flow graph of "
+            "SourceQualifier/ExpressionTransformation/TargetTransformation. This native "
+            "kind does not state a row-level transform in the primary job's dataflow "
+            "vocabulary."
+        ),
+        "role": "TASK",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Control-flow fan-out. Covering: Product_SubJobs."
+    },
+    "tSendMail": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Orchestration / catcher / joblet wrapper: the IR is a "
+            "flat data-flow graph of "
+            "SourceQualifier/ExpressionTransformation/TargetTransformation. This native "
+            "kind does not state a row-level transform in the primary job's dataflow "
+            "vocabulary."
+        ),
+        "role": "TASK",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Side-effect mail. Covering joblets."
+    },
+    "tSetGlobalVar": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Sets job-global variables, not a row transform the "
+            "hydrator can emit."
+        ),
+        "role": "TRANSFORMATION",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Covering joblets."
+    },
+    "tStatCatcher": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Orchestration / catcher / joblet wrapper: the IR is a "
+            "flat data-flow graph of "
+            "SourceQualifier/ExpressionTransformation/TargetTransformation. This native "
+            "kind does not state a row-level transform in the primary job's dataflow "
+            "vocabulary."
+        ),
+        "role": "CATCHER",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Stats catcher component."
+    },
+    "tLogCatcher": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Orchestration / catcher / joblet wrapper: the IR is a "
+            "flat data-flow graph of "
+            "SourceQualifier/ExpressionTransformation/TargetTransformation. This native "
+            "kind does not state a row-level transform in the primary job's dataflow "
+            "vocabulary."
+        ),
+        "role": "CATCHER",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Log catcher component."
+    },
+    "tAssertCatcher": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Orchestration / catcher / joblet wrapper: the IR is a "
+            "flat data-flow graph of "
+            "SourceQualifier/ExpressionTransformation/TargetTransformation. This native "
+            "kind does not state a row-level transform in the primary job's dataflow "
+            "vocabulary."
+        ),
+        "role": "CATCHER",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Assert catcher component."
+    },
+    "tFlowMeterCatcher": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Orchestration / catcher / joblet wrapper: the IR is a "
+            "flat data-flow graph of "
+            "SourceQualifier/ExpressionTransformation/TargetTransformation. This native "
+            "kind does not state a row-level transform in the primary job's dataflow "
+            "vocabulary."
+        ),
+        "role": "CATCHER",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Flow-meter catcher component."
+    },
+    "TRIGGER_OUTPUT": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Joblet reference / trigger pin, not a hydratable "
+            "data-flow operator. Named so convert can census it later; Stage 0 does not "
+            "invent an IR door."
+        ),
+        "role": "JOBLET",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Joblet trigger output pin."
+    },
+    "DI_CNTL_AssertCatcher": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Joblet reference / trigger pin, not a hydratable "
+            "data-flow operator. Named so convert can census it later; Stage 0 does not "
+            "invent an IR door."
+        ),
+        "role": "JOBLET",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Joblet instance of assert-catcher."
+    },
+    "DI_CNTL_AssertCatcher_Root": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Joblet reference / trigger pin, not a hydratable "
+            "data-flow operator. Named so convert can census it later; Stage 0 does not "
+            "invent an IR door."
+        ),
+        "role": "JOBLET",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Joblet root pin, AssertCatcher family."
+    },
+    "DI_CNTL_FlowMeter": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Joblet reference / trigger pin, not a hydratable "
+            "data-flow operator. Named so convert can census it later; Stage 0 does not "
+            "invent an IR door."
+        ),
+        "role": "JOBLET",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Joblet instance of flow-meter."
+    },
+    "DI_CNTL_FlowMeter_Root": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Joblet reference / trigger pin, not a hydratable "
+            "data-flow operator. Named so convert can census it later; Stage 0 does not "
+            "invent an IR door."
+        ),
+        "role": "JOBLET",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Joblet root pin, FlowMeter family."
+    },
+    "DI_CNTL_JobStats": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Joblet reference / trigger pin, not a hydratable "
+            "data-flow operator. Named so convert can census it later; Stage 0 does not "
+            "invent an IR door."
+        ),
+        "role": "JOBLET",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Joblet instance of job stats."
+    },
+    "DI_CNTL_JobStats_Root": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Joblet reference / trigger pin, not a hydratable "
+            "data-flow operator. Named so convert can census it later; Stage 0 does not "
+            "invent an IR door."
+        ),
+        "role": "JOBLET",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Joblet root pin, JobStats family."
+    },
+    "DI_CNTL_LogCatcher": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Joblet reference / trigger pin, not a hydratable "
+            "data-flow operator. Named so convert can census it later; Stage 0 does not "
+            "invent an IR door."
+        ),
+        "role": "JOBLET",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Joblet instance of log catcher."
+    },
+    "DI_CNTL_LogCatcher_Root": {
+        "ir_kind": None,
+        "degrade_to": None,
+        "degrade_reason": (
+            "LEFT NULL DELIBERATELY. Joblet reference / trigger pin, not a hydratable "
+            "data-flow operator. Named so convert can census it later; Stage 0 does not "
+            "invent an IR door."
+        ),
+        "role": "JOBLET",
+        "supported": False,
+        "def_site": "SELF",
+        "note": "Joblet root pin, LogCatcher family."
+    }
+},
+"role_to_node_type": {
+    "SOURCE": "source",
+    "TARGET": "target",
+    "TRANSFORMATION": "transformation",
+    "TASK": "unknown",
+    "CATCHER": "unknown",
+    "JOBLET": "unknown",
+    "unmapped_role_node_type": "unknown",
+    "unmapped_role_reason": "Declared so an unmapped role is a recorded gap, not a KeyError."
+},
+"naming_policy": {
+    "policy_id": "talend.modelname.v1",
+    "name_source": "node/elementParameter[@name=UNIQUE_NAME]/@value",
+    "name_from": "DISPLAY_NAME",
+    "element_name_from": "DISPLAY_NAME",
+    "lowercase": True,
+    "sanitize_identifier": {
+        "allowed_chars": "abcdefghijklmnopqrstuvwxyz0123456789_",
+        "allowed_leading_chars": "abcdefghijklmnopqrstuvwxyz_",
+        "replace_illegal_with": "_",
+        "leading_prefix": "m_"
+    }
+},
+"column_propagation": {
+    "_comment": (
+        "FILL_WHEN_UNDECLARED: tMap and some outputs may not expose metadata/column the "
+        "same way inputs do. ACCUMULATE is unverified on this corpus."
+    ),
+    "mode": "FILL_WHEN_UNDECLARED",
+    "algorithm_id": "predecessor_column_propagation.v1",
+    "stop_at_kinds": [],
+    "stop_at_roles": []
+},
+"port_policy": {
+    "output_column_order": "FIELD_ELEMENT_DOCUMENT_ORDER",
+    "input_column_naming": "UPSTREAM_FIELD",
+    "input_columns_from": "NONE",
+    "input_column_type_from": "LOCAL_PORT",
+    "emit_scale_when_zero": True,
+    "inline_local_variables": False,
+    "drop_local_variables_from_outputs": False,
+    "port_reference_case_insensitive": False,
+    "local_variable_porttype": "LOCAL",
+    "output_porttypes": ["OUTPUT"],
+    "input_porttypes": ["INPUT"],
+    "exclude_port_groups_with_flag": None,
+    "exclude_port_groups_name_matches": ["reject", "rejects"],
+    "_exclude_port_groups_name_matches_comment": (
+        "tMap states no structural reject marker anywhere in the 34-item AdW2017 corpus -- "
+        "MEASURED: <outputTables> carries only "
+        "name/sizeState/activateExpressionFilter/expressionFilter/minimized, never a "
+        "boolean reject attribute, on every multi-output tMap sampled "
+        "(fact_workorderrouting_Copy_0.1.item's four output tables among them). A reject "
+        "flow is a Studio NAMING convention only, which is exactly what this project's own "
+        "tMap.md reference doc's detection regex assumes for Talend's generated Java "
+        "(`reject_tmp\\.\\w+|_REJECT_tmp\\.\\w+`). This is the same predicate, generalised "
+        "to a table-declared, case-insensitive WHOLE-TOKEN list (the group name split on "
+        "non-alphanumerics; a pattern must equal one full token, never merely be its "
+        "substring) rather than a Talend-special-cased Python branch -- reused by "
+        "emit.py's `excluded_group` (already flag-based for SSIS's isErrorOut) and by "
+        "no_slot_facts `talend_tmap_output_group`, so a matching group is EXCLUDED from "
+        "OutputColumns but still IDENTIFIED as residue, never silently dropped. Anchored "
+        "to whole tokens, not raw substrings, because `reject` is also an ordinary "
+        "business word: fact_workorderrouting_Copy_0.1.item's real, WIRED "
+        "'fact_workorder_rejects' target and dim_rejectcodes/fact_purchase_rejects/"
+        "load_fworkorderrejects_Copy's own sole output all contain it without being a "
+        "Studio reject flow. `excluded_group` therefore checks wiring FIRST whenever the "
+        "element states any usable outgoing edge label at all (authoritative -- see "
+        "exclude_unwired_output_groups below) and only falls back to this name list when "
+        "the document states no wiring evidence whatsoever. Both `reject` and `rejects` "
+        "are listed because the corpus's actual Studio-generated flow is named the latter "
+        "(fact_workorderrouting_Copy_0.1.item's own 'rejects' group)."
+    ),
+    "exclude_unwired_output_groups": True,
+    "_exclude_unwired_output_groups_comment": (
+        "A Studio-leftover <outputTables> group can carry no live outgoing <connection> at "
+        "all -- MEASURED on fact_workorderrouting_Copy_0.1.item: 'workOrderRoutingOut' is "
+        "stale (declared, unconnected) alongside the wired 'fact_workorderrouting', and "
+        "self_def_sites.tmap's port_sites read every declared group with no wiring check. "
+        "emit.py's excluded_group compares each group's own name, case-insensitively, "
+        "against the REAL outgoing edge labels this element's resolved instance actually "
+        "states (edge_policy.label_source is connection/@label, and a wired tMap output "
+        "group's connection carries that SAME name as its label) -- a table-declared "
+        "wiring predicate, not a Talend-special-cased Python branch, reused by the same "
+        "excluded_group SSIS's isErrorOut flag and the reject name-match already share. "
+        "Guarded identically to the name-match predicate (only fires with >1 declared "
+        "group, and only when the element states at least one usable outgoing label) for "
+        "the same reason: emptying OutputColumns on a false exclusion is worse than "
+        "leaving a rare unmeasured case unfiltered. THIS PREDICATE RUNS BEFORE, AND "
+        "INSTEAD OF, THE NAME MATCH whenever it has evidence to run on: wiring is a "
+        "structural fact the document states, a name match is only a naming convention, "
+        "and MEASURED on fact_workorderrouting_Copy_0.1.item the two can disagree -- its "
+        "wired 'fact_workorder_rejects' output contains 'rejects' as an ordinary business "
+        "word (a fact table of rejected work orders) and would be wrongly excluded by the "
+        "name list alone. The name-match list is consulted only when the element states "
+        "no wiring evidence whatsoever."
+    ),
+    "ref_field_passthrough_rule": None
+},
+"type_vocabulary": {
+    "_comment": (
+        "Talend Studio types on column/@type (id_String, id_Integer, id_Date, ...). "
+        "Carried as names, not remapped."
+    ),
+    "carry": "TALEND_COLUMN_TYPE",
+    "vocabulary": [
+        "id_String",
+        "id_Integer",
+        "id_Date",
+        "id_Double",
+        "id_Boolean",
+        "id_Long",
+        "id_Float",
+        "id_BigDecimal",
+        "id_Byte",
+        "id_Short",
+        "id_Character"
+    ],
+    "precision_field_carries": "TALEND_LENGTH",
+    "known_defect": "id_* names are Studio identifiers, not Snowflake types."
+},
+"edge_policy": {
+    "element_edges_from": "EXPLICIT_EDGE_ELEMENTS",
+    "collapse_connectors_by": None,
+    "label_source": "connection/@label",
+    "label_when_absent": None
+},
+"default_value_policy": {
+    "error_function_prefix": None,
+    "error_default_disposition": None,
+    "literal_default_on_unconnected_input": None,
+    "discardable_label": "DISCARDABLE",
+    "load_bearing_label": "LOAD_BEARING"
+},
+"expression_syntax": {
+    "_comment": (
+        "tMap expressions live in nodeData mapper tables "
+        "(outputTables/varTables/inputTables mapperTableEntries@expression), now read via "
+        "self_def_sites.tmap and no_slot_facts. identifier_extra_chars='.' keeps a dotted "
+        "reference like 'row1.CD_CLIENT' or 'Var.lineTotal' as ONE token, matching how "
+        "tMap itself writes a qualified column/variable reference. This block is the LEXER "
+        "only; the Java-to-Snowflake rewrite is dialect.expression_translation, and an "
+        "expression neither can resolve is carried through verbatim as residue rather than "
+        "dropped or guessed at."
+    ),
+    "string_quotes": ["\"", "'"],
+    "string_escape_char": "\\",
+    "_string_escape_char_comment": (
+        "Java escapes an in-literal quote with a backslash. Without this the scanner "
+        "closes \"a\\\"b\" at the ESCAPED quote, and every token after it is lexed in the "
+        "wrong context -- which TK-03 turned from a lossless passthrough into corrupted "
+        "output, since the translated path RE-QUOTES a literal for SQL. Declared per "
+        "platform, so a table that states no escape lexes exactly as it did before this "
+        "key existed. MEASURED: zero escaped quotes in the 516 tMap expressions of the "
+        "34-item AdW2017 corpus, so this is a latent-defect fix, not a corpus one."
+    ),
+    "reference_delimiters": None,
+    "identifier_extra_chars": ".",
+    "case_insensitive_resolution": False,
+    "expression_property_read": None,
+    "expression_property_ignored": None
+},
+"no_slot_facts": [
+    {"id": "talend_table_name", "from": "ELEMENT_ATTR", "attr": "table_name"},
+    {"id": "talend_query_text", "from": "ELEMENT_ATTR", "attr": "query_text"},
+    {
+        "id": "talend_tmap_input_lookup_mode",
+        "from": "CHILD_ATTR",
+        "xpath": "./nodeData/inputTables",
+        "attr": "lookupMode",
+        "key_attr": "name",
+        "note": (
+            "Per-inputTables residue, keyed by the table's own @name. Stated verbatim "
+            "(e.g. 'LOAD_ONCE'); the tMap kind_dispatch note already covers why this stays "
+            "residue rather than becoming join IR."
+        )
+    },
+    {
+        "id": "talend_tmap_input_matching_mode",
+        "from": "CHILD_ATTR",
+        "xpath": "./nodeData/inputTables",
+        "attr": "matchingMode",
+        "key_attr": "name",
+        "note": (
+            "MEASURED values across the AdW2017 corpus: UNIQUE_MATCH, ALL_MATCHES, "
+            "ALL_ROWS. Recorded verbatim, whatever the value -- an unrecognised value is "
+            "not filtered or normalised, it is simply residue too."
+        )
+    },
+    {
+        "id": "talend_tmap_input_inner_join",
+        "from": "CHILD_ATTR",
+        "xpath": "./nodeData/inputTables",
+        "attr": "innerJoin",
+        "key_attr": "name",
+        "note": (
+            "Present ('true') only on an INNER-joined lookup. Its absence on a "
+            "lookupMode-stated input table is itself the LEFT JOIN signal per tMap.md's "
+            "own conversion rule -- not restated as a second fact, since "
+            "record_no_slot_facts only raises a fact for a STATED attribute (CHILD_ATTR "
+            "skips an absent one) and inventing a 'left_join=true' counterpart the source "
+            "never states would be exactly the fabricated join IR this table refuses to "
+            "emit."
+        )
+    },
+    {
+        "id": "talend_tmap_join_key_expression",
+        "from": "CHILD_ATTR",
+        "xpath": "./nodeData/inputTables/mapperTableEntries",
+        "attr": "expression",
+        "key_attr": "name",
+        "note": (
+            "A non-empty expression on an INPUT row is a join key against another row "
+            "(e.g. 'orders.CUSTOMER_ID') -- CHILD_ATTR's own `if v` check already drops "
+            "the common empty-expression rows (a lookup's OWN columns, stated with no "
+            "expression at all), so no separate emptiness predicate is needed."
+        )
+    },
+    {
+        "id": "talend_tmap_output_group",
+        "from": "GROUP",
+        "note": (
+            "Every declared <outputTables> group, by name -- including one "
+            "port_policy.exclude_port_groups_name_matches or exclude_unwired_output_groups "
+            "drops from OutputColumns. Identification, not projection: this is what keeps "
+            "a reject-shaped (or stale, unwired) secondary output VISIBLE as residue "
+            "rather than silently vanishing the moment it is excluded from the real IR "
+            "field."
+        )
+    }
+],
+"neutral_defaults": {"_comment": "No studio defaults are treated as load-bearing here."},
+"dialect": {
+    "_comment": "Mixed Oracle/MySQL/SQL Server SQL in QUERY parameters; no single dialect declared.",
+    "identical": [],
+    "syntactically_identical_semantically_divergent": {},
+    "divergent_operator_lengths": [1],
+    "known_functions_identical": [],
+    "unknown_identifier_disposition": "RESIDUE",
+    "expression_translation": {
+        "_comment": (
+            "TK-03: table-driven Java-expression -> Snowflake SQL normalization for tMap "
+            "column expressions, consumed generically by emit.py's Emitter._translate_span "
+            "and friends (gated on this block's presence, not on platform=='talend'; no "
+            "other checked-in platform table declares it). EVERY Java operator spelling, "
+            "type id and function name the translator knows is declared HERE -- emit.py "
+            "names none of them, and an operator or type this block does not declare "
+            "produces a residue reason naming it rather than reaching the artifact looking "
+            "translated. Crosswalk sourced from "
+            "refs/talend-to-dbt-snowflake/translation-references/functions.md's "
+            "'Java/Talend Functions' table and data-types.md's 'Java Types (Talend "
+            "Internal)' table. call_name_strip_prefixes covers the generated-code form "
+            "observed in the AdW2017 corpus itself (fact_workorderrouting_Copy_0.1.item: "
+            "'routines.TalendDate.formatDate(...)', not bare 'TalendDate.formatDate(...)')."
+        ),
+        "null_literal": "null",
+        "max_expression_span_depth": 120,
+        "_max_expression_span_depth_comment": (
+            "Recursive descent over nested spans is bounded here rather than by the "
+            "interpreter: past this many nesting levels the remainder of the expression is "
+            "emitted verbatim with a residue reason. MEASURED before this bound existed: "
+            "300 nested parentheses raised RecursionError out of Emitter.emit(), aborting "
+            "the WHOLE document over one column. 120 is above every depth this corpus "
+            "states (deepest MEASURED nesting in the 34-item AdW2017 corpus: 3) and below "
+            "the interpreter's own limit for the ~3 frames each span level costs."
+        ),
+        "ternary_operators": {
+            "condition_separator": "?",
+            "branch_separator": ":",
+            "case_template": "CASE WHEN {0} THEN {1} ELSE {2} END",
+            "coalesce_template": "COALESCE({0}, {1})",
+        },
+        "_ternary_operators_comment": (
+            "case_template is the general lowering, read positionally ({0}/{1}/{2} = "
+            "condition/then/else) rather than through _substitute: CASE's own WHEN/THEN/"
+            "ELSE/END keywords bound each branch the way template_operand_delimiters' "
+            "characters bound a call's parenthesised arguments, so no operand here is at "
+            "risk of re-associating with what the template puts around it either way. "
+            "coalesce_template is the narrower COALESCE(x, other) simplification "
+            "_coalesce_shape recognizes and goes THROUGH _substitute like any other "
+            "call-shaped template, because its placeholders sit beside the same "
+            "comma/parens template_operand_delimiters already covers."
+        ),
+        "null_comparison_rewrite": {
+            "==": {"target": "IS NULL", "matches_null": True},
+            "!=": {"target": "IS NOT NULL", "matches_null": False}
+        },
+        "_null_comparison_rewrite_comment": (
+            "A comparison AGAINST the null literal is not a comparison in SQL: the "
+            "rewritten `= NULL` is never true. `matches_null` states which spelling is "
+            "TRUE for a null operand, which is also what tells the COALESCE simplification "
+            "which ternary branch is the one taken when the operand is non-null."
+        ),
+        "binary_operator_levels": [
+            {"id": "logical_or", "operators": {"||": "OR"}},
+            {"id": "logical_and", "operators": {"&&": "AND"}},
+            {"id": "equality", "operators": {"==": "=", "!=": "<>"}},
+            {"id": "relational", "operators": {"<=": "<=", ">=": ">=", "<": "<", ">": ">"}},
+            {"id": "additive", "operators": {"+": "+", "-": "-"}},
+            {"id": "multiplicative", "operators": {"*": "*", "/": "/", "%": "%"}}
+        ],
+        "_binary_operator_levels_comment": (
+            "Java's own precedence order, LOOSEST FIRST, each level's operators keyed by "
+            "their Java spelling and valued by the Snowflake one. Two properties this list "
+            "is load-bearing for. (1) `||` is Java's logical OR and Snowflake's string "
+            "CONCATENATION -- the single most dangerous coincidence in this crosswalk, "
+            "since an untranslated `a || b` is valid SQL computing something else "
+            "entirely. (2) Every level declared here is a level that PEELS OFF, which is "
+            "what lets a construct next to an operator still translate: without an "
+            "additive level, `StringHandling.LEN(x) - 1` is not call-shaped and loses its "
+            "translation, and `(int) x - 1` casts `x - 1`. Java's remaining operators "
+            "(bitwise, shift, instanceof, assignment) are deliberately absent: none "
+            "appears in the AdW2017 corpus, and an operator declared by no level reaches "
+            "the artifact with a residue reason naming it rather than silently."
+        ),
+        "operator_residue_notes": {
+            "/": (
+                "operator '/' truncates toward zero in the source when both its operands "
+                "are integral and the target's '/' does not, so the source reads 5 / 2 as "
+                "2 and the target reads it as 2.5. Whether the operands are integral at "
+                "run time is not decidable here, which is why the divergence is reported "
+                "rather than rewritten."
+            )
+        },
+        "_operator_residue_notes_comment": (
+            "A residue reason per SOURCE operator, for a divergence that translating the "
+            "spelling cannot fix. It is attached once per chain that uses the operator, on "
+            "every path, because it states a property of the source operator and not of "
+            "one rendering. `/` is the only one: every other declared operator means in "
+            "Snowflake what it means in Java. Rewriting integer division would need the "
+            "operand types at run time (an id_Integer column divided by a literal is "
+            "integral, the same column cast to double is not), and a rewrite that guesses "
+            "is exactly what produces a wrong value with clean provenance -- so the choice "
+            "here is to report."
+        ),
+        "unary_operator_forms": {"!": "NOT {0}", "-": "-{0}", "+": "{0}"},
+        "_unary_operator_forms_comment": (
+            "Prefix operators, valued by the FULL target form they render as ({0} is the "
+            "operand). Unary `+` is the identity in Java and has no Snowflake spelling at "
+            "all, so its form drops it: declaring it as `+{0}` would emit a leading "
+            "operator that parses nowhere. `!` becomes the SQL keyword and is written "
+            "unparenthesised here because the ordinary operand is a single primary; an "
+            "operand that is NOT one is parenthesised by the same "
+            "template_operand_delimiters rule that guards every other template, so `NOT "
+            "{0}` never binds across its operand's own operators."
+        ),
+        "argument_separator": ",",
+        "template_operand_delimiters": "(),",
+        "_template_operand_delimiters_comment": (
+            "The characters that ISOLATE a `{n}` placeholder in any template here -- "
+            "function_translations[*].template, cast_types, unary_operator_forms alike. A "
+            "placeholder with one of these (or the template's own end) on both sides "
+            "cannot re-associate with what the template puts around it, so the operand is "
+            "spliced exactly as the source wrote it. A placeholder with anything else "
+            "beside it -- an operator, a keyword, a cast marker -- sits in a context the "
+            "TEMPLATE generates, and an operand that is not a single primary goes in "
+            "parenthesised. That is why `SUBSTR({0}, {1}, {2})` stays unparenthesised "
+            "while `({1} + (ROW_NUMBER() OVER () - 1) * {2})` and `({0} IS NULL)` group "
+            "their operands. Whitespace is deliberately NOT a delimiter: ` IS NULL` binds "
+            "to the operand before it exactly as `*` does."
+        ),
+        "string_concat_operator": "+",
+        "string_concat_target_operator": "||",
+        "string_concat_detection": "typed_operands_left_associative",
+        "_string_concat_detection_comment": (
+            "Java's `+` is arithmetic addition OR string concatenation, decided PAIRWISE "
+            "and LEFT TO RIGHT by operand type; Snowflake spells the two differently, so "
+            "the reading has to be reconstructed. `typed_operands_left_associative` is the "
+            "only value emit.py dispatches on (it raises on any other): the first "
+            "string-valued operand makes it and everything after it a concatenation, and "
+            "everything BEFORE it stays arithmetic -- `qty + price + \" units\"` is `(qty "
+            "+ price) || ' units'`. The prior value here was `literal_operand_in_chain`, a "
+            "whole-chain heuristic that emitted `qty || price || ' units'`: valid SQL, "
+            "different number. Where the source states no value class for an operand, the "
+            "chain carries a residue reason rather than choosing a reading."
+        ),
+        "string_value_class": "string",
+        "numeric_value_class": "numeric",
+        "value_class_by_datatype": {
+            "id_String": "string",
+            "id_Character": "string",
+            "id_Password": "string",
+            "id_Integer": "numeric",
+            "id_Short": "numeric",
+            "id_Long": "numeric",
+            "id_Float": "numeric",
+            "id_Double": "numeric",
+            "id_BigDecimal": "numeric",
+            "id_Byte": "numeric",
+            "id_Boolean": "boolean",
+            "id_Date": "date"
+        },
+        "_value_class_by_datatype_comment": (
+            "Talend's own column type ids -> the value class the `+` reading needs. Every "
+            "id MEASURED in the 34-item AdW2017 corpus is declared (id_String 1676, "
+            "id_Integer 1194, id_Date 678, id_Long 66, id_Password 48, id_BigDecimal 44, "
+            "id_Float 38, id_Short 14, id_Character 12, id_Byte 4, id_Boolean 4), plus "
+            "id_Double, which Talend states and this corpus happens not to use. id_Object "
+            "is DELIBERATELY absent: it is Talend's opaque any-type (6 occurrences), so a "
+            "`+` on one is exactly the case that must report an unstated class rather than "
+            "be classified."
+        ),
+        "leaf_passthrough_characters": "0123456789.",
+        "_leaf_passthrough_characters_comment": (
+            "The CLOSED set of non-identifier characters that may reach the emitted "
+            "expression without a residue reason -- numeric literal characters, and "
+            "nothing else. Everything else that gets this far is an operator or "
+            "punctuation no declared level understood, and the whole point of the set is "
+            "that such a character cannot pass silently: it is still emitted verbatim "
+            "(dropping it would change the expression) but the slot becomes residue."
+        ),
+        "call_name_strip_prefixes": ["routines."],
+        "_date_part_literals_comment": (
+            "Java SimpleDateFormat pattern letters are case-SENSITIVE ('MM' month vs 'mm' "
+            "minute), so this map is too. Only codes actually named by functions.md's "
+            "addDate/diffDate/getPartOfDate examples plus their obvious siblings are "
+            "declared; an addDate/diffDate/getPartOfDate call whose unit literal is not "
+            "one of these keys is left unsupported (residue) rather than guessed. Stated "
+            "as a SIBLING key rather than inside the map: every key of the map itself is "
+            "DATA the reader looks a source literal up in, so an inline '_comment' is "
+            "reachable as data -- MEASURED before this convention was applied here, "
+            "`TalendDate.addDate(src.D, 1, \"_comment\")` emitted `DATEADD(<this whole "
+            "paragraph>, 1, src.D)`."
+        ),
+        "date_part_literals": {
+            "yyyy": "YEAR",
+            "yy": "YEAR",
+            "YEAR": "YEAR",
+            "YYYY": "YEAR",
+            "MM": "MONTH",
+            "MONTH": "MONTH",
+            "dd": "DAY",
+            "DD": "DAY",
+            "DAY": "DAY",
+            "HH": "HOUR",
+            "HOUR": "HOUR",
+            "mm": "MINUTE",
+            "MINUTE": "MINUTE",
+            "ss": "SECOND",
+            "SECOND": "SECOND",
+            "ww": "WEEK",
+            "WEEK": "WEEK"
+        },
+        "date_format_pattern_map": {
+            "yyyy": "YYYY",
+            "yy": "YY",
+            "MM": "MM",
+            "dd": "DD",
+            "HH": "HH24",
+            "hh": "HH12",
+            "mm": "MI",
+            "ss": "SS",
+            "SSS": "FF3",
+            "a": "AM"
+        },
+        "_date_format_pattern_map_comment": (
+            "Java SimpleDateFormat pattern LETTER RUNS -> Snowflake format-model elements, "
+            "for the format-string argument of a function that declares "
+            "`date_format_args`. Keyed by the whole run because the run length is part of "
+            "the letter's meaning ('MM' is not 'M' twice) and case is part of it too: 'MM' "
+            "is the month and 'mm' is the MINUTE, which is the defect this map exists for "
+            "-- MEASURED before it existed, `TalendDate.formatDate(\"HH:mm:ss\", d)` "
+            "emitted `TO_CHAR(d, 'HH:mm:ss')`, and Snowflake reads that 'mm' as a MONTH, "
+            "so a timestamp rendered its month where its minutes belong. A run in "
+            "date_format_letter_characters that this map does not declare leaves the WHOLE "
+            "call untranslated with a residue reason naming the run, because a format "
+            "string is not partially wrong: one unmapped element makes every character "
+            "after it land in the wrong position."
+        ),
+        "date_format_letter_characters": "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+        "_date_format_letter_characters_comment": (
+            "Every ASCII letter is RESERVED as a pattern letter by SimpleDateFormat, "
+            "whether or not it carries a meaning. Declared as data so the reader does not "
+            "have to know which characters the SOURCE language reserves: a character in "
+            "this set starts a letter run that must be declared in "
+            "date_format_pattern_map, and a character in NEITHER this set nor "
+            "date_format_literal_characters is one the source's own grammar leaves "
+            "undefined, so it too declines the call rather than being passed through into "
+            "a Snowflake format string."
+        ),
+        "date_format_literal_characters": "-/:. ,",
+        "_date_format_literal_characters_comment": (
+            "The CLOSED set of unquoted characters that mean themselves in BOTH format "
+            "models and may therefore cross unchanged. Deliberately narrow: Snowflake's "
+            "format model is not documented to ignore arbitrary punctuation, so a "
+            "character outside this set (MEASURED counterexample: the '@' in 'yyyy@MM') "
+            "declines the call instead of being copied in and hoped for."
+        ),
+        "date_format_quote_character": "'",
+        "date_format_quoted_literal_template": "\"{0}\"",
+        "_date_format_quoted_literal_comment": (
+            "SimpleDateFormat quotes a LITERAL section with single quotes ('at' is the "
+            "word 'at', not a pattern); Snowflake's format model spells the same thing "
+            "with double quotes. A doubled source quote ('') is the escaped single quote "
+            "itself. A quoted body containing the TARGET's own delimiter, or a section the "
+            "source never closes, declines the call -- there is no second escape level to "
+            "fall back on."
+        ),
+        "_cast_types_comment": (
+            "Java parenthesised-cast syntax '(Type) expr', keyed by the exact Java type "
+            "name, valued by the FULL cast expression template from data-types.md's 'Java "
+            "Types (Talend Internal)' table ({0} is the casted operand). A cast to a Java "
+            "type not listed here (a dotted type like java.util.Date, or an array type) is "
+            "left unsupported (residue) rather than guessed. Stated as a SIBLING key for "
+            "the same reason _date_part_literals_comment is: MEASURED before this "
+            "convention was applied here, the expression `(_comment) src.A` emitted this "
+            "whole paragraph as the column's Expression, with '{0}' substituted by src.A."
+        ),
+        "cast_types": {
+            "String": "{0}::VARCHAR",
+            "int": "TRY_CAST({0} AS INTEGER)",
+            "Integer": "TRY_CAST({0} AS INTEGER)",
+            "long": "TRY_CAST({0} AS BIGINT)",
+            "Long": "TRY_CAST({0} AS BIGINT)",
+            "float": "TRY_CAST({0} AS FLOAT)",
+            "Float": "TRY_CAST({0} AS FLOAT)",
+            "double": "TRY_CAST({0} AS DOUBLE)",
+            "Double": "TRY_CAST({0} AS DOUBLE)",
+            "BigDecimal": "TRY_CAST({0} AS NUMBER(38,10))",
+            "boolean": "TRY_CAST({0} AS BOOLEAN)",
+            "Boolean": "TRY_CAST({0} AS BOOLEAN)"
+        },
+        "_cast_value_classes_comment": (
+            "The value class a CAST states for its result, keyed by the same Java type "
+            "names cast_types is. It exists for the same reason value_class_by_datatype "
+            "and function_translations[*].returns do -- a cast is the most explicit "
+            "statement of a value class the source can make, and reading the cast as an "
+            "opaque operand throws it away. MEASURED before this key existed: `(int) "
+            "src.QTY + 1` emitted the correct `TRY_CAST(src.QTY AS INTEGER) + 1` but "
+            "carried a residue reason claiming the source stated no value class for every "
+            "operand, and a `(String) x + y` would have been emitted as arithmetic. A cast "
+            "type absent from here is UNSTATED, not numeric, exactly as "
+            "value_class_by_datatype leaves id_Object absent."
+        ),
+        "cast_value_classes": {
+            "String": "string",
+            "int": "numeric",
+            "Integer": "numeric",
+            "long": "numeric",
+            "Long": "numeric",
+            "float": "numeric",
+            "Float": "numeric",
+            "double": "numeric",
+            "Double": "numeric",
+            "BigDecimal": "numeric",
+            "boolean": "boolean",
+            "Boolean": "boolean"
+        },
+        "_function_translations_comment": (
+            "`returns` is the value class of the call's RESULT, and it exists for the same "
+            "reason value_class_by_datatype does: `StringHandling.LEFT(a, 3) + "
+            "StringHandling.RIGHT(b, 2)` is a concatenation of two calls this table itself "
+            "just translated and knows return VARCHAR, and without `returns` it is emitted "
+            "as arithmetic on two strings. A call whose result class is not stated here is "
+            "UNSTATED, not numeric -- the `+` chain reports it."
+        ),
+        "_arity_comment": (
+            "`arity` is the EXACT number of arguments the source spelling takes, and a "
+            "call stating any other count is emitted verbatim and untranslated. Required "
+            "on every entry, and checked against the entry's own template by "
+            "identify.validate_table, because a count is the one thing a template cannot "
+            "state for itself: a template referencing {0} and {1} is satisfied by three "
+            "arguments as readily as by two. MEASURED before arity existed: "
+            "`StringHandling.LEFT(src.A, 3, 4)` emitted `LEFT(src.A, 3)`, silently "
+            "dropping the surplus argument, and `TalendDate.parseDate(\"yyyy-MM-dd\", "
+            "src.A, \"en_US\")` -- a real Talend three-argument overload -- emitted "
+            "`TRY_TO_DATE(src.A, 'yyyy-MM-dd')`, silently dropping the locale. Both "
+            "produced valid SQL with nothing in the slot naming the argument that "
+            "disappeared. validate_table additionally requires that every argument "
+            "position be ACCOUNTED FOR -- reached by a template placeholder, referenced by "
+            "an argument_adjustments coefficient, or declared in unused_arguments -- so a "
+            "translation that drops an argument cannot be authored at all."
+        ),
+        "_argument_adjustments_comment": (
+            "A per-placeholder LINEAR adjustment, for a source function whose argument "
+            "means a different number to the target function. `{\"source_index_base\": 0, "
+            "\"target_index_base\": 1}` is the offset form for an index (the target's base "
+            "minus the source's); `offset` states the same constant directly; "
+            "`argument_coefficients` maps SOURCE argument positions to integer "
+            "coefficients when the target's argument is a combination of several source "
+            "ones. The adjusted value is FOLDED at translate time when every referenced "
+            "argument is an integer literal (so a literal call stays as readable as it "
+            "was) and emitted as explicit, parenthesised arithmetic when any of them is "
+            "not. This is data rather than a constant in the reader because an index base "
+            "is a property of the source LANGUAGE: Java's StringHandling.SUBSTR/INDEX are "
+            "0-based and take an EXCLUSIVE end index, Snowflake's SUBSTR/POSITION are "
+            "1-based and take a LENGTH. MEASURED before this existed: "
+            "`StringHandling.SUBSTR(src.NAME, 1, 3)` emitted `SUBSTR(src.NAME, 1, 3)`, "
+            "which returns the source's characters 0..2 as 3 characters starting at the "
+            "SECOND one -- both the start and the count wrong, on the one shape most "
+            "likely to appear in a customer job."
+        ),
+        "_string_index_base_comment": (
+            "StringHandling.INDEX is reconciled entirely inside its template rather than "
+            "through argument_adjustments, because BOTH of its divergences are on the "
+            "RESULT: Java returns a 0-based position and -1 when the substring is absent, "
+            "Snowflake POSITION returns a 1-based position and 0 when it is absent. "
+            "`POSITION(...) - 1` maps both exactly and simultaneously -- 1-based hit minus "
+            "one is the 0-based hit, and the 0 miss minus one is Java's own -1 -- so the "
+            "miss sentinel needs no residue and no separate declaration."
+        ),
+        "_unused_arguments_comment": (
+            "Argument positions the translation deliberately does NOT represent, each "
+            "stated with the reason. Declaring one is what makes the loss explicit rather "
+            "than silent: the position still satisfies validate_table's "
+            "account-for-every-argument check, and the reason is emitted as residue on "
+            "every call, so the slot is RESIDUE and a reader is told which argument "
+            "stopped being modelled and why. An argument that is simply forgotten is a "
+            "validate_table failure, not a quieter version of this."
+        ),
+        "function_translations": {
+            "StringHandling.UPCASE": {"template": "UPPER({0})", "arity": 1, "returns": "string"},
+            "StringHandling.DOWNCASE": {"template": "LOWER({0})", "arity": 1, "returns": "string"},
+            "StringHandling.TRIM": {"template": "TRIM({0})", "arity": 1, "returns": "string"},
+            "StringHandling.LEN": {"template": "LENGTH({0})", "arity": 1, "returns": "numeric"},
+            "StringHandling.LEFT": {"template": "LEFT({0}, {1})", "arity": 2, "returns": "string"},
+            "StringHandling.RIGHT": {"template": "RIGHT({0}, {1})", "arity": 2, "returns": "string"},
+            "StringHandling.INDEX": {"template": "(POSITION({1} IN {0}) - 1)", "arity": 2, "returns": "numeric"},
+            "StringHandling.SUBSTR": {
+                "template": "SUBSTR({0}, {1}, {2})",
+                "arity": 3,
+                "argument_adjustments": {
+                    "1": {"source_index_base": 0, "target_index_base": 1},
+                    "2": {"offset": 0, "argument_coefficients": {"2": 1, "1": -1}}
+                },
+                "returns": "string"
+            },
+            "StringHandling.REPLACE": {"template": "REPLACE({0}, {1}, {2})", "arity": 3, "returns": "string"},
+            "StringHandling.IS_EMPTY": {"template": "(NVL({0}, '') = '')", "arity": 1, "returns": "boolean"},
+            "Math.abs": {"template": "ABS({0})", "arity": 1, "returns": "numeric"},
+            "Math.round": {
+                "template": "ROUND({0})",
+                "arity": 1,
+                "returns": "numeric",
+                "residue_note": (
+                    "Math.round rounds a half TOWARDS POSITIVE INFINITY (Math.round(-2.5) "
+                    "is -2) and returns an integral type; Snowflake ROUND rounds a half "
+                    "AWAY FROM ZERO (ROUND(-2.5) is -3), so the two disagree on exactly "
+                    "the negative halves -- emitted as ROUND with the divergence named "
+                    "rather than reproducing Java's tie rule with an invented expression "
+                    "the source does not state"
+                )
+            },
+            "TalendDate.getCurrentDate": {"template": "CURRENT_DATE()", "arity": 0, "returns": "date"},
+            "TalendDate.parseDate": {
+                "template": "TRY_TO_DATE({1}, {0})",
+                "arity": 2,
+                "date_format_args": _OneLine([0]),
+                "returns": "date"
+            },
+            "TalendDate.formatDate": {
+                "template": "TO_CHAR({1}, {0})",
+                "arity": 2,
+                "date_format_args": _OneLine([0]),
+                "returns": "string"
+            },
+            "TalendDate.addDate": {
+                "template": "DATEADD({2}, {1}, {0})",
+                "arity": 3,
+                "date_part_args": _OneLine([2]),
+                "returns": "date"
+            },
+            "TalendDate.diffDate": {
+                "template": "DATEDIFF({2}, {1}, {0})",
+                "arity": 3,
+                "date_part_args": _OneLine([2]),
+                "returns": "numeric"
+            },
+            "TalendDate.getPartOfDate": {
+                "template": "DATE_PART({0}, {1})",
+                "arity": 2,
+                "date_part_args": _OneLine([0]),
+                "returns": "numeric"
+            },
+            "Numeric.sequence": {
+                "template": "({1} + (ROW_NUMBER() OVER () - 1) * {2})",
+                "arity": 3,
+                "unused_arguments": {
+                    "0": (
+                        "the sequence NAME identifies a counter SHARED by every call that "
+                        "names it, and a window function has no shared state -- two calls "
+                        "on one name would each restart at the start value instead of "
+                        "continuing the same sequence"
+                    )
+                },
+                "returns": "numeric",
+                "residue_note": (
+                    "Numeric.sequence is a stateful job-run counter unrelated to any "
+                    "stated row order; the source names no ORDER BY, so ROW_NUMBER() OVER "
+                    "() is emitted with none invented rather than guessing one -- ordering "
+                    "is non-deterministic until a real one is supplied"
+                )
+            },
+            "Relational.ISNULL": {"template": "({0} IS NULL)", "arity": 1, "returns": "boolean"}
+        }
+    }
+},
+"residue": {
+    "_comment": (
+        "tMap nodeData, Java bodies, SCD policy, joblet internals, and context encryption "
+        "are identified as payload exclusions, not IR fields."
+    ),
+    "tmap_mapper_tree": (
+        "TalendMapper nodeData is a nested join/expression tree. self_def_sites.tmap and "
+        "the talend_tmap_* no_slot_facts rules now read its "
+        "outputTables/varTables/inputTables shape (OutputColumns, Var intermediates, "
+        "lookupMode/matchingMode/innerJoin, join-key expressions) -- but there is still no "
+        "COMPOSING fact rule that turns an inputTables lookup into an actual JOIN: the "
+        "join/lookup facts stay residue by design (kind_dispatch.tMap's own note), and the "
+        "tree's own multi-output routing filter "
+        "(outputTables/@activateExpressionFilter+@expressionFilter) is read by no rule at "
+        "all and remains excluded as node payload."
+    ),
+    "coverage_gate": (
+        "UNMEASURED. coverage_gate.RULES has no entry for platform identity `talend` "
+        "(the shipped keys are SqlServerIntegrationServices, InformaticaPowerCenter, "
+        "PentahoDataIntegration, IbmInfoSphereDataStage and alteryx -- MEASURED by "
+        "reading scripts/coverage_gate.py's own RULES dict), so Gate A's source-element "
+        "coverage and IR-completeness checks report UNMEASURED for Talend, not a real "
+        "number, exactly as the driver's own coverage advisory (aifirst-migrate.sh) "
+        "already announces for any identity it does not recognise. Adding a Talend "
+        "counting rule to coverage_gate.RULES and a matching link/residue rule to "
+        "gate_a.py is real, undone work with its own design questions (what counts as one "
+        "source element per <node>, how a reject-shaped output group's residue is scored) "
+        "-- out of scope here, and NOT claimed done."
+    ),
+    "tmap_stale_output_groups_filtered_by_wiring": (
+        "A tMap can declare an <outputTables> group with no live <connection> wired to it "
+        "at all (Studio leftover configuration). FIXED by "
+        "port_policy.exclude_unwired_output_groups: emit.py's excluded_group now compares "
+        "each group's name, case-insensitively, against the real outgoing edge labels this "
+        "element's resolved instance states (edge_policy.label_source connection/@label), "
+        "and runs BEFORE the reject name-match whenever it has evidence to run on -- see "
+        "that policy's own comment for why the two predicates can disagree. MEASURED on "
+        "fact_workorderrouting_Copy_0.1.item: its tMap declares FOUR output groups "
+        "(workOrderRoutingOut 22 real expressions, rejects 26, fact_workorderrouting 0, "
+        "fact_workorder_rejects 0), of which only 'fact_workorderrouting' and "
+        "'fact_workorder_rejects' carry a live outgoing <connection> -- wiring alone keeps "
+        "exactly those two (18 + 19 = 37 OutputColumns) and drops 'workOrderRoutingOut' "
+        "and 'rejects'. Checking wiring before the name list is the fix: with the name "
+        "list checked first, 'fact_workorder_rejects' also contains the word 'rejects' "
+        "and would be wrongly dropped by the naming convention alone, losing the real "
+        "wired target's 19 columns entirely (37 -> 18). The same non-reject-named "
+        "unwired-group shape recurs on dimScrapReason_Copy_0.1.item ('dim_scrapreason' "
+        "unwired, dropped; 'dim_scarpreason' wired, kept) -- 2 of the 26 corpus tMaps "
+        "changed by this predicate. A COUNTER-INTUITIVE PROPERTY, MEASURED on both: the "
+        "group(s) this predicate KEEPS can carry FEWER stated expressions than the ones it "
+        "drops (fact_workorderrouting_Copy: 48 real expressions dropped across "
+        "workOrderRoutingOut/rejects, 0 kept across the two wired groups; "
+        "dimScrapReason_Copy: 6 dropped, 0 kept) -- each document's real per-column "
+        "mapping logic was authored on the output group(s) Studio later stopped wiring, "
+        "and the group(s) actually wired to a downstream table were left as bare "
+        "same-named passthrough. This is read as a genuine property of the SOURCE "
+        "document, not a defect in the predicate: only the wired group's rows are ones "
+        "Talend's own runtime would ever populate, and inventing 'prefer the group with "
+        "richer expressions' instead would be exactly the guessing this project's "
+        "conventions refuse -- wiring, not expression richness, is what the task asked "
+        "this predicate to trust. The remaining, DELIBERATE boundary: the predicate only "
+        "fires when the element states at least one usable outgoing label at all (guards "
+        "against a document where NO group's wiring is stated, which must not be read as "
+        "'every group is stale') and never on an element's only declared group (same "
+        "sole-real-target guard exclude_port_groups_name_matches already needed). Neither "
+        "boundary is exercised by the 34-item AdW2017 corpus today -- every multi-output "
+        "tMap in it states at least one real outgoing label."
+    )
+},
+"_provenance": [
+    {
+        "derived_from_sha256": "3d81c197b06fa2bc64a100729d1cdb705cc08510d6908e32f43ea0909e414224",
+        "reason": (
+            "Rebased three census exclusions from root-relative (./x) to descendant (.//x) "
+            "so they match in JOBLET documents, whose root is XMI and whose content sits "
+            "under XMI/JobletProcess. As shipped, ./context ./parameters ./subjob matched "
+            "nothing in any of the 8 joblets, which is the whole of the 1085-record "
+            "'unknown joblet XMI residue' the prior run reported. Measured safe: those "
+            "three tags occur ONLY under ProcessType or XMI/JobletProcess in all 34 corpus "
+            "documents and never under a node or connection, so the widening creates no "
+            "overlap with talend-node-payload. Also named the two joblet-only records "
+            "nothing excluded: the JobletProcess envelope and the ByteArray canvas "
+            "screenshot."
+        ),
+        "changes": [
+            "talend-context-block: ./context -> .//context",
+            "talend-job-parameters: ./parameters -> .//parameters",
+            "talend-subjob-boxes: ./subjob -> .//subjob",
+            "+ talend-joblet-envelope (./JobletProcess)",
+            "+ talend-joblet-canvas-image (./ByteArray)"
+        ]
+    },
+    {
+        "derived_from_sha256": "d99d1a8c3fb37b05dd199bb16874ef971195f3a448e962930e50b6ff26a6b6a1",
+        "reason": (
+            "Named the last 97 unclassified records, each against its measured parent "
+            "chain. Four of the five causes were namespace or level mismatches (the joblet "
+            "envelope, the canvas ByteArray and the ContextType blocks are namespaced; the "
+            "43 stray elementParameters sit under note and jobletNodes, not under the "
+            "job-level parameters block). The fifth, jobletNodes, is a real decision "
+            "recorded as a limitation: the joblet's trigger boundary is excluded as an "
+            "interface marker and is therefore not modelled as a node in the output."
+        ),
+        "changes": [
+            (
+                "~ talend-joblet-envelope: ./JobletProcess -> "
+                "./{http://www.talend.com/joblet.ecore}JobletProcess"
+            ),
+            (
+                "~ talend-joblet-canvas-image: ./ByteArray -> "
+                ".//{http://www.talend.org/properties}ByteArray"
+            ),
+            (
+                "+ talend-context-document: "
+                ".//{platform:/resource/org.talend.model/model/TalendFile.xsd}ContextType"
+            ),
+            "+ talend-canvas-notes: .//note",
+            "+ talend-joblet-trigger-boundary: .//jobletNodes"
+        ]
+    },
+    {
+        "derived_from_sha256": "150b6be63ec40abe922bdaa6ab89191885431b81a548db57bcb527d585a2537f",
+        "reason": (
+            "Talend competence TK-02: extract tMap payloads. Added self_def_sites.tmap "
+            "(OutputColumns from outputTables/mapperTableEntries expression->name; Var "
+            "intermediates from varTables/mapperTableEntries, porttype LOCAL) and four "
+            "talend_tmap_* no_slot_facts CHILD_ATTR/GROUP rules for inputTables "
+            "lookupMode/matchingMode/innerJoin and join-key expressions, plus "
+            "port_policy.exclude_port_groups_name_matches (['reject']) so a reject-shaped "
+            "output group is excluded from OutputColumns yet still IDENTIFIED via "
+            "talend_tmap_output_group residue. kind_dispatch.tMap's "
+            "ir_kind/role/supported/def_site/note are UNCHANGED; only self_def_site was "
+            "added to that entry. No new kind_dispatch entry, no new IR kind, no join IR "
+            "-- join/lookup semantics stay residue exactly as the tMap note already said."
+        ),
+        "changes": [
+            (
+                "+ structure.self_def_sites.tmap (port_sites tmap_output, tmap_var; "
+                "group_site on outputTables)"
+            ),
+            (
+                "~ kind_dispatch.tMap: + self_def_site 'tmap' "
+                "(ir_kind/role/supported/def_site/note unchanged)"
+            ),
+            (
+                "~ port_policy.local_variable_porttype: "
+                "'__TALEND_HAS_NO_LOCAL_VARIABLE_PORTTYPE__' -> 'LOCAL'"
+            ),
+            "+ port_policy.exclude_port_groups_name_matches: ['reject']",
+            (
+                "+ no_slot_facts: talend_tmap_input_lookup_mode, "
+                "talend_tmap_input_matching_mode, talend_tmap_input_inner_join, "
+                "talend_tmap_join_key_expression, talend_tmap_output_group"
+            ),
+            (
+                "~ residue.tmap_mapper_tree: reworded -- the shape is now partly read; the "
+                "join composition and the multi-output expressionFilter are the parts that "
+                "remain residue"
+            ),
+            (
+                "+ residue.tmap_stale_output_groups_not_filtered: named limitation, "
+                "MEASURED on fact_workorderrouting_Copy_0.1.item (3 of 26 corpus tMaps are "
+                "multi-output)"
+            ),
+            (
+                "~ expression_syntax._comment: reworded to state the tMap mapper shape is "
+                "now read"
+            ),
+            (
+                "~ emit.py excluded_group(): name-pattern exclusion only fires when the "
+                "element declares MORE THAN ONE output group -- first version excluded a "
+                "reject-NAMED sole output (dim_rejectcodes, fact_purchase_rejects, "
+                "load_fworkorderrejects_Copy: 3 of 26 corpus tMaps), which then silently "
+                "backfilled via column_propagation.FILL_WHEN_UNDECLARED. MEASURED before "
+                "this refinement and fixed before commit."
+            )
+        ]
+    },
+    {
+        "derived_from_sha256": "90dc2724aa9f15624f5102f2a14784fd3f052123ae2573aade5d30ffc7cec1b9",
+        "reason": (
+            "Talend competence TK-02 review follow-up: filter stale (unwired) tMap output "
+            "groups. residue.tmap_stale_output_groups_not_filtered named a known gap -- a "
+            "Studio-leftover <outputTables> group with no live outgoing <connection> "
+            "leaked into OutputColumns alongside a real, wired group. Added "
+            "port_policy.exclude_unwired_output_groups (bool) and emit.py's "
+            "_outgoing_group_labels, a third independent predicate in excluded_group: a "
+            "group is excluded when the element declares MORE THAN ONE output group (same "
+            "sole-real-target guard exclude_port_groups_name_matches already needed) AND "
+            "the element states at least one usable outgoing edge label "
+            "(edge_policy.label_source connection/@label) AND that group's name matches "
+            "none of them, case-insensitively. An element with NO usable outgoing label at "
+            "all is left untouched -- fail-safe, not 'everything is stale'. No Talend "
+            "literal in emit.py; the predicate reads Identification.element_edges(), which "
+            "every EXPLICIT_EDGE_ELEMENTS platform already populates."
+        ),
+        "changes": [
+            "+ port_policy.exclude_unwired_output_groups: true",
+            (
+                "~ emit.py excluded_group(): + wiring predicate "
+                "(exclude_unwired_output_groups), same >1-group guard, fails safe when the "
+                "element states no usable outgoing label"
+            ),
+            (
+                "+ emit.py Emitter._outgoing_group_labels(): case-insensitive outgoing "
+                "edge labels for one element, or None when none are usable"
+            ),
+            (
+                "~ no_slot_facts.talend_tmap_output_group.note: mentions "
+                "exclude_unwired_output_groups alongside exclude_port_groups_name_matches"
+            ),
+            (
+                "~ residue.tmap_stale_output_groups_not_filtered -> "
+                "tmap_stale_output_groups_filtered_by_wiring: MEASURED fixed on "
+                "fact_workorderrouting_Copy_0.1.item and dimScrapReason_Copy_0.1.item (2 "
+                "of 26 corpus tMaps changed: 519->489 OutputColumns, 457->429 with a real "
+                "Expression); remaining boundary (no usable outgoing label at all) is "
+                "unexercised by the 34-item corpus. Also names a MEASURED, "
+                "counter-intuitive property of both changed files: the wired group this "
+                "predicate keeps carries FEWER stated expressions than the unwired group "
+                "it drops -- read as a fact about the source documents, not a defect (see "
+                "the residue note's own text)."
+            )
+        ]
+    },
+    {
+        "derived_from_sha256": "c1f27f6d05a46ccf0186956d5ec60801d5e9638743d2a10f62ccc742def1952a",
+        "reason": (
+            "Talend competence TK-03: translate tMap expressions. Added "
+            "dialect.expression_translation, a table-driven crosswalk "
+            "(function_translations, date_part_literals, cast_types, "
+            "relational_operator_rewrite, string_concat_*, call_name_strip_prefixes) "
+            "sourced from refs/talend-to-dbt-snowflake/translation-references/functions.md "
+            "and data-types.md. emit.py gained a structural recursive-descent walk "
+            "(Emitter._translate_span and its helpers) over the SAME `_scan` token stream "
+            "`resolve` already used, gated on this block's presence -- not on "
+            "platform=='talend' -- so every other checked-in platform's expression "
+            "resolution is byte-for-byte unchanged (confirmed: the full pre-existing suite "
+            "still passes with zero code touched on their path). A "
+            "StringHandling/TalendDate/Numeric/Relational.ISNULL call becomes real "
+            "Snowflake SQL; a Java `!=null`/`==null` ternary becomes COALESCE when the "
+            "non-null branch repeats the checked operand's own raw tokens, else CASE WHEN; "
+            "`+` becomes `||` only for a chain that contains at least one literal string "
+            "operand (never for a chain with none, so numeric addition is never "
+            "corrupted); a Java parenthesised cast becomes the matching data-types.md cast "
+            "expression. An unrecognised call is threaded through verbatim with 'unknown "
+            "identifier' residue while its OWN arguments still recurse -- so a recognised "
+            "call nested inside an unsupported wrapper "
+            "(Integer.parseInt(routines.TalendDate.formatDate(...)) in the AdW2017 corpus) "
+            "is not hidden by the wrapper around it. Numeric.sequence deliberately does "
+            "NOT follow functions.md's own 'ROW_NUMBER() OVER (ORDER BY 1)' suggestion: "
+            "the source states no order, and inventing one is exactly the guessing this "
+            "project's conventions refuse, so ROW_NUMBER() OVER () is emitted with a "
+            "residue note instead. No new IR kind, no join IR, no generator; "
+            "kind_dispatch, self_def_sites, port_policy and the TK-02 output-group "
+            "filtering are all byte-identical to the pre-TK-03 file."
+        ),
+        "changes": [
+            (
+                "+ dialect.expression_translation (null_literal, ternary_style, "
+                "relational_operator_rewrite, "
+                "string_concat_operator/string_concat_target_operator/string_concat_detection, "
+                "call_name_strip_prefixes, date_part_literals, cast_types, "
+                "function_translations)"
+            ),
+            (
+                "~ emit.py resolve(): gated dispatch to the new structural translator when "
+                "dialect.expression_translation is present, unchanged flat per-token loop "
+                "otherwise (refactored to share _resolve_ident_or_ref with the new path, "
+                "not to change its output)"
+            ),
+            (
+                "+ emit.py Emitter._resolve_ident_or_ref, _translate_span, "
+                "_coalesce_shape, _translate_equality, _translate_additive, "
+                "_translate_operand, _split_args, _translate_call_or_unsupported, "
+                "_translate_leaf_span, _find_ternary_split, _find_top_level, _paren_delta"
+            )
+        ]
+    },
+    {
+        "derived_from_sha256": "8692a9d2e97ba1a8aecec4cd9632649bcc4ae076c7fcf2a0405418f723fd71f6",
+        "reason": (
+            "TK-03 review remediation pass A. The reviewed translator was correct where it "
+            "failed loudly and wrong where it had to CHOOSE, and because residue is "
+            "provenance and not a gate, every wrong choice shipped as valid SQL computing "
+            "something else. Five choices are now made from declared data instead of a "
+            "heuristic, and one more is refused outright. (1) The `+` chain is resolved "
+            "LEFT-ASSOCIATIVELY and BY OPERAND VALUE CLASS: `qty + price + \" units\"` is "
+            "`(qty + price) || ' units'`, not the prior whole-chain `qty || price || ' "
+            "units'` (with QTY=2/PRICE=3: '5 units' vs '23 units'); two id_String columns "
+            "and two string-returning calls now concatenate instead of being handed to "
+            "Snowflake as arithmetic on VARCHARs; and where the source states no class for "
+            "an operand the chain carries an explicit residue reason rather than emitting "
+            "a clean-looking arithmetic expression. Classes are data on both sides -- "
+            "value_class_by_datatype over Talend's own type ids, "
+            "function_translations[*].returns, and operand_datatype_sites, which reads the "
+            "DECLARED type of an inputTables/varTables row (a type lookup only: no port, "
+            "no InputColumns entry, no change to the residue census). (2) "
+            "binary_operator_levels replaces the single ==/!= level with Java's own "
+            "precedence order as data, so &&->AND, ||->OR (a Java logical OR was "
+            "previously emitted verbatim, which is Snowflake string CONCATENATION), ALL "
+            "top-level ==/!=, < <= > >=, - and * / % all translate, and every null "
+            "comparison in a combined condition becomes IS [NOT] NULL instead of the "
+            "never-true `= NULL`. Because a level PEELS OFF, `StringHandling.LEN(x) - 1` "
+            "is call-shaped again and `(int) x - 1` casts only x. (3) unary_operator_forms "
+            "handles prefix operators, so a unary `+` cannot emit a leading operator and "
+            "`!` becomes NOT. (4) leaf_passthrough_characters closes the set of characters "
+            "that may reach the artifact without a residue reason, which is the general "
+            "guard against the next operator nobody enumerated. (5) "
+            "expression_syntax.string_escape_char makes the lexer read Java's escaped "
+            "in-literal quote; a literal it still cannot close takes the verbatim flat "
+            "path with a residue reason, because TK-03's re-quoting turned that lexing "
+            "limit into corrupted SQL carrying DERIVED provenance. (6) "
+            "max_expression_span_depth bounds the recursive descent, which previously "
+            "raised RecursionError out of emit() at 300 nested parens, aborting the whole "
+            "document over one column. MEASURED over the 34-item AdW2017 corpus: 26 tMaps "
+            "/ 489 OutputColumns / 429 with an Expression / 54 normalized / 375 residue, "
+            "all IDENTICAL to TK-03, as expected -- the review measured zero occurrences "
+            "of these constructs in the corpus, so this is a latent-defect pass. Three "
+            "emitted values differ, all improvements: `stats01.duration/1000` is now a "
+            "recognised division (DI_CNTL_JobStats 6.7 and 7.0), and the corpus's own "
+            "truncated `Numeric.sequence(\"s1\",1,1` now names its unreadable '(' and ',' "
+            "in residue as well as the unresolved call. Flat path proven unchanged twice: "
+            "15 (platform, document) pairs over every non-Talend fixture hash identically "
+            "to the prior commit, and this table with expression_translation stripped "
+            "emits all 34 corpus documents byte-identically to the prior commit."
+        ),
+        "changes": [
+            (
+                "+ expression_syntax.string_escape_char: '\\\\' (per-platform, so a table "
+                "declaring none lexes exactly as before)"
+            ),
+            (
+                "~ expression_syntax._comment: no longer says 'no dialect translation "
+                "happens here (TK-03)', which the same file contradicts"
+            ),
+            (
+                "+ dialect.expression_translation.binary_operator_levels (logical_or, "
+                "logical_and, equality, relational, additive, multiplicative), replacing "
+                "relational_operator_rewrite"
+            ),
+            (
+                "+ dialect.expression_translation.null_comparison_rewrite (target + "
+                "matches_null), unary_operator_forms, ternary_operators (replacing the "
+                "unread ternary_style), argument_separator"
+            ),
+            (
+                "+ dialect.expression_translation.value_class_by_datatype, "
+                "string_value_class, numeric_value_class, operand_datatype_sites, "
+                "function_translations[*].returns"
+            ),
+            (
+                "~ dialect.expression_translation.string_concat_detection: "
+                "'literal_operand_in_chain' (read by nothing) -> "
+                "'typed_operands_left_associative' (dispatched on; emit.py raises on any "
+                "other value)"
+            ),
+            (
+                "+ dialect.expression_translation.max_expression_span_depth: 120, "
+                "leaf_passthrough_characters: '0123456789.'"
+            ),
+            (
+                "~ emit.py scan(): + escape parameter, + 'str_open' kind for a literal the "
+                "text never closes (lexeme unchanged, so joining is still lossless)"
+            ),
+            (
+                "~ emit.py resolve(): declines the translated path for an unterminated "
+                "literal and on RecursionError, falling back to the verbatim flat reading "
+                "with a residue reason (_flat_fallback / _resolve_flat, extracted "
+                "unchanged from resolve's own loop)"
+            ),
+            (
+                "+ emit.py _ExprCtx, _operator_hits, _chain_spans, _primary_end, "
+                "_translate_binary, _non_null_side, _concat_chain, _value_class, "
+                "_reference_value_class, _operand_datatypes, _call_key; "
+                "-_translate_equality, -_translate_additive, -_find_top_level"
+            )
+        ]
+    },
+    {
+        "derived_from_sha256": "aad67bf4ce3199c170c77932576db45d2bdb453ff959fa10d5c27b1c5efe91d6",
+        "reason": (
+            "TK-03 review remediation pass B, the SEMANTICS of a translated call. Pass A "
+            "fixed where the translator had to choose between operator readings; every "
+            "defect here is inside a call the translator already accepted, where it "
+            "emitted a template with an argument meaning something else or not meaning "
+            "anything at all. All of it is data, because all of it is source-LANGUAGE "
+            "fact. (1) INDEX BASES. Java StringHandling.SUBSTR is 0-based with an "
+            "EXCLUSIVE end index; Snowflake SUBSTR is 1-based with a LENGTH. MEASURED "
+            "before: `StringHandling.SUBSTR(src.NAME, 1, 3)` emitted `SUBSTR(src.NAME, 1, "
+            "3)` -- wrong start AND wrong count -- and is now `SUBSTR(src.NAME, 2, 2)`; "
+            "non-literal indexes emit the correction as arithmetic (`SUBSTR(src.NAME, "
+            "(src.S + 1), (src.E - src.S))`) rather than declining the calls that most "
+            "need it. Declared as argument_adjustments (offset / index-base pair / "
+            "argument_coefficients), never as a reader constant. StringHandling.INDEX is "
+            "reconciled in its template instead: `POSITION({1} IN {0}) - 1` maps the "
+            "0-based hit AND Java's -1-on-miss simultaneously, since POSITION's 0-on-miss "
+            "minus one IS -1, so the sentinel needs no residue. (2) DATE/TIME FORMAT "
+            "PATTERNS, via date_format_pattern_map over whole SimpleDateFormat letter RUNS "
+            "plus declared literal characters and quoted sections. MEASURED before: "
+            "`formatDate(\"HH:mm:ss\", d)` emitted `TO_CHAR(d, 'HH:mm:ss')`, whose 'mm' "
+            "Snowflake reads as a MONTH -- a timestamp rendering its month where its "
+            "minutes belong, with nothing recorded about the letters copied through. Now "
+            "`TO_CHAR(d, 'HH24:MI:SS')`; `yyyy-MM-dd HH:mm:ss.SSS` -> `YYYY-MM-DD "
+            "HH24:MI:SS.FF3`, `hh:mm a` -> `HH12:MI AM`, `yyyy 'at' HH` -> `YYYY \"at\" "
+            "HH24`. A run or character the table does not declare ('DDD', 'EEE', '@') "
+            "leaves the WHOLE call untranslated with the run named, because a format "
+            "string is positional and one wrong-width element moves every character after "
+            "it. (3) SILENT ARGUMENT LOSS, closed twice. `arity` is now required on every "
+            "entry and is EXACT: `StringHandling.LEFT(src.A, 3, 4)` emitted `LEFT(src.A, "
+            "3)` and `TalendDate.parseDate(p, s, \"en_US\")` -- a real three-argument "
+            "Talend overload -- emitted `TRY_TO_DATE(s, p)`, both silently dropping an "
+            "argument with nothing naming the loss; both are now emitted untranslated "
+            "naming the declared count and the stated one. And identify.validate_table now "
+            "requires every argument position to be ACCOUNTED for -- placeholder, "
+            "adjustment coefficient, or unused_arguments with a reason -- so "
+            "Numeric.sequence can no longer translate to a bare `ROW_NUMBER() OVER ()` "
+            "with start and step gone: `Numeric.sequence(\"s2\",100,5)` is `(100 + "
+            "(ROW_NUMBER() OVER () - 1) * 5)` and the sequence NAME is declared unused "
+            "with the reason (a window function has no state shared across two calls on "
+            "one name). (4) DOCUMENTATION KEYS ARE NOT DATA. `cast_types._comment` and "
+            "`date_part_literals._comment` were reachable as data: MEASURED, `(_comment) "
+            "src.A` emitted the entire cast-type paragraph as that column's Expression, "
+            "and `addDate(src.D, 1, \"_comment\")` emitted `DATEADD(<the date-part "
+            "paragraph>, 1, src.D)`. Moved to sibling _<key>_comment keys, and emit.py "
+            "additionally strips every '_'-prefixed key out of the block once at "
+            "construction. (5) Math.abs/Math.round added (the second with its tie-rule "
+            "divergence as residue, Java rounding a half towards +INF and Snowflake away "
+            "from zero), which also gives `Math.abs(x) + Math.round(x)` two stated numeric "
+            "classes instead of an unstated-class residue. StringHandling.IS_EMPTY no "
+            "longer duplicates its operand: `(NVL({0}, '') = '')` evaluates it once. (6) "
+            "RESIDUE WORDING now names the actual cause: a known function with an "
+            "unmappable date part said \"unknown identifier 'TalendDate.addDate'\", and an "
+            "unknown call said its arguments survived verbatim when its string literals "
+            "had in fact been re-quoted -- MEASURED 15 times in the corpus on "
+            "`context.getProperty(\"vJobPID\")`. MEASURED over the 34-item AdW2017 corpus: "
+            "26 tMaps / 489 OutputColumns / 429 with an Expression / 54 normalized / 375 "
+            "residue, IDENTICAL to pass A. 11 emitted values improved (every corpus "
+            "Numeric.sequence now carries its start and step) and 15 residue reasons "
+            "became accurate; nothing regressed. Identity proven three ways against pass "
+            "A's own extracted scripts and table: 15 (platform, document) pairs over every "
+            "non-Talend fixture hash identically, this table with expression_translation "
+            "stripped emits all 34 corpus documents identically, and the extraction-only "
+            "reading (tMap instances, input/output groups, column names and types, which "
+            "columns carry an Expression key, join/filter/variable payloads -- every "
+            "Expression VALUE dropped) hashes identically, so TK-02/TK-05 extraction and "
+            "the unwired-output-group filter did not move under the 11 documents whose IR "
+            "did."
+        ),
+        "changes": [
+            (
+                "+ dialect.expression_translation.date_format_pattern_map, "
+                "date_format_letter_characters, date_format_literal_characters, "
+                "date_format_quote_character, date_format_quoted_literal_template"
+            ),
+            (
+                "~ dialect.expression_translation.cast_types._comment and "
+                "date_part_literals._comment -> sibling _cast_types_comment / "
+                "_date_part_literals_comment (both were reachable as data)"
+            ),
+            (
+                "+ function_translations[*].arity on all 19 entries (required and exact), "
+                "+ argument_adjustments, + date_format_args, + unused_arguments"
+            ),
+            (
+                "~ StringHandling.SUBSTR: + argument_adjustments (index base on {1}, "
+                "end-index-to-length on {2})"
+            ),
+            (
+                "~ StringHandling.INDEX: 'POSITION({1} IN {0})' -> '(POSITION({1} IN {0}) "
+                "- 1)' (0-based result and Java's -1-on-miss, both)"
+            ),
+            (
+                "~ StringHandling.IS_EMPTY: '({0} IS NULL OR {0} = ...)' -> \"(NVL({0}, "
+                "'') = '')\" (operand evaluated once)"
+            ),
+            "~ TalendDate.parseDate/formatDate: + date_format_args [0]",
+            (
+                "~ Numeric.sequence: template now carries start and step; + "
+                "unused_arguments {'0': why}"
+            ),
+            "+ Math.abs, Math.round (the latter with a tie-rule residue_note)",
+            (
+                "~ emit.py _translate_call_or_unsupported: rewritten to decline per-cause "
+                "(arity, unmappable date part, unmappable format pattern) instead of "
+                "dropping arguments; + _literal_body, _mapped_date_part, "
+                "_mapped_date_format, _integer_literal, _adjusted_argument, table_data_only"
+            ),
+            (
+                "~ identify.py validate_table: + dialect.expression_translation contract "
+                "(unknown keys, required keys, per-entry keys, identifier-shaped names, "
+                "prefix reachability, placeholder/arity agreement, argument accounting, "
+                "adjustment form); + TableSection.table_path"
+            ),
+            (
+                "~ platforms/AUTHORING_CONTRACT.md: + the dialect.expression_translation "
+                "section"
+            )
+        ]
+    },
+    {
+        "derived_from_sha256": "816258af0170ac22c0e1375def32f999b47ad0deb632d442ff4e8538420dc489",
+        "reason": (
+            "TK-03 review remediation pass C, the four places a translated expression was "
+            "still valid Snowflake computing a DIFFERENT value with nothing naming it, "
+            "plus the two value-class gaps that made the ambiguity residue itself "
+            "unreliable. (1) AN OVERLOADED ADDITIVE OPERATOR IS RESOLVED PER PAIRWISE "
+            "STEP, NOT PER CHAIN. Java resolves `+` one left-associative step at a time, "
+            "so a chain may be arithmetic at one step and concatenation at the next. Pass "
+            "B classified the whole chain and abandoned it whenever any operator differed "
+            "from the overloaded one, which meant a single `-` anywhere silently lost the "
+            "concatenation AND skipped the ambiguity residue too. MEASURED before: "
+            "`src.QTY - 1 + src.A` emitted `src.QTY - 1 + src.A`, which computes 11 where "
+            "the source concatenates to '47', with no reason recorded; `src.QTY - "
+            "src.PRICE + \" u\"` emitted verbatim arithmetic against a string literal. Now "
+            "`(src.QTY - 1) || src.A` and `(src.QTY - src.PRICE) || ' u'` -- the source's "
+            "own left-associativity supplies the parentheses, and `src.A + src.QTY - 1` "
+            "correspondingly becomes `(src.A || src.QTY) - 1`. A step whose two classes "
+            "are not both stated is emitted as the source spelling AND carries the "
+            "ambiguity reason, so `src.QTY + src.ANY - 1` reports where `src.QTY - src.ANY "
+            "+ src.A` (whose only overloaded step has a stated string side) does not: "
+            "nothing ships silently on the mixed-operator path any more. (2) AN ADJUSTED "
+            "ARGUMENT IS PARENTHESISED BEFORE IT IS SPLICED INTO ARITHMETIC. "
+            "argument_adjustments emits the index-base correction as explicit arithmetic, "
+            "and pass B interpolated the argument's own text unbracketed, so a trailing "
+            "subtraction inverted the sign of the generated term. MEASURED before: "
+            "`StringHandling.SUBSTR(src.NAME, src.S - 1, src.E)` emitted `SUBSTR(src.NAME, "
+            "(src.S - 1 + 1), (src.E - src.S - 1))`, a length two characters short; the "
+            "canonical after-the-separator idiom `SUBSTR(NAME, INDEX(NAME, \"-\") + 1, "
+            "LEN(NAME))` emitted a length longer than the string. Now `SUBSTR(src.NAME, "
+            "((src.S - 1) + 1), (src.E - (src.S - 1)))` and `SUBSTR(src.NAME, "
+            "(((POSITION('-' IN src.NAME) - 1) + 1) + 1), (LENGTH(src.NAME) - "
+            "((POSITION('-' IN src.NAME) - 1) + 1)))`. An argument that is already one "
+            "primary keeps the source's own grouping exactly (`(src.S + 1)` is not "
+            "re-wrapped), and an all-literal call still folds to constants "
+            "(`SUBSTR(src.NAME, 2, 2)`). (3) A LITERAL `= NULL` CAN NO LONGER SHIP. The "
+            "null rewrite was reachable only on a two-operand comparison whose operand "
+            "span was the bare null identifier. MEASURED before: `src.F == null == src.G` "
+            "emitted `src.F = NULL = src.G` and `src.A == (null)` emitted `src.A = (NULL)` "
+            "-- both silently UNKNOWN, so both invert the branch they guard. The rewrite "
+            "now folds a longer equality chain step by step and strips a parenthesised "
+            "null: `(src.F IS NULL) = src.G`, `src.A IS NULL`, `src.A IS NOT NULL`. (4) "
+            "TWO ADJACENT STRING LITERALS ARE DECLINED. Nothing in Java reads `\"a\"\"b\"` "
+            "as an expression, and pass B re-quoted each literal independently: MEASURED "
+            "before, it emitted `'a''b'`, a perfectly valid Snowflake literal reading "
+            "`a'b`, as a clean DERIVED slot. The run is now emitted verbatim and "
+            "untranslated with the adjacency named as residue. (5) THE VALUE CLASS IS "
+            "DERIVED THROUGH A CAST AND THROUGH A GROUP. Both gaps made the residue itself "
+            "untrustworthy in opposite directions. cast_value_classes states what a "
+            "declared cast_types cast produces, so `(int) src.QTY + 1` emits "
+            "`TRY_CAST(src.QTY AS INTEGER) + 1` with no reason where it previously carried "
+            "a FALSE ambiguity reason on correct output, and `(String) src.QTY + 1` now "
+            "concatenates (`src.QTY::VARCHAR || 1`). A parenthesised operand and a "
+            "sub-chain now fold to their own class, so `src.QTY + (src.A)` is `src.QTY || "
+            "(src.A)` and `src.QTY + (src.PRICE + \" u\")` is `src.QTY || (src.PRICE || ' "
+            "u')`, where both previously fell through to a verbatim `+` with the ambiguity "
+            "reason -- valid SQL adding a number to a string. MEASURED over the 34-item "
+            "AdW2017 corpus: 26 tMaps / 489 OutputColumns / 429 carrying an Expression / "
+            "54 normalized (35 TABLE, 19 DERIVED) / 375 residue, and every one of the 429 "
+            "emitted values BYTE-IDENTICAL to pass B -- the corpus states none of these "
+            "five shapes, which is why all five needed the synthetic fixture to surface at "
+            "all. Identity proven three ways: 259 (platform, document) pairs over every "
+            "non-Talend table hash identically to pass B, this table with "
+            "dialect.expression_translation stripped emits all 34 corpus documents "
+            "identically both to pass B stripped AND to the pre-TK-03 parent where the "
+            "block never existed, and the extraction-only reading (tMap instances, groups, "
+            "column names and types, which columns carry an Expression key, "
+            "join/filter/variable payloads, every Expression VALUE dropped) hashes "
+            "identically across all 34, so TK-02/TK-05 and the unwired-output-group filter "
+            "did not move."
+        ),
+        "changes": [
+            (
+                "+ dialect.expression_translation.cast_value_classes (String -> string; "
+                "int/Integer/long/Long/float/Float/double/Double/BigDecimal -> numeric; "
+                "boolean/Boolean -> boolean), + sibling _cast_value_classes_comment"
+            ),
+            (
+                "~ emit.py _concat_chain: whole-chain classification -> left-associative "
+                "pairwise fold; + _additive_step_class (the one place a step is read as "
+                "arithmetic, concatenation, or unresolvable)"
+            ),
+            (
+                "~ emit.py _adjusted_argument: a spliced argument is parenthesised unless "
+                "it is one primary; + _is_atom"
+            ),
+            (
+                "~ emit.py _translate_binary null special case -> _null_comparison_chain "
+                "over a whole equality chain; + _is_null_literal (strips a parenthesised "
+                "null literal)"
+            ),
+            (
+                "~ emit.py _translate_leaf_span: + an adjacent-string-literal pre-scan "
+                "that emits the run verbatim with a residue reason instead of re-quoting "
+                "each literal"
+            ),
+            (
+                "~ emit.py _value_class: reads cast_value_classes through a cast, folds a "
+                "parenthesised operand, and folds an additive sub-chain; + _cast_at "
+                "(shared with _translate_operand), + _chain_value_class"
+            ),
+            (
+                "~ identify.py: + 'cast_value_classes' to EXPRESSION_TRANSLATION_KEYS, + a "
+                "validate_table check that every cast_value_classes key names a declared "
+                "cast_types key"
+            ),
+            (
+                "~ platforms/AUTHORING_CONTRACT.md: cast_value_classes in the reader-key "
+                "list, the pairwise-step paragraph naming the four sources of a value "
+                "class, and the argument_adjustments row's parenthesisation rule"
+            )
+        ]
+    },
+    {
+        "derived_from_sha256": "934d8e96c3629ee8bf290252415edc5aec01483845856437b48a9ec2ac90d77a",
+        "reason": (
+            "TK-03 review remediation pass D. Pass C got the RIGHT predicate for 'does "
+            "this operand need grouping before it is spliced' (_is_atom) and then applied "
+            "it in ONE place -- inside _adjusted_argument -- so it protected only the "
+            "placeholders that happened to carry an argument_adjustments entry. Every "
+            "other placeholder in every other template splices bare, which is not four "
+            "defects but one, in four templates. (1) THE GROUPING DECISION IS NOW MADE "
+            "ONCE, AT THE SUBSTITUTION SITE. Emitter._substitute is the only code that "
+            "expands a `{N}`, and it parenthesises whatever it receives unless the operand "
+            "is one primary or the placeholder sits between two characters "
+            "template_operand_delimiters declares. Every generated context inherits it: "
+            "function_translations templates, cast_types, unary_operator_forms, and the "
+            "date-part/date-format arguments that are substituted as already-final text. "
+            "MEASURED before, `Numeric.sequence(\"g\", 100, src.N + 1)` emitted `(100 + "
+            "(ROW_NUMBER() OVER () - 1) * src.N + 1)`, which at row 3 with N=2 computes "
+            "105 where the source computes 106, and `* src.N - 1` computed one less than "
+            "the row's step for EVERY row; now `(100 + (ROW_NUMBER() OVER () - 1) * (src.N "
+            "+ 1))`. `Relational.ISNULL(!src.FLAG)` emitted `(NOT src.FLAG IS NULL)`, "
+            "which is TRUE for every non-null flag where the source is FALSE -- a straight "
+            "inversion of whatever it guards -- and is now `((NOT src.FLAG) IS NULL)`; the "
+            "same for an equality, a comparison and a null test inside it. "
+            "`StringHandling.INDEX(src.A + src.B, \"-\")` searched only src.B "
+            "(`POSITION('-' IN src.A || src.B)`) and now searches the concatenation, and "
+            "`!!src.FLAG` is `NOT (NOT src.FLAG)` rather than the un-parseable `NOT NOT "
+            "src.FLAG`. Numeric.sequence's TEMPLATE was deliberately NOT "
+            "hand-parenthesised: the generic guard already groups {2}, and a second pair "
+            "of parentheses would be noise on every call and would hide the next template "
+            "that needs the guard. The eight probed step shapes and five ISNULL shapes are "
+            "all pinned, INCLUDING the four that were already right (a bare literal step, "
+            "a grouped step, a comma-delimited argument, a sole argument), so the guard is "
+            "pinned generically rather than per shape. (2) ADJACENCY IS NOW ANY TWO LEAF "
+            "VALUES WITH NO DECLARED OPERATOR BETWEEN THEM, not two string literals. Pass "
+            "C's pre-scan was written for the literal pair it had measured, so `\"a\"1`, "
+            "`1\"a\"`, `\"a\"src.A` and `src.A\"b\"` still crossed with their string "
+            "halves re-quoted (`'a'1`), and `1 2` shipped as the single valid value `12` "
+            "with no reason at all. The scan now reads _leaf_value_kind over "
+            "string_value_class, numeric_value_class and leaf_passthrough_characters, so a "
+            "leaf kind added to the table later is covered without another repair round, "
+            "and the dropped whitespace is restored inside a declining run only -- `1 2` "
+            "is `1 2` and `1 . 5` is `1 . 5`, which fail to parse, while `1.5` is still "
+            "the one value `1.5` and a stated `\"a\" + \"b\"` still concatenates. (3) A "
+            "STATED-BUT-UNUSABLE VALUE CLASS NOW DECLINES WITH A REASON. "
+            "_additive_step_class reported ambiguity only when a class was missing, so a "
+            "boolean-plus-number or date-plus-number step -- both stated, neither giving "
+            "the overloaded operator a reading -- emitted a verbatim `+` with ZERO "
+            "reasons, the one outcome that looks translated and is not. MEASURED before, "
+            "`src.FLAG + src.QTY`, `src.D + src.QTY` and `(NVL(src.A,'') = '') + src.QTY` "
+            "each emitted a bare `+` with nothing recorded; each now names its two classes "
+            "and says it is emitted as '+', NOT as '||'. The unstated-class reason is kept "
+            "distinct from it, because the author's fix differs (declare the datatype vs. "
+            "decide the expression). (4) AN INDEX LITERAL THE SOURCE ITSELF REJECTS IS "
+            "NAMED. The argument_adjustments correction is linear, so it maps an "
+            "out-of-domain index as readily as a valid one: "
+            "`StringHandling.SUBSTR(src.NAME, -1, 3)` emitted `SUBSTR(src.NAME, 0, 4)`, a "
+            "value Java answers with StringIndexOutOfBoundsException, silently. It still "
+            "emits the correction (declining would lose the ordinary cases) but now names "
+            "the literal and the index base it is below. (5) operator_residue_notes "
+            "carries a divergence that SURVIVES a correct translation, read once where a "
+            "level splits, so it reaches an operator inside a template's operands too. Its "
+            "one entry is integer division: the source truncates toward zero when both "
+            "operands are integral and the target does not, and the document does not "
+            "state run-time types. This is the pass's only corpus movement, and it is a "
+            "real one -- DI_CNTL_JobStats 6.7 and 7.0 convert milliseconds with "
+            "`stats01.duration / 1000`, where the source yields whole seconds and "
+            "Snowflake yields a fraction. MEASURED over the 34-item AdW2017 corpus: 26 "
+            "tMaps / 489 OutputColumns / 429 carrying an Expression / 54 normalized (35 "
+            "TABLE, 19 DERIVED) / 375 residue, and all 429 emitted VALUES plus all 429 "
+            "provenance labels byte-identical to pass C, with exactly 2 residue details "
+            "changed (the two divisions above). Identity proven four ways against "
+            "d7e0ddfefb's own extracted scripts and table: 413 (table, document) pairs "
+            "over every checked-in platform table x the whole corpus and every fixture -- "
+            "recording a raised exception as an outcome, so a pair that started or stopped "
+            "failing is visible -- differ in exactly ONE, the synthetic Talend fixture "
+            "this pass extended; the 15 identifiable non-Talend (platform, document) "
+            "pairs, this table with dialect.expression_translation stripped over all 34 "
+            "corpus documents, and the translated Talend IR over all 34, all hash "
+            "identically; and the extraction-only reading (tMap instances, groups, column "
+            "names and types, which columns carry an Expression key, join/filter/variable "
+            "payloads, every Expression VALUE dropped) hashes identically across all 26 "
+            "corpus tMaps, so TK-02/TK-05 and exclude_unwired_output_groups did not move. "
+            "A tokenize-based scan of emit.py and identify.py with docstrings and comments "
+            "stripped finds ZERO source-language operator spellings, type ids, function "
+            "names, index constants or format letters and no platform-equality branch, "
+            "unchanged from d7e0ddfefb: the grouping hoist is platform-agnostic, and its "
+            "two new keys are read through the same closed EXPRESSION_TRANSLATION_KEYS set "
+            "(27 keys, symmetric difference empty in both directions)."
+        ),
+        "changes": [
+            (
+                "+ dialect.expression_translation.template_operand_delimiters: '(),' -- "
+                "the characters that make a template placeholder self-delimiting, + "
+                "sibling _template_operand_delimiters_comment"
+            ),
+            (
+                "+ dialect.expression_translation.operator_residue_notes: {'/': the "
+                "integral-truncation divergence}, + sibling _operator_residue_notes_comment"
+            ),
+            (
+                "~ _unary_operator_forms_comment: no longer implies the form's own text "
+                "supplies the grouping"
+            ),
+            (
+                "+ emit.py Emitter._substitute / _delimited_in_template: the ONE site that "
+                "expands a template placeholder, and the only place the grouping decision "
+                "is made"
+            ),
+            (
+                "~ emit.py _translate_call_or_unsupported, _translate_operand (unary and "
+                "cast), _adjusted_argument: all splice through _substitute and report "
+                "atom-ness instead of formatting their own template"
+            ),
+            (
+                "~ emit.py _translate_binary: reads operator_residue_notes once at the "
+                "split site, so a note reaches every level and every nested operand"
+            ),
+            (
+                "~ emit.py _additive_step_class / _concat_chain: a third outcome for two "
+                "stated classes that give the operator neither reading (distinct from an "
+                "unstated class)"
+            ),
+            (
+                "+ emit.py _out_of_domain_index: a reason for a literal index argument "
+                "below the declared source_index_base"
+            ),
+            (
+                "~ emit.py _translate_leaf_span: the adjacent-string pre-scan generalised "
+                "to _undeclared_adjacencies / _leaf_value_kind / _adjacent_values over the "
+                "table's own value classes; + _ExprCtx.gaps recorded by resolve(), so `1 "
+                "2` and `1.5` are distinguishable and a declining run keeps the source's "
+                "whitespace"
+            ),
+            (
+                "~ identify.py: + 'operator_residue_notes' and "
+                "'template_operand_delimiters' to EXPRESSION_TRANSLATION_KEYS, + "
+                "validate_table checks that every note names an operator a level declares "
+                "and that the delimiter set contains the argument_separator"
+            ),
+            (
+                "~ platforms/AUTHORING_CONTRACT.md: the write-templates-bare rule, "
+                "operator_residue_notes, the adjacency rule, the two distinct "
+                "overloaded-additive decline reasons, and the out-of-domain index literal "
+                "in the argument_adjustments row"
+            )
+        ]
+    },
+    {
+        "derived_from_sha256": "f23e4ab4879e45bdb65d9cc9356db3cce74cab8da258eb142b19cf7ab5e1681f",
+        "reason": (
+            "TK-03 review remediation pass E, four findings on one PR reviewed together. "
+            "(1) THE REJECT-GROUP NAME MATCH WAS A SUBSTRING TEST. "
+            "exclude_port_groups_name_matches previously checked `pat in group_name`, so "
+            "the corpus's own wired business tables containing the ordinary word 'reject' "
+            "-- fact_workorderrouting_Copy_0.1.item's 'fact_workorder_rejects' target, "
+            "dim_rejectcodes, fact_purchase_rejects, load_fworkorderrejects_Copy -- were "
+            "silently dropped from OutputColumns despite carrying a live outgoing "
+            "connection. The match is now WHOLE-TOKEN (the group name split on "
+            "non-alphanumerics; a pattern must equal one full token) and WIRING-FIRST: "
+            "`excluded_group` checks the document's own outgoing-edge evidence before "
+            "ever consulting the name list, so a group the document says is connected is "
+            "never excluded by name alone. (2) TERNARY LOWERING WAS TWO HARDCODED PYTHON "
+            "TEMPLATES. `_translate_span`'s COALESCE/CASE WHEN spellings were Python "
+            "string literals, the one remaining place a structural decision was made in "
+            "code instead of data. `ternary_operators.case_template` / "
+            "`coalesce_template` now state both spellings as table data, read positionally "
+            "for case_template (its own WHEN/THEN/ELSE/END keywords bound each operand, "
+            "so no operand risks re-associating either way) and through the shared "
+            "`_substitute` site for coalesce_template (a call-shaped template whose "
+            "placeholders sit beside the same comma/parens template_operand_delimiters "
+            "already covers). A validate_table check now refuses a table that declares "
+            "condition_separator/branch_separator without a case_template, so a future "
+            "platform cannot ship a ternary split with nothing to lower it into. (3) A "
+            "SECOND TMAP EXTRACTOR RESTATED THE SAME NODEDATA A THIRD WAY. "
+            "operand_datatype_sites re-read inputTables/varTables straight from the "
+            "source XML so `_reference_value_class` could see a type for `src.QTY` / "
+            "`Var.lineTotal`, while `_resolve_ident_or_ref` still could not resolve either "
+            "lexeme AT ALL, because tmap_var ports were named bare `lineTotal` and "
+            "inputTables rows were not ports of any kind. Both gaps close the same way: "
+            "`_read_ports` gained a qualifier_source PARENT_ATTR / qualifier_attr / "
+            "qualifier_separator capability that composes a qualified Port.name ('src.QTY') "
+            "from an attribute the port's immediate PARENT XML node states as ITS OWN "
+            "qualifier -- a different site than the existing group_from ANCESTOR mechanism "
+            "(tied to the separately-registered outputTables 'output group' walk, not "
+            "reusable for inputTables/varTables without polluting el.groups). tmap_var now "
+            "declares that capability and a new tmap_input port_site reads inputTables the "
+            "identical way with porttype INPUT (port_policy.input_columns_from is NONE for "
+            "Talend, so a new INPUT port adds nothing to InputColumns); an inputTables "
+            "row's own join/lookup `expression` is still never read as a Port's expression "
+            "-- that semantics stays residue exactly as talend_tmap_join_key_expression "
+            "already names it. With every reference now a Port, operand_datatype_sites and "
+            "_operand_datatypes are gone and _reference_value_class reads ctx.by_lower "
+            "alone; by_lower's own construction was lowercasing its keys unconditionally, "
+            "which made a case-sensitive lookup (expression_syntax."
+            "case_insensitive_resolution: false, Talend's own declared policy) unable to "
+            "ever match it, so by_lower now lowercases only when that flag is true, same as "
+            "every lookup already probing it. No no_slot_facts rule reads `\"src\": "
+            "\"PORT\"` for Talend, so adding tmap_input triggers no residue-census side "
+            "effect. (4) THE COVERAGE-GATE RESIDUE NOTE CLAIMED A RULE THAT DOES NOT "
+            "EXIST. residue.coverage_gate said CLOSED, naming a `talend` key in "
+            "coverage_gate.RULES and matching link/residue rules in gate_a.py -- neither "
+            "file has ever contained the string 'talend'; the note described work that was "
+            "never done. Corrected to say UNMEASURED, naming the actual shipped RULES keys "
+            "and pointing at the driver's own live coverage advisory "
+            "(aifirst-migrate.sh/test_driver_coverage_identity.py), which already reports "
+            "unmeasured coverage for any platform identity it does not recognise -- "
+            "consistent with the true, current behavior instead of an invented one."
+        ),
+        "changes": [
+            (
+                "~ port_policy.exclude_port_groups_name_matches matching: substring -> "
+                "whole-token, case-insensitive, split on non-alphanumerics"
+            ),
+            (
+                "+ dialect.expression_translation.ternary_operators.case_template / "
+                "coalesce_template (the two spellings _translate_span previously "
+                "hardcoded in Python)"
+            ),
+            (
+                "~ identify.py: + validate_table check requiring case_template whenever "
+                "ternary_operators declares condition_separator/branch_separator"
+            ),
+            (
+                "- dialect.expression_translation.operand_datatype_sites (2 entries: "
+                "inputTables holder, varTables holder); - 'operand_datatype_sites' from "
+                "identify.py EXPRESSION_TRANSLATION_KEYS and from the "
+                "AUTHORING_CONTRACT.md reader-key list"
+            ),
+            (
+                "~ self_def_sites.tmap.port_sites: tmap_var gains qualifier_source "
+                "PARENT_ATTR / qualifier_attr 'name' / qualifier_separator '.'; "
+                "+ tmap_input (porttype INPUT, the same qualifier shape) reading "
+                "./nodeData/inputTables/mapperTableEntries"
+            ),
+            (
+                "~ identify.py _read_ports: + qualifier_source PARENT_ATTR / "
+                "qualifier_attr / qualifier_separator, composing Port.name from the "
+                "port's immediate parent's own attribute (distinct from group_from "
+                "ANCESTOR's registered-output-group walk)"
+            ),
+            (
+                "- emit.py Emitter._operand_datatypes, _operand_datatype_cache; "
+                "~ _reference_value_class reads ctx.by_lower only, no longer a "
+                "primary XML-rescan lookup"
+            ),
+            (
+                "~ emit.py by_lower construction (sole construction site): lowercases "
+                "keys only when expression_syntax.case_insensitive_resolution is true, "
+                "matching every lookup that already probes it with case_insensitive_"
+                "resolution"
+            ),
+            (
+                "~ residue.coverage_gate: false 'CLOSED' claim (a talend key in "
+                "coverage_gate.RULES/gate_a.py that was never added) -> honest "
+                "'UNMEASURED', naming the shipped RULES keys and the driver's own "
+                "coverage advisory"
+            )
+        ]
+    }
+],
+}
+
+_OUT = Path(__file__).resolve().parent.parent / "platforms" / "platform_talend.json"
+
+# indent=1, not the 2 every other builder here uses: the checked-in file states it.
+text = json.dumps(table, indent=1, cls=_Encoder) + "\n"
+text = re.sub('"' + _TOKEN + "(.*?)" + _TOKEN + '"', lambda m: m.group(1), text)
+
+with open(str(_OUT), "w", encoding="utf-8", newline="\n") as f:
+    f.write(text)
+
+print("wrote", _OUT.name, len(text.encode("utf-8")), "bytes")

@@ -30,6 +30,7 @@ Tell the user:
 Ask the user what they want to extract. Present the available object types for their source dialect:
 
 - **SqlServer:** TABLE, VIEW, FUNCTION, PROCEDURE, SEQUENCE, TABLE_TYPE, TRIGGER
+- **AzureSynapse:** TABLE, VIEW, FUNCTION, PROCEDURE, SEQUENCE, TABLE_TYPE, TRIGGER
 - **Redshift:** TABLE, VIEW, MATERIALIZED_VIEW, FUNCTION, PROCEDURE
 - **Oracle:** TABLE, VIEW, MATERIALIZED_VIEW, FUNCTION, PROCEDURE, PACKAGE, PACKAGE_BODY, TRIGGER, SEQUENCE, TYPE, TYPE_BODY, SYNONYM
 - **Teradata:** TABLE, VIEW, FUNCTION, PROCEDURE
@@ -196,7 +197,7 @@ Then ask via `ask_user_question` (`multiSelect = false`):
 > 1. **Yes**
 > 2. **No**
 
-- If **no**, say that next we'll convert these to Snowflake SQL.
+- If **no**, continue to the Power BI prompt below.
 - If **yes**, ask for the ETL folder path and run (do **not** pass `--overwrite` — the extracted SQL is already in `source/`):
 
 ```bash
@@ -204,5 +205,21 @@ scai code add -i <ETL_PATH> --json
 ```
 
 This arranges the packages into `source/_etl/`, where `convert` finds them without an external path flag.
+
+Power BI templates are **not** extracted from the database. After extract (and after any ETL add), ask independently via `ask_user_question` (`multiSelect = false`):
+
+> "Do you have any local Power BI template (`.pbit`) files to include?"
+>
+> 1. **Yes**
+> 2. **No**
+
+- If **no**, say that next we'll convert these to Snowflake SQL.
+- If **yes**, ask for the local folder that contains the `.pbit` files and run (do **not** pass `--overwrite`):
+
+```bash
+scai code add -i <POWER_BI_PATH> --json
+```
+
+This copies templates to `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` only. Do not imply a database extract of Power BI.
 
 Then return to the calling skill.
