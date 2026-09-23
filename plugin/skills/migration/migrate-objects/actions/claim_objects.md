@@ -22,7 +22,7 @@ migration_status(mode="next_objects")
 
 > **Whatever the user said to enter this skill is not approval to claim specific IDs.** Even if the previous turn's answer was "claim", "pick up work", or "go ahead", that approval was for *entering* this skill — the IDs come from this turn's picker output, which the user has not yet seen. Render the list, then stop and wait.
 
-Render the `objects` returned by Step 1 as a numbered list with id, name, and object type. For any entry with `blocked: true`, append a `BLOCKED at <blocked_at>: <missing_deps> missing deps` marker.
+Render the `objects` returned by Step 1 as a numbered list with id, name, object type, and the step the object is actually at — `pending at '<next_task>'`, taken verbatim from the entry's `next_task`. Objects reach the picker at whatever step they stopped on, so never assume it is `deploy`; the app's Tasks panel labels the same payload the same way, and a guessed step contradicts it on screen. Omit the label for an entry with no `next_task`. For any entry with `blocked: true`, append a `BLOCKED at <blocked_at>: <missing_deps> missing deps` marker instead.
 
 If `total_available` exceeds the number of returned `objects`, tell the user how many ready objects exist in total and that they can ask for a numeric `limit` (e.g. "show me 20") to view more.
 
@@ -31,11 +31,11 @@ Then offer concrete picker options and **wait for the user's response.** Example
 ```
 Next 5 ready objects (12 total):
 
-1. [Staging].[CWSO_CUST_TBL]      table       ready to deploy
+1. [Staging].[CWSO_CUST_TBL]      table       pending at 'deploy'
 2. [Staging].[CWSO_SOPEVEH_TBL]   table       BLOCKED at deploy: 2 missing deps
-3. [Staging].[CWSO_ITEM_TBL]      table       ready to deploy
-4. [Reporting].[v_daily_sales]    view        ready to deploy
-5. [Reporting].[sp_load_sales]    procedure   ready to deploy
+3. [Staging].[CWSO_ITEM_TBL]      table       pending at 'migrateData'
+4. [Reporting].[v_daily_sales]    view        pending at 'validateView'
+5. [Reporting].[sp_load_sales]    procedure   pending at 'createTests'
 
 Pick one or more by number or name, or say "all", "first 3", or "show more".
 ```

@@ -25,12 +25,14 @@ Converted files may contain issues that need manual fixes before deployment:
 2. Keep the converted qualifier (`<%token%>.dbo.X`, `TaskTracker.dbo.X`, or `schema.X`). `deploy` injects `--database-bindings` from the session's active yaml so tokens resolve at deploy time. Do **not** write the SNAP / configure database name into the file. `-d` is only used when convert wrote no bindings file.
 3. **Variable binding in LANGUAGE SQL procedures:** Parameters and variables inside SQL statements (SELECT, INSERT, WHERE, etc.) must use `:param_name` syntax. SnowConvert often omits the colon prefix — always verify.
 4. **Preserve original comments:** When editing or rewriting converted SQL, always retain the original source code comments (synopsis, metadata, author, archive, change log, etc.). These comments document provenance and authorship — do not strip them during conversion or fixes.
+5. **A `DEFAULT` on an output argument:** Snowflake supports optional arguments (`HISTORICALPERIODS INT DEFAULT 12`) and, in `LANGUAGE SQL` procedures, output arguments (`TARGETID OUT INT`) — but not both on one argument. `TARGETID OUT INT DEFAULT NULL` fails to compile; delete the `DEFAULT` from that argument and leave the signature otherwise alone. The other arguments keep their defaults, `OUT` stays, and callers keep their calling convention — do not bundle the outputs into a `RETURNS OBJECT`, return a result set, or drop the output arguments, all of which change every call site to work around a one-token defect.
 
 ## If deployment fails
 
 | Error | Cause | Fix |
 |-------|-------|-----|
 | Syntax error | Invalid SQL | A pre-deploy check above, if one matches — otherwise `transition_status(outcome='failed', error='sql')` and let the fix loop take it |
+| `unexpected 'DEFAULT'` | An output argument carries a default | Pre-deploy check 5 — delete that argument's `DEFAULT`, nothing else |
 | Unknown function `<name>` | Missing dependency | Deploy that function first |
 | Object does not exist | Missing table/view | Deploy or check schema |
 | Schema does not exist | Missing schema | `CREATE SCHEMA IF NOT EXISTS <schema>` |

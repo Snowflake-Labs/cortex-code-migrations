@@ -64,7 +64,9 @@ Persist via `configure(...)` (still no `ensure_metadata_schema=true`):
 Call `configure(ensure_metadata_schema=true)` (no other args). This:
 
 1. Invalidates the cached `schema_manager` and `prereqs` reports for the
-   current `(snowflake_connection, snowflake_database)`.
+   current `(snowflake_connection, snowflake_database)`, and clears
+   `schema_version` in `.scai/config/plugin.local.yml` so a matching plugin
+   version no longer skips the probe.
 2. Re-runs `ensure_schemas`. `check_validation` now sees
    `testing_data_source` is set and **auto-deploys VALIDATION** via
    `scai test validate --create-schema` if it's missing.

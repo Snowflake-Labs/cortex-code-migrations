@@ -145,12 +145,12 @@ After conversion, ask:
 
 > "What would you like to do next?"
 > 1. **Review converted output** — inspect `snowflake/`, `reports/SnowConvert/`, conversion logs, and (if Power BI repointing ran) `artifacts/repointing_output/` and `snowflake/power_bi_sql_queries/`
-> 2. **Review EWIs** — summarize issues from the latest SnowConvert reports and identify high-priority items
+> 2. **Review EWIs** — summarize issues from the latest conversion reports and identify high-priority items
 > 3. **Resolve EWIs with Cortex Code** — work through selected converted files/issues and apply fixes
 > 4. **Add more source files and re-run conversion** — return to Step 2
 > 5. **Stop here** — leave the converted output ready for manual review
 
-If the user chooses **Resolve EWIs with Cortex Code**, inspect the latest SnowConvert issue reports and converted files, then help fix the selected EWIs directly in the project. Keep the work scoped to code conversion output unless the user explicitly asks to move into deployment or broader migration workflows.
+If the user chooses **Resolve EWIs with Cortex Code**, inspect the latest conversion issue reports and converted files, then help fix the selected EWIs directly in the project. Keep the work scoped to code conversion output unless the user explicitly asks to move into deployment or broader migration workflows.
 
 ## Rules
 

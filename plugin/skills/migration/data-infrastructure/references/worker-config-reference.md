@@ -39,6 +39,36 @@ The project-default `.scai/config/dew_configuration.toml` (path relative to the 
 | `[connections.source.azure_synapse]` | `pool_type` | String | `"dedicated"` (Dedicated SQL pool) or `"serverless"` (on-demand). For serverless, also run the orchestrator with `--source-platform azure_synapse_serverless` and set `database = "master"`. |
 | `[connections.target.snowflake_connection_name]` | `connection_name` | String | Connection name from `~/.snowflake/config.toml` |
 
+## scai source credentials vs worker keys
+
+scai stores source connections in `~/.snowflake/snowct/<engine>.toml`. The worker reads a **different** vocabulary under `[connections.source.<engine>]`. `scai data worker generate-config` writes `connection_name = "…"` (no secrets). Hydration at `worker start` translates through `DewConfigBuilder.ExtractSourceConnectionInfo`. Copy-pasting a scai TOML into the worker file does **not** work.
+
+| Meaning | scai (`snowct/<engine>.toml`) | Worker (`[connections.source.<engine>]`) |
+|---------|-------------------------------|------------------------------------------|
+| Login | `user` | `username` |
+| SQL Server / Synapse host | `server_url` | `host` |
+| Host (Oracle, Teradata, PostgreSQL, Redshift, Db2) | `host` | `host` |
+| Oracle service / SID | `service_name` | **`database`** |
+| Auth discriminator | `auth_method` | Often omitted. Else `authentication` (SQL Server, Teradata), `mode` (Synapse), `oracle_connection_mode`, Redshift IAM `auth_method` |
+| Password / TLS | `password`, `encrypt`, `trust_server_certificate`, `ssl_mode` | Same names |
+| Redshift IAM workgroup | `workgroup` | `workgroup_name` |
+| BigQuery project | `project` | `project_id` |
+
+| scai `--auth` / `auth_method` | Worker TOML |
+|-------------------------------|-------------|
+| SQL Server `standard` | username + password (no `authentication` key; DEA default `sql_auth`) |
+| SQL Server `windows` | `authentication = "windows_auth"` (not `use_windows_auth`) |
+| SQL Server `service_principal` | `authentication = "service_principal"` + `client_id` / `client_secret` |
+| Teradata `standard` | username + password (DEA default logmech TD2) |
+| Teradata `ldap` | `authentication = "LDAP"` + username + password |
+| Synapse `standard` | `mode = "sql_auth"` |
+| Synapse `service-principal` | `mode = "azure_ad"` + `client_id` / `client_secret` — **not** `service_principal` |
+| Synapse `interactive` | *not supported* (headless worker) |
+| Redshift `standard` | username + password + host/port |
+| Redshift `iam-provisioned-cluster` / `iam-serverless` | `auth_method` kept; `cluster_id` or `workgroup_name` |
+
+Prefer the by-name section. Hand-authored inline TOML must use the **worker** column.
+
 ## Azure Synapse auth modes
 
 The worker and scai use **different names for the same authentication method**. `scai data worker generate-config` translates them; only hand-authored TOML needs this table.

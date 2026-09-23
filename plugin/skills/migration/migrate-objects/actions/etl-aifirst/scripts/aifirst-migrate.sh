@@ -1335,7 +1335,22 @@ elif printf '%s' "$BRIEF" | grep -q " BRIEF INCOMPLETE "; then
   degraded=1
 fi
 # ---- END STAGE 6 ------------------------------------------------------------------
-# ====================================================================================
+# =============================================================================
+=======
+# ---- STAGE 7: LINEAGE (I-31 / SNOW-3956440 Component 3) --------------------------
+# Reads the emitted project's source() calls and writes Reports/AiFirstLineage/lineage.json.
+# NON-GATING: a lineage read that fails does not set degraded.
+echo "-- stage 7: lineage (source() dependencies for the registry)"
+LINEAGE=$(python3 "$HERE/lineage.py" "$OUT" 2>&1)
+LINEAGE_RC=$?
+printf '%s\n' "$LINEAGE" | sed 's/^/   /'
+if [ $LINEAGE_RC -ne 0 ]; then
+  echo "   *** LINEAGE UNMEASURED — see cause above. The unit's dependsOn write (Step 2a of"
+  echo "       convert/etl-aifirst/SKILL.md) has nothing to read; it is not a claim the"
+  echo "       unit has no dependencies."
+fi
+# ---- END STAGE 7 ------------------------------------------------------------------
+# ==================================================================================
 
 rm -f "$IR" "$EMITLOG"
 echo "--------------------------------------------------------------"

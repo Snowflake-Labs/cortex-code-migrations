@@ -35,6 +35,7 @@ configure(tasks={"validateView": false})
 
 The choice persists to `<project_dir>/.scai/config/plugin.yml` under `tasks.*`, so it holds across sessions.
 
+- **Disable per-object tasks before registering any in-scope objects.** `main` tasks such as `validateView`, `migrateData`, and `validateData` are project-wide settings; new exclusions are rejected once an in-scope object is registered, including after a completed wave, so later waves cannot silently inherit them. Re-applying an existing disable is safe. One-time `setup` task exclusions are not subject to this timing guard.
 - **Locked tasks can't be disabled.** Load-bearing steps are marked `locked` in the machine — `configure` rejects disabling them (the core setup steps, plus `registration`, `convert`, `deploy`, `etlStabilization`, `seedSynthetic`, `fixCode`).
 - **Structural nodes can't be disabled.** Internal prompts, routers, and terminals have no executor to override — `configure` rejects attempts to exclude them too.
 
@@ -67,7 +68,7 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | Task id | What it does |
 |---|---|
 | `registration` | Register (or update) one object's source DDL (per-object). |
-| `convert` | Converts one object via SnowConvert (per-object). Interactive convert is `scai code convert`. Under `configure(subagent_mode=true)` the executor also passes `--generate-source-bindable-format --generate-snowflake-bindable-format`. |
+| `convert` | Converts one object via SnowConvert (per-object). Always passes `--generate-source-bindable-format --generate-snowflake-bindable-format` (interactive and subagent). Deploy stays legacy-safe when no bindings yaml exists. |
 | `setupSandbox` | Populates the shared source catalog for one read-only object (table, view, function), and only when `configure(subagent_mode=true)`. Deploys the object's source DDL into the source catalog, and for a table also loads its testbed rows (`scai testbed load --source-only`). Interactive sessions skip this task because a live source already holds the objects. Procedures take `deploySandbox` instead — they mutate data, so they set up in a private binding. |
 | `etlStabilization` | Stabilizes a converted ETL code unit (SSIS, Informatica, ...) and validates the functionality. |
 | `etlSeed` | Runs `scai test seed` to generate the per-unit ETL test YAML (pipeline + validation.tables) with the source/target table pairs filled from the Code Unit Registry write-dependencies; the agent fills index_columns and the user confirms before validation runs. |

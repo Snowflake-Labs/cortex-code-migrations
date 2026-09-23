@@ -1,6 +1,6 @@
 ---
 name: convert
-description: Convert source code to Snowflake SQL using SnowConvert. Transforms full-migration sources and code-conversion-only sources to Snowflake-compatible syntax, and optionally repoints Power BI reports and Tableau workbooks. Triggers: convert, snowconvert, transform code, convert to snowflake, power bi, tableau.
+description: Convert source code to Snowflake SQL using Snowflake's deterministic code conversion engine. Transforms full-migration sources and code-conversion-only sources to Snowflake-compatible syntax, and optionally repoints Power BI reports and Tableau workbooks. Triggers: convert, snowconvert, transform code, convert to snowflake, power bi, tableau.
 parent_skill: migration
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -13,11 +13,11 @@ Tell the user:
 > **Code Conversion.**
 >
 > Here's what I'll do:
-> 1. Run SnowConvert against your source SQL files, transforming each into Snowflake SQL syntax (optionally tailoring conversion settings to your source first, or going with defaults).
+> 1. Run the deterministic code conversion engine against your source SQL files, transforming each into Snowflake SQL syntax (optionally tailoring conversion settings to your source first, or going with defaults).
 > 2. Generate reports flagging anything that needs manual review (EWIs, FDMs, performance remarks, out-of-scope items).
 > 3. Save converted code under `snowflake/` and reports under `reports/SnowConvert/`.
 
-Convert source code to Snowflake SQL using SnowConvert.
+Convert source code to Snowflake SQL using the deterministic code conversion engine.
 
 Report the result from the `--json` envelope and hand off. Reading the generated
 reports, counting EWIs by severity or judging what needs fixing is the
@@ -89,7 +89,7 @@ If **no**, proceed to Step 3.6. `TABLEAU_PATH` remains unset; do not pass `--tab
 
 Keep this quick — most users just want defaults. Ask via `ask_user_question` (`multiSelect = false`):
 
-> "SnowConvert supports custom conversion settings tailored to your source language. Want to tailor them, or go with the defaults?"
+> "The conversion engine supports custom conversion settings tailored to your source language. Want to tailor them, or go with the defaults?"
 >
 > 1. **Tailor settings** — I'll suggest options based on your code; you confirm.
 > 2. **Go with defaults**
@@ -99,7 +99,7 @@ Keep this quick — most users just want defaults. Ask via `ask_user_question` (
 
 ### Step 4: Run Conversion
 
-Before running, tell the user what the conversion will cover: the SQL and ETL already in the project (`source/`, plus `source/_etl/` when present), Power BI repointing if `PBIT_PATH` was set, and Tableau repointing if `TABLEAU_PATH` was set. Tableau-only (empty `source/`, `TABLEAU_PATH` set) is valid.
+Before running, tell the user what the conversion will cover: the SQL and ETL already in the project (`source/`, plus `source/_etl/` when present), Power BI repointing if `PBIT_PATH` was set, and Tableau repointing if `TABLEAU_PATH` was set. Tableau-only (empty `source/`, `TABLEAU_PATH` set) is valid. Also tell them convert will write `.scai/bindings/database-bindings.yaml` by default so each source catalog maps to a Snowflake database — they can opt out before you run if they want the older single-database convert.
 
 Start from the base command:
 
@@ -109,10 +109,11 @@ scai code convert <SETTINGS_FLAGS> --json
 
 `--json` is always required so you can parse the result envelope. Substitute `<SETTINGS_FLAGS>` with the confirmed flags from Step 3.6 (or omit the token when empty). Then append one flag per decision already recorded in the steps above — nothing else. Do **not** pass `--etl-replatform-sources-path`; ETL already lives under `source/_etl/` from register.
 
-When `configure()` reports `subagent_mode` is on, also append `--generate-source-bindable-format --generate-snowflake-bindable-format`. They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Interactive convert omits them so existing projects are not forced onto bindings.
+Always append `--generate-source-bindable-format --generate-snowflake-bindable-format` (**default on / opt-out**). They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Omit both flags only when the user explicitly opts out. Deploy stays legacy-safe: projects converted earlier, with no bindings file, still use `-d snowflake_database`. Bare `scai code convert` without these flags (engine default) is also opt-out.
 
 | Append | When |
 |--------|------|
+| `--generate-source-bindable-format --generate-snowflake-bindable-format` | Default on (interactive and `subagent_mode`). Skip only on explicit opt-out. |
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 2 (Informatica target is Snowflake Scripting) |
 | `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set in Step 2 (Informatica target is dbt and the user chose to consolidate model chains) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 3 |
@@ -125,6 +126,8 @@ Substitute `<PBIT_PATH>` and `<TABLEAU_PATH>` with the actual paths you stored. 
 ### Step 4.5: AI-First ETL Migration (Something else only)
 
 Skip this step unless Step 2 set `<AIFIRST_ETL_PATH>`. Load `./etl-aifirst/MIGRATE.md` and follow it — it routes the unsupported ETL document through the AI-First convert action instead of the native engine, reports its exit code, and returns here when done. It does not touch the SQL conversion Step 4 just produced.
+
+Its registry step defers to `./etl-aifirst/SKILL.md`, which is the contract for when an unsupported-platform unit may be recorded as converted and how its lineage is written. Read that file too; a unit left pending there is missing from every report rebuilt from `dependencies.dependsOn`.
 
 ### Step 5: Read the Result Envelope
 
@@ -224,25 +227,39 @@ If the envelope reports errors, surface them verbatim and stop. Otherwise move o
 
 ## On Completion
 
-Show the JSON envelope from `scai code convert --json` **as-is**, in a fenced
-`json` block, under one line:
+Show a concise result line using only values from the JSON envelope:
 
-> **Conversion complete.** Converted code is in `snowflake/`, reports in `reports/SnowConvert/`.
+> **Conversion complete.** SQL: `<codeConversion.filesProcessed>` files processed,
+> `<codeConversion.codeUnitsConverted>` code units converted. ETL:
+> `<etlReplatforming.processedFiles>` files processed. Converted code is in
+> `snowflake/`; reports are in `reports/SnowConvert/`.
+
+If the envelope has no `etlReplatforming` result, omit the ETL sentence. Never
+invent a missing count.
+
+Then show the JSON envelope from `scai code convert --json` **as-is**, in a
+fenced `json` block.
 
 When Tableau was requested, the envelope's `result.tableauRepointing` block is
 authoritative: success contains `processedFiles` and the durable `outputPath`;
 `{"message":"None found"}` means no Tableau result was processed. Do not construct
 or infer a different output path.
 
+If you appended the bindable-format flags (the default), also tell the user once:
+
+> Convert wrote `.scai/bindings/database-bindings.yaml` — each source catalog maps to a Snowflake database there (1:1 by default). Edit that file before deploy if you want different target names.
+
+Skip that line when the user opted out of the flags.
+
 Then one line on what's next, and move on:
 
 > Next, we'll run an assessment to plan your migration: dependency waves, object categorization, and a deployment plan.
 
-Do not restate the envelope's numbers in prose, break issues down by severity,
-rank them, or say which ones need fixing — the assessment does that with the
-full picture, and a summary here is one more thing that can disagree with it.
-If the user asks about a number, an EWI code, or a specific file, dig in *then*;
-the reference sections above are for that.
+Do not break issues down by severity, rank them, or say which ones need fixing
+— the assessment does that with the full picture. The concise result line above
+is the only prose summary of envelope numbers. If the user asks about a number,
+an EWI code, or a specific file, dig in *then*; the reference sections above
+are for that.
 
 *If `SCRIPTING_MODE` was set*, also tell the user:
 > Informatica mappings were converted to Snowflake Scripting stored procedures (preview). **ETL Stabilization is not supported for Snowflake Scripting conversions (dbt only)**, and deploy is not part of this preview flow - both are skipped for these ETL units. The generated procedures and Task graph are under `snowflake/_etl/` for review.

@@ -43,7 +43,7 @@ projects, this is a new project — load `./setup/SKILL.md`.
 ### Step 1.B: If `project_exists` is true, construct a brief narrative summary for the user from the JSON before showing the checklist. Use the `routing` booleans and `by_type` counts to describe the current state in plain language. Examples of the tone and level of detail:
 
 - **Early setup:** "Your project is initialized and connected to SQL Server. 147 objects are registered but haven't been converted yet. We're in the setup phase."
-- **Mid-migration:** "Setup is complete — 147 objects registered and converted, assessment done. You're in the migration phase: 12 of 47 objects have been deployed so far (Wave 2). 8 tables deployed, 2 views deployed, 2 procedures passed testing."
+- **Mid-migration:** "Setup is complete — 147 objects registered and converted, assessment done. You're in the migration phase: of the 47 objects in Wave 2, 12 have been deployed so far. 8 tables deployed, 2 views deployed, 2 procedures passed testing."
 - **Near completion:** "Almost there — 45 of 47 objects are deployed and tested. 2 procedures are still failing tests."
 
 Also add the checklist based on the status JSON. On macOS/Linux use `✅` (all done), `◐` (partial), `⬚` (not started). On Windows use `[done]` (all done), `[in progress]` (partial), `[ ]` (not started) because the default Windows console encoding cannot render Unicode symbols.
@@ -56,17 +56,20 @@ Also add the checklist based on the status JSON. On macOS/Linux use `✅` (all d
 <symbol> 5. Assessment               - Assessment report generated
 <symbol> 6. Migration Setup          - Snowflake target, testing, testbed, and data infra configured
 <symbol> 7. Migrate Objects
-   - Tables:      <table.deployed>/<table.total> deployed, <table.data_migrated>/<table.total> with data migrated, <table.data_validated>/<table.total> validated
-   - Views:       <view.deployed>/<view.total> deployed
-   - Functions:   <function.deployed>/<function.total> deployed, <function.tested>/<function.total> tested
-   - Procedures:  <procedure.deployed>/<procedure.total> deployed, <procedure.tested>/<procedure.total> tested
-   - ETL:         <etl.deployed>/<etl.total> deployed
-   - BTEQ scripts: <bteq.tested>/<bteq.total> tested
+   - Tables:      <table.deployed>/<table.in_scope> deployed, <table.data_migrated>/<table.in_scope> with data migrated, <table.data_validated>/<table.in_scope> validated
+   - Views:       <view.deployed>/<view.in_scope> deployed
+   - Functions:   <function.deployed>/<function.in_scope> deployed, <function.tested>/<function.in_scope> tested
+   - Procedures:  <procedure.deployed>/<procedure.in_scope> deployed, <procedure.tested>/<procedure.in_scope> tested
+   - ETL:         <etl.deployed>/<etl.in_scope> deployed
+   - BTEQ scripts: <bteq.tested>/<bteq.in_scope> tested
 ```
+
+The denominator is `in_scope`, not `total`: the numerators above are wave-scoped, so dividing them by the project-wide `total` reports one wave's progress as the whole migration's. Under an active wave, say which wave the checklist covers.
 
 Use `by_type.<type>.total` to decide what to show:
 - **Type not in the project** (`total` absent or 0): omit that bullet (e.g. no functions in the project).
 - **Type present but none in the current wave** (`total` > 0, but the wave-scoped counts like `deployed` are absent or 0 for this wave): keep it visible and acknowledge it in the narrative. For example, "You also have 1 Informatica ETL workflow staged, scheduled in a later wave and ready to deploy." Do not let the current wave hide work that exists elsewhere in the project.
+- **A wave is active** (`wave` is present in the status JSON): `in_scope`, `objects_done` and every `stage_totals` count cover that wave alone, while `total_objects` and `by_type.<type>.total` are project-wide. Always name the wave and `in_scope_all_waves` when you quote them — "69 objects in wave 1, of 1,110 in scope across all waves" — never present a wave's count as the project's.
 
 Never describe the project as "<type>-only" (e.g. "table-only") when `by_type` lists any other type with `total` > 0. The placeholders read directly from `by_type.<type>` in the `## Migration status` block; counts that never incremented are absent from the JSON and should be treated as `0`. **BTEQ scripts have no deploy step** — they run their converted SQL inside the test itself, so report them only by `tested` (never "deployed"); `by_type.bteq` carries no `deployed` count.
 

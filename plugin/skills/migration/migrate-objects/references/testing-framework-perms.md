@@ -71,7 +71,7 @@ GRANT CREATE DATABASE ON ACCOUNT TO ROLE <ROLE>;
 GRANT USAGE, OPERATE ON WAREHOUSE <WAREHOUSE> TO ROLE <ROLE>;
 ```
 
-After applying, tell the agent "done" or "recheck" — it will run `configure(ensure_metadata_schema=true)` which clears the cached failure and re-probes.
+After applying, tell the agent "done" or "recheck" — it will run `configure(ensure_metadata_schema=true)` which clears the cached failure (including the `schema_version` stamp in `plugin.local.yml`) and re-probes.
 
 ### Why each grant
 

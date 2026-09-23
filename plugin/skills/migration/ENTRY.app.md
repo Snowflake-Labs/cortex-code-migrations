@@ -13,7 +13,7 @@ Call `migration_status`. It returns JSON with `project_exists`, `directory_empty
 **If `project_exists` is true**, give the user a brief prose summary of where the migration stands, built from the `routing` booleans and `by_type` counts. The UI panel already shows the stage-by-stage numbers, so your job is the sentence the panel cannot write: what phase this project is in and what stands out. Aim for this level of detail:
 
 - **Early setup:** "Your project is initialized and connected to SQL Server. 147 objects are registered but haven't been converted yet — we're still in the setup phase."
-- **Mid-migration:** "Setup is complete and assessment is done. You're in the migration phase: 12 of 47 objects deployed so far, in Wave 2."
+- **Mid-migration:** "Setup is complete and assessment is done. You're in the migration phase: of the 47 objects in Wave 2, 12 are deployed so far."
 - **Near completion:** "Almost there — 45 of 47 objects are deployed and tested. 2 procedures are still failing tests."
 
 Then go to Step 2.
@@ -22,6 +22,7 @@ Reading `by_type` correctly matters:
 
 - **Type absent** (`total` absent or 0): don't mention it. A project with no functions has no function story.
 - **Type present but not in the current wave** (`total` > 0, wave-scoped counts absent or 0): acknowledge it anyway — e.g. "you also have 1 Informatica ETL workflow staged for a later wave." Don't let the current wave hide work that exists elsewhere in the project.
+- **A wave is active** (`wave` present): `in_scope`, `objects_done` and every `stage_totals` count are that wave only; `total_objects` and `by_type.<type>.total` are project-wide. Name the wave and `in_scope_all_waves` whenever you quote them — "69 objects in wave 1, of 1,110 in scope across all waves" — never report a wave's count as the project's.
 - Never describe a project as "<type>-only" (e.g. "table-only") when `by_type` lists any other type with `total` > 0.
 - Counts that never incremented are absent from the JSON — treat them as 0.
 - **BTEQ scripts have no deploy step.** They run their converted SQL inside the test itself, so report them only by `tested`, never "deployed"; `by_type.bteq` carries no `deployed` count.

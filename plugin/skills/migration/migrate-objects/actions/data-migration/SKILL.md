@@ -268,7 +268,13 @@ turn while bypassing the relay. Arm Monitor instead. If its watch is lost,
 recover it with `job_status(job_id, monitor=true)` as described below; do not
 compensate with `sleep`. `sleep` is not a shorter wait — Monitor is already
 watching, so a sleep only delays the report you would have gotten for free.
-Short sleeps (1–3s) after killing a process are the only allowed exception.
+Short sleeps (1–3s) after killing a process are the only allowed exception, and
+that ceiling holds whatever the reason. A refused `scai connection test` is
+retried immediately, not after a pause — a port that rejected you does not
+change its mind on a timer, so retry once and report what it said. Reading
+`.scai/monitor/relay.jsonl` is not a reason to sleep either: the relay's event
+is what wakes you, so tailing its log behind a `sleep` spends the turn you were
+waiting with and tells you nothing the event would not have.
 
 **Never declare the job done from SQL or from the report files.** A
 `sql_execute` `SELECT` / `COUNT(*)` against the target table is not
