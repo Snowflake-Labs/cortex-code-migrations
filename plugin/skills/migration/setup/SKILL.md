@@ -131,6 +131,7 @@ Tasks the machine routes through, in order:
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
 | `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
+| `chooseEtlFlow`                  | inline prompt (`next_prompt`) — recommended stabilize-first vs. validate-first ETL routing; writes `etl_flow=stabilize|validate`, then continues to `chooseRunMode` |
 | `chooseRunMode`                  | inline prompt (`next_prompt`) — continue to migration setup; writes `run_mode=manual`. Do not offer autonomous. AIM pre-sets `run_mode=manual` (see `bootConfigureParams`) so this prompt is not asked there. |
 | `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md`                  |
@@ -144,8 +145,8 @@ Tasks the machine routes through, in order:
 
 Conversion and assessment come first on purpose: neither needs a Snowflake
 target, so a user reaches their assessment report before opting into
-migration setup. Everything else — git included — follows the
-`chooseRunMode` prompt.
+migration setup. The ETL flow choice follows assessment; everything else —
+git included — follows the `chooseRunMode` prompt.
 
 The milestone commits (`registerCode`, `convertCode`, `runAssessment`) need git,
 which now comes after that prompt. They land together on the first

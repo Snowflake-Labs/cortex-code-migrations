@@ -317,7 +317,17 @@ or a shared job reached terminal — never from the child's `failed` payload:
 transition_status(status="reset", task="<task>", where="id = '<id>'")
 ```
 
-Then a later send of the same object, once.
+Then a later send of the same object, once. **That is the whole recovery
+sequence.** Do not follow `reset` with `status="answer"`; do not manufacture
+`resolution="guidance"` from your diagnosis or repair notes. `answer` records a
+human decision. Your verified remediation belongs in the wave report and the
+later-send prompt, not in a row attributed to the user.
+
+If a child already parked the object before a foreground recovery helper
+returns `done`, the helper's successful repair is clearing evidence: call
+`reset`, then later-send the same walker with the repair fact. Do not leave a
+mechanically repaired object parked, and do not answer its historical row.
+
 Record the remediation or clearing evidence in your report. If nothing changed,
 leave an existing escalation open; if the object is not parked yet, park it with
 the exact failure and the repair needed before a rerun.
@@ -472,9 +482,10 @@ an agent because the machine could not observe them.
 A stage count is not a done count. Take the finished number from the
 `migration_status()` you already called — `objects_done` — and leave `stage_totals`
 out of it: an object can be deployed, data-migrated, and still not finished, so
-adding stage counts together counts one object several times. `objects_done` is
-project-wide, which is what a wave total should be; `doneCount` on
-`my_objects_board` counts only what you hold a claim on.
+adding stage counts together counts one object several times. `objects_done` covers
+the active wave, so when the status payload carries a `wave`, name it and
+`in_scope_all_waves` rather than presenting that wave's total as the migration's;
+`doneCount` on `my_objects_board` counts only what you hold a claim on.
 
 Build every line the board can confirm from the board. A walker's final JSON
 is not a channel to the dispatcher. Nothing counts remediated resets for you — take those from the board and

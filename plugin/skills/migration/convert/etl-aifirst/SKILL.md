@@ -4,7 +4,8 @@ parent_skill: convert
 description: >
   Routing for ETL platforms SnowConvert does not natively convert. Decides between the
   native ETL replatform path and the AI-First convert action, states what each exit
-  code means, and when the Code Unit Registry may record conversion as completed.
+  code means, when the Code Unit Registry may record conversion as completed,
+  and how lineage is written into the Code Unit Registry.
   Instruction-only: the runtime lives in the etl-aifirst action.
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -37,7 +38,14 @@ path is available.
 
 ## Routing the AI-First case
 
-Ask for the filesystem path of the source document, then hand it to the action's driver.
+First resolve the registered unit's output root. If a real
+`Reports/AiFirstRemediation/remediation-brief.json` already exists there, the producer
+already ran. Resume those artifacts: do not invoke the driver, replace output, or
+regenerate a missing lineage report. If issues exist without a brief, preserve that
+failed run and record it as failed below. Only ask for the source document and start a
+new producer run when neither artifact exists.
+
+For a new run, ask for the filesystem path of the source document, then hand it to the action's driver.
 Read that action's `SKILL.md` before invoking it; the entry is:
 
 ```bash
@@ -108,3 +116,35 @@ AI-First writes a remediation brief indexing its Gate B obligations, integrity f
 and AIM issues. That brief is what `etl-stabilization` consumes to repair emitted output;
 it is the seam between the two actions. Do not attempt post-emission repair here — this
 skill routes, and Stabilization repairs.
+
+## Writing lineage into the Code Unit Registry
+
+So the unit shows up in ObjectReferences CSV the same way an engine-converted unit's
+dependencies do — that report is rebuilt generically from any unit's
+`dependencies.dependsOn`.
+
+1. Read `Reports/AiFirstLineage/lineage.json` beside this unit's output root (producer
+   Stage 7, `lineage.py`). Its `sources` array lists the bare `(schema, table)` names
+   this unit's emitted SQL reads via `source()`. If the file is absent or its stage
+   logged `LINEAGE UNMEASURED`, skip this write — an absent report is not "no
+   dependencies"; do not invent an empty array.
+
+   That report is the only admissible evidence. Do not reconstruct the array from the
+   emitted dbt project, its `sources.yml`, the seed CSVs, or the source document. Those
+   show what you can read, not what the producer measured, and a dependency derived
+   from them is fabricated even when it happens to be right.
+2. For each `(schema, table)` pair, resolve it with `query_registry`. The emitter never
+   invents a database/schema for a `source()` call.
+   - Exactly one match: that entry's `id` is the dependency.
+   - Zero matches: use the bare table name as `id` and set `"isMissing": true`. Do not drop it.
+   - More than one match: do not guess; escalate.
+3. Call once per unit, replacing (not merging) the array:
+
+```
+update_registry(field="dependencies.dependsOn", objects=["<unit_id>"],
+                depends_on='[{"id": "<resolved_id>", "relationTypes": ["source"]},
+                              {"id": "<bare_table_name>", "isMissing": true, "relationTypes": ["source"]}]')
+```
+
+Do not write `dependencies.dependsOn` from `lineage.json`'s `intra_project_refs` — those
+are `ref()` calls between this unit's own emitted models.

@@ -96,6 +96,14 @@ except ImportError as e:
     print(f"Warning: Anti-patterns report generator not available: {e}", file=sys.stderr)
     ANTI_PATTERNS_SUPPORT = False
 
+# Data Lineage report generator (optional)
+try:
+    from data_lineage_report import generate_data_lineage_html_content
+    DATA_LINEAGE_SUPPORT = True
+except ImportError as e:
+    print(f"Warning: Data lineage report generator not available: {e}", file=sys.stderr)
+    DATA_LINEAGE_SUPPORT = False
+
 # Effort estimation artifact loader and renderers
 try:
     from effort_estimation import (
@@ -112,12 +120,16 @@ except ImportError as e:
 
 # Workload Insights artifact loader and renderer
 try:
-    from workload_insights import (
-        is_sql_server,
+    from workload_insights_common import (
+        is_workload_insights_dialect,
         load_workload_insights,
-        render_workload_insights_tab_html,
         workload_insights_chart_js,
         workload_insights_css,
+    )
+    from sqlserver_workload_insights import render_workload_insights_tab_html
+    from teradata_workload_insights import (
+        render_teradata_workload_insights_tab_html,
+        teradata_workload_insights_css,
     )
     WORKLOAD_INSIGHTS_SUPPORT = True
 except ImportError as e:
@@ -1046,6 +1058,7 @@ def generate_multi_report(
     informatica_source_dir: Path = None,
     effort_estimates_json: Path = None,
     workload_insights_json: Path = None,
+    data_lineage_json: Path = None,
     project_dir: Path = None,
 ) -> None:
     """Generate multi-tab HTML report"""
@@ -1117,6 +1130,17 @@ def generate_multi_report(
             print(f"Warning: Could not load anti-patterns data: {e}", file=sys.stderr)
             has_anti_patterns = False
 
+    # Data Lineage: counts as a first-class data source (an explicit or
+    # discovered artifact that exists is enough), but the tab itself always
+    # renders regardless -- a missing or malformed artifact renders the
+    # module's own empty state rather than omitting the tab. See the
+    # unconditional generate_data_lineage_html_content() call below.
+    has_data_lineage = False
+    if data_lineage_json and DATA_LINEAGE_SUPPORT:
+        has_data_lineage = Path(data_lineage_json).is_file()
+        if has_data_lineage and not exclusion_json and not dynamic_sql_json and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns:
+            default_tab = 'data-lineage'
+
     effort_assessment = None
     if effort_estimates_json and EFFORT_SUPPORT:
         print(f"Loading effort estimates data from {effort_estimates_json}...")
@@ -1144,8 +1168,8 @@ def generate_multi_report(
         if override_count:
             print(f"  - Effort overrides: {override_count} from {overrides_path.name}")
 
-    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns and not effort_estimates_json and not workload_insights_json:
-        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, anti-patterns, effort estimates, or workload insights) must be provided")
+    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns and not effort_estimates_json and not workload_insights_json and not has_data_lineage:
+        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, anti-patterns, effort estimates, workload insights, or data lineage) must be provided")
     
     # Process exclusion data — schema produced by `scai assessment object-exclusion`
     # is the single source of truth; field names below match that schema directly.
@@ -1300,6 +1324,7 @@ def generate_multi_report(
         ssis_json=ssis_json if has_ssis else None,
         has_anti_patterns=has_anti_patterns,
         anti_patterns_json=anti_patterns_json if has_anti_patterns else None,
+        data_lineage_json=data_lineage_json,
         has_informatica=has_informatica,
         informatica_json=informatica_json if has_informatica else None,
         informatica_source_dir=informatica_source_dir,
@@ -1381,6 +1406,7 @@ def generate_html_template(
     missing_objects_data: Dict = None,
     has_anti_patterns: bool = False,
     anti_patterns_json: Path = None,
+    data_lineage_json: Path = None,
     effort_assessment: Dict = None,
     workload_insights_payload: Dict = None,
     effort_overrides: Dict = None,
@@ -1599,7 +1625,15 @@ def generate_html_template(
     show_workload_insights = (
         WORKLOAD_INSIGHTS_ENABLED
         and WORKLOAD_INSIGHTS_SUPPORT
-        and is_sql_server(source_dialect)
+        and is_workload_insights_dialect(source_dialect)
+    )
+    # The artifact names the engine its rows came from, so it outranks the
+    # registry dialect when picking a renderer.
+    workload_insights_dialect = str(
+        (workload_insights_payload or {}).get('source_dialect') or ''
+    ).strip().lower()
+    renders_teradata_workload = workload_insights_dialect == 'teradata' or (
+        not workload_insights_dialect and source_dialect == 'Teradata'
     )
     workload_insights_nav_html = ""
     workload_insights_html = ""
@@ -1613,13 +1647,17 @@ def generate_html_template(
         """
         workload_insights_html = f"""
             <div class="tab-content" :class="{{active: activeTab === 'workload-insights'}}">
-                {render_workload_insights_tab_html(workload_insights_payload)}
+                {render_teradata_workload_insights_tab_html(workload_insights_payload) if renders_teradata_workload else render_workload_insights_tab_html(workload_insights_payload)}
             </div>
         """
         workload_insights_javascript = workload_insights_chart_js(
             workload_insights_payload
         )
-        workload_insights_styles = workload_insights_css()
+        workload_insights_styles = (
+            teradata_workload_insights_css()
+            if renders_teradata_workload
+            else workload_insights_css()
+        )
 
     external_tables_card_html = ''
     objects_by_type = overview_stats.get('objects_by_type', {}) if overview_stats else {}
@@ -1663,6 +1701,27 @@ def generate_html_template(
             '<a @click="scrollToSection(\'#effort-top-issues\', \'effort-estimates\')" class="nav-sublink">Top Issues</a>'
             '</div>'
         )
+
+    # `scrollToSection` silently no-ops on a missing target, so a sublist whose
+    # anchors live in optional pane content has to be gated on that same content.
+    waves_nav_sublist = (
+        '<div v-if="activeTab === \'waves\'" class="nav-sublist">'
+        '<a @click="scrollToSection(\'#overview\', \'waves\')" class="nav-sublink">Overview</a>'
+        '<a @click="scrollToSection(\'#all-objects\', \'waves\')" class="nav-sublink">All Objects</a>'
+        '</div>'
+        if has_waves and waves_info
+        else ""
+    )
+    etl_nav_sublist = (
+        '<div v-if="activeTab === \'etl\'" class="nav-sublist">'
+        '<a @click="scrollToSection(\'#informatica-executive-summary\', \'etl\')" class="nav-sublink">AI Summary</a>'
+        '<a @click="scrollToSection(\'#informatica-metrics\', \'etl\')" class="nav-sublink">Key Metrics</a>'
+        '<a @click="scrollToSection(\'#informatica-workflow-classification\', \'etl\')" class="nav-sublink">Workflow Classification</a>'
+        '<a @click="scrollToSection(\'#informatica-component-breakdown\', \'etl\')" class="nav-sublink">Component Breakdown</a>'
+        '</div>'
+        if has_informatica
+        else ""
+    )
 
     # Overview tab HTML
     overview_html = f"""
@@ -1808,12 +1867,17 @@ def generate_html_template(
          'For Teradata workloads, plan query virtualization and find help designing your Snowflake target.'),
     ]
     if show_workload_insights:
+        capture_name = (
+            'Teradata DBQL extract'
+            if renders_teradata_workload
+            else 'SQL Server Extended Events capture'
+        )
         journey_steps.insert(
             0,
             (
                 'workload-insights',
                 'Discovery',
-                'Insights from the SQL Server Extended Events capture: execution volume, duration, statement mix, applications, users, long-running executions, and errors.',
+                f'Insights from the {capture_name}: execution volume, duration, statement mix, applications, users, long-running executions, and errors.',
             ),
         )
     if not show_virtualization:
@@ -1964,7 +2028,48 @@ def generate_html_template(
             </div>
         """
 
-
+    # Generate Data Lineage HTML content. Unlike the other optional tabs
+    # above, this call is unconditional: the renderer itself produces the
+    # tab's empty state for a missing (including None) or malformed
+    # artifact, so the Data Lineage tab is always present whenever the
+    # multi-tab report is generated at all -- only a missing
+    # data_lineage_report module (import failure) falls back to a plain
+    # notice here instead.
+    data_lineage_html = ""
+    data_lineage_js = ""
+    data_lineage_css = ""
+    if DATA_LINEAGE_SUPPORT:
+        dl_content, data_lineage_js, data_lineage_css = generate_data_lineage_html_content(data_lineage_json)
+        # v-pre shields the artifact-controlled body from Vue's mustache
+        # compiler: a customer node Label/Narrative/Ask/Finding containing
+        # "{{ }}" would otherwise be evaluated as a Vue expression and blank
+        # the whole report. Only the rendered body is v-pre'd; the outer
+        # tab-content div keeps its normal :class active binding.
+        data_lineage_html = f"""
+            <!-- Data Lineage Report Tab -->
+            <div class="tab-content" :class="{{active: activeTab === 'data-lineage'}}">
+                <div v-pre>
+                {dl_content}
+                </div>
+            </div>
+        """
+    else:
+        data_lineage_html = """
+            <div class="tab-content" :class="{active: activeTab === 'data-lineage'}">
+                <div style="margin-bottom: 32px;">
+                    <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
+                        Data Lineage
+                    </h1>
+                    <p style="color: #64748B; font-size: 1.1rem;">
+                        Follow how data moves from sources through pipelines to targets and reports.
+                    </p>
+                </div>
+                <div class="empty-state">
+                    <h3>No Data Available</h3>
+                    <p>Data lineage assessment data is not available. Run <code>scai assessment data-lineage</code> to generate it.</p>
+                </div>
+            </div>
+        """
 
     exclusion_html = ""
     if has_exclusion:
@@ -4368,6 +4473,9 @@ def generate_html_template(
 
         /* Anti-patterns report styles (scoped to #anti-patterns-report) */
 {anti_patterns_css}
+
+        /* Data Lineage report styles (scoped to #data-lineage-report) */
+{data_lineage_css}
 {workload_insights_styles}
 {testing_css}
 {data_migration_css}
@@ -5340,11 +5448,7 @@ def generate_html_template(
                     <a @click="activeTab = 'waves'" class="nav-link" data-tab="waves" :class="{{active: activeTab === 'waves'}}">
                         Dependencies Report
                     </a>
-                    <div v-if="activeTab === 'waves'" class="nav-sublist">
-                        <a @click="scrollToSection('#overview', 'waves')" class="nav-sublink">Overview</a>
-                        <a @click="scrollToSection('#all-objects', 'waves')" class="nav-sublink">All Objects</a>
-                        <a @click="scrollToSection('#wave-recommendations', 'waves')" class="nav-sublink">Migration Waves</a>
-                    </div>
+                    {waves_nav_sublist}
                     <a @click="activeTab = 'exclusion'" class="nav-link" data-tab="exclusion" :class="{{active: activeTab === 'exclusion'}}">
                         Exclusion Report
                     </a>
@@ -5354,14 +5458,12 @@ def generate_html_template(
                     <a @click="activeTab = 'etl'" class="nav-link" data-tab="etl" :class="{{active: activeTab === 'etl'}}">
                         ETL Report
                     </a>
-                    <div v-if="activeTab === 'etl'" class="nav-sublist">
-                        <a @click="scrollToSection('#informatica-executive-summary', 'etl')" class="nav-sublink">AI Summary</a>
-                        <a @click="scrollToSection('#informatica-metrics', 'etl')" class="nav-sublink">Key Metrics</a>
-                        <a @click="scrollToSection('#informatica-workflow-classification', 'etl')" class="nav-sublink">Workflow Classification</a>
-                        <a @click="scrollToSection('#informatica-component-breakdown', 'etl')" class="nav-sublink">Component Breakdown</a>
-                    </div>
+                    {etl_nav_sublist}
                     <a @click="activeTab = 'risks'" class="nav-link" data-tab="risks" :class="{{active: activeTab === 'risks'}}">
                         Optimization Opportunities
+                    </a>
+                    <a @click="activeTab = 'data-lineage'" class="nav-link" data-tab="data-lineage" :class="{{active: activeTab === 'data-lineage'}}">
+                        Data Lineage
                     </a>
                 </div>
                 <a @click="activeTab = 'data-migration'" class="nav-section" data-tab="data-migration" :class="{{active: activeTab === 'data-migration'}}">
@@ -5384,6 +5486,7 @@ def generate_html_template(
             {waves_html}
             {etl_tab_content}
             {anti_patterns_html}
+            {data_lineage_html}
             {data_migration_html}
             {testing_html}
             {virtualization_html}
@@ -5521,7 +5624,7 @@ def generate_html_template(
                     sourceDialect: {source_dialect_json},
                     // Must list every nav-link inside the group: the group is
                     // v-show'd on membership, so an omitted tab hides its own sub-nav.
-                    codeEtlTabs: ['overview', 'effort-estimates', 'waves', 'exclusion', 'dynamic-sql', 'etl', 'risks'],
+                    codeEtlTabs: ['overview', 'effort-estimates', 'waves', 'exclusion', 'dynamic-sql', 'etl', 'risks', 'data-lineage'],
                     jsonData: dynamicSqlData,
                     searchQuery: '',
                     complexityFilter: 'all',
@@ -5806,6 +5909,9 @@ def generate_html_template(
             }},
             watch: {{
                 activeTab(newTab) {{
+                    // Every pane shares the document's scroll, so a switch would otherwise
+                    // open mid-pane. Synchronous, so a sub-link's scrollIntoView still wins.
+                    window.scrollTo(0, 0);
                     if (newTab === 'workload-insights') {{
                         this.$nextTick(() => {{
                             if (typeof window.renderWorkloadInsightsCharts === 'function') {{
@@ -6495,6 +6601,14 @@ def generate_html_template(
         {anti_patterns_js}
     </script>
 
+    <!-- Data Lineage Report JavaScript: the graph payload plus click-to-highlight.
+         The payload has to be assigned out here rather than embedded in the tab
+         body, because Vue drops a <script> element when it compiles the mounted
+         template. -->
+    <script>
+        {data_lineage_js}
+    </script>
+
     <!-- Dependencies Report JavaScript (separate script block for global scope) -->
     <script>
         {waves_js}
@@ -6693,6 +6807,12 @@ def main():
     )
 
     parser.add_argument(
+        '--data-lineage-json',
+        type=Path,
+        help='Path to data-lineage.json produced by `scai assessment data-lineage`.'
+    )
+
+    parser.add_argument(
         '--output',
         type=Path,
         required=True,
@@ -6702,6 +6822,7 @@ def main():
     args = parser.parse_args()
     explicit_effort_estimates_json = args.effort_estimates_json
     explicit_workload_insights_json = args.workload_insights_json
+    explicit_data_lineage_json = args.data_lineage_json
 
     # --project-dir auto-discovery: fill in registry-dir and snowconvert-reports-dir
     # from the conventional layout if they weren't set explicitly.
@@ -6754,6 +6875,12 @@ def main():
                 if ap_candidates:
                     args.anti_patterns_json = ap_candidates[-1]
                     print(f"Using anti-patterns JSON: {args.anti_patterns_json}", file=sys.stderr)
+        if not args.data_lineage_json:
+            # Stable filename, not globbed/timestamped like the artifacts above.
+            candidate = args.project_dir / "artifacts" / "assessment" / "data-lineage.json"
+            if candidate.is_file():
+                args.data_lineage_json = candidate
+                print(f"Using data lineage JSON: {candidate}", file=sys.stderr)
         if not args.effort_estimates_json:
             effort_dir = args.project_dir / "artifacts" / "assessment"
             if effort_dir.is_dir():
@@ -6790,8 +6917,8 @@ def main():
                     print(f"Using Informatica JSON: {args.informatica_json}", file=sys.stderr)
                     break
 
-    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.effort_estimates_json and not args.workload_insights_json and not args.registry_dir:
-        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --effort-estimates-json, --workload-insights-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
+    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.effort_estimates_json and not args.workload_insights_json and not args.data_lineage_json and not args.registry_dir:
+        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --effort-estimates-json, --workload-insights-json, --data-lineage-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
         print_usage()
         sys.exit(1)
 
@@ -6831,6 +6958,16 @@ def main():
     ):
         print(
             f"Error: Workload insights JSON file not found: {explicit_workload_insights_json}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if (
+        explicit_data_lineage_json
+        and not explicit_data_lineage_json.exists()
+    ):
+        print(
+            f"Error: Data Lineage JSON file not found: {explicit_data_lineage_json}",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -6895,6 +7032,7 @@ def main():
                 informatica_source_dir=getattr(args, 'informatica_source_dir', None),
                 effort_estimates_json=getattr(args, 'effort_estimates_json', None),
                 workload_insights_json=getattr(args, 'workload_insights_json', None),
+                data_lineage_json=getattr(args, 'data_lineage_json', None),
                 project_dir=getattr(args, 'project_dir', None),
             )
     except Exception as e:

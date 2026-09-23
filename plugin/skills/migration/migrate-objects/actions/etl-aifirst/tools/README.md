@@ -5,6 +5,7 @@ Not on the convert runtime path. Runtime lives in `../scripts/`.
 | Script | Role |
 |--------|------|
 | `build_alteryx_table.py` | Regenerate `platforms/platform_alteryx.json` |
+| `build_talend_table.py` | Regenerate `platforms/platform_talend.json` (byte-for-byte; pinned by `test_platform_talend_builder.py`) |
 | `alteryx_census.py` | Corpus plugin-frequency census (`AIFIRST_ALTERYX_CORPUS` or argv) |
 | `runall.py` | Multi-fixture identify/emit batch (`AIFIRST_FIXTURES`, optional `AIFIRST_ENGINE_TESTS`) |
 | `declared_vs_identified.py` | Element-loss gate over `runall.RUNS` |

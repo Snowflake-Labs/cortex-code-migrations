@@ -170,7 +170,7 @@ Ask the user for:
 
 1. **Auto-detect from file extension**: `.dtsx` → `ssis`, `.yxmd` → `alteryx`, `.xml` → ask user to confirm platform
 2. **If ambiguous**, ask the user which platform via `ask_user_question`
-3. **Fallback rule**: if no platform was named (omitted/ambiguous), or a named platform has no `{SKILL_DIR}/platforms/{PLATFORM_ID}/` directory, set `{PLATFORM_ID}` = `unsupported` instead of proceeding with a missing pack. Never carry a null or made-up platform into Step 2 — `scan_unit.py` re-derives and records this same fallback independently.
+3. **Fallback rule**: if no platform was named by the user or established from an original source file (omitted/ambiguous), or a named platform has no `{SKILL_DIR}/platforms/{PLATFORM_ID}/` directory, set `{PLATFORM_ID}` = `unsupported` instead of proceeding with a missing pack. A remediation brief's `platform` field describes where its findings originated; it is **not** source-platform evidence and must not override this fallback. Never pass that field to `scan_unit.py --platform`. Never carry a null or made-up platform into Step 2 — `scan_unit.py` re-derives and records this same fallback independently.
 4. **Read the platform profile** from `{SKILL_DIR}/platforms/{PLATFORM_ID}/platform-profile.md`
 5. **Store the platform** in session — subsequent steps use `{PLATFORM_ID}`, `{PLATFORM_DIR}` (`{SKILL_DIR}/platforms/{PLATFORM_ID}`), and `{SOURCE_FILE_PATH}`
 
