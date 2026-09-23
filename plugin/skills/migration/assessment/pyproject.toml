@@ -17,3 +17,6 @@ dev = [
 # Scripts are imported via PYTHONPATH / -m, not installed as a wheel — uv only
 # needs to manage the dependency environment, not build this project.
 package = false
+# `dev` is a default group, so without this `uv run` downloads pytest before a
+# stdlib-only script can start — fatal wherever the index is unreachable.
+default-groups = []

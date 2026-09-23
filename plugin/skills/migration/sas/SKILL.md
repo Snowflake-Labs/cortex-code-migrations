@@ -8,7 +8,7 @@ license: Proprietary. See License-Skills for complete terms
 # SAS → Snowflake (parallel track)
 
 Tell the user:
-> **SAS migration track (Preview)** — assessment, code conversion, or `.sas7bdat` load. This path does not use SnowConvert or the AIM object registry.
+> **SAS migration track (Preview)** — assessment, code conversion, or `.sas7bdat` load. This path does not use the deterministic code conversion engine or the AIM object registry.
 
 Do **not** call `configure` or `migration_status` as a prerequisite.
 

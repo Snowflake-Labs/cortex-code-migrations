@@ -4,9 +4,9 @@ This guide defines how to write comprehensive, actionable AI analysis for Inform
 
 ---
 
-## Context: SnowConvert AI Migration
+## Context: Snowflake AIM for Data Warehouses Migration
 
-SnowConvert AI processes Informatica PowerCenter workflows and converts them to Snowflake-native components. The conversion target depends on `informatica_target` (set by the parent skill):
+Snowflake AIM for Data Warehouses processes Informatica PowerCenter workflows and converts them to Snowflake-native components. The conversion target depends on `informatica_target` (set by the parent skill):
 
 ### dbt mode (`informatica_target: dbt`)
 

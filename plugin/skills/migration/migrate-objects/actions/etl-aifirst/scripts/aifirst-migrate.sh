@@ -1285,6 +1285,73 @@ fi
 # ---- END STAGE 5 -----------------------------------------------------------------
 # ==================================================================================
 
+# ==================================================================================
+# ---- STAGE 6: REMEDIATION BRIEF ---------------------------------------------------
+#
+# findings/61 SS10-11: this driver already produces three separate, independently-scored
+# verdicts on the same emitted tree -- integrity's structural ledger, Gate B's intent-parity
+# ledger, and stage 5's AIM issue instances -- and nothing correlates them for whoever has to
+# act next. This stage does exactly that correlation: it reads the three artifacts already on
+# disk and writes ONE indexed brief beside them, `Reports/AiFirstRemediation/remediation-brief.json`.
+# It raises no new obligation and reaches no new verdict; every citation in it points back at a
+# file this driver already wrote.
+#
+# RUNS UNCONDITIONALLY, EVEN ON A DEGRADED EXIT. A degraded run is precisely the run whose
+# outstanding items someone needs a handoff for -- gating this stage on `$degraded == 0` would
+# mean the brief only ever fires on the one exit code that has nothing to hand off.
+#
+# ORDERED AFTER STAGE 5 AND BEFORE `rm -f "$IR"` for the reason stage 5 gave for the same
+# ordering: the AIM issues artifact is one of this stage's inputs, so it must exist first, and
+# `$IR` is only needed if a caller wants to inspect the representation this brief was built
+# from directly (it does not read `$IR` itself -- integrity's own stashed copy at
+# `$INTEGRITY_IR` is what `--bundle-dir` resolves to).
+echo "-- stage 6: remediation brief (index Gate B / integrity / AIM issues for stabilization)"
+if [ "$degraded" -ne 0 ]; then CONVERSION_EXIT=3; else CONVERSION_EXIT=0; fi
+# Same disambiguation Stage 5 uses: capture stdout+RC, require a success marker. Piping to sed
+# alone would swallow a non-zero python exit under `set -uo pipefail` without `set -e`.
+BRIEF=$(python3 "$HERE/remediation_brief.py" "$TABLE" "$DOC" "$OUT" \
+        --bundle-dir "$GATE_BUNDLES" --conversion-exit "$CONVERSION_EXIT" 2>&1)
+BRIEF_RC=$?
+printf '%s\n' "$BRIEF" | sed 's/^/   /'
+# A real write always prints " remediation brief :". Missing that line means the stage could
+# not run (import error, unwritable tree, traceback) -- opposite of "brief is empty".
+if ! printf '%s' "$BRIEF" | grep -q " remediation brief :"; then
+  echo "   *** BRIEF UNMEASURED — the remediation brief could not run on this document."
+  echo "       This is NOT a claim that there were no outstanding items. Cause above."
+  echo "       Exit 3 already means output exists and is not trustworthy, which is"
+  echo "       exactly the state of a handoff that could not be written."
+  degraded=1
+elif [ $BRIEF_RC -ne 0 ]; then
+  echo "   *** BRIEF UNMEASURED — remediation brief exited $BRIEF_RC after printing a"
+  echo "       success line. Treat the artifact as untrusted and re-run Stage 6."
+  degraded=1
+elif printf '%s' "$BRIEF" | grep -q " BRIEF INCOMPLETE "; then
+  # The brief itself printed this: on a degraded run one of its own three sources (Gate B,
+  # integrity, AIM) came back missing or corrupt, so items_total:0 in the written brief means
+  # "could not be checked", not "nothing to report" — the two must not be read the same way.
+  echo "   *** BRIEF INCOMPLETE — written, but at least one Gate B / integrity / AIM source"
+  echo "       could not be read on this degraded run. Detail above; do not read this brief's"
+  echo "       items_total as a full accounting."
+  degraded=1
+fi
+# ---- END STAGE 6 ------------------------------------------------------------------
+# =============================================================================
+=======
+# ---- STAGE 7: LINEAGE (I-31 / SNOW-3956440 Component 3) --------------------------
+# Reads the emitted project's source() calls and writes Reports/AiFirstLineage/lineage.json.
+# NON-GATING: a lineage read that fails does not set degraded.
+echo "-- stage 7: lineage (source() dependencies for the registry)"
+LINEAGE=$(python3 "$HERE/lineage.py" "$OUT" 2>&1)
+LINEAGE_RC=$?
+printf '%s\n' "$LINEAGE" | sed 's/^/   /'
+if [ $LINEAGE_RC -ne 0 ]; then
+  echo "   *** LINEAGE UNMEASURED — see cause above. The unit's dependsOn write (Step 2a of"
+  echo "       convert/etl-aifirst/SKILL.md) has nothing to read; it is not a claim the"
+  echo "       unit has no dependencies."
+fi
+# ---- END STAGE 7 ------------------------------------------------------------------
+# ==================================================================================
+
 rm -f "$IR" "$EMITLOG"
 echo "--------------------------------------------------------------"
 if [ "$degraded" -ne 0 ]; then

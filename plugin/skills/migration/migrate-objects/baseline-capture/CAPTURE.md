@@ -6,19 +6,16 @@ After creating the test YAML files, capture baselines from the source database a
 
 ## Step 1: Capture Baselines from Source Database
 
-Baselines upload to the Snowflake stage `@<TESTING_RESULTS_DATABASE>.VALIDATION.BASELINES` — the database named by `testing_results_database` in `.scai/settings/test_config.yaml`; no copy is kept on the user's laptop (customer data residency).
+Call the `run_tests` MCP tool with `mode=capture` and `object_name` or `where`. Do **not**
+pass `--profile` or `--database-bindings` — the tool injects them from the object's leftover
+sandbox yaml after `deploySandbox`, else `.scai/bindings/database-bindings.yaml`.
 
-```bash
-scai test capture \
-  -s <SOURCE_CONNECTION_NAME> \
-  -c <SNOWFLAKE_CONNECTION_NAME> \
-  --where "source.canonicalName ILIKE '%<schema>.<object_name>%'"
-```
-
-**Flags:**
-- `-s, --source-connection` — Name of the source connection (from `scai connection list`). Uses default if not specified.
-- `-c, --connection` — Snowflake connection (destination for baseline upload). Required unless `target_connection.name` is set in `settings/test_config.yaml`.
-- `--where` — Registry filter, SQL-like (same syntax as `scai code deploy --where`). The canonical form used across the plugin is `source.canonicalName ILIKE '%<name>%'`.
+Both connections come from `configure` for this project — read them back from
+`migration_status` rather than from anything in your own environment. In particular the
+connection your `sql_execute` tool uses is **not** one of them: it is a read-only reader
+scoped to its own databases, and passing it here fails with `CNX0021` /
+`390201 The requested database does not exist or not authorized`, which reads as the project
+being misconfigured rather than as the wrong connection having been named.
 
 ## Step 2: Verify
 
@@ -40,7 +37,18 @@ transition_status status=advance task=captureBaseline --where "id = '<unit_id>'"
 
 Procedures/functions skip this — their `captureBaseline` completes once `VALIDATION.BASELINE_METADATA` has a row for the object whose `ROW_COUNTS` sum to more than zero.
 
-If capture fails because **the source object cannot run as written** (column-count mismatch on `INSERT…EXEC`, missing columns, the object's own SQL errors on `EXEC`), escalate on `captureBaseline`. Do not `ALTER` the source to make the capture green and do not skip ahead to deploy. A person decides whether to fix source, mark the object out of scope, or treat it as always-erroring.
+If capture fails because **the source object cannot run as written on any
+legal dataset** (column-count mismatch on `INSERT…EXEC`, missing columns, a
+numeric overflow the object's own SQL always hits), escalate on
+`captureBaseline`. Do not `ALTER` the source to make the capture green and
+do not skip ahead to deploy.
+
+If capture fails only because **this fixture's rows** are the wrong shape
+(concat of in-domain values into a narrower temp column, a join the
+fixture never produced), spawn
+(`subagent_type="sandbox_specialist"`) with `task=captureBaseline`. Do not stamp
+`error=sql`. After `done`, note the reshape and retry capture. Leftover
+sandbox yaml is the binding.
 
 ## CHECKPOINT
 
@@ -48,7 +56,3 @@ Confirm:
 - [ ] Baselines captured for `<object_name>` from source database
 - [ ] Baselines visible on Snowflake stage `@<TESTING_RESULTS_DATABASE>.VALIDATION.BASELINES`
 - [ ] At least 15-25 test cases for this object
-
-## Next Steps
-
-Load [migrate-object/SKILL.md](../migrate-object/SKILL.md) to start the deploy-test-fix loop for `<object_name>`.

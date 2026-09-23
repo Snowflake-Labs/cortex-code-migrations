@@ -98,7 +98,29 @@ Getting the containment check wrong is not silently destructive: re-adding files
 
 `code add` arranges the packages into `source/_etl/`. Confirm they landed there before continuing.
 
-### Step 5: Verify Files Were Added
+### Step 5: Import Power BI templates
+
+Power BI `.pbit` files are inventory only: `code add` copies them to `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` and never sends them to the conversion engine. Ask independently via `ask_user_question` (`multiSelect = false`):
+
+> "Do you have any Power BI template (`.pbit`) files to include?"
+>
+> 1. **Yes**
+> 2. **No**
+
+- If **no**, proceed to Step 6.
+- If **yes**, ask for the folder path and compare it to `<INPUT_PATH>`:
+  - If it is **the same as, or inside, `<INPUT_PATH>`**, Step 3 already imported it — `code add` claims `.pbit` files anywhere under the input path. Proceed to Step 6 without running a second `code add`.
+  - Otherwise (a genuinely separate folder) run:
+
+```bash
+scai code add -i <POWER_BI_PATH> --json
+```
+
+Do **not** pass `--overwrite` here — existing SQL/ETL in `source/` would be wiped.
+
+Confirm files landed in both `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` before continuing.
+
+### Step 6: Verify Files Were Added
 
 Check that `source/` contains the expected `.sql` files and report a count. Use whichever portable form fits the host:
 
@@ -120,6 +142,9 @@ Get-ChildItem -Recurse -Filter *.sql source/ | Select-Object -First 20
 artifacts/source_raw/    Original files copied from input path
 artifacts/source_split/  sc-tag annotated copies (only created when multi-object files exist)
 source/                  Arranged source files ready for conversion
+source/_etl/             ETL packages (when present)
+source/BI/PowerBI/       Power BI `.pbit` templates (inventory only, not converted)
+artifacts/BI/PowerBI/    Same relative layout as `source/BI/PowerBI/`
 ```
 
 ## Troubleshooting
@@ -137,6 +162,7 @@ Confirm with user:
 - [ ] `scai code add` completed without errors
 - [ ] Expected number of files appear in `source/`
 - [ ] File structure looks correct
+- [ ] If Power BI was imported: files exist in both `source/BI/PowerBI/` and `artifacts/BI/PowerBI/`
 
 ## On Completion
 
@@ -145,6 +171,7 @@ After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON enve
 > **Import complete.** `<filesCopied>` SQL files imported as `<codeUnitsAdded>` code units, broken down by type (filled from `byType`). Files in `source/`.
 > *If `etlFilesAdded > 0`:* ETL: `<etlFilesAdded>` files added.
 > *If `etlFilesSkippedInvalidSchema > 0`:* `<etlFilesSkippedInvalidSchema>` ETL files skipped due to invalid schema.
+> *If Power BI files were added:* Power BI templates copied to `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` (not converted).
 > Next, we'll convert these to Snowflake SQL.
 
 Then return to the calling skill.

@@ -6,36 +6,19 @@ parent_skill: baseline-capture
 
 # Generate Test Cases (Seed → Maybe-Fill)
 
-State-machine entry point for `testing_data_source = "source_database"`. Handles **one object (`<object_name>`)** at a time. Two stages:
+State-machine entry point for `testing_data_source = "source_database"`
+or `"testbed"`. Handles **one object (`<object_name>`)** at a time. Two stages:
 
 1. **Seed** — run `scai test seed` to scaffold the step-based YAML stub. If `test_seed_source = logs`, pass `--execution-log <path>` to hydrate `test_cases:` from real captured calls.
 2. **Maybe-fill** — if the stub came back with empty `test_cases:`, spawn an AI swarm to fill them. The swarm fills *rows only*; it never edits `steps:`.
 
 > **SCOPE: One object only.** Triggered per-object by the `generateTestCases` state-machine task. Do not loop here — the state machine handles the next object after `captureBaseline` completes.
 
-> **Not for BTEQ scripts.** Units with `kind: "script"` (BTEQ) are seeded by [seed-script/SKILL.md](seed-script/SKILL.md) from user-provided bindings + import fixtures — not here. Do not generate `test_cases:` rows or synthesize fixtures for them.
-
 ---
-
-## On entry
-
-Tell the user one line:
-
-> Generating test cases for `<object_name>`.
 
 ## Step 1: Pull settings from `configure()`
 
-Call `configure()` and read:
-
-- `project_dir`
-- `source_connection`, `snowflake_connection`, `snowflake_database`
-- `testing_data_source` (expected: `source_database`)
-- `test_seed_source` (`logs` or `source_db_query`; may be absent on fallback)
-- `execution_log_path` (only meaningful when `test_seed_source = logs`)
-
-`test_seed_source` and `execution_log_path` come from the Q2 prompts in [`../SKILL.md`](../SKILL.md) Step 2 and are persisted across sessions.
-
-**Fallback when `test_seed_source` is unset** (a state-machine entry that didn't go through Step 2 — rare): default to `source_db_query`. Don't prompt — the state machine doesn't have a user surface here. The user can rerun the parent flow to re-prompt.
+Call `configure()` and read the relevant details.
 
 ## Step 2: Look up the source SQL file
 
@@ -59,6 +42,12 @@ The YAML lives under `<project_dir>/<files.artifacts.path>/test/` — discover i
 
 If `files.source` cannot execute as written (INSERT…EXEC column-count mismatch, a comment that the object fails at runtime, or the same defect on a live `EXEC`), **escalate on `generateTestCases` now**. Do not seed, do not spawn the swarm, and do not paper over it in YAML. The customer owns source.
 
+If seed / `EXEC` fails only because **this fixture's rows** are the wrong
+shape (concat into a narrower temp column, a join the fixture never
+produced), spawn
+(`subagent_type="sandbox_specialist"`) with `task=generateTestCases`. Do not
+stamp `error=sql`. After `done`, note the reshape and retry seed.
+
 ## Step 3: Run `scai test seed`
 
 Always invoke seed — it's the universal scaffolder. The flags depend on `test_seed_source`:
@@ -66,22 +55,16 @@ Always invoke seed — it's the universal scaffolder. The flags depend on `test_
 ```bash
 # test_seed_source = logs
 scai test seed \
-  --where "source.canonicalName ILIKE '%<object_name>%'" \
+  --where "id = <object_id>" \
   --append \
-  --execution-log "<execution_log_path>"
-
-# test_seed_source = source_db_query (or fallback)
-scai test seed \
-  --where "source.canonicalName ILIKE '%<object_name>%'" \
-  --append
+  --execution-log "<execution_log_path_if_set>"
 ```
 
 Notes:
 
-- `--append` is always on. If a YAML already exists for this object, `scai test seed` will leave existing rows alone and only add new ones (relevant when the user re-runs with a different log).
+- `--append` is always on to avoid overwriting an existing YAML.
 - `--where` is scoped to one object so we don't rescaffold the whole project.
-- Source / Snowflake connection names come from `configure()`; `scai` picks them up via the per-project config — don't pass them on the command line unless probing fails.
-- The seed command writes the stub YAML to the artifacts path even if no log row matched. The stub uses **step-based schema** (`validation.steps[]` with `source_query`/`target_query`, plus `test_cases: []`).
+- The seed command writes the stub YAML to the artifacts path even if no log row matched.
 
 If `scai test seed` returns a non-zero exit:
 
@@ -183,8 +166,6 @@ Don't load `CAPTURE.md` — the state machine transitions to `captureBaseline` n
 ## Things this skill is not for
 
 - **Editing `steps:`** (multi-RS, OUT param compare, table-read, side-effect DML, before/after capture). That's a failure-mode response — see [`../migrate-object/EDIT_TEST_YAML.md`](../migrate-object/EDIT_TEST_YAML.md), loaded on demand from `DIAGNOSE_FIX.md`.
-- **Authoring a YAML from scratch.** If `scai test seed` won't produce a stub for an object (e.g. dialect quirk), that's a testing-infrastructure bug — file it upstream. Don't hand-write step-based YAMLs here.
-- **Loop control.** One object per invocation. State machine handles the queue.
 
 ## Troubleshooting
 

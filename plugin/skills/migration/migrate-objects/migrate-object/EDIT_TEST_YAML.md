@@ -60,6 +60,7 @@ validation:
 |---|---|
 | `false` | This RS is debug output / not migrated. Skip. |
 | `result` | Snowflake target also returns this RS as the CALL's direct return value. |
+| `array_index: N` | Target is a `RETURNS ARRAY` proc (SSC-FDM-0020). Compare source RS against `GET(array, N)` (0-based). |
 | `table: "name"` | Target wrote this RS to a persistent table. Compare via `SELECT *` on that table. |
 | `cursor: "name"` | Target wrote this RS to a named cursor. |
 | `target_query: "SQL"` | Anything more complex — `ORDER BY`, `WHERE _RESULT_SET_ID = N`, etc. |
@@ -70,6 +71,15 @@ validation:
 validate:
   - target_query: "SELECT ID, Name FROM MyDB.dbo.T_AllOrders WHERE _RESULT_SET_ID = 1 ORDER BY OrderDate"
   - target_query: "SELECT ID, Name FROM MyDB.dbo.T_AllOrders WHERE _RESULT_SET_ID = 2 ORDER BY OrderDate"
+```
+
+**RETURNS ARRAY (SSC-FDM-0020).** SnowConvert returns an array of temp-table names instead of named staging tables:
+
+```yaml
+validate:
+  - array_index: 0
+  - array_index: 1
+  - array_index: 2
 ```
 
 ---

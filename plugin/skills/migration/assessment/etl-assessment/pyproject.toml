@@ -1,7 +1,7 @@
 [project]
 name = "scai-assessment-analyzer"
 version = "1.0.0"
-description = "SSIS ETL Assessment Helper Analyzer for SnowConvert AI migrations"
+description = "SSIS ETL Assessment Helper Analyzer for Snowflake AIM for Data Warehouses migrations"
 requires-python = ">=3.11"
 dependencies = []
 

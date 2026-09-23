@@ -52,7 +52,7 @@ grep -c "Unsupported" reports/SnowConvert/ETLAndBiRepointing*.csv
 
 If any rows have `Status=Unsupported`, tell the user:
 
-> *"SnowConvert successfully repointed your Power BI files, but some embedded queries could not be automatically converted. I can fix these using LLM-based translation. Would you like me to proceed?"*
+> *"The conversion engine successfully repointed your Power BI files, but some embedded queries could not be automatically converted. I can fix these using LLM-based translation. Would you like me to proceed?"*
 
 If the user confirms, load `./fixer/SKILL.md` to complete the repointing process.
 

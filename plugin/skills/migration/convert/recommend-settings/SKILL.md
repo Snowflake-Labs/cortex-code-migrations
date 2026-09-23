@@ -1,6 +1,6 @@
 ---
 name: recommend-settings
-description: Recommend per-language SnowConvert conversion settings based on the input source code. Reads the project's source SQL, matches constructs to the dialect's available settings, and proposes flags for `scai code convert` (user confirms). Load from `convert` or `code-conversion-only` before running the conversion. Triggers: recommend settings, conversion options, which flags, tune conversion, per-language settings.
+description: Recommend per-language conversion engine settings based on the input source code. Reads the project's source SQL, matches constructs to the dialect's available settings, and proposes flags for `scai code convert` (user confirms). Load from `convert` or `code-conversion-only` before running the conversion. Triggers: recommend settings, conversion options, which flags, tune conversion, per-language settings.
 parent_skill: migration
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -12,7 +12,7 @@ Load this skill from `convert` (or `code-conversion-only`) right before running 
 ## On Entry
 
 Tell the user:
-> **Tuning conversion settings.** I'll scan your source and suggest SnowConvert options that fit what's in your code. You'll confirm before anything runs.
+> **Tuning conversion settings.** I'll scan your source and suggest conversion engine options that fit what's in your code. You'll confirm before anything runs.
 
 ## Workflow
 

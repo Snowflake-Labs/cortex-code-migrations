@@ -21,7 +21,7 @@ wants to carry with the tag; leave it `{}` when there is nothing to put in it.
 
 ## Tagging
 
-`update_registry`'s `value` writes raw JSON at an `extensions.<path>` field. It **replaces** the
+`update_registry`'s `value` writes raw JSON at `extensions.tags`. It **replaces** the
 whole array, so read the current tags before writing:
 
 1. `query_registry(where="<filter>", fields="id,source,extensions")` — `extensions` is not in the
