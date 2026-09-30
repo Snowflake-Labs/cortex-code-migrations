@@ -27,6 +27,31 @@ An orchestrator that dispatches subagents calls `configure(subagent_mode=true)` 
 - After the latch is on, a later `configure` is attach-only: it names the caller (hook-stamped `agent_id`), `source_connection`, the Snowflake connection, and `active_bindings` (the YAML whose `source:` / `snow:` maps are the catalogs to qualify against), and announces any live job to that id. It does not bind a dashboard, persist plugin.yml, or rewrite session defaults. Walkers, a `test_case_verifier`, and a `sandbox_specialist` omit `agent_id`.
 - `ORCHESTRATION.AGENTS` has one row per Cortex child (and the parent session id) keyed with the MCP run as `SESSION_ID`, so `TASK_EVENTS` joins. `ORCHESTRATION.AGENT_ACTIONS` records `subagent_start`, `subagent_stop`, and MCP `tool_call` (tool name / agent_type / object_id — not prompts). Non-MCP tools such as Bash are not logged. The hub spool (`.scai/monitor`) is the live view; Snowflake is the durable log. Cortex `SubagentStart` does not carry the child prompt, so the parent's `PostToolUse` on `task` is what joins returned `agentId` to `objectId` in the prompt (and `resume` on a later send) while the walker is still `running`.
 
+### Autonomous mode (desktop app only, off by default)
+
+**The standalone plugin never offers autonomous mode**, whatever its
+environment says. It is a desktop-app surface, gated on the same
+`SCAI_CALLER=aim-app` the app-only tools use, so a marketplace install driven
+by the `cortex` CLI always runs a project manually.
+
+Within the app it is behind `AIM_AUTONOMOUS`, read once at startup; set it to
+`1` or `true` before launching to turn it on. While it is off:
+
+- `chooseRunMode` asks only whether to continue to migration setup, and
+  `chooseAutonomousSubagentCount` is not part of the setup machine at all.
+- `configure(run_mode="autonomous")` and `configure(subagent_mode=true)` are
+  refused, so the dispatcher skill cannot start a wave a user asked for in chat.
+
+A GUI launch does not see a shell's environment; on macOS use
+`launchctl setenv AIM_AUTONOMOUS 1` before starting the app, or launch it from a
+terminal that already exports it.
+
+The desktop app drops the variable before launching anything when its own build
+is a preview (`-pr`), so a value exported for a dev build does not follow the
+user into a preview install — the variable lives on the machine, not in the
+bundle. Running the plugin through the `cortex` CLI does not go through the app
+and so is not subject to that.
+
 ### Local dashboard (opt-in)
 
 The server can host a small read-only HTML dashboard on `127.0.0.1` (no data leaves the host). It is **off by default** — enable it one of three ways:
@@ -65,7 +90,7 @@ The server can host a small read-only HTML dashboard on `127.0.0.1` (no data lea
 | `deploy` | Deploy converted objects via `scai code deploy`. Three walker calls: (1) `sandbox=true` omit `mode` = transitive closure into the sandbox (creates `AIMSBX_*` unless leftover yaml already names the pair — then no DROP/CLONE, but still deploys tables, functions, views, and this object); (2) `sandbox=true` `mode=redeploy_object` = this object only into a live pair; (3) omit `sandbox` = this object only onto the common catalogs. Procedures take (1) as the `deploySandbox` task and (3) after tests. `mode=reload_tables` reloads closure CSVs (wipes AIMSBX DML). |
 | `setup_sandbox` | Shared source catalog: source DDL (CREATE skipped when the object already exists) plus testbed load for tables. `mode=load_only` reloads this object's CSV. Failure JSON carries `failure_class` (SQL 547 is `fixture_fk`; unmapped is `other`), `sample_rows`, and `next_invocation`. |
 | `run_tests` | `mode="validate"` (default) runs `scai test validate`; `mode="capture"` runs `scai test capture`. Injects `--profile` / `--database-bindings` from the session pair; bound isolation only on validate when restore is set. |
-| `query_source` | Run a SQL query against the source database via `scai query` (TEMP: writes allowed — CREATE / ALTER / EXEC) |
+| `query_source` | Run SQL against the source database via `scai query`. SELECT plus CREATE / ALTER / EXEC / DML. When a live sandbox binding exists, mutating SQL that names a common catalog is refused (qualify `AIMSBX_*`). Walker writes are claim-authorized by the PreToolUse hook. |
 | `testbed` | Drive one Synthetic Testbed Generator phase (`phase` = mine \| validate \| enrich \| compile \| generate) via `scai testbed`. Each phase is idempotent (its view file is the completion predicate) and resumes from on-disk state; returns `{phase, rc, message}`. The deterministic critics, envelope assembly, ledger, and quarantine loop are native Rust (`src/testbed/`) — the LLM boundary stays the on-disk `fragments/` + `verdict.json` handoff. Replaces the former Python `run_pipeline.py` orchestration. |
 | `migrate_data` | Two-mode tool. `mode="setup"` requires `where` and generates a per-`where` workflow YAML at `artifacts/data_migration/workflows/<hash>.yaml` (forwarding `where` to scai's `--where`); `where` is **not** stored on the session. Wave-level knobs persist under `data_migration:` in `plugin.yml`. The agent reviews/edits before running. `mode="run"` takes the `workflow_path` and binds objects from that file's `tables:` list (pure dispatch against the shared orchestrator + worker). |
 | `validate_data` | Validate migrated data between source and Snowflake. `mode="setup"` generates workflow YAML; `mode="run"` executes it; `mode="revalidate"` retries failed partitions from a finished parent workflow. Uses cloud validation (SPCS) when configured. |

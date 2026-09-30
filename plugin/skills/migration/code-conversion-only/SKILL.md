@@ -118,6 +118,7 @@ scai code convert --json
 |--------|------|
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 3 (Informatica target is Snowflake Scripting) |
 | `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set in Step 3 (Informatica target is dbt and the user chose to consolidate model chains) |
+| `--consolidate-dbt-projects` | SSIS dbt target: one dbt project per package instead of one per Data Flow. Independent of `--consolidate-dbt-model-chains`. |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 4 |
 
 The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. Either combines with `--powerbi-repointing`. If none of the conditions hold, run the base command as-is.
@@ -136,6 +137,7 @@ For Power BI output paths and the CHECKPOINT addendum, see `../powerbi-repointin
 | `--overwrite-working-directory` | Overwrite output files in `snowflake/` and registry |
 | `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor. |
 | `--consolidate-dbt-model-chains` | Consolidate Informatica dbt model chains to reduce the number of generated model files. Applies when the Informatica target is dbt. |
+| `--consolidate-dbt-projects` | Consolidate SSIS dbt output into one dbt project per package instead of one project per Data Flow. Independent of model-chain consolidation. |
 
 For Power BI options, see `../powerbi-repointing/SKILL.md`.
 

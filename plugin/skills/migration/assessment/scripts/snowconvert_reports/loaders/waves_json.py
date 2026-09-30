@@ -77,16 +77,20 @@ class WavesJsonAdapter:
             return counts
         return self._cache("conversion_status_counts", build)
 
-    def temporal_tables_count(self) -> int:
-        def build() -> int:
-            count = 0
+    def temporal_table_names(self) -> list[str]:
+        """Names of the SQL Server ``#``/``##`` temp tables among ``objects[]``."""
+        def build() -> list[str]:
+            names = []
             for obj in self._data.get("objects", []):
                 name = obj.get("name", "") or ""
                 bare = name.replace("[", "").replace("]", "").rsplit(".", 1)[-1]
                 if bare.startswith("#"):
-                    count += 1
-            return count
-        return self._cache("temporal_tables_count", build)
+                    names.append(name)
+            return names
+        return self._cache("temporal_table_names", build)
+
+    def temporal_tables_count(self) -> int:
+        return len(self.temporal_table_names())
 
     def external_tables_count(self) -> int:
         def build() -> int:

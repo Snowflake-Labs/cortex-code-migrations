@@ -89,7 +89,7 @@ The total score is: `base_score + feature_score + structure_score`
 
 ### Feature Score
 - Pattern-matched against SAS constructs that indicate translation difficulty
-- Tier 3 patterns (HASH, CALL EXECUTE, statistical PROCs): +6-8 points each
+- Tier 3 patterns (HASH, statistical PROCs) and CALL EXECUTE (Tier 2): +6-8 points each
 - Tier 2 patterns (CALL SYMPUT, PROC TRANSPOSE): +3 points each
 - Tier 1 advanced (RETAIN, ARRAY, MERGE, FIRST./LAST.): +1-3 points each
 - Each pattern capped at 3 occurrences (prevents repetitive code from dominating)

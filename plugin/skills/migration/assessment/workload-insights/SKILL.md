@@ -1,6 +1,6 @@
 ---
 name: workload-insights
-description: Builds Discovery from SQL Server Extended Events `.xel` captures or Teradata DBQL metrics CSV exports by running `scai assessment workload-insights --input <file>`. SQL Server and Teradata only. Reads inputs in place.
+description: Builds Discovery from SQL Server Extended Events `.xel` captures, Teradata DBQL metrics CSV exports, or Redshift SYS_QUERY_HISTORY CSV exports by running `scai assessment workload-insights --input <file>`. Reads inputs in place.
 parent_skill: assessment
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -12,17 +12,20 @@ parent supplies absolute input paths. The command streams them and writes
 timestamped JSON under the project. Never parse or rewrite the input or the
 JSON. Never copy input files into the project. Never ask the user questions.
 
-- **Supported dialects:** SQL Server and Teradata. Any other dialect aborts
-  with `ASM0034`; report `skipped`, not an error.
+- **Supported dialects:** SQL Server, Teradata, and Redshift. Any other dialect
+  aborts with `ASM0034`; report `skipped`, not an error.
 - **SQL Server input:** one or more binary Extended Events `.xel` files.
   Rollover files from the same capture are separate `--input` arguments. Any
   filename works.
 - **Teradata input:** one or more uncompressed `.csv` files of DBQL request
   metrics. Split files are separate `--input` arguments. Any filename works.
   Do not pass statement text.
-- The project's dialect selects the reader. A `.xel` on a Teradata project, a
-  CSV on a SQL Server project, or a metrics CSV missing a required column
-  fails with `ASM0032` / `ASM0033`; report the message as `error`.
+- **Redshift input:** one or more uncompressed `.csv` files of `SYS_QUERY_HISTORY`
+  request metrics. Split files are separate `--input` arguments. Any filename
+  works. Do not pass statement text.
+- The project's dialect selects the reader. A `.xel` on a Teradata or Redshift
+  project, a CSV on a SQL Server project, or a metrics CSV missing a required
+  column fails with `ASM0032` / `ASM0033`; report the message as `error`.
 
 ## Run
 
@@ -35,6 +38,13 @@ scai assessment workload-insights \
 ```
 
 Teradata, one `--input` per export file:
+
+```bash
+scai assessment workload-insights \
+  --input /abs/path/querylogs.csv
+```
+
+Redshift, one `--input` per export file:
 
 ```bash
 scai assessment workload-insights \
@@ -83,3 +93,5 @@ provide files later. This sub-skill never runs any of them.
   the user can actually read.
 - `references/teradata-fallback.sql` — the request-metrics `SELECT` the user
   runs against that table and exports to CSV.
+- `references/redshift-sys-query-history.sql` — the request-metrics `UNLOAD` the
+  user runs against `SYS_QUERY_HISTORY` and exports to CSV.

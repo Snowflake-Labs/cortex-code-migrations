@@ -23,17 +23,44 @@ Drive the `data-migration-setup` machine to completion: call `progress_setup(mod
 loop until the response's `completed` is `true` — ask each response's `next_prompt` (plus any `then_ask`,
 in the same turn) and send the answers back with `progress_setup(mode="data_migration", answers={...})`.
 
+The migration wizard does **not** ask for an incremental sync strategy (checksum / watermark). That
+choice needs each table's columns, so it is made per table when the workflow is generated
+(`migrate_data(mode="setup")`); see the data-migration action's Step 2a. Do not ask it here unless
+the user volunteers one, in which case pass it as `sync_strategy=` to `migrate_data(mode="setup")`.
+
 If the strategy was already chosen (e.g. a prior migration set it lazily), the first call returns
 `completed: true` immediately — do not re-prompt.
+
+### Extraction prerequisite contract
+
+Extraction options are ordered best-first for each dialect. Present each option's full description:
+selecting it is the user's explicit confirmation that its listed source/cloud/worker prerequisites can
+be met. Do not infer readiness from table size and do not silently choose the first option. If the user
+cannot confirm the preferred method, walk down to the next option.
+
+This selection is an **attestation**, not a live probe. For a server/cloud method (`unload`,
+`write_nos`, `dbms_cloud`, `cet_as`, `export_data`, `cloud_direct`), the later
+`migrate_data(mode="setup")` call needs the fully-qualified Snowflake `external_stage` the first time
+and writes it with the strategy; re-runs inherit whatever the workflow already records. Setup then runs
+Data Doctor for evidence; `migrate_data(mode="run")` validates the workflow again and fails closed
+before dispatch. Worker methods (`odbc`, `bcp`, `pg_copy`, `tpt`) persist as the method but write
+workflow strategy `regular`; `data_infrastructure(mode="up")` applies their TOML flag.
+
+`odbc` and `regular` are **not** interchangeable. `odbc` is the explicit driver-read rung and turns the
+dialect's worker bulk flag off. Bare `regular` is the legacy value from before this ladder and means
+"leave the worker config as it is" — it is what projects configured earlier already hold, and setup
+deliberately does not reinterpret it as a driver read. Record `odbc` when the user picks that rung.
 
 ## Step 2 — Validation strategy
 
 Then drive the `data-validation-setup` machine the same way: `progress_setup(mode="data_validation")` in
 a loop until `completed`. An already-chosen strategy returns `completed: true` at once.
 
-The choices persist to `plugin.yml` as `data_migration_type`, `data_migration_sync_strategy`,
-`data_migration_extraction_strategy`, `data_migration_target_table_type` (Redshift), `data_validation_type`,
-and `data_validation_sync_strategy`.
+The choices persist to `plugin.yml` as `data_migration_type`,
+`data_migration_extraction_strategy` (the user-facing method, including worker methods),
+`data_migration_target_table_type` (Redshift), `data_validation_type`, and
+`data_validation_sync_strategy`. `data_migration_sync_strategy` is set only by an explicit
+`migrate_data(mode="setup", sync_strategy=...)`.
 
 ## Changing an existing choice
 

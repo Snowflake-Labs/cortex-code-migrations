@@ -444,16 +444,6 @@ def generate_html_report(waves_json, output_path=None, reports_dir=None, registr
     total_ewis = sum(objects_data.get(obj_name, {}).get('ewi_count', 0)
                      for obj_name in membership)
 
-    temporal_table_count = sum(
-        1 for obj_name in membership
-        if _is_temporal_table(obj_name, objects_data.get(obj_name, {}), membership[obj_name])
-    )
-    missing_temporal = sum(
-        1 for obj_name in missing_obj_refs.get('missing_objects', set())
-        if _is_temporal_table(obj_name, {}, {})
-    )
-    temporal_table_count += missing_temporal
-
     # Calculate top dependencies/dependents for statistics section
     top_dependencies = sorted(
         [(obj, dependency_counts[obj]['total_dependencies'], membership[obj]['partition'])
@@ -479,7 +469,7 @@ def generate_html_report(waves_json, output_path=None, reports_dir=None, registr
         total_estimated_hours, conversion_percentage, timestamp, estimation_source, grand_totals_data,
         object_references, missing_obj_refs, total_objects_with_ewis, total_ewis, wave_deployment_order_data,
         top_dependencies, top_dependents, membership, dependency_counts,
-        objects_data, temporal_table_count
+        objects_data
     )
     
     with open(output_path, 'w', encoding='utf-8') as f:
@@ -573,7 +563,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
                          object_references=None, missing_obj_refs=None, total_objects_with_ewis=0, total_ewis=0,
                          wave_deployment_order=None, top_dependencies=None, top_dependents=None,
                          membership=None, dependency_counts=None,
-                         objects_data=None, temporal_table_count=0):
+                         objects_data=None):
     """Generate complete HTML content with AI-generated benefits and purposes."""
 
     if object_references is None:
@@ -682,6 +672,10 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
 
     # Sort by wave, then by name (missing objects with wave='-' come last)
     all_objects_data.sort(key=lambda x: (float('inf') if x['wave'] == '-' else x['wave'], x['name']))
+
+    # Count the card from the rows the All Objects table lists, so the two agree:
+    # a missing temp table the waves JSON also emits as an object row is one row.
+    temporal_table_count = sum(1 for obj in all_objects_data if obj['type'] == 'TEMPORAL TABLE')
 
     html = f'''<!DOCTYPE html>
 <html lang="en">

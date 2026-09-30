@@ -29,6 +29,7 @@ _scripts_dir = str(Path(__file__).resolve().parent.parent.parent / "scripts")
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
+from snowconvert_reports.conversion_status import has_actionable_issues
 from snowconvert_reports.na_utils import (
     NA_VALUES as _NA_VALUES,
     is_na,
@@ -126,8 +127,8 @@ def _compute_conversion_status(entry: Dict[str, Any]) -> str:
     Registry semantics (vs CSV ConversionStatus):
     - conversion.status = "pending" → "Pending Conversion" (not yet converted)
     - conversion.status = "completed":
-      - No issues or empty issues → "Success"
-      - Has issues (SSC-EWI, SSC-FDM, etc.) → "Require Attention"
+      - No actionable issues → "Success" (FDM / PRF advisories included)
+      - Has an SSC-EWI or SSC-OOS issue → "Require Attention"
     - conversion.status in ("notsupported", "not_supported", "NotSupported", "failed") → "Not Supported"
     - Fallback: assessment.status or raw conversion.status
     """
@@ -138,8 +139,6 @@ def _compute_conversion_status(entry: Dict[str, Any]) -> str:
     assessment_raw = (
         code_status.get("assessment", {}).get("status", "")
     ).strip().lower()
-    issues = entry.get("issues") or []
-
     if conversion_raw == "pending":
         return "Pending Conversion"
 
@@ -147,7 +146,7 @@ def _compute_conversion_status(entry: Dict[str, Any]) -> str:
         return "Not Supported"
 
     if conversion_raw == "completed":
-        if not issues:
+        if not has_actionable_issues(entry):
             return "Success"
         return "Require Attention"
 

@@ -92,7 +92,7 @@ steps shell to the executor / `snow sql`, never the interactive `snowflake_sql_e
 | splice a reconstructed block back | `uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/stabilization_tools.py block-replace <proc.sql> --block '<FullName>' --replacement-file <fix.sql>` |
 | map a CALL error to its block | `uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/stabilization_tools.py task-error-locate <proc.sql> --error-file <errfile>` |
 | deploy the proc + CALL it | `scai code deploy-and-call -c <conn> -d <db> --schema <test_schema> --proc-file <proc.sql> --call "CALL <proc>(...)"` → JSON `{deployed, called, errorText, rows}` |
-| seed / run the grade query | run `<proc_name>.seed.sql`, then `<proc_name>.assert.sql`, via `snow sql -c <conn> --database <db> --schema <test_schema> --format json` |
+| seed / run the grade query | run `<proc_name>.seed.sql`, then `<proc_name>.assert.sql`, via `snow sql -c <conn> --database <db> --schema <test_schema> --format json`, plus `--role <role> --warehouse <warehouse>` when the attach briefing lists `snowflake_role` / `snowflake_warehouse` |
 
 block-replace integrity-checks the marker pair and refuses to write if the reconstruction would drop or add a
 marker; treat a non-zero exit as a failed splice, not a fixed block.

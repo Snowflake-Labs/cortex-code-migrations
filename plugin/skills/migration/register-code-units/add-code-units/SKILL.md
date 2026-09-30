@@ -23,7 +23,9 @@ Tell the user:
 
 ### Step 1: Get Source Path
 
-Ask the user for the path to their source SQL files:
+If the session's `workload` is `dbt`, load `dbt.md` instead of Steps 1–4, then rejoin at Step 5.
+
+Otherwise, ask the user for the path to their source SQL files:
 
 > "Where are your SQL source files located? Please provide the full path to the directory."
 
@@ -64,6 +66,15 @@ Use the path returned by `split_code` (or `<INPUT_PATH>` directly if no multi-ob
 scai code add -i <INPUT_PATH> --json
 ```
 
+**dbt projects use this form instead** — always, with no exceptions:
+
+```bash
+scai code add -i <DBT_PROJECT_PATH> --code-already-split --json
+```
+
+Step 2 is skipped for dbt, so the files have no SC tags; `--code-already-split` tells the arrange
+engine the input is already one object per file. Without it the command fails with `ADD0010`.
+
 This will:
 - Copy all files from the input path to `artifacts/source_raw/`
 - Arrange and process the source code
@@ -75,6 +86,10 @@ scai code add -i <INPUT_PATH> --overwrite --json
 ```
 
 ### Step 4: Import ETL
+
+**Skip this entire step for a dbt project.** If Step 1 found `dbt_project.yml`, do **not** ask the
+ETL question — a dbt workload has no SSIS or Informatica packages, and asking it is a defect. Go
+straight to Step 5 without calling `ask_user_question`.
 
 ETL belongs in the project from register onward — the conversion picks it up from `source/_etl/` with no external path flag. Ask via `ask_user_question` (`multiSelect = false`):
 
@@ -152,6 +167,7 @@ artifacts/BI/PowerBI/    Same relative layout as `source/BI/PowerBI/`
 | Issue | Solution |
 |-------|----------|
 | "conflicting files" error | Use `--overwrite` flag to replace existing files |
+| `ADD0010: Source files must contain SC tags` | The arrange engine found no `/* <sc-...> */` boundary tags. For a **dbt project**, re-run with `--code-already-split` (required on every dbt add). For a non-dbt source, run Step 2 (`split_code`) first and pass the returned `artifacts/source_split/` path. |
 | No `.sql` files found after add | Verify input path contains valid SQL files |
 | Unexpected file arrangement | Check `artifacts/source_raw/` for the original copies |
 | `split_code` reports verification errors | Manually inspect flagged files; the tool lists each with its boundary and tag counts |

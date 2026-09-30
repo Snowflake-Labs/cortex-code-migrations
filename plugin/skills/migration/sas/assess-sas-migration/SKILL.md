@@ -1,7 +1,7 @@
 ---
 name: assess-sas-migration
 parent_skill: sas
-description: "Preview. Assess SAS migration complexity and volume for Snowflake. Produces portfolio analysis with tier distribution, complexity heatmap, dependency DAG, a migration wave plan, and (on request) a separate effort/staffing plan. Triggers: assess SAS, SAS assessment, migration complexity, SAS analysis, SAS dependency diagram, migration waves, migration phases, migration sizing, LOE estimate SAS, SAS volume analysis, SAS migration readiness."
+description: "Preview. Assess SAS migration complexity and volume for Snowflake. Produces portfolio analysis with tier distribution, complexity heatmap, dependency DAG, a migration wave plan, and (on request) a separate effort/staffing plan. Triggers: assess SAS, SAS assessment, migration complexity, SAS analysis, SAS dependency diagram, migration waves, migration phases, migration sizing, LOE estimate SAS, SAS volume analysis, SAS migration readiness, Enterprise Guide project, EGP file, .egp, extract egp, EG process flow."
 license: Proprietary. See License-Skills for complete terms
 ---
 
@@ -24,11 +24,12 @@ same wave plan.
 ## Architecture
 
 ```
-User provides SAS files
+User provides SAS files (.sas) and/or Enterprise Guide projects (.egp)
         │
         ▼
 ┌─────────────────────────────┐
 │  Python CLI (assess_sas.py) │  ← Standalone, no Snowflake needed
+│  - Extract .egp → .sas+flow │
 │  - Parse .sas files         │
 │  - Score complexity         │
 │  - Classify tiers           │
@@ -40,6 +41,7 @@ User provides SAS files
     assessment_report.md
     assessment_report.html
     dependency_dag.mmd
+    egp_extracted/<project>/  (only for .egp input)
                │
                ▼
 ┌─────────────────────────────┐
@@ -63,7 +65,9 @@ User provides SAS files
 ### Step 1: Gather Input
 
 Ask user for:
-1. SAS source path (file, directory, or already-generated `assessment.json`)
+1. SAS source path (file, directory, or already-generated `assessment.json`). `.egp`
+   (SAS Enterprise Guide project) files are accepted directly — alone, in a directory, or
+   mixed with `.sas` files. Do **not** ask the user to export code from Enterprise Guide first.
 2. Output location
 
 **Default path:** Run the Python CLI for quantitative metrics, then add the CoCo-native
@@ -72,7 +76,7 @@ complexity layer (Step 4) on top.
 Branch on what's available:
 - **`assessment.json` already exists** → skip the CLI, present it (Step 3), then add CoCo analysis (Step 4).
 - **SAS files provided + Python available** → run the CLI (Step 2), present (Step 3), add CoCo analysis (Step 4).
-- **Python unavailable or user opts out** → skip Steps 2-3; run Step 4 in **standalone mode** (CoCo reads `.sas` directly and produces both distributions and the complexity narrative).
+- **Python unavailable or user opts out** → skip Steps 2-3; run Step 4 in **standalone mode** (CoCo reads `.sas` directly and produces both distributions and the complexity narrative). `.egp` input needs the CLI (at least `--egp-extract-only`) to unpack it; without Python, ask the user for the exported `.sas` code instead.
 
 ### Step 2: Run Assessment Tool
 
@@ -88,13 +92,27 @@ python assess_sas.py <source_path> --output <output_dir>
 - `<output_dir>/assessment_report.md` — human-readable report
 - `<output_dir>/assessment_report.html` — self-contained, SCAI-themed HTML report (KPIs, tier mix, complexity/volume charts, dependency DAG, per-file detail). Open in a browser; share as the visual deliverable.
 - `<output_dir>/dependency_dag.mmd` — Mermaid dependency graph
+- `<output_dir>/egp_extracted/<project>/` — **only when `.egp` input was given**: one `.sas`
+  file per code-producing task (named `<project>__<flow><position>_<TaskID>.sas`, in process-flow
+  run order), `egp_manifest.json` (flows, tasks, edges, data/file nodes, run lists, schedules,
+  tasks without code, stale ZIP entries, warnings) and `egp_flow.mmd` (the recovered flow).
+  `assessment.json` gains an `egp_projects` section and the HTML report an **EG Projects** tab.
 
 Use `--format html` to emit only the HTML report, or `--format all` (default) for every artifact.
+Use `--egp-extract-only` to unpack `.egp` files without assessing them.
+
+How `.egp` extraction works (structural rules, EG 4.x–8.x): code comes from `project.xml`
+(`TaskCode` plus any user pre/post-code), never from stale `code.sas` copies left in the
+archive; process flows and their dependencies come from every item that carries a `<PFD>`
+definition, plus explicit `Link` items. Tasks from one project are treated as one SAS session
+(shared `WORK`), and flow edges are merged into the dependency graph (`via: egp_flow`).
 
 If the tool fails, check:
 - Python >= 3.8 available
-- Source path contains `.sas` files
+- Source path contains `.sas` or `.egp` files
 - Output directory is writable
+- For a `.egp` reported as "could not extract": the file is not a valid EG project archive
+  (corrupt, password-protected, or not an `.egp`); the rest of the run still completes
 
 ### Step 3: Present Assessment Results
 
@@ -119,6 +137,17 @@ Read `assessment.json` and present:
 4. **Top Complex Files** (highest scoring, most likely to need manual review)
 
 5. **Dependency DAG** (render Mermaid or describe topology)
+
+6. **Enterprise Guide projects** (only if `assessment.json` has `egp_projects`):
+   - Per project: EG version, process flows, task counts by type, code vs. no-code tasks.
+   - **Tasks without code** (exports, wizard outputs, ...) — list them as manual-review items
+     with their output hints; they must be recreated in the target pipeline.
+   - **Flow vs. inferred** counts. `inferred_only` pairs are tasks that share a dataset but
+     were never linked in the EG flow — call these out, since the declared run order may be
+     incomplete there. Stale ZIP entries and warnings: mention counts; they were not assessed.
+
+7. **Out-of-scope `%include` files** (`portfolio_summary.external_includes` with `in_scope: false`):
+   list them as open questions — that code was not assessed and must be collected.
 
 ### Step 4: CoCo-Native Complexity Analysis (additive)
 
@@ -163,7 +192,10 @@ Produce:
 - Qualitative wave gates (no calendar time)
 
 Keep dependency clusters intact, isolate externally-blocked scripts into a later gated wave, and
-sequence the rest Tier 1 → Tier 2 → Tier 3. This wave plan is generated **once** and reused
+sequence the rest Tier 1 → Tier 2 → Tier 3. For `.egp` input, keep each Enterprise Guide
+project's tasks together and in process-flow order within a wave (they share one `WORK`
+session); do not split a project across waves unless it is broken into separately runnable
+flows. This wave plan is generated **once** and reused
 verbatim in both Part 5 of the report and (if requested) the effort & staffing file.
 
 ### Step 5b: Effort & Staffing (opt-in — separate deliverable)

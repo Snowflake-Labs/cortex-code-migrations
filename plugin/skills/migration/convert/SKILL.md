@@ -36,7 +36,29 @@ Confirm `source/` contains `.sql` files (use whichever portable form fits the ho
 
 If `source/` is empty, continue to Steps 2–3.5. After those steps, if there is still no SQL **and** `TABLEAU_PATH` is unset **and** `PBIT_PATH` is unset, return to the parent setup skill so it can re-query `progress_setup()`. Tableau-only conversions (Step 3.5 sets `TABLEAU_PATH`) are allowed with an empty `source/`.
 
+### Step 1.5: dbt Fast-Path
+
+A dbt workload was routed here from the dbt branch of the Setup machine. Detect it
+deterministically — `dbt_project.yml` lands in `source/` when the dbt project is added
+(via `scai code add`) — and shortcut the generic conversion questions:
+
+> If `source/dbt_project.yml` exists (a dbt Jinja project), this is a **dbt conversion**.
+> Skip Steps 2, 3, and 3.5 entirely (no ETL, no Power BI, no custom settings) and run
+> the dbt-specific conversion in Step 4:
+> ```bash
+> scai code convert --dbt --json
+> ```
+> The `--dbt` flag is an internal engine detail, never surfaced — the Jinja tokenization,
+> translation, and restoration all happen inside the engine. Repointed models land in
+> `snowflake/models/`. After a successful envelope, the Setup machine routes to the dbt
+> repointing skill for agentic YAML/macro refinement.
+
+If `source/dbt_project.yml` does **not** exist, continue to Step 2 normally.
+
 ### Step 2: Check for ETL Code
+
+**Skip this entire step if `source/dbt_project.yml` exists** (see Step 1.5). A dbt workload has no
+SSIS or Informatica packages — do not ask any ETL question, go straight to Step 4.
 
 Any ETL in this project was imported during register (`scai code add`), which arranges the packages into `source/_etl/`. That is where `convert` reads them from.
 
@@ -109,13 +131,14 @@ scai code convert <SETTINGS_FLAGS> --json
 
 `--json` is always required so you can parse the result envelope. Substitute `<SETTINGS_FLAGS>` with the confirmed flags from Step 3.6 (or omit the token when empty). Then append one flag per decision already recorded in the steps above — nothing else. Do **not** pass `--etl-replatform-sources-path`; ETL already lives under `source/_etl/` from register.
 
-Always append `--generate-source-bindable-format --generate-snowflake-bindable-format` (**default on / opt-out**). They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Omit both flags only when the user explicitly opts out. Deploy stays legacy-safe: projects converted earlier, with no bindings file, still use `-d snowflake_database`. Bare `scai code convert` without these flags (engine default) is also opt-out.
+Always append `--generate-source-bindable-format --generate-snowflake-bindable-format` (**default on / opt-out**), **except on the dbt repointing path** — they are invalid alongside `--dbt` and the engine rejects the command (see `dbt/SKILL.md` Step 2). They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Omit both flags only when the user explicitly opts out. Deploy stays legacy-safe: projects converted earlier, with no bindings file, still use `-d snowflake_database`. Bare `scai code convert` without these flags (engine default) is also opt-out.
 
 | Append | When |
 |--------|------|
-| `--generate-source-bindable-format --generate-snowflake-bindable-format` | Default on (interactive and `subagent_mode`). Skip only on explicit opt-out. |
+| `--generate-source-bindable-format --generate-snowflake-bindable-format` | Default on (interactive and `subagent_mode`). Skip only on explicit opt-out, or on the `--dbt` path where they are invalid. |
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 2 (Informatica target is Snowflake Scripting) |
 | `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set in Step 2 (Informatica target is dbt and the user chose to consolidate model chains) |
+| `--consolidate-dbt-projects` | SSIS dbt target: one dbt project per package instead of one per Data Flow. Independent of `--consolidate-dbt-model-chains`. |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 3 |
 | `--tableauRepointing <TABLEAU_PATH>` | `TABLEAU_PATH` was set in Step 3.5 |
 
@@ -151,6 +174,7 @@ envelope can't answer.
 | `--overwrite-working-directory` | Overwrite output files in `snowflake/` and registry |
 | `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; ETL stabilization and deploy are skipped for these units. |
 | `--consolidate-dbt-model-chains` | Consolidate Informatica dbt model chains to reduce the number of generated model files. Applies when the Informatica target is dbt. |
+| `--consolidate-dbt-projects` | Consolidate SSIS dbt output into one dbt project per package instead of one project per Data Flow. Independent of model-chain consolidation. |
 
 For Power BI options, see `../powerbi-repointing/SKILL.md`. For Tableau options, see `../tableau-repointing/SKILL.md`.
 

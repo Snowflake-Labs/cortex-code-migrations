@@ -26,6 +26,7 @@ from typing import Dict, List, Optional
 from .parser import SASParser, SASScript, BlockType
 from .dependency import DependencyTracker
 from .constants import iter_countable_blocks, is_boilerplate_macro
+from .source_io import read_sas_source
 
 # Stable namespace for deterministic unit ids (do not change — ids would churn).
 _CUR_NAMESPACE = uuid.UUID("b6d7e1a2-9c34-5f60-8a71-2c3d4e5f6a7b")
@@ -174,7 +175,8 @@ class CurEmitter:
         analyses: Dict[str, Dict] = {}
         file_by_name: Dict[str, Path] = {}
         for sas_file in sorted(sas_files):
-            content = sas_file.read_text(encoding="utf-8", errors="replace")
+            # Normalised text for parsing; _md5 below still hashes raw bytes.
+            content, _ = read_sas_source(sas_file)
             script = parser.parse(content, filename=sas_file.name)
             name = sas_file.stem
             scripts[name] = script
@@ -183,7 +185,9 @@ class CurEmitter:
             file_by_name[name] = sas_file
             parser = SASParser()  # reset per-file libname/macro-var state
 
-        edges = tracker.build_cross_file_graph(analyses)["edges"]
+        edges = tracker.build_cross_file_graph(
+            analyses, DependencyTracker.session_groups(file_by_name.values())
+        )["edges"]
         depends_on, required_by = self._edges_to_deps(edges, file_by_name)
         ranks = self._topological_ranks(file_by_name.keys(), depends_on)
 

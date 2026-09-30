@@ -21,7 +21,7 @@ Tell the user:
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `-c, --connection` | Yes | Friendly name for this connection |
+| `-s, --source-connection` | Yes | Friendly name for this connection |
 | `--auth` | Yes | Authentication method (`standard`) |
 | `--host` | Yes | Oracle hostname or IP |
 | `--port` | No | Port number (default: 1521) |
@@ -71,7 +71,7 @@ scai connection add-oracle
 **Inline mode:**
 ```bash
 scai connection add-oracle \
-  -c <CONNECTION_NAME> \
+  -s <CONNECTION_NAME> \
   --auth standard \
   --host <HOST> \
   --port 1521 \
@@ -144,9 +144,9 @@ Then return to the calling skill.
 | Download driver (macOS/Linux) | `curl -L -o Oracle.ManagedDataAccess.Core.nupkg https://www.nuget.org/api/v2/package/Oracle.ManagedDataAccess.Core` |
 | Download driver (Windows PowerShell) | `curl.exe -L -o Oracle.ManagedDataAccess.Core.nupkg https://www.nuget.org/api/v2/package/Oracle.ManagedDataAccess.Core` |
 | Add connection (interactive) | `scai connection add-oracle` |
-| Add connection (inline) | `scai connection add-oracle -c NAME --auth standard --host HOST --service-name SVC --user USER` |
+| Add connection (inline) | `scai connection add-oracle -s NAME --auth standard --host HOST --service-name SVC --user USER` |
 | Test connection (first time) | `configure(source_connection=NAME, driver_path=<PATH_TO_NUPKG>)` |
 | Test connection (driver cached) | `configure(source_connection=NAME)` |
 | List connections | `scai connection list -l oracle --json` |
-| Set default | `scai connection set-default -l oracle -c NAME` |
+| Set default | `scai connection set-default -l oracle -s NAME` |
 | Extract code | `scai code extract -s NAME --json` |

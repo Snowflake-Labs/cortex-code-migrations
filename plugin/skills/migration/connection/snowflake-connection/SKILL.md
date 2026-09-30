@@ -15,12 +15,16 @@ license: Proprietary. See License-Skills for complete terms
 | Microsoft Entra ID, Azure AD, or any OIDC IdP | `oauth_authorization_code` | Browser PKCE flow. Required for Entra. |
 | Snowflake SAML SSO / classic IdP SSO | `externalbrowser` | Do **not** use this for Entra OIDC. |
 | Password + MFA | omit / `username_password_mfa` | Existing default. |
-| Programmatic access token | `programmatic_access_token` | Headless / CI. |
+| Programmatic access token | `programmatic_access_token` | Headless / CI. Requires `token` **or** `token_file_path` in `connections.toml`. |
 | Key-pair | `snowflake_jwt` | Headless / CI. |
 | Token already in hand (SPCS) | `oauth` | Non-interactive. |
 | Service principal | `oauth_client_credentials` | Non-interactive. |
 
 If a connection using `externalbrowser` fails with an OIDC / Entra / AADSTS error, switch it to `oauth_authorization_code`. Do not keep retrying SAML.
+
+## PAT (`programmatic_access_token`)
+
+Requires `token` **or** `token_file_path` in `~/.snowflake/connections.toml` (`token_file_path` is the usual CI/headless form). If `configure()` reports that the profile has neither, quote that error to the user, edit the profile, then retry `configure()`. Do **not** switch to `externalbrowser` or `oauth_authorization_code` to work around a PAT error.
 
 Full field reference: `Snowflake.SnowConvertDesktop/Snowflake.SnowConvert.Cli/docs/entra-oidc-oauth.md`.
 

@@ -30,9 +30,28 @@ STATUS_PENDING = "Pending Conversion"
 STATUS_NOT_SUPPORTED = "Not Supported"
 STATUS_MISSING = "Missing"
 
+# SnowConvert raises four families of issue: EWI (something did not convert),
+# OOS (out of scope), FDM (a functional difference to be aware of) and PRF (a
+# performance note). Only the first two are work. The registry stores code +
+# count with no severity, so the code is the only thing to classify on.
+ACTIONABLE_ISSUE_FAMILIES = ("EWI", "OOS")
+
 
 def is_etl(entry: dict) -> bool:
     return entry.get("kind") == "etl"
+
+
+def is_actionable_issue(issue: dict) -> bool:
+    code = (issue.get("code") or "").upper()
+    return any(family in code for family in ACTIONABLE_ISSUE_FAMILIES)
+
+
+def has_actionable_issues(entry: dict) -> bool:
+    """True when the entry carries an EWI or OOS, ETL parts included."""
+    issues = list(entry.get("issues") or [])
+    if is_etl(entry):
+        issues += aggregate_etl_issues(entry)
+    return any(is_actionable_issue(i) for i in issues if isinstance(i, dict))
 
 
 def aggregate_etl_issues(entry: dict) -> list[dict]:
@@ -58,14 +77,16 @@ def map_conversion_status(entry: dict) -> str:
 
     Rules:
     - ``isMissing == true`` → "Missing" (takes precedence)
-    - ``conversion.status == "pending"`` and no issues  → "Pending Conversion"
-    - ``conversion.status == "pending"`` and issues > 0 → "Require Attention"
-    - ``conversion.status == "completed"`` and issues > 0 → "Require Attention"
-    - ``conversion.status == "completed"`` and no issues → "Success"
-    - otherwise: "Require Attention" if issues else "Pending Conversion"
+    - ``conversion.status == "pending"`` and no actionable issues  → "Pending Conversion"
+    - ``conversion.status == "pending"`` and actionable issues → "Require Attention"
+    - ``conversion.status == "completed"`` and actionable issues → "Require Attention"
+    - ``conversion.status == "completed"`` and no actionable issues → "Success"
+    - otherwise: "Require Attention" if actionable issues else "Pending Conversion"
 
-    For ETL units, "issues" includes ``parts[*].issues`` since the
-    SnowConvert conversion attaches gaps per-part.
+    Advisory-only units (FDM / PRF and nothing else) read as converted: those
+    codes are a difference to read about, not work, and counting them as
+    attention left the status column saying "Require Attention" for almost
+    every object in a project.
     """
     if entry.get("isMissing"):
         return STATUS_MISSING
@@ -73,13 +94,8 @@ def map_conversion_status(entry: dict) -> str:
     conv = (
         entry.get("codeStatus", {}).get("conversion", {}).get("status", "") or ""
     ).strip().lower()
-    issues = entry.get("issues") or []
-    if is_etl(entry):
-        issues = list(issues) + aggregate_etl_issues(entry)
-    has_issues = bool(issues)
+    actionable = has_actionable_issues(entry)
 
-    if conv == "pending":
-        return STATUS_REQUIRE_ATTENTION if has_issues else STATUS_PENDING
     if conv == "completed":
-        return STATUS_REQUIRE_ATTENTION if has_issues else STATUS_SUCCESS
-    return STATUS_REQUIRE_ATTENTION if has_issues else STATUS_PENDING
+        return STATUS_REQUIRE_ATTENTION if actionable else STATUS_SUCCESS
+    return STATUS_REQUIRE_ATTENTION if actionable else STATUS_PENDING

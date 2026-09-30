@@ -28,3 +28,8 @@ packages = ["scripts/conversion_checker"]
 dev = [
     "pytest>=9.0.3",
 ]
+
+[tool.uv]
+constraint-dependencies = [
+    "pyjwt>=2.14.0",
+]

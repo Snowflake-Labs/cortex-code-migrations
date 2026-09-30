@@ -22,11 +22,9 @@ emitted verbatim; they are authored content, not user input.
 Copy is owned by SNOW-3813566 and reviewed there; the four published platform pages it draws on
 are cited in ``snowconvert_reports/type_coverage.py``.
 
-The source notes for this tab carried a sentence about planned improvements to
-unload for validation. It is deliberately absent: it discloses unshipped
-roadmap, the Testing tab set that precedent, and a test asserts the rendered
-HTML never matches /in the future|we plan to|coming soon|roadmap/i. Section 5
-states what is true today and stops.
+No copy here may disclose unshipped roadmap: the Testing tab set that precedent,
+and a test asserts the rendered HTML never matches
+/in the future|we plan to|coming soon|roadmap/i. State what is true today and stop.
 """
 
 from __future__ import annotations
@@ -183,8 +181,9 @@ TOPOLOGY_CELLS: tuple[TopologyCell, ...] = (
             "writes into Snowflake, table by table."
         ),
         efficiency=(
-            "Relatively efficient &mdash; throughput is bounded by the driver "
-            "rather than by storage."
+            "Relatively efficient &mdash; throughput comes from how many workers "
+            "run in parallel and how fast each one moves data from the source "
+            "into Snowflake."
         ),
     ),
     TopologyCell(
@@ -230,29 +229,6 @@ BOTTLENECKS: tuple[str, ...] = (
     "Partition size on the widest tables &mdash; too small and the overhead dominates.",
 )
 
-VALIDATION_TITLE = "How validation differs"
-VALIDATION_BODY: tuple[str, ...] = (
-    (
-        "The same two questions set the topology for validation, and the answers are "
-        "normally the same ones. One thing does not carry over: bulk export does not "
-        "shorten validation. Validation compares by running SQL against the live "
-        "source, so a table migrated from a staged export is still validated by "
-        "querying the source directly."
-    ),
-    (
-        "Two consequences worth planning for. Keep the source reachable for the whole "
-        "validation window, not just the migration window &mdash; if a "
-        "decommissioning date is already set, validation has to finish before it. And "
-        "treat worker count as the lever for how long validation takes, because the "
-        "export path is not one."
-    ),
-    (
-        "Views are optional. Their rows are derived from tables you are already "
-        "comparing, so validate a view when a downstream consumer reads it directly "
-        "and skip it otherwise."
-    ),
-)
-
 SUGGESTIONS_TITLE = "Suggestions for {dialect}"
 SUGGESTIONS: dict[str, tuple[Suggestion, ...]] = {
     "sqlserver": (
@@ -270,15 +246,11 @@ SUGGESTIONS: dict[str, tuple[Suggestion, ...]] = {
             "dirty reads, which can surface later as false validation mismatches.",
         ),
         Suggestion(
-            "Partition the largest tables",
-            "Name a partitioning column and a partition size for the biggest "
-            "tables so extraction runs in parallel instead of streaming one "
-            "result set.",
-        ),
-        Suggestion(
-            "State the encryption settings",
-            "Set encryption and certificate trust explicitly rather than relying "
-            "on driver defaults, which differ by driver version.",
+            "Partition every table",
+            "Name a partitioning column and a partition size for each table so "
+            "extraction runs in parallel instead of streaming one result set. "
+            "This is worth doing regardless of table size &mdash; there is no "
+            "threshold below which a single streamed result set is preferable.",
         ),
     ),
     "redshift": (

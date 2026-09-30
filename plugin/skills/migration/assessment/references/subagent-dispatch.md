@@ -144,24 +144,25 @@ JSON contract with workflow/classified/pending/target counts.
 
 ### Discovery
 
-Dispatch only for SQL Server or Teradata when mode is `have_extract` and paths
-are non-empty. For `skip`, synthesize `skipped by user`. For `later`,
+Dispatch only for SQL Server, Teradata, or Redshift when mode is `have_extract`
+and paths are non-empty. For `skip`, synthesize `skipped by user`. For `later`,
 synthesize `capture SQL provided; re-run assessment with the .xel files` on
-SQL Server or `probe and export SQL provided; re-run assessment with the
-metrics file` on Teradata.
+SQL Server, `probe and export SQL provided; re-run assessment with the
+metrics file` on Teradata, or `extract SQL provided; re-run assessment with
+the Redshift metrics file` on Redshift.
 
 ```text
 Read and follow plugin/skills/migration/assessment/workload-insights/SKILL.md.
 You are a non-interactive sub-agent. Do not ask questions.
 Context: project_dir, input_paths=<absolute .xel paths (SQL Server) or metrics
-CSV paths (Teradata)>.
+CSV paths (Teradata or Redshift)>.
 Call configure(project_dir). From project_dir run scai assessment
 workload-insights with exactly one --input per path. Return the common JSON
 contract for workload-insights with the newest
 artifacts/assessment/workload-insights-*.json. ASM0034 is skipped. Exit 0 plus
 a written artifact is ok even when stdout reports a large/long parse or
-skipped-row warnings from a Teradata extract. Never copy input files into the
-project.
+skipped-row warnings from a Teradata or Redshift extract. Never copy input
+files into the project.
 ```
 
 ### 6.7 data-lineage-runner prompt

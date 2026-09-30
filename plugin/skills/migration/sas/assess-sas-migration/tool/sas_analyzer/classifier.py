@@ -1,3 +1,4 @@
+import re
 from typing import Dict
 from .parser import SASScript, SASBlock, BlockType
 from .constants import iter_countable_blocks
@@ -7,7 +8,6 @@ class TierClassifier:
 
     TIER3_TRIGGERS = [
         ('declare hash', 'HASH objects - no SQL equivalent'),
-        ('call execute', 'CALL EXECUTE - dynamic code generation'),
     ]
 
     # Statistical-modeling PROCs -> Tier 3 (PySpark/SCOS). Canonical list, kept in
@@ -24,6 +24,12 @@ class TierClassifier:
         'odbc', 'oledb', 'db2', 'postgres', 'mysql', 'dsn=',
     ]
 
+    # PROCs without a dedicated BlockType that are nonetheless well understood:
+    # housekeeping (no data logic) or a direct SQL mapping (RANK -> RANK()).
+    KNOWN_OTHER_PROCS = frozenset({
+        'DELETE', 'PRINTTO', 'OPTIONS', 'OPTSAVE', 'OPTLOAD', 'CATALOG', 'PWENCODE', 'RANK',
+    })
+
     def classify_block(self, block: SASBlock) -> Dict:
         content_lower = block.content.lower()
 
@@ -32,12 +38,22 @@ class TierClassifier:
                 return {'tier': 3, 'label': 'TIER_3_PYSPARK', 'reason': reason, 'confidence': 'HIGH'}
 
         if ('do until' in content_lower or 'do while' in content_lower):
-            if 'symput' in content_lower or content_lower.count('call ') > 2:
+            # CALL EXECUTE is not external state (it is Tier 2 below); don't count it.
+            other_calls = content_lower.count('call ') - content_lower.count('call execute')
+            if 'symput' in content_lower or other_calls > 2:
                 return {'tier': 3, 'label': 'TIER_3_PYSPARK', 'reason': 'DO loop with external state', 'confidence': 'HIGH'}
 
         for proc in self.TIER3_STAT_PROCS:
             if proc in content_lower:
                 return {'tier': 3, 'label': 'TIER_3_PYSPARK', 'reason': f'Statistical modeling: {proc}', 'confidence': 'HIGH'}
+
+        # CALL EXECUTE is dynamic dispatch, not something SQL cannot express:
+        # both conversions rebuilt it as a procedure. HASH / stat PROCs in the
+        # same block still win above. See block-tiering-spec.md.
+        if 'call execute' in content_lower:
+            return {'tier': 2, 'label': 'TIER_2_SP',
+                    'reason': 'CALL EXECUTE - dynamic dispatch -> stored procedure with EXECUTE IMMEDIATE / cursor loop',
+                    'confidence': 'MEDIUM'}
 
         if 'retain ' in content_lower and 'first.' in content_lower:
             if '= 0' in content_lower or '= .' in content_lower:
@@ -62,7 +78,17 @@ class TierClassifier:
             return {'tier': 2, 'label': 'TIER_2_SP', 'reason': '3+ sequential DML operations', 'confidence': 'MEDIUM'}
 
         confidence = self._assess_confidence(content_lower)
+        if block.block_type == BlockType.PROC_OTHER and self.proc_name(block) not in self.KNOWN_OTHER_PROCS:
+            # A PROC we have no rule for: do not claim it is plain SQL with HIGH
+            # confidence. Flagged in portfolio_summary.unrecognised_procs.
+            return {'tier': 1, 'label': 'TIER_1_SQL',
+                    'reason': f'Unrecognised PROC {self.proc_name(block)} - review manually', 'confidence': 'LOW'}
         return {'tier': 1, 'label': 'TIER_1_SQL', 'reason': 'SQL-translatable', 'confidence': confidence}
+
+    @staticmethod
+    def proc_name(block: SASBlock) -> str:
+        m = re.match(r'(?is)\s*proc\s+(\w+)', block.content)
+        return m.group(1).upper() if m else 'UNKNOWN'
 
     def _assess_confidence(self, content_lower: str) -> str:
         if content_lower.count('%macro') > 2:

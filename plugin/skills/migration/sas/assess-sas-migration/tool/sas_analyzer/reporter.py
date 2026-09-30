@@ -1,6 +1,8 @@
 import json
+import re
 from datetime import datetime
-from typing import List, Dict
+from pathlib import Path
+from typing import List, Dict, Optional
 from collections import Counter
 from .parser import SASScript
 from .constants import iter_countable_blocks
@@ -48,6 +50,13 @@ class AssessmentReporter:
 
         func_usage = self._get_function_usage(scripts)
 
+        # PROCs with no specific rule (tiered Tier 1 / LOW). One line in the report.
+        unrecognised = Counter()
+        for c in classifications:
+            for b in c['block_classifications']:
+                if b['block_type'] == 'PROC_OTHER' and b['confidence'] == 'LOW' and b['tier'] == 1:
+                    unrecognised[b['reason'].split()[2]] += 1
+
         return {
             'total_lines': total_lines,
             'total_blocks': total_blocks,
@@ -56,7 +65,17 @@ class AssessmentReporter:
             'tier_distribution': dict(tier_dist),
             'block_type_distribution': dict(block_type_dist),
             'function_usage': dict(sorted(func_usage.items(), key=lambda x: -x[1])[:20]),
+            'unrecognised_procs': dict(sorted(unrecognised.items())),
+            'external_includes': self._external_includes(scripts),
         }
+
+    @staticmethod
+    def _external_includes(scripts: List[SASScript]) -> List[Dict]:
+        """Every ``%include``; ``in_scope`` when its file is among the assessed files."""
+        assessed = {s.filename.lower() for s in scripts}
+        return [{'file': s.filename, 'path': inc['path'], 'dynamic': inc['dynamic'],
+                 'in_scope': re.split(r'[\\/]', inc['path'])[-1].lower() in assessed}
+                for s in scripts for inc in s.includes]
 
     def _build_file_details(self, scripts: List[SASScript], scores: List[Dict],
                             classifications: List[Dict], file_analyses: Dict[str, Dict]) -> List[Dict]:
@@ -66,6 +85,7 @@ class AssessmentReporter:
             files.append({
                 'filename': script.filename,
                 'lines': script.total_lines,
+                'line_endings_normalised': script.line_endings_normalised,
                 'blocks': sum(1 for _ in iter_countable_blocks(script)),
                 'complexity_score': score['overall_score'],
                 'complexity_level': score['complexity_level'],
@@ -79,6 +99,7 @@ class AssessmentReporter:
                     'reads': deps['reads'],
                 },
                 'external_sources': deps['external_sources'],
+                'includes': script.includes,
             })
         return files
 
@@ -258,4 +279,60 @@ class AssessmentReporter:
             lines.append(f'- **External Inputs:** {len(graph.get("external_inputs", []))}')
             lines.append('')
 
+        lines.extend(self._render_includes_markdown(portfolio.get('external_includes', [])))
+        lines.extend(self._render_egp_markdown(assessment.get('egp_projects')))
         return '\n'.join(lines)
+
+    @staticmethod
+    def _render_includes_markdown(includes: List[Dict]) -> List[str]:
+        if not includes:
+            return []
+        lines = ['## Included Files (%INCLUDE)', '',
+                 '_Files pulled in at run time. Out-of-scope ones are code this assessment did not see._', '',
+                 '| File | Includes | In scope | Dynamic path |', '|---|---|---|---|']
+        for inc in includes:
+            lines.append(f"| {inc['file']} | `{inc['path']}` | {'yes' if inc['in_scope'] else 'no'} | "
+                         f"{'yes' if inc['dynamic'] else 'no'} |")
+        lines.append('')
+        return lines
+
+    @staticmethod
+    def _render_egp_markdown(egp: Optional[Dict]) -> List[str]:
+        if not egp:
+            return []
+        lines = ['## Enterprise Guide Projects', '',
+                 '_Extracted from `.egp` inputs. Per-project detail: '
+                 '`egp_extracted/<project>/egp_manifest.json` and `egp_flow.mmd`._', '',
+                 '| Project | EG version | Flows | Tasks | Code tasks | No-code tasks | Stale ZIP code | Warnings |',
+                 '|---|---|---|---|---|---|---|---|']
+        for p in egp['projects']:
+            s = p['summary']
+            version = p['eg_versions'][-1] if p['eg_versions'] else 'unknown'
+            lines.append(f"| {Path(p['source']).name} | {version} | {s['flows']} | {s['tasks']} | "
+                         f"{s['code_tasks']} | {s['no_code_tasks']} | {s['orphaned_zip_code']} | {s['warnings']} |")
+        lines.append('')
+
+        review = [(Path(p['source']).name, t) for p in egp['projects'] for t in p['tasks']
+                  if t['code_source'] == 'none']
+        if review:
+            lines += ['### Tasks without code (manual review)', '',
+                      '_These tasks produce no SAS code in the project file (e.g. exports, '
+                      'wizard outputs). Recreate them in the target pipeline._', '',
+                      '| Project | Task | Type | Output hints |', '|---|---|---|---|']
+            for project, t in review:
+                hints = '; '.join(f'{k}={v}' for k, v in t['output_hints'].items()) or '-'
+                lines.append(f"| {project} | {t['label']} | {t['element_type']} | {hints.replace('|', '/')} |")
+            lines.append('')
+
+        cmp = egp.get('flow_vs_inferred') or {}
+        if cmp:
+            lines += ['### Process flow vs. inferred dataset dependencies', '',
+                      f"- Agreed: {cmp.get('agreed', 0)}",
+                      f"- Declared in flow only: {len(cmp.get('flow_only', []))}",
+                      f"- Inferred from shared datasets only (not linked in the flow): "
+                      f"{len(cmp.get('inferred_only', []))}", '']
+        for failure in egp.get('failed', []):
+            lines.append(f"- **Could not extract** `{Path(failure['source']).name}`: {failure['error']}")
+        if egp.get('failed'):
+            lines.append('')
+        return lines

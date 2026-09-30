@@ -157,7 +157,7 @@ BigQuery has no portable system row identifier suitable for partitioning. Use:
 ## Verifying Connectivity
 
 ```bash
-scai connection test -l bigquery -c <CONNECTION_NAME> --json
+scai connection test -l bigquery -s <CONNECTION_NAME> --json
 ```
 
 Manual network test:
