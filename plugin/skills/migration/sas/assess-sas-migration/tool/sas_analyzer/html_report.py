@@ -139,11 +139,74 @@ def _findings(assessment: Dict) -> List[str]:
         out.append(f"{edges} cross-file dependency edge(s) detected — migrate producers before consumers (see Dependencies).")
     if macros:
         out.append(f"{macros} macro definition(s) found — factor shared macros into reusable Snowflake objects.")
+    missing = [i for i in p.get("external_includes", []) if not i["in_scope"]]
+    if missing:
+        out.append(f"{len(missing)} %INCLUDE file(s) are outside the assessed scope "
+                   f"(e.g. <code>{_e(missing[0]['path'])}</code>) — collect them before conversion.")
     files = assessment.get("files", [])
     if files:
         top = max(files, key=lambda f: f.get("complexity_score", 0))
         out.append(f"Highest-scoring file: <code>{_e(top['filename'])}</code> (score {top['complexity_score']}).")
     return out
+
+
+def _egp_tab(egp) -> str:
+    """'EG Projects' tab; empty string when no ``.egp`` input was assessed."""
+    if not egp:
+        return ""
+    project_rows = "".join(
+        "<tr>"
+        f"<td><code>{_e(Path(p['source']).name)}</code></td>"
+        f"<td>{_e(p['eg_versions'][-1] if p['eg_versions'] else 'unknown')}</td>"
+        f"<td class='num'>{p['summary']['flows']}</td>"
+        f"<td class='num'>{p['summary']['tasks']}</td>"
+        f"<td class='num'>{p['summary']['code_tasks']}</td>"
+        f"<td class='num'>{p['summary']['no_code_tasks']}</td>"
+        f"<td class='num'>{p['summary']['orphaned_zip_code']}</td>"
+        f"<td class='num'>{p['summary']['warnings']}</td>"
+        "</tr>"
+        for p in egp["projects"]
+    )
+    review_rows = "".join(
+        f"<tr><td><code>{_e(Path(p['source']).name)}</code></td><td>{_e(t['label'])}</td>"
+        f"<td>{_e(t['element_type'])}</td>"
+        f"<td>{_e('; '.join(f'{k}={v}' for k, v in t['output_hints'].items()) or '-')}</td></tr>"
+        for p in egp["projects"] for t in p["tasks"] if t["code_source"] == "none"
+    ) or "<tr><td colspan='4' class='muted'>Every task produced SAS code.</td></tr>"
+    warning_items = "".join(
+        f"<li><code>{_e(Path(p['source']).name)}</code>: {_e(w)}</li>"
+        for p in egp["projects"] for w in p["warnings"]
+    ) + "".join(
+        f"<li><code>{_e(Path(f['source']).name)}</code>: could not extract — {_e(f['error'])}</li>"
+        for f in egp.get("failed", [])
+    )
+    cmp = egp.get("flow_vs_inferred") or {}
+    warnings_card = (f'<div class="card"><h2>Warnings</h2><ul>{warning_items}</ul></div>'
+                     if warning_items else "")
+    return f"""
+      <section class="tab" id="egp">
+        <div class="card"><h2>Enterprise Guide projects ({len(egp['projects'])})</h2>
+          <p class="muted">Code and process flows recovered from <code>.egp</code> files. Per-project manifest and
+          flow diagram: <code>egp_extracted/&lt;project&gt;/egp_manifest.json</code> and <code>egp_flow.mmd</code>.
+          Stale <code>code.sas</code> entries (tasks no longer in the project) are listed there and were not assessed.</p>
+          <div class="scroll"><table><thead><tr><th>Project</th><th>EG version</th><th class="num">Flows</th>
+          <th class="num">Tasks</th><th class="num">Code tasks</th><th class="num">No-code tasks</th>
+          <th class="num">Stale ZIP code</th><th class="num">Warnings</th></tr></thead><tbody>{project_rows}</tbody></table></div>
+        </div>
+        <div class="card"><h2>Process flow vs. inferred dataset dependencies</h2>
+          <table><tbody>
+          <tr><td>Agreed</td><td class="num">{cmp.get('agreed', 0)}</td></tr>
+          <tr><td>Declared in the flow only</td><td class="num">{len(cmp.get('flow_only', []))}</td></tr>
+          <tr><td>Shared dataset but not linked in the flow</td><td class="num">{len(cmp.get('inferred_only', []))}</td></tr>
+          </tbody></table>
+        </div>
+        <div class="card"><h2>Tasks without code — manual review</h2>
+          <div class="scroll"><table><thead><tr><th>Project</th><th>Task</th><th>Type</th><th>Output hints</th></tr></thead>
+          <tbody>{review_rows}</tbody></table></div>
+        </div>
+        {warnings_card}
+      </section>
+"""
 
 
 def render_html(assessment: Dict, mermaid_str: str = "") -> str:
@@ -251,6 +314,9 @@ def render_html(assessment: Dict, mermaid_str: str = "") -> str:
         ("files", "Per-File Detail"),
         ("funcs", "Functions"),
     ]
+    egp_tab = _egp_tab(assessment.get("egp_projects"))
+    if egp_tab:
+        nav_items.insert(3, ("egp", "EG Projects"))
     nav = "".join(
         f'<button class="{"active" if i == 0 else ""}" data-tab="{tid}">{label}</button>'
         for i, (tid, label) in enumerate(nav_items)
@@ -374,7 +440,7 @@ footer {{ color:var(--muted); font-size:12px; padding:22px 0 0; border-top:1px s
           <div class="card"><h2>External source tables ({len(ext_inputs)})</h2><div class="scroll"><ul>{ext_list}</ul>{ext_more}</div></div>
         </div>
       </section>
-
+{egp_tab}
       <section class="tab" id="files">
         <div class="card"><h2>Per-file detail ({total} files, sorted by complexity score)</h2>
           <div class="scroll"><table><thead><tr><th>File</th><th class="num">Lines</th><th class="num">Blocks</th><th class="num">Score</th>

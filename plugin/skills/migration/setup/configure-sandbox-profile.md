@@ -6,10 +6,6 @@ license: Proprietary. See License-Skills for complete terms
 
 # Configure sandbox profile
 
-AIM currently pre-sets `sandbox_profile=sandbox` in `bootConfigureParams`,
-so this step is not asked. Do not load this skill until that default is
-removed.
-
 Runs after `configureSnowflakeTarget`. Both the Snowflake connection +
 database and a source connection must be confirmed before creating a
 **sandbox** profile that downstream migration commands resolve through

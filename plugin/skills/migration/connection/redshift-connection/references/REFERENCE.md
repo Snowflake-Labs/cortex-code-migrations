@@ -8,7 +8,7 @@ Detailed reference for Redshift connection options, authentication methods, and 
 
 | Parameter | Flag | Description |
 |-----------|------|-------------|
-| Connection name | `-c, --connection` | Unique identifier for this connection |
+| Connection name | `-s, --source-connection` | Unique identifier for this connection |
 | Database | `--database` | Target database name |
 | Authentication | `--auth` | Auth method: `iam-provisioned-cluster`, `iam-serverless`, or `standard` |
 
@@ -54,7 +54,7 @@ Uses AWS IAM credentials to authenticate with a provisioned Redshift cluster.
 
 ```bash
 scai connection add-redshift \
-  --connection my-redshift \
+  --source-connection my-redshift \
   --auth iam-provisioned-cluster \
   --user myuser \
   --cluster-id my-cluster \
@@ -79,7 +79,7 @@ Uses AWS IAM credentials with Redshift Serverless workgroups.
 
 ```bash
 scai connection add-redshift \
-  --connection my-serverless \
+  --source-connection my-serverless \
   --auth iam-serverless \
   --workgroup my-workgroup \
   --database mydb \
@@ -99,7 +99,7 @@ Uses Redshift username and password directly.
 
 ```bash
 scai connection add-redshift \
-  --connection my-redshift \
+  --source-connection my-redshift \
   --auth standard \
   --host my-cluster.xxxxxxxxxxxx.us-west-2.redshift.amazonaws.com \
   --port 5439 \
@@ -107,6 +107,10 @@ scai connection add-redshift \
   --user myuser \
   --password <PASSWORD>
 ```
+
+Add `--ssl-mode <MODE>` to override the default `Require`; the stored value is the
+`ssl_mode` key in `redshift.toml` and is honored by the connection test. Data-migration /
+validation DEW configs do not yet emit `ssl_mode` for Redshift (follow-up to SNOW-4167411).
 
 **When to use:**
 - Quick testing and development
@@ -131,6 +135,15 @@ scai connection add-redshift \
    ```bash
    scai connection add-redshift ... --connection-timeout 60
    ```
+
+### No pg_hba.conf Entry / SSL off
+
+**Symptoms:**
+- `28000: no pg_hba.conf entry for host "???", user "X", database "Y", SSL off`
+
+**Cause:** the connection was attempted without TLS, and Redshift only publishes `hostssl`
+rules. Re-add the connection with `--ssl-mode Require`, or set `ssl_mode = "Require"` in
+`redshift.toml`. This is the default for connections added by current builds.
 
 ### Database Does Not Exist
 
@@ -236,7 +249,7 @@ IAM authentication generates temporary credentials internally.
 ### Test with scai
 
 ```bash
-scai connection test -l redshift -c <CONNECTION_NAME> --json
+scai connection test -l redshift -s <CONNECTION_NAME> --json
 ```
 
 ### Manual Network Test

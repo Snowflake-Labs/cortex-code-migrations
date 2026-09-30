@@ -109,7 +109,9 @@ One code unit per **converted object**, which in the SAS 1:1 flow is **one per S
 file** (consolidate mode: one per merged group). Rationale: conversion and
 `conversion_state.json` are per file, and `dependency.py` already builds a
 **file-level** cross-file graph (nodes = files, edges via shared datasets) that maps
-directly onto `dependencies.dependsOn` / `requiredBy`. Blocks (from `parser.py`) are
+directly onto `dependencies.dependsOn` / `requiredBy`. An edge needs a dataset under a
+permanent libref (`LIB.T` or `DB.SCH.T`); `WORK` / unqualified names link files only when
+they share one SAS session (Enterprise Guide task files in the same folder). Blocks (from `parser.py`) are
 used to classify `objectType` and derive the `signature`, not as separate units.
 
 ## 5. objectType classification

@@ -49,11 +49,13 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 
 | Task id | What it does |
 |---|---|
+| `dbtSetup` | Bootstraps a detected dbt project: resolves the source dialect from profiles.yml, initializes the project, and points the code-source step at local files so the generic dialect menu is never shown. |
 | `midwayEntry` | Imports an existing pre-converted Snowflake project to be compatible with AIM projects. |
 | `configureGit` | Configures git integration (main branch, remote, housekeeping commits). |
 | `configureSourceConnectionExtract` | Configures the source database connection. |
 | `registerCode` | Pulls source SQL into the project. |
 | `convertCode` | Runs the source → Snowflake conversion. |
+| `dbtRepoint` | Agentic dbt repointing: validates and fixes dbt configs, macros, and refines converted SQL after the `--dbt` conversion. |
 | `runAssessment` | Generates a migration assessment report. |
 | `configureSandboxProfile` | Configure a sandbox scai profile binding source and Snowflake target connections for iterative workload conversion. |
 | `configureSourceConnectionTesting` | Configures the source database connection (needed for source-data testing path). |
@@ -69,10 +71,13 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 |---|---|
 | `registration` | Register (or update) one object's source DDL (per-object). |
 | `convert` | Converts one object via SnowConvert (per-object). Always passes `--generate-source-bindable-format --generate-snowflake-bindable-format` (interactive and subagent). Deploy stays legacy-safe when no bindings yaml exists. |
+| `dbtOrchestrator` | Validates configs, fixes macros, and refines converted dbt models for Snowflake. |
 | `setupSandbox` | Populates the shared source catalog for one read-only object (table, view, function), and only when `configure(subagent_mode=true)`. Deploys the object's source DDL into the source catalog, and for a table also loads its testbed rows (`scai testbed load --source-only`). Interactive sessions skip this task because a live source already holds the objects. Procedures take `deploySandbox` instead — they mutate data, so they set up in a private binding. |
 | `etlStabilization` | Stabilizes a converted ETL code unit (SSIS, Informatica, ...) and validates the functionality. |
 | `etlSeed` | Runs `scai test seed` to generate the per-unit ETL test YAML (pipeline + validation.tables) with the source/target table pairs filled from the Code Unit Registry write-dependencies; the agent fills index_columns and the user confirms before validation runs. |
 | `etlValidate` | Runs `scai test etl-validate --platform <platform>` to compare source package output with the converted Snowflake output. |
+| `validateEtlSeed` | Seeds the ETL test YAML and arranges both source and target inputs for the validate flow. |
+| `validateEtlValidate` | Runs `scai test etl-validate --platform <platform>` for the validate flow. |
 | `generateTestCases` | Generates a per-object test-case YAML from source-connected inputs (via `scai test seed`); reads source to build the cases, never writes to source. Used for both live source data and a generated testbed catalog. |
 | `seedSynthetic` | Generates synthetic test inputs. |
 | `seedScript` | Writes a BTEQ script's test YAML, resolving binding values and staging .IMPORT fixtures from the shell script that runs it via `scai test seed --bindings-from`; values that can't be resolved statically become `{ eval }` recipes or stay `__REPLACE_ME__` for manual fill, and bindings shared across scripts are hoisted to the global test_config.yaml. Requires the bteq binary on PATH. |
@@ -118,9 +123,19 @@ Every entry below names the task id, what your override needs as input, and the 
 
 > **Signaling completion via session config.** Setup tasks that gather user choices complete by calling the `configure` MCP tool with the relevant field set (e.g. `configure(source_language='sqlserver')`). The plugin reads from the session config to know the task is done.
 
+> **ETL route selection.** Missing `etl_flow` and `etl_flow=stabilize`
+> follow `convert` → `etlStabilization` → `deploy` → `etlSeed` →
+> `etlValidate`. `etl_flow=validate` follows `convert` → `deploy` →
+> `validateEtlSeed` → `validateEtlValidate`. The machine selects the route;
+> the shared migration skills do not.
+
 <cntrc>
 
 ### `setup` (one-time per project)
+
+#### `dbtSetup`
+- **Inputs:** A source directory containing dbt_project.yml (detected by the `detectDbt` gate).
+- **Done when:** Project is initialized (`.scai/config/project.yml`) with `source_language` resolved from profiles.yml.
 
 #### `midwayEntry`
 - **Inputs:** An existing project tree containing source SQL and pre-converted Snowflake SQL.
@@ -135,11 +150,15 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `registerCode`
 - **Inputs:** Either a configured source connection (extracted via scai) or a folder of `.sql` files to register as-is.
-- **Done when:** Project is initialized and at least one file exists at `<project_dir>/source/**/*.sql`.
+- **Done when:** Project is initialized and at least one file of any type exists under `<project_dir>/source/`.
 
 #### `convertCode`
 - **Inputs:** Registered source code from the `registerCode` task.
 - **Done when:** Project is initialized and at least one file exists at `<project_dir>/snowflake/**/*.sql`.
+
+#### `dbtRepoint`
+- **Inputs:** A dbt project converted by `scai code convert --dbt` (kind=dbt CUR entries).
+- **Done when:** The dbt skill has finished agentic refinement. It writes `<project_dir>/.scai/dbt-repoint-complete` as a deterministic project-scope completion signal (a `registryField` status object is per-object and cannot be read by the project-scope Setup machine).
 
 #### `runAssessment`
 - **Inputs:** A converted project from the `convertCode` task.
@@ -180,6 +199,10 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Inputs:** Registered object.
 - **Done when:** Registry field `codeStatus.conversion` reads completed.
 
+#### `dbtOrchestrator`
+- **Inputs:** Converted dbt project in snowflake/models/; source platform resolved from project config or profiles.yml.
+- **Done when:** Registry field `codeStatus.dbtRepointing` reads completed.
+
 #### `setupSandbox`
 - **Inputs:** Converted object whose dependencies have completed their own setupSandbox.
 - **Done when:** `SANDBOX_EVENTS` latest `source_ready` / `source_failed` watermark is `source_ready`.
@@ -195,6 +218,14 @@ Every entry below names the task id, what your override needs as input, and the 
 #### `etlValidate`
 - **Inputs:** ETL test YAML present (from etlSeed or hand-authored); ETL unit deployed to Snowflake and source/Snowflake connections configured — all enforced via preconditions.
 - **Done when:** `scai test etl-validate` stamps registry field `codeStatus.etlValidate` completed (failed runs stamp failed + error). Units skipped for a missing YAML stay pending.
+
+#### `validateEtlSeed`
+- **Inputs:** Converted ETL unit deployed to Snowflake (deploy enforced via precondition).
+- **Done when:** Registry field `codeStatus.validateEtlSeed` reads completed.
+
+#### `validateEtlValidate`
+- **Inputs:** ETL test YAML present from validateEtlSeed; ETL unit deployed and source/Snowflake connections configured.
+- **Done when:** `scai test etl-validate` stamps registry field `codeStatus.validateEtlValidate` completed (failed runs stamp failed + error). Units skipped for a missing YAML stay pending.
 
 #### `generateTestCases`
 - **Inputs:** Object that needs test inputs; configured source connection.

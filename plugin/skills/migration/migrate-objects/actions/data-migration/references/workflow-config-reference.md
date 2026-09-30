@@ -150,8 +150,8 @@ The `icebergConfig` at the table level is **merged** with `defaultTableConfigura
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `strategy` | `"regular"` \| `"unload"` \| `"tpt"` \| `"write_nos"` \| `"dbms_cloud"` | Yes | `"regular"` is the default. `"unload"` is Redshift-only. `"tpt"` and `"write_nos"` are Teradata-only. `"dbms_cloud"` is Oracle-only. See [extraction-strategies-reference.md](./extraction-strategies-reference.md) and [`worker-config-reference.md`](../../../../data-infrastructure/references/worker-config-reference.md). |
-| `externalStage` | String | UNLOAD / WRITE_NOS / DBMS_CLOUD | Snowflake external stage (e.g. `MY_DB.MY_SCHEMA.S3_STAGE`) |
+| `strategy` | `"regular"` \| `"unload"` \| `"write_nos"` \| `"dbms_cloud"` \| `"cet_as"` \| `"export_data"` \| `"cloud_direct"` | Yes | `"regular"` is the default. `"unload"` is Redshift-only, `"write_nos"` Teradata-only, `"dbms_cloud"` Oracle-only, `"export_data"` BigQuery-only; `"cet_as"` is SQL Server and Azure Synapse; `"cloud_direct"` is every dialect except BigQuery. `"tpt"` is accepted as a legacy alias for `"regular"` (TPT is selected from the worker's `tpt_*` fields, not here). Per-dialect setup: [extraction-strategies-reference.md](./extraction-strategies-reference.md) and [`worker-config-reference.md`](../../../../data-infrastructure/references/worker-config-reference.md). |
+| `externalStage` | String | Every strategy except `regular` (and its `tpt` alias) | Snowflake external stage (e.g. `MY_DB.MY_SCHEMA.S3_STAGE`), exactly three identifier segments. Omitting it fails workflow parsing, not the run. |
 
 ```yaml
 extraction:
@@ -170,7 +170,7 @@ extraction:
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `strategy` | `"none"` \| `"checksum"` \| `"watermark"` | Yes | Sync strategy (default `none`) |
+| `strategy` | `"none"` \| `"full-replace"` \| `"checksum"` \| `"watermark"` | Yes | Sync strategy (default `none`) |
 | `checksumExpression` | String | When `strategy` is `checksum` | Source SQL expression used to detect changed partitions (for example `MAX(ORA_ROWSCN)`). Must not contain `;`. |
 | `watermarkColumn` | String | When `strategy` is `watermark` | Monotonic column used for incremental filtering |
 | `trackModifications` | Boolean | No | When `true` with `watermark`, detect updated rows (requires `primaryKeyColumns`) |
@@ -178,11 +178,12 @@ extraction:
 
 | Strategy | Description | Best for |
 |----------|-------------|----------|
-| `none` (default) | Full extraction every run | One-time loads, or tables you will not re-migrate without clearing the target first |
+| `none` (default) | Full extraction every run; rows are **appended** to the target | One-time loads, or tables you will not re-migrate without clearing the target first |
+| `full-replace` | Like `none`, but each partition's target rows are **deleted before loading** so a re-run overwrites instead of appending | Repeatable full reloads where the whole table (or partition) should be replaced each run, without needing a monotonic/change-tracking column. Works for every supported source dialect (the delete runs on the Snowflake target). |
 | `checksum` | Hash all column values per partition; re-extract changed partitions only | Dimension tables without a monotonic column. **Oracle:** built-in partition checksum is supported (`STANDARD_HASH` over normalized columns); optional `checksumExpression` (for example `MAX(ORA_ROWSCN)`) overrides the default hash. Some Oracle types are excluded from the default hash — see checksum type coverage below. |
 | `watermark` | Track a monotonic column; sync only rows newer than the last observed value | Fact tables, event logs with a reliable `UPDATED_AT` / ID column |
 
-> **Re-running without incremental sync:** With `strategy: none` (or no `synchronization` block), every migration run extracts and loads **all** matching rows again. Re-running the same workflow against a target that already holds data from a prior run **appends duplicate rows** (or loads more data than expected). Use `watermark` or `checksum` for repeatable incremental runs. Do **not** `TRUNCATE` or bulk-`DELETE` the target without explicit user confirmation — the table may legitimately contain pre-existing or expected rows.
+> **Re-running without incremental sync:** With `strategy: none` (or no `synchronization` block), every migration run extracts and loads **all** matching rows again. Re-running the same workflow against a target that already holds data from a prior run **appends duplicate rows** (or loads more data than expected). Use `full-replace` to have each run delete the target partition before loading (clean overwrite, no duplicates), or `watermark` / `checksum` for repeatable incremental runs. Do **not** `TRUNCATE` or bulk-`DELETE` the target manually without explicit user confirmation — the table may legitimately contain pre-existing or expected rows.
 
 > **Checksum type coverage:** Built-in partition checksums **skip or normalize** some types (SQL Server `text`/`ntext`/`image`; Oracle LOBs/`LONG`/`XMLTYPE`/`VECTOR`; float rounding; spatial WKT; Redshift `HLLSKETCH`). Changes only in those columns may **not** change the checksum — no re-extract on the next run. Custom `checksumExpression` (for example `MAX(ORA_ROWSCN)`) only reflects what that expression measures. See [Advanced operations reference](../../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
 
@@ -252,7 +253,7 @@ tables:
       selectModifier: " /*+ INDEX(t idx_orders_created_at) */"
 ```
 
-On the DM base-path (extraction, partition-boundary, checksum, watermark probes), DMVF aliases the source table as `t`. Hints referencing the alias should use `t` on this path. Some DV Jinja templates use other aliases (`src`, `rw`) — check the template context if configuring a hint that references the alias.
+On the DM base-path (extraction, partition-boundary, checksum, watermark probes), DMVF aliases the source table as `t`. Hints referencing the alias should use `t` on this path.
 
 #### Oracle auto-hint
 
@@ -281,7 +282,7 @@ tables:
     # queryModifiers omitted → Oracle auto-hint fires if row count is large enough
 ```
 
-Auto-hint fires on every DM source-SELECT path: extraction, DV checksum probes, DV watermark probes, and partition-boundary queries. It does not fire on Snowflake-target queries.
+Auto-hint fires on every DM source-SELECT path: extraction, checksum probes, watermark probes, and partition-boundary queries. It does not fire on Snowflake-target queries.
 
 #### `"NONE"` opt-out sentinel
 

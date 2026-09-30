@@ -373,6 +373,7 @@ class LineageView:
     selected_id: Optional[str]
     active_ids: FrozenSet[str]
     visible_ids: FrozenSet[str]
+    dimmed_ids: FrozenSet[str]
     connected: ConnectedLineage
 
 
@@ -455,7 +456,6 @@ def compose_lineage_view(
     connected = connected_lineage(selected, active_edges, active_ids)
 
     visible: Set[str] = set()
-    focused = bool(connected.selected)
     for node_id, node in nodes_by_id.items():
         parent = _parent_id(node)
         if parent:
@@ -463,22 +463,25 @@ def compose_lineage_view(
                 continue
         elif node_id in expanded:
             continue
-        if focused and node_id != connected.selected and node_id not in connected.path:
-            continue
         visible.add(node_id)
     for parent_id in expanded:
         if parent_id not in nodes_by_id:
             continue
-        if not focused:
-            visible.add(parent_id)
-            continue
-        if any(child_id in visible for child_id in children_by_parent.get(parent_id, ())):
-            visible.add(parent_id)
+        visible.add(parent_id)
+        visible.update(children_by_parent.get(parent_id, ()))
+
+    dimmed: Set[str] = set()
+    if connected.path or connected.selected:
+        highlight = set(connected.path)
+        if connected.selected:
+            highlight.add(connected.selected)
+        dimmed = {node_id for node_id in visible if node_id not in highlight}
 
     return LineageView(
         selected_id=connected.selected,
         active_ids=frozenset(active_ids),
         visible_ids=frozenset(visible),
+        dimmed_ids=frozenset(dimmed),
         connected=connected,
     )
 

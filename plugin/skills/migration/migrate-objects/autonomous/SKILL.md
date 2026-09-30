@@ -77,11 +77,18 @@ live-child slot count. Stop settles a yielded walker: a
 `waiting` / `partial` / `reopened` / `stuck` waiter stays harvested on the
 ledger (`agentId` remains, `flight` is `none`, not a leftover) until a later
 `task(resume=…)`; `completed` leaves the roster. `flight=idle` is unsettled
-(stop not folded yet) — re-read the board; do not call `agent_output`. Do not overlay
+(stop not folded yet) — re-read the board. Do not overlay
 `hub(mode="status")` for
 dispatch — the board already stamped walker liveness (running wins over idle).
 Two live children on one object are forbidden: if `flight` is `running` or
 `idle`, do not first-send another.
+
+If Cortex explicitly reports that a walker was cancelled, killed, failed, or
+completed but the board still shows it `running`, call
+`agent_output(agent_id=<that walker's stored resume id>, wait=false)` once.
+This is a terminal-status reconciliation, not transcript polling: its
+PostToolUse hook drops the dead ledger row and mirrored claim. Re-read the board
+and `next_objects`; the open database claim then appears in `leftover_claims`.
 
 Do not call `my_objects_summary`, `my_objects_details`, `next_task`, or
 `task_views`. Those name the current task and why it is waiting; they are for
@@ -171,7 +178,8 @@ reason:             <from a `reopened` return — only when there is one>
 `task` returns an `agentId` (UUID). Store it as this object's `resume` id. That
 is the conversation. A later `task(resume=…)` returns a
 **different** UUID — a wait handle for that send only. Do not overwrite the
-stored `resume` id with it. Do not call `agent_output`.
+stored `resume` id with it. Do not call `agent_output` except for the explicit
+terminal-status reconciliation in 2a.
 
 One imperative line, then values. The line matters: four bare `key: value` pairs
 read as context rather than a request, and an agent handed only context asks
@@ -267,8 +275,9 @@ hub wakes. First-send every `leftover_claims` entry (new child, no
 first send and every pending wake in this turn (background `task` calls).
 Do not start a wait while leftovers or free slots remain. A live Cortex child on one object does not
 block filling the other slots. Neither does a `waiting` object or an
-escalation. Do not call `agent_output` — Cortex does not need it to settle
-a yielded child.
+escalation. Do not poll live children with `agent_output`; use it once only
+when Cortex explicitly reports a terminal child that the board still calls
+`running`.
 
 A `Background agent finished` line, a Monitor
 `wake up <parent session id>`, and `bash sleep` mean re-read the board (2a/2b).
@@ -300,7 +309,8 @@ That is a later send: `task(resume=<that UUID>)` with the `relay_wake:` line
 (the UUID is the child's `agentId`). Do not spawn a new `general_task`
 for it. That later send is the live child; it occupies a slot only while
 the board lists it `flight=running`. A wake naming the parent session id means
-2a/2b. Do not inspect the event. Do not call `agent_output`.
+2a/2b. Do not inspect the event. Do not call `agent_output` unless 2a's
+terminal-status reconciliation applies.
 
 Report from the board (`bucket`, leftover, escalations), not from a child's
 final JSON. A harvested waiter with `flight=none` keeps its `resume` id until
@@ -450,10 +460,10 @@ somewhere else, and re-reading beats remembering:
 | What claimed work is ready? | `my_objects_board` → `bucket=ready` |
 | What unclaimed object can take a free slot? | `next_objects` |
 | Which Cortex children are live vs yielded? | `my_objects_board` → `flight` (`running` / `idle` / `none`); `walkerRunning` is the slot count |
-| Did a walker yield? | Stop already settled it. `flight=none` with `agentId` is a harvested waiter; without a walker it is gone. Do not call `agent_output`. |
+| Did a walker yield? | Stop already settled it. `flight=none` with `agentId` is a harvested waiter; without a walker it is gone. Use `agent_output(wait=false)` only for 2a's explicit terminal-status reconciliation. |
 | What is parked on a person? | `my_objects_board` → `bucket=escalated`, and `escalations` for the asks |
 | What is claimed, by whom? | `my_objects_board` → `agentId` (live session when `flight` is `running` / `idle`; harvested waiter when `flight=none` still carries one) |
-| Who to wake for a relay event? | The wake line (`resume` that UUID). A parent-session wake → 2a/2b. Do not read the job. Do not call `agent_output`. |
+| Who to wake for a relay event? | The wake line (`resume` that UUID). A parent-session wake → 2a/2b. Do not read the job. |
 | Is an object done? | `bucket=done` — the machine closes a verified terminal (`isDone`) |
 | What is waiting on a human, and what did they decide? | `escalations` → `escalations` and `answered` |
 | Unreviewed judgments (count only, mid-loop) | `escalations` → `unreviewedCount` |

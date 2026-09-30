@@ -59,7 +59,7 @@ validate_data(
   where="<registry filter>",
   validation_type="full" | "incremental",   # from state machine; persisted
   sync_strategy="none" | "checksum" | "watermark",  # from state machine; persisted
-  schema_validation=true | false,    # optional; persisted as a session default
+  schema_validation=true,            # optional; false is refused — L1 is always required
   metrics_validation=true | false,   # optional; scai default is false — pass true only if user wants metrics
   row_validation=true | false,       # optional; scai default is true
   continue_on_failure=true | false,  # optional; persisted as a session default
@@ -112,8 +112,9 @@ The setup response contains:
    | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber` |
    | Reduce source locking | `queryModifiers` |
    | Incremental watermark | `synchronization.watermarkColumn` (+ `columnNamesToPartitionBy`) |
+   | L3 extract via object storage | `validationConfiguration.extraction.strategy` + `extraction.externalStage` (see [L3 pushdown](../../setup/data-validation/l3-pushdown/SKILL.md)) |
 
-   For stalled or partially finished runs, see [Task model reference](../../migrate-objects/actions/data-migration/references/task-model-reference.md) and [Troubleshooting reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md).
+   For stalled or partially finished runs, see [Task model reference](./references/task-model-reference.md) and [Troubleshooting reference](./references/troubleshooting-reference.md).
 
 6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7).
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
@@ -121,6 +122,7 @@ The setup response contains:
    - When incremental **watermark**: ensure `watermarkColumn` is set on `defaultTableConfiguration.synchronization` (or per table).
    - When incremental: ensure partition columns (`columnNamesToPartitionBy`) are present.
    - Verify `targetDatabase` / per-table targets match the deployed Snowflake objects.
+   - **L3 extract (non-Snowflake sources, `rowValidation` on):** if `validationConfiguration.extraction` is missing, load [../../setup/data-validation/l3-pushdown/SKILL.md](../../setup/data-validation/l3-pushdown/SKILL.md) and complete it before run (reuse DM object storage without asking; otherwise bucket question / wait / continue without). Skip for Snowflake-source workflows. Do not dispatch `validate_data(mode="run")` while they are waiting on a bucket. Never say strategy enum names to the user.
    - Tell the user what you changed and why before confirming.
 8. **Apply user-requested edits before run (hard gate).** If the user already asked to change the workflow (turn metrics off, narrow tables, etc.), those edits are **not optional**:
    - Write them into `workflow_path`, re-display the changed sections, and only then accept “Proceed” / confirmation to run.
@@ -130,7 +132,7 @@ The setup response contains:
    names or source/target type pairs. Validate the configured columns and
    report mismatches. Any deterministic normalization or exclusion belongs in
    product configuration, not agent guesswork.
-10. **Pre-run verification (hard gate).** Before calling `validate_data(mode="run")`, **re-read `workflow_path`** and confirm every user-requested edit from steps 5/8 is actually written to the file and `metricsValidation` matches the agreed value. If a requested edit is missing, apply it now; do not run until the on-disk YAML matches what the user asked for. Then get **explicit confirmation** to run with the final workflow and continue to Step 3.
+10. **Pre-run verification (hard gate).** Before calling `validate_data(mode="run")`, **re-read `workflow_path`** and confirm every user-requested edit from steps 5/8 is actually written to the file, `metricsValidation` matches the agreed value, and (for non-Snowflake L3) object-store strategies include `extraction.externalStage`. If a requested edit is missing, apply it now; do not run until the on-disk YAML matches what the user asked for. Then get **explicit confirmation** to run with the final workflow and continue to Step 3.
 
 **Optional — explain validation levels:** After the “update any fields?” question (or while the user is reviewing), offer a brief explanation unless they are clearly repeating a prior run or only asked to execute:
 
@@ -258,7 +260,7 @@ whether `details.progress.output.isFinished == true` **and** any of:
 
 1. List pending tables under **Execution** as “never validated” — use `errorMessage` when set; otherwise `details.reports.files.data_validation_errors` or “Table not validated — check task errors”.
 2. Pull detail from `details.reports.files` before guessing. Do **not** treat `metricsValidated: null` as failure when metrics was disabled.
-3. If messages are thin, follow [Workflow finished but tables incomplete](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md#workflow-finished-but-tables-incomplete) — query `TASK_QUEUE` for the workflow. Worker/orchestrator issues are one cause, not the only one.
+3. If messages are thin, follow [Validation workflow finished but tables incomplete](./references/troubleshooting-reference.md#validation-workflow-finished-but-tables-incomplete) — query `TASK_QUEUE` for the workflow. Worker/orchestrator issues are one cause, not the only one.
 4. Do **not** suggest re-run until prerequisites are identified.
 
 ---

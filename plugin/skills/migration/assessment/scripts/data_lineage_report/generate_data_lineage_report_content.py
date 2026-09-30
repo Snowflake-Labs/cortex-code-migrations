@@ -12,10 +12,11 @@ and usually wider than that base width, so the tab script stretches the x axis
 to fill it: lanes and cards are re-placed from the base geometry this renderer
 emits as data attributes, and edges are then rebuilt from the cards' resulting
 boxes, which keeps the pixel space shared at any width. Selecting a card
-focuses the map: everything off its connected path is hidden and the survivors
-are restacked from the top of each lane, again from constants this renderer
-emits rather than values duplicated in the script. Per the locked design,
-`Inferred`, `Observed`, and `Status` are never rendered.
+spotlights the map: everything off its connected path stays in place and is
+dimmed. Expanding a parent restacks the visible grain from the top of each
+lane, again from constants this renderer emits rather than values duplicated
+in the script. Per the locked design, `Inferred`, `Observed`, and `Status`
+are never rendered.
 """
 from __future__ import annotations
 
@@ -797,6 +798,12 @@ def _render_details_strip() -> str:
     # the selection happens elsewhere on the page (the canvas), so a screen
     # reader gets no other signal that this strip changed.
     return (
+        '<div class="dl-toolbar">'
+        '<label class="dl-search-label" for="dl-search">Search this map</label>'
+        '<input id="dl-search" class="dl-search" type="search" '
+        'placeholder="Package, system, database, or schema" autocomplete="off">'
+        '<ul id="dl-search-hits" class="dl-search-hits" hidden></ul>'
+        "</div>"
         '<div id="dl-details" class="dl-details" aria-live="polite">'
         '<div id="dl-detail-empty" class="dl-detail-empty-copy">Select a card to see its details.</div>'
         f'<div id="dl-detail-fields" class="dl-detail-fields" hidden>{field_html}</div>'
@@ -852,6 +859,12 @@ def _node_payload(node: Dict[str, Any], layout: LineageLayout) -> Dict[str, Any]
         "kind": node.get("Kind", ""),
         "lane": node.get("Lane", ""),
     }
+    platform = str(node.get("Platform") or "").strip()
+    database = str(node.get("Database") or "").strip()
+    if platform:
+        entry["platform"] = platform
+    if database:
+        entry["database"] = database
     if card.parent_id is not None:
         entry["parentId"] = card.parent_id
         # Must match `_render_card`'s meta line for the same reason `label`
@@ -1245,7 +1258,6 @@ _JS = """
     // last -- because a child survived, never because focus reached it.
     function dlComputeVisibleIds(connected) {
         var visible = new Set();
-        var focused = Boolean(connected.selected);
         dlAllIds.forEach(function (id) {
             var parentId = nodesById[id].parentId;
             if (parentId) {
@@ -1253,15 +1265,12 @@ _JS = """
             } else if (dlExpandedParents[id]) {
                 return;
             }
-            if (focused && id !== connected.selected && !connected.path[id]) { return; }
             visible.add(id);
         });
         Object.keys(dlExpandedParents).forEach(function (parentId) {
             if (!dlAllIds.has(parentId)) { return; }
-            if (!focused) { visible.add(parentId); return; }
-            (childrenByParent[parentId] || []).forEach(function (childId) {
-                if (visible.has(childId)) { visible.add(parentId); }
-            });
+            visible.add(parentId);
+            (childrenByParent[parentId] || []).forEach(function (childId) { visible.add(childId); });
         });
         return visible;
     }
@@ -1279,7 +1288,7 @@ _JS = """
         var visible = dlComputeVisibleIds(connected);
         var activeEdgeKeys = {};
         activeEdges.forEach(function (e) { activeEdgeKeys[dlEdgeKey(e.from, e.to)] = true; });
-        var focusing = Boolean(dlSelectedId) || dlAnyExpanded();
+        var focusing = dlAnyExpanded();
 
         var aggregatesPerLane = {};
         var aggregatesPerBucket = {};
@@ -1292,7 +1301,7 @@ _JS = """
             var slot = dlBucketSlot(lane, card.getAttribute('data-bucket') || '');
             var shown = visible.has(id);
             var isExpanded = Boolean(dlExpandedParents[id]);
-            card.classList.remove('dl-selected', 'dl-path', 'dl-hidden');
+            card.classList.remove('dl-selected', 'dl-path', 'dl-hidden', 'dl-dimmed');
             card.classList.toggle('dl-expanded', isExpanded);
             if (parentId) { card.classList.toggle('dl-collapsed', !dlExpandedParents[parentId]); }
             dlSetHidden(card, !shown);
@@ -1300,6 +1309,7 @@ _JS = """
             if (!shown) { return; }
             if (id === dlSelectedId) { card.classList.add('dl-selected'); }
             else if (connected.path[id]) { card.classList.add('dl-path'); }
+            else if (connected.selected) { card.classList.add('dl-dimmed'); }
             if (parentId) {
                 dlCountChild(dlChildGroups(childrenPerLane, lane), card);
                 dlCountChild(dlChildGroups(childrenPerBucket, slot), card);
@@ -1322,16 +1332,15 @@ _JS = """
         document.querySelectorAll(ROOT + ' .dl-edge').forEach(function (edge) {
             var from = edge.getAttribute('data-from');
             var to = edge.getAttribute('data-to');
-            edge.classList.remove('dl-selected', 'dl-hidden');
+            edge.classList.remove('dl-selected', 'dl-hidden', 'dl-dimmed');
             var isSelected = false;
             // Drawable only at the grain currently on screen, and only while
             // both of its endpoints are still on screen.
             var drawable = Boolean(activeEdgeKeys[dlEdgeKey(from, to)]) && visible.has(from) && visible.has(to);
             if (drawable && dlSelectedId) {
-                // The edge touches the selection, or joins two path nodes.
                 var touches = from === dlSelectedId || to === dlSelectedId || (connected.path[from] && connected.path[to]);
                 if (touches) { edge.classList.add('dl-selected'); isSelected = true; }
-                else { drawable = false; }
+                else { edge.classList.add('dl-dimmed'); }
             }
             dlSetHidden(edge, !drawable);
             edge.setAttribute('marker-end', isSelected ? 'url(#dl-arrow-selected)' : 'url(#dl-arrow)');
@@ -1620,7 +1629,46 @@ _JS = """
         window.addEventListener('scroll', dlHideTip, true);
     }
 
+    function dlHaystack(node) {
+        return [node.label, node.kind, node.lane, node.platform, node.database, node.schema, node.typeLabel]
+            .filter(Boolean).join('\\u0000').toLowerCase();
+    }
+
+    function dlInitSearch() {
+        var input = document.querySelector(ROOT + ' #dl-search');
+        var hits = document.querySelector(ROOT + ' #dl-search-hits');
+        if (!input || !hits) { return; }
+        function dlCloseHits() { hits.hidden = true; hits.innerHTML = ''; }
+        input.addEventListener('input', function () {
+            var needle = input.value.trim().toLowerCase();
+            if (!needle) { dlCloseHits(); return; }
+            var matches = [];
+            dlAllIds.forEach(function (id) {
+                var node = nodesById[id];
+                if (dlHaystack(node).indexOf(needle) !== -1) { matches.push(node); }
+            });
+            hits.innerHTML = '';
+            matches.slice(0, 50).forEach(function (node) {
+                var item = document.createElement('li');
+                var button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = node.label + ' · ' + (node.lane || '');
+                button.addEventListener('click', function () {
+                    if (node.parentId) { dlExpandedParents[node.parentId] = true; }
+                    dlSelectedId = node.id;
+                    input.value = '';
+                    dlCloseHits();
+                    dlApplyView();
+                });
+                item.appendChild(button);
+                hits.appendChild(item);
+            });
+            hits.hidden = matches.length === 0;
+        });
+    }
+
     dlInitInfoTips();
+    dlInitSearch();
 
     var canvas = document.querySelector(ROOT + ' .dl-canvas');
     if (canvas) {
@@ -1744,6 +1792,14 @@ _BASE_CSS = """
 #data-lineage-report .dl-edge.dl-selected { stroke: #1A6CE7; stroke-width: 2; }
 /* Focus mode: a selection removes everything outside its connected lineage
    from view, so the remaining path is readable on a dense canvas. */
+#data-lineage-report .dl-card.dl-dimmed { opacity: 0.4; }
+#data-lineage-report .dl-edge.dl-dimmed { opacity: 0.25; }
+#data-lineage-report .dl-toolbar { margin-bottom: 12px; position: relative; }
+#data-lineage-report .dl-search-label { display: block; font-size: 12px; color: #64748B; margin-bottom: 4px; }
+#data-lineage-report .dl-search { width: 100%; box-sizing: border-box; border: 1px solid #E2E8F0; border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+#data-lineage-report .dl-search-hits { list-style: none; margin: 4px 0 0; padding: 0; border: 1px solid #E2E8F0; border-radius: 6px; background: #fff; max-height: 240px; overflow-y: auto; }
+#data-lineage-report .dl-search-hits[hidden] { display: none; }
+#data-lineage-report .dl-search-hits button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 8px 10px; cursor: pointer; }
 #data-lineage-report .dl-card.dl-hidden { display: none; }
 #data-lineage-report .dl-edge.dl-hidden { display: none; }
 #data-lineage-report .dl-bucket.dl-hidden { display: none; }

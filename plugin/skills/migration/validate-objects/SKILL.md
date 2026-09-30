@@ -35,7 +35,10 @@ Only an explicit user request changes that persisted setup.
 
 Load [actions/validate_tables.md](actions/validate_tables.md). Snowflake-source
 projects generate a template without a registry filter; the user or agent must
-fill its source and target object names before the run.
+fill its source and target object names before the run. Do **not** load
+[../setup/data-validation/l3-pushdown/SKILL.md](../setup/data-validation/l3-pushdown/SKILL.md)
+for Snowflake sources. For other sources with row validation on, that skill
+runs from validate_tables Step 2 if extraction is not already configured.
 
 ## Step 3: Wave progress
 

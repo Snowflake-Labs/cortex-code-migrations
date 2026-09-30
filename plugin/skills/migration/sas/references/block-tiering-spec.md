@@ -59,8 +59,8 @@ top-down; the first match wins. Tier 1 (pure SQL) is the default.
 Any ONE of:
 
 - `declare hash` — HASH objects, no SQL equivalent.
-- `call execute` — dynamic code generation at runtime.
-- `do until` / `do while` **with** external state (`symput`, or more than 2 `call ` statements).
+- `do until` / `do while` **with** external state (`symput`, or more than 2 `call ` statements
+  other than `call execute`).
 - Statistical modeling PROC — any of:
   `proc reg`, `proc glm`, `proc logistic`, `proc cluster`, `proc factor`, `proc phreg`,
   `proc lifetest`, `proc surveyselect`, `proc mixed`, `proc genmod`, `proc nlmixed`.
@@ -69,6 +69,8 @@ Any ONE of:
 
 Any ONE of (when no Tier-3 trigger matched):
 
+- `call execute` — dynamic dispatch; convert to a procedure using EXECUTE IMMEDIATE or a cursor
+  loop. A block that also has `declare hash` or a statistical PROC is still Tier 3 (checked first).
 - `retain` + `first.` + conditional reset (`= 0` or `= .`).
 - `first.` or `last.` **with** more than one `output ` statement.
 - More than one `output ` destination and no plain `output;`.
@@ -83,6 +85,9 @@ Any ONE of (when no Tier-3 trigger matched):
 
 Everything else: PROC SQL, PROC SORT, simple DATA steps, MERGE, ARRAY, RETAIN running totals,
 `%DO` loops, etc. — translatable with CTAS, CTEs, and window functions.
+
+A PROC with no rule above (not a known utility such as DELETE/PRINTTO/RANK) stays Tier 1 but
+with LOW confidence, and is listed in `portfolio_summary.unrecognised_procs`.
 
 ---
 

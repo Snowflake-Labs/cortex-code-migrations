@@ -148,7 +148,7 @@ DB2 has no portable system row identifier suitable for partitioning. Use:
 ## Verifying Connectivity
 
 ```bash
-scai connection test -l db2 -c <CONNECTION_NAME> --json
+scai connection test -l db2 -s <CONNECTION_NAME> --json
 ```
 
 Manual network test:

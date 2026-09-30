@@ -107,7 +107,8 @@ Then return to the calling skill.
 ## Security Rules
 
 - **NEVER** log or display secrets (service account keys) in plain text.
-- **NEVER** include secrets in command-line arguments that might be logged. Prefer a credential manager (e.g. 1Password `op run`, or use /secrets capability from Cortex Code to store them). Pass the key as a file path, not inline JSON.
+- **NEVER** include secrets in command-line arguments that might be logged. `--credentials-file` takes a path rather than the key, which is why Step 3 is safe as written — never expand the JSON into the command.
+- Where a credential manager holds the key, have it materialise the file (e.g. 1Password `op run`) rather than substituting the key itself. Storing it somewhere else first does not help on its own, because `scai` reads the key from the path you give it.
 
 ## Quick Reference
 
@@ -116,5 +117,5 @@ Then return to the calling skill.
 | Add connection | `scai connection add-bigquery -s NAME --auth service-account --project-id PROJECT --credentials-file KEY.json` |
 | Test connection | `configure(source_connection=NAME)` (runs the test internally) |
 | List connections | `scai connection list -l bigquery --json` |
-| Set default | `scai connection set-default -l bigquery -c NAME` |
+| Set default | `scai connection set-default -l bigquery -s NAME` |
 | Extract code | `scai code extract -s NAME --json` |

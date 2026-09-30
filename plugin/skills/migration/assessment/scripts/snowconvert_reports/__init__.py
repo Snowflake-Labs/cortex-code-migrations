@@ -64,6 +64,8 @@ from .conversion_status import (
     STATUS_REQUIRE_ATTENTION,
     STATUS_SUCCESS,
     aggregate_etl_issues,
+    has_actionable_issues,
+    is_actionable_issue,
     is_etl,
     map_conversion_status,
 )
@@ -140,6 +142,8 @@ __all__ = [
     "STATUS_REQUIRE_ATTENTION",
     "STATUS_SUCCESS",
     "aggregate_etl_issues",
+    "has_actionable_issues",
+    "is_actionable_issue",
     "is_etl",
     "map_conversion_status",
     # Testing readiness

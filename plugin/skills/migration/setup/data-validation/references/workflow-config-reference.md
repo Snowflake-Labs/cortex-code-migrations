@@ -40,7 +40,7 @@
 | `acceptedTransformations` | Array | No | Global accepted source→target value differences (L3) |
 | `validationCustomNormalizationRules` | Array | No | Granular L3 normalization expression overrides |
 | `validationCustomTypeRules` | Array | No | Per-column cross-type mappings for L1 |
-| `queryModifiers` | Object | No | SQL hints for source queries (see migration reference) |
+| `queryModifiers` | Object | No | SQL hints for source queries (see migration reference). DV Jinja templates alias the source table as `src` or `rw` (not `t`), so check the template context before writing a hint that references the alias. |
 | `intervalHandling` | `"interval"` \| `"varchar"` | `"interval"` | Interval column mapping mode |
 
 \*At least one entry is required across `tables`, `views`, and `objects`.
@@ -53,7 +53,7 @@ qualified names before running.
 
 | Field | Type | Default (scai `generate-config`) | Description |
 |-------|------|----------------------------------|-------------|
-| `schemaValidation` | Boolean | `true` | L1 — compare column definitions |
+| `schemaValidation` | Boolean | `true` | L1 — compare column definitions. **Never `false`**, under either spelling (`schema_validation` is rejected identically): scai rejects the whole config (`CDV0004`), because L2 metrics and hybrid L3 both read L1's column metadata. There is no row-only run — accept a known type difference with `validationCustomTypeRules` / `acceptedTransformations` instead |
 | `metricsValidation` | Boolean | `false` | L2 — compare aggregate statistics (opt-in) |
 | `rowValidation` | Boolean | `true` | L3 — row-level comparison |
 | `rowValidationMode` | String | `hybrid` | Only `hybrid` is supported (`row`/`cell` are rejected) |
@@ -69,12 +69,15 @@ qualified names before running.
 | `earlyStopCheckIntervalSeconds` | Integer | No | Seconds between ticks (mutually exclusive with minutes) |
 | `acceptedTransformations` | Array | No | Accepted source→target value differences at this level |
 | `textComparisonMode` | String | No | Text comparison mode for L3 |
+| `extraction` | Object | `regular` (omit) | L3 signature **transport** for non-Snowflake sources. See [L3 pushdown extract](./l3-pushdown-extraction.md). |
+| `extraction.strategy` | String | `regular` | `regular` \| `unload` \| `write_nos` \| `dbms_cloud` \| `cet_as` \| `export_data` \| `cloud_direct`. Must be supported for `sourcePlatform`. Snowflake sources ignore this (in-warehouse L3). |
+| `extraction.externalStage` | String | No | Snowflake external stage FQN. **Required** for every strategy except `regular`. |
 | `validationCustomNormalizationRules` | Array | No | Granular L3 normalization overrides |
 | `validationCustomTypeRules` | Array | No | Per-column L1 type mapping overrides |
 
 For user-facing explanations of each level, see [Validation levels reference](../../../validate-objects/actions/references/validation-levels-reference.md).
 
-The four bool toggles can be set via setup-mode params (`schema_validation=`, `metrics_validation=`, `row_validation=`, `continue_on_failure=`) and persist as session defaults under `data_validation_*` in `plugin.yml`. Incremental mode uses `validation_type=` / `sync_strategy=` (also persisted) and patches `defaultTableConfiguration.synchronization.strategy`. Other fields (`watermarkColumn`, `checksumExpression`, `maxFailedRowsNumber`, …) require an in-place YAML edit.
+The four bool toggles can be set via setup-mode params (`schema_validation=true` only, `metrics_validation=`, `row_validation=`, `continue_on_failure=`) and persist as session defaults under `data_validation_*` in `plugin.yml`. Incremental mode uses `validation_type=` / `sync_strategy=` (also persisted) and patches `defaultTableConfiguration.synchronization.strategy`. Other fields (`watermarkColumn`, `checksumExpression`, `maxFailedRowsNumber`, …) require an in-place YAML edit.
 
 ## `comparisonConfiguration`
 
@@ -316,4 +319,4 @@ tables:
 
 Apply user-requested excludes **before** `validate_data(mode="run")`. Do not wait for a failed row compare to add them when the user already asked.
 
-For task-level debugging when validation stalls or finishes with incomplete tables, see [Task model reference](../../../migrate-objects/actions/data-migration/references/task-model-reference.md) and [Troubleshooting reference](../../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md).
+For task-level debugging when validation stalls or finishes with incomplete tables, see [Task model reference](../../../validate-objects/actions/references/task-model-reference.md) and [Troubleshooting reference](../../../validate-objects/actions/references/troubleshooting-reference.md).

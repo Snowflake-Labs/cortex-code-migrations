@@ -1,6 +1,6 @@
 {
   "name": "snowflake-migration",
-  "version": "2.46.0",
+  "version": "2.47.0",
   "description": "Snowflake AIM for Data Warehouses \u2014 end-to-end database migration to Snowflake: assessment, conversion, validation, and deployment",
   "author": {
     "name": "db-eng-migrations"
@@ -17,9 +17,19 @@
         "run"
       ],
       "env": {
+        "AIM_AUTONOMOUS": "${AIM_AUTONOMOUS:-}",
+        "CUSTOM_SNOWCONVERT_COMMON_SCHEMA": "${CUSTOM_SNOWCONVERT_COMMON_SCHEMA:-}",
         "CUSTOM_SNOWCONVERT_DATABASE": "${CUSTOM_SNOWCONVERT_DATABASE:-}",
+        "CUSTOM_SNOWCONVERT_DATA_MIGRATION_SCHEMA": "${CUSTOM_SNOWCONVERT_DATA_MIGRATION_SCHEMA:-}",
+        "CUSTOM_SNOWCONVERT_DATA_VALIDATION_SCHEMA": "${CUSTOM_SNOWCONVERT_DATA_VALIDATION_SCHEMA:-}",
+        "CUSTOM_SNOWCONVERT_TEMP_SCHEMA": "${CUSTOM_SNOWCONVERT_TEMP_SCHEMA:-}",
         "CUSTOM_SNOWFLAKE_DATABASE_FOR_METADATA": "${CUSTOM_SNOWFLAKE_DATABASE_FOR_METADATA:-}",
-        "MIGRATION_MCP_SERVER_BIN": "${MIGRATION_MCP_SERVER_BIN:-}"
+        "CUSTOM_SNOWFLAKE_SCHEMA_FOR_COMMON_METADATA": "${CUSTOM_SNOWFLAKE_SCHEMA_FOR_COMMON_METADATA:-}",
+        "CUSTOM_SNOWFLAKE_SCHEMA_FOR_DATA_MIGRATION_METADATA": "${CUSTOM_SNOWFLAKE_SCHEMA_FOR_DATA_MIGRATION_METADATA:-}",
+        "CUSTOM_SNOWFLAKE_SCHEMA_FOR_DATA_VALIDATION_METADATA": "${CUSTOM_SNOWFLAKE_SCHEMA_FOR_DATA_VALIDATION_METADATA:-}",
+        "CUSTOM_SNOWFLAKE_SCHEMA_FOR_TEMP_METADATA": "${CUSTOM_SNOWFLAKE_SCHEMA_FOR_TEMP_METADATA:-}",
+        "MIGRATION_MCP_SERVER_BIN": "${MIGRATION_MCP_SERVER_BIN:-}",
+        "SCAI_CALLER": "${SCAI_CALLER:-}"
       }
     }
   },
@@ -73,6 +83,15 @@
           }
         ],
         "matcher": "agent_output"
+      },
+      {
+        "hooks": [
+          {
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mcp-hook.cmd deny-unclaimed-destructive-sql",
+            "type": "command"
+          }
+        ],
+        "matcher": "^(mcp__mcp__)?(query_source|sql_execute|snowflake_sql_execute|[Bb]ash|[Ss]hell)$"
       }
     ],
     "PostToolUse": [
@@ -83,7 +102,7 @@
             "type": "command"
           }
         ],
-        "matcher": "^(?i)(task|agent[_-]?output)$"
+        "matcher": "^([Tt]ask|[Aa]gent[_-]?[Oo]utput|[Kk]ill[_-]?[Aa]gent|[Aa]gent[_-]?[Kk]ill)$"
       }
     ],
     "SubagentStart": [
@@ -98,6 +117,17 @@
       }
     ],
     "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mcp-hook.cmd agent-ledger",
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
+      }
+    ],
+    "Notification": [
       {
         "hooks": [
           {

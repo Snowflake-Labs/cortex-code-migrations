@@ -49,6 +49,86 @@ class SASScript:
     macro_variables: Dict[str, str]
     libraries: Dict[str, str]
     complexity_score: int = 0
+    line_endings_normalised: bool = False
+    includes: List[Dict] = field(default_factory=list)
+
+
+# ``%include 'path';`` / ``%include "path";`` / ``%include fileref;``
+_INCLUDE_RE = re.compile(r"(?i)%include\s+(?:(['\"])(.+?)\1|([^\s;]+))")
+
+
+# One part of a dataset name: a word, or a SAS name literal ('any text'n / "any text"n)
+# that Enterprise Guide writes for names with spaces or slashes.
+_DS_PART = r"(?:\w+|'[^'\n]*'[nN]|\"[^\"\n]*\"[nN])"
+_DS_REF = rf"{_DS_PART}(?:\.{_DS_PART}){{0,2}}"
+# Option values (DATA=, OUT=, CREATE TABLE) may also be macro-built: &lib..&tbl.
+_DS_MACRO_PART = r"(?:[\w&]+|'[^'\n]*'[nN]|\"[^\"\n]*\"[nN])"
+_DS_MACRO_REF = rf"{_DS_MACRO_PART}(?:\.{{1,2}}{_DS_MACRO_PART}){{0,2}}\.?"
+
+# A dataset reference: LIB.TABLE, DB.SCHEMA.TABLE, or bare name; macro refs
+# (&lib..tbl) are allowed. Anything else in a DATA/SET/MERGE list is an option,
+# an operator, or a fragment of one (``=``, ``B``, ``(KEEP``) and is dropped.
+_NAME_PART = r"(?:[A-Za-z_&][\w&]*|'[^']*'[nN]|\"[^\"]*\"[nN])"
+_NAME_TOKEN = re.compile(rf'^{_NAME_PART}(?:\.{{1,2}}{_NAME_PART}){{0,2}}$')
+_LIST_TOKEN = re.compile(r"(?:'[^']*'[nN]|\"[^\"]*\"[nN]|[^\s'\"])+")
+_DQ_LITERAL = re.compile(r'"([^"]*)"[nN]')
+
+
+def _canonical_ref(name: str) -> str:
+    """One spelling per table: ``"x"n`` and ``'x'n`` name the same dataset."""
+    return _DQ_LITERAL.sub(lambda m: "'" + m.group(1).replace("'", "''") + "'N", name)
+
+# DATA-step statement keywords that can follow the dataset list on a SET line.
+_SET_OPTION_WORDS = frozenset({'_NULL_', 'END', 'NOBS', 'POINT', 'KEY', 'INDSNAME', 'OPEN', 'CUROBS'})
+
+
+def _strip_balanced_parens(text: str) -> str:
+    """Remove every parenthesised group, including nested ones like
+    ``(rename=(a=b) keep=c)``; parentheses inside quoted name literals are kept."""
+    out = []
+    depth = 0
+    quote = ''
+    for ch in text:
+        if quote:
+            quote = '' if ch == quote else quote
+        elif ch in ('\'', '"'):
+            quote = ch
+        elif ch == '(':
+            depth += 1
+            out.append(' ')
+            continue
+        elif ch == ')':
+            depth = max(depth - 1, 0)
+            out.append(' ')
+            continue
+        if depth == 0:
+            out.append(ch)
+    return ''.join(out)
+
+
+def _before_unquoted_slash(text: str) -> str:
+    quote = ''
+    for i, ch in enumerate(text):
+        if quote:
+            quote = '' if ch == quote else quote
+        elif ch in ('\'', '"'):
+            quote = ch
+        elif ch == '/':
+            return text[:i]
+    return text
+
+
+def _dataset_names(ds_list: str) -> List[str]:
+    """Dataset names from a DATA / SET / MERGE statement's argument list."""
+    names = []
+    # Statement options follow a '/' (e.g. ``set x key=k / unique;``).
+    for tok in _LIST_TOKEN.findall(_before_unquoted_slash(_strip_balanced_parens(ds_list))):
+        if '=' in tok:
+            continue  # END=eof, NOBS=n, or a stray '=' / '=value'
+        if tok.upper() in _SET_OPTION_WORDS or not _NAME_TOKEN.match(tok):
+            continue
+        names.append(_canonical_ref(tok))
+    return names
 
 
 class SASParser:
@@ -79,6 +159,8 @@ class SASParser:
 
         content = self._remove_comments_preserve_structure(content)
         blocks = self._extract_blocks(content)
+        includes = [{'path': m.group(2) or m.group(3), 'dynamic': '&' in (m.group(2) or m.group(3))}
+                    for m in _INCLUDE_RE.finditer(content)]
 
         macros = {b.metadata.get('name', ''): b for b in blocks if b.block_type == BlockType.MACRO_DEF}
 
@@ -94,7 +176,8 @@ class SASParser:
             macros=macros,
             macro_variables=self.macro_vars.copy(),
             libraries=self.libraries.copy(),
-            complexity_score=total_complexity
+            complexity_score=total_complexity,
+            includes=includes,
         )
 
     def _remove_comments_preserve_structure(self, content: str) -> str:
@@ -197,24 +280,35 @@ class SASParser:
             'noprint': 'noprint' in proc_header.lower()
         }
 
-        create_pattern = r"(?i)CREATE\s+TABLE\s+(\S+)"
+        create_pattern = rf"(?i)CREATE\s+TABLE\s+({_DS_MACRO_REF})"
         for match in re.finditer(create_pattern, sql_body):
-            metadata['output_datasets'].append(match.group(1).rstrip('('))
+            metadata['output_datasets'].append(_canonical_ref(match.group(1)))
 
-        from_pattern = r"(?i)\bFROM\s+(\w+\.?\w*)"
-        join_pattern = r"(?i)\bJOIN\s+(\w+\.?\w*)"
+        # Writes into an existing table, including pass-through
+        # ``execute(insert into DB.SCH.T ...) by snow`` — the only way a
+        # pass-through job hands data to the next job.
+        insert_pattern = rf"(?i)\bINSERT\s+INTO\s+({_DS_REF})"
+        for match in re.finditer(insert_pattern, sql_body):
+            metadata['output_datasets'].append(_canonical_ref(match.group(1)))
+
+        # Up to three parts (DB.SCHEMA.TABLE) so distinct pass-through tables
+        # are not truncated to DB.SCHEMA and merged.
+        from_pattern = rf"(?i)\bFROM\s+({_DS_REF})"
+        join_pattern = rf"(?i)\bJOIN\s+({_DS_REF})"
         for match in re.finditer(from_pattern, sql_body):
-            tbl = match.group(1)
+            tbl = _canonical_ref(match.group(1))
             if tbl.upper() not in ('DUAL', 'DICTIONARY'):
                 metadata['input_datasets'].append(tbl)
         for match in re.finditer(join_pattern, sql_body):
-            metadata['input_datasets'].append(match.group(1))
+            metadata['input_datasets'].append(_canonical_ref(match.group(1)))
 
         return metadata
 
     def _extract_data_step_blocks(self, content: str) -> List[SASBlock]:
         blocks = []
-        data_step_pattern = r"(?i)(DATA\s+([^;]+)\s*;)(.*?)(RUN\s*;)"
+        # Word boundary so identifiers ending in "data" (``Join CBData B``) do not
+        # open a phantom DATA step; ``(?!=)`` skips PROC options like ``data = x``.
+        data_step_pattern = r"(?i)(?<![\w.&])(DATA\s+(?!=)([^;]+)\s*;)(.*?)(RUN\s*;)"
 
         for match in re.finditer(data_step_pattern, content, re.DOTALL):
             data_header = match.group(1)
@@ -236,11 +330,7 @@ class SASParser:
         return blocks
 
     def _parse_data_step_body(self, body: str, output_datasets: str) -> Dict:
-        out_datasets = []
-        for ds in output_datasets.split():
-            clean = re.sub(r'\([^)]*\)', '', ds).strip()
-            if clean and clean.upper() != '_NULL_':
-                out_datasets.append(clean)
+        out_datasets = _dataset_names(output_datasets)
 
         metadata = {
             'output_datasets': out_datasets,
@@ -254,20 +344,12 @@ class SASParser:
 
         set_match = re.search(r'(?i)SET\s+([^;]+)\s*;', body)
         if set_match:
-            datasets = set_match.group(1)
-            for ds in re.split(r'\s+', datasets):
-                clean = re.sub(r'\([^)]*\)', '', ds).strip()
-                if clean and not clean.upper().startswith('END=') and not clean.upper().startswith('NOBS='):
-                    metadata['input_datasets'].append(clean)
+            metadata['input_datasets'].extend(_dataset_names(set_match.group(1)))
 
         merge_match = re.search(r'(?i)MERGE\s+([^;]+)\s*;', body)
         if merge_match:
             metadata['has_merge'] = True
-            datasets = merge_match.group(1)
-            for ds in re.split(r'\s+', datasets):
-                clean = re.sub(r'\([^)]*\)', '', ds).strip()
-                if clean:
-                    metadata['input_datasets'].append(clean)
+            metadata['input_datasets'].extend(_dataset_names(merge_match.group(1)))
 
         by_match = re.search(r'(?i)BY\s+([^;]+)\s*;', body)
         if by_match:
@@ -334,24 +416,24 @@ class SASParser:
     def _parse_proc_metadata(self, header: str, body: str, block_type: BlockType) -> Dict:
         metadata: Dict = {'input_datasets': [], 'output_datasets': []}
 
-        data_match = re.search(r'(?i)DATA\s*=\s*(\S+)', header)
-        out_match = re.search(r'(?i)OUT\s*=\s*(\S+)', header)
+        data_match = re.search(rf'(?i)DATA\s*=\s*({_DS_MACRO_REF})', header)
+        out_match = re.search(rf'(?i)OUT\s*=\s*({_DS_MACRO_REF})', header)
 
         if data_match:
-            metadata['input_datasets'].append(re.sub(r'\([^)]*\)', '', data_match.group(1)))
+            metadata['input_datasets'].append(_canonical_ref(data_match.group(1)))
         if out_match:
-            metadata['output_datasets'].append(re.sub(r'\([^)]*\)', '', out_match.group(1)))
+            metadata['output_datasets'].append(_canonical_ref(out_match.group(1)))
 
         if block_type == BlockType.PROC_SORT:
             metadata['nodupkey'] = 'nodupkey' in header.lower()
         elif block_type == BlockType.PROC_APPEND:
-            base_match = re.search(r'(?i)BASE\s*=\s*(\S+)', header + body)
+            base_match = re.search(rf'(?i)BASE\s*=\s*({_DS_MACRO_REF})', header + body)
             if base_match:
-                metadata['output_datasets'].append(re.sub(r'\([^)]*\)', '', base_match.group(1)))
+                metadata['output_datasets'].append(_canonical_ref(base_match.group(1)))
 
-        output_match = re.search(r'(?i)OUTPUT\s+OUT\s*=\s*(\S+)', body)
+        output_match = re.search(rf'(?i)OUTPUT\s+OUT\s*=\s*({_DS_MACRO_REF})', body)
         if output_match:
-            metadata['output_datasets'].append(re.sub(r'\([^)]*\)', '', output_match.group(1)))
+            metadata['output_datasets'].append(_canonical_ref(output_match.group(1)))
 
         return metadata
 

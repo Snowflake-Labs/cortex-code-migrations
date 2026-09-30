@@ -6,7 +6,7 @@ Common failure modes and their solutions when running data migration via `scai`.
 
 ## `cryptography` / `_rust.abi3.so` symbol not found in flat namespace
 
-**Symptom:** `migrate_data`/`validate_data` fail (often `Error [DMG0011]: Data exchange agent failed: Could not parse orchestrator workflow config validation output`) with a Python traceback like:
+**Symptom:** `migrate_data` fails (often `Error [DMG0011]: Data exchange agent failed: Could not parse orchestrator workflow config validation output`) with a Python traceback like:
 
 ```
 ImportError: dlopen(.../data-migration-orchestrator/lib/pythonX.Y/site-packages/cryptography/hazmat/bindings/_rust.abi3.so, 0x0002):
@@ -108,7 +108,7 @@ Also consider a cheaper partition key / larger partitions so NTILE boundary anal
 
 ## Worker claims tasks from old/wrong workflows
 
-**Symptom:** The worker picks up tasks from a previous migration (e.g., Teradata data-validation tasks) and fails with errors like `Engine 'teradata' not found in source connections`.
+**Symptom:** The worker picks up tasks from a previous migration (e.g., tasks from an earlier Teradata workflow) and fails with errors like `Engine 'teradata' not found in source connections`.
 
 **Cause:** Old workflows left pending/executing tasks in the `TASK_QUEUE` table. The worker claims tasks globally (filtered only by affinity), not scoped to a specific workflow.
 
@@ -271,14 +271,6 @@ If metadata/schema extraction completes with **zero rows** but no worker error, 
 
 ---
 
-## `POSSIBLE_MISMATCH` after validation completes
-
-Hybrid L3 validation may stop early when `earlyStoppingForRowHashing` or `maxFailedRowsNumber` is reached. A workflow can finish with `POSSIBLE_MISMATCH` result codes — **do not treat as a clean pass**. Review L3 result tables and consider re-running with adjusted early-stop settings or narrower `sourceWhereClause`/`targetWhereClause` filters.
-
-> **Data validation is read-only** — re-running a DV workflow compares source and target; it does not move or duplicate data on either side.
-
----
-
 ## Target has more/duplicate rows after re-running a migration
 
 **Symptom:** Target row count exceeds source (or a prior migration run), or users report duplicate keys/rows after a second `migrate_data(mode="run")`.
@@ -296,12 +288,7 @@ Hybrid L3 validation may stop early when `earlyStoppingForRowHashing` or `maxFai
 
 ## Workflow finished but tables incomplete
 
-**Symptom:** `details.progress.output.isFinished` is `true` (workflow status `Finished`) but work did not complete for every table:
-
-| Job | Incomplete signal |
-|-----|-------------------|
-| **Migration** | `preprocessedTables < totalTables`, or any `tablePartitions[].hasBeenPreprocessed == false`, or `aggregatedCounts.failedPartitions > 0` |
-| **Validation** | `validatedTables + failedTables < totalTables`, or any `tableStates[].status == "Pending"` |
+**Symptom:** `details.progress.output.isFinished` is `true` (workflow status `Finished`) but `preprocessedTables < totalTables`, or any `tablePartitions[].hasBeenPreprocessed == false`, or `aggregatedCounts.failedPartitions > 0`.
 
 **Meaning:** The orchestrator closed the workflow while one or more tables never finished. This is an **error**, not success — scai treats it as `HasErrors`.
 
@@ -314,7 +301,7 @@ Hybrid L3 validation may stop early when `earlyStoppingForRowHashing` or `maxFai
 
 **Fix path (in order):**
 
-1. **MCP / reports (no SQL):** Re-read the latest status response. Use `details.reports.files.errors` / `details.reports.files.progress` (migration) or `tableStates[].errorMessage` and `details.reports.files.data_validation_errors` (validation) for `LastErrorMessage` / task detail.
+1. **MCP / reports (no SQL):** Re-read the latest status response. Use `details.reports.files.errors` / `details.reports.files.progress` for `LastErrorMessage` / task detail.
 2. **Task queue:** Resolve `WORKFLOW_ID` from `WORKFLOW` (match `NAME` to `details.progress.output.workflowName`), then run the queries below. Look for tasks still `pending` / `executing` / `blocked` vs `failed` / `cancelled` / `completed`, and read `LAST_ERROR_MESSAGE`.
 3. **Infrastructure:** If tasks are stuck pending with no errors, check worker process, affinity, stale `TASK_QUEUE` rows, and `SYSTEM$GET_SERVICE_STATUS` for the orchestrator — see sections above in this reference.
 
@@ -358,7 +345,7 @@ ORDER BY WORKFLOW_ID;
 
 ## Source overloaded or too many concurrent extractions/loads
 
-**Symptom:** Migration or validation is slow; source DBA reports connection pressure; many extraction/load tasks run at once; customer wants to throttle without stopping workers entirely.
+**Symptom:** Migration is slow; source DBA reports connection pressure; many extraction/load tasks run at once; customer wants to throttle without stopping workers entirely.
 
 **Cause:** Default parallelism (`max_parallel_tasks` per worker × number of workers) may exceed what the source can sustain.
 
@@ -388,15 +375,15 @@ Do **not** suggest orchestrator polling-interval env vars as a throttle mechanis
 
 ## Incremental sync or checksum did not detect a column change
 
-**Symptom:** Customer edited data (especially in `text`/`ntext`/`image`, LOBs, floats, spatial, or high-precision timestamps) but the next incremental migration or incremental validation run did not re-process the partition; checksum unchanged.
+**Symptom:** Customer edited data (especially in `text`/`ntext`/`image`, LOBs, floats, spatial, or high-precision timestamps) but the next incremental migration run did not re-process the partition; checksum unchanged.
 
-**Cause:** Built-in **partition checksums** exclude or normalize some types before hashing. A custom `checksumExpression` only reflects that SQL aggregate. **Watermark** sync ignores columns that are not the watermark. DM checksum and DV L3 row-hash use **different** pipelines — a column skipped from DM checksum may still be compared at L3.
+**Cause:** Built-in **partition checksums** exclude or normalize some types before hashing. A custom `checksumExpression` only reflects that SQL aggregate. **Watermark** sync ignores columns that are not the watermark.
 
 **Agent guidance:**
 
 1. Confirm sync strategy (`checksum` vs `watermark`) and whether the changed column is in the checksum input.
 2. Explain using the skipped/lossy type table — see [Advanced operations reference](../../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
-3. Offer remediation: one-time **full** run; custom **`checksumExpression`**; switch to **watermark** if appropriate; **DV L3** + `validationCustomNormalizationRules` when the issue is compare semantics.
+3. Offer remediation: one-time **full** run; custom **`checksumExpression`**; switch to **watermark** if appropriate.
 
 ---
 

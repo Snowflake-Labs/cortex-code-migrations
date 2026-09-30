@@ -19,13 +19,18 @@ A user importing local SQL files never reaches this skill from setup.
 
 ## Before connecting — tell the user
 
-Before proceeding to connection setup, show the following warning **verbatim** regardless of which entry path brought the user here.
+Before proceeding to connection setup, show this **verbatim** on every entry path.
 
 > **What this connection is used for:** This source connection will be used
 > throughout the migration lifecycle for metadata extraction, DDL/code
 > extraction, schema introspection, data migration reads, and validation
 > queries.
->
+
+Then, when `progress_setup`'s `next_task` is `configureSourceConnectionTesting` or
+`configureSourceConnectionData`, also show this **verbatim**. **Never show it on
+`configureSourceConnectionExtract`** — extraction reads metadata and DDL, so telling
+the user their source must not be production is wrong there.
+
 > **Use a non-production instance.** Connect to a dev, test, or sandbox
 > database — not production. Migration operations can introduce significant
 > query load, long-running reads, and potential locking on the source database

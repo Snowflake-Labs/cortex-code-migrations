@@ -49,7 +49,7 @@ The envelope is the standard CLI shape. On success it carries a `result` object;
 
 1. **If there is no `result` object** — the envelope has a top-level `error` (`code`, `message`, `suggestion`, `details`) or the command emitted no JSON at all — surface stderr / the error to the user and stop. This is a runtime error (bad connection name, missing TOML, command crash), not a check failure; do **not** treat it as a passing run.
 2. Read `result.checks`. **Group by `section`**, then list **Fail** first, then **Warning**, then **Skipped**.
-3. **Gate on `result.hasFailures`** — when you run doctor manually (Level 1, before setup), don't proceed to workflow setup while it is `true`. The run tools (`migrate_data`/`validate_data`) enforce this gate themselves at run time, so you only apply it by hand for the pre-setup Level 1 check. Present each failure's `detail` and `suggestion` to the user with concrete next steps (grants SQL, TOML edits, partition column changes, etc.); you do not need to auto-fix everything.
+3. **Gate on `result.hasFailures`** — when you run doctor manually (Level 1, before setup), don't proceed to workflow setup while it is `true`. `data_infrastructure(mode="up")` enforces the same gate before starting shared infrastructure. `migrate_data(mode="run")` and `validate_data(mode="run")` require that infrastructure to be ready but do not rerun Doctor. Present each failure's `detail` and `suggestion` to the user with concrete next steps (grants SQL, TOML edits, partition column changes, etc.); you do not need to auto-fix everything.
 4. **Iterate** — after the user applies fixes, re-run the same doctor command until `hasFailures` is `false`.
 5. **Warnings** — the CLI exits 0 with warnings. Summarize them and ask whether to fix now or proceed.
 6. **Skipped** — explain what was skipped and which flag unlocks that check (usually `--config` or `--source-connection`).
@@ -82,12 +82,12 @@ Omit `-c` or `--source-connection` only when not yet configured; those sections 
 
 ---
 
-## Level 2: Workflow gate (automatic — do not run by hand)
+## Level 2: Infrastructure gate (automatic during `up`)
 
-The run-time doctor is **built into the tools**. `migrate_data(mode="run")` and `validate_data(mode="run")` run a quick infrastructure doctor (no `--config`) before starting and **refuse to start** when any check fails, returning `doctor_failures` in the response. You do not run `scai data doctor` manually before run.
+`data_infrastructure(mode="up")` runs the quick infrastructure Doctor (no `--config`) after generating and applying the selected worker configuration. It **refuses to start** when a reported check fails and returns `doctor_failures`. The migration and validation run tools then require that infrastructure to be ready; they do not invoke Doctor again.
 
-- **On `doctor_failures`:** surface each failure's `detail` / `suggestion` to the user and fix it, then call the tool again. To proceed despite failures, pass `skip_doctor=true` — only after the user explicitly accepts them. Overridden failures come back as `doctor_warnings`.
-- **Workflow-schema validation** is already enforced by the run tools (they reject a malformed YAML before starting), so the run gate intentionally skips `--config`.
+- **On `doctor_failures`:** surface each failure's `detail` / `suggestion` to the user and fix it, then call `data_infrastructure(mode="up")` again. To proceed despite failures, pass `skip_doctor=true` to `data_infrastructure` — only after the user explicitly accepts them. Overridden failures come back as `doctor_warnings`.
+- **Workflow-schema validation** is enforced separately: the MCP run preflight rejects known structural errors, and `scai ... create-workflow` performs the authoritative full configuration validation.
 
 ### Partition-key analysis (setup, not run)
 
@@ -95,7 +95,7 @@ The run-time doctor is **built into the tools**. `migrate_data(mode="run")` and 
 
 ### Manual invocation (debugging only)
 
-To reproduce what the tools run, e.g. when diagnosing a persistent `doctor_failures`:
+To reproduce what infrastructure setup runs, e.g. when diagnosing persistent `doctor_failures`:
 
 ```bash
 scai data doctor -c <snowflake_connection> --source-connection <source_connection> --json

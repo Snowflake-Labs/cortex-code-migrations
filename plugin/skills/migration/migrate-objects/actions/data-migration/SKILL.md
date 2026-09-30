@@ -11,7 +11,7 @@ One-time configuration for migrating data from a source database into Snowflake 
 
 > **Always use the official tooling.** Run data migration through `migrate_data(mode="setup")` / `migrate_data(mode="run")` (backed by `scai data migrate`). **Never** suggest writing ad-hoc scripts to extract, copy, or load data outside the DMVF task pipeline — the orchestrator handles partitioning, retries, incremental sync, and load orchestration.
 
-> **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL
+> **Supported sources**: SQL Server, Azure Synapse, Redshift, Oracle, Teradata, PostgreSQL, BigQuery, DB2
 > **Supported targets**: Native Snowflake tables (default). **Iceberg** targets are **Redshift-only** (partial support) — see [Extraction strategies reference](./references/extraction-strategies-reference.md#iceberg-target-redshift-only--partial-support).
 
 > **Run-only entry:** If you were routed here only to execute `migrateData` (registry task) and the workflow YAML already exists, skip Steps 1–2 and complete **Step 2a** (display the existing `workflow_path` and offer optional updates) before **Step 4**. Complete **Steps 5–6** (background Monitor and error-first migration report), then return the result to the parent. Per-object subagents do not manage shared infrastructure or teardown.
@@ -75,7 +75,7 @@ confirmation before continuing.
 
 ### 1.B — Migration strategy (captured at setup)
 
-The migration strategy — **migration type, sync strategy, extraction mechanism, and target table type** — is chosen **once during setup** by the `dataStrategy` task (executor [`setup/data-strategy/SKILL.md`](../../../setup/data-strategy/SKILL.md)) and committed to the git main branch, so by the time you dispatch it is **already set**. Do not re-ask it here.
+The migration strategy — **migration type, extraction mechanism, and target table type** — is chosen **once during setup** by the `dataStrategy` task (executor [`setup/data-strategy/SKILL.md`](../../../setup/data-strategy/SKILL.md)) and committed to the git main branch, so by the time you dispatch it is **already set**. Do not re-ask it here.
 
 If the user asks to change that persisted strategy, do not apply the change
 inside this per-object action. Return control to the main agent, which owns the
@@ -85,10 +85,11 @@ which owns any setup delegation, before redispatching object work.
 
 If the strategy is unexpectedly unset (for example, an older project), return
 that setup remediation to the main agent as well. Do not run a catch-up wizard
-from an object subagent. Extraction is **not always ODBC** (PostgreSQL COPY;
-Oracle ODP.NET/DBMS_CLOUD; Redshift ODBC/UNLOAD + optional Iceberg; Teradata
-direct/TPT/WRITE_NOS), and each strategy has worker/infra prerequisites owned
-by setup; see [Extraction strategies reference](./references/extraction-strategies-reference.md)
+from an object subagent. Extraction is **not always ODBC** (SQL Server BCP;
+PostgreSQL COPY; Oracle ODP.NET/DBMS_CLOUD; Redshift ODBC/UNLOAD + optional
+Iceberg; Teradata direct/TPT/WRITE_NOS), and each strategy has worker/infra
+prerequisites owned by setup; see
+[Extraction strategies reference](./references/extraction-strategies-reference.md)
 for the per-dialect matrix. `target_table_type=iceberg` is Redshift-only.
 
 For **Preliminary** migrations, after YAML generation (Step 2a) add `whereClauseCriteria` per table with a valid WHERE predicate; see `./references/workflow-config-reference.md`.
@@ -101,12 +102,14 @@ For **Preliminary** migrations, after YAML generation (Step 2a) add `whereClause
 Migration approach:
   Tables (where): <registry filter or "all in scope">
   Type:           <from machine>
-  Sync:           <from machine, or none for preliminary/full>
-  Extraction:     <from machine — e.g. regular, unload, dbms_cloud, tpt, write_nos>
+   Sync:           <incremental: recommended per table in Step 2a; none for preliminary/full>
+   Extraction:     <from machine — workflow strategy or worker method>
   Target:         <from machine>
 ```
 
-Confirm strategy-specific prerequisites from [extraction-strategies-reference.md](./references/extraction-strategies-reference.md) are met (or planned) before Step 2.
+The user's selection confirms the option's listed prerequisites. For a server/cloud method, collect
+the fully-qualified Snowflake external stage now unless the workflow already records one; if it is not
+ready, return to the ladder and choose the next method rather than generating a config that cannot run.
 
 ---
 
@@ -121,8 +124,11 @@ migrate_data(
   mode="setup",
   where=<table-selection filter from 1.A, or omit to include all tables in scope>,
   migration_type="preliminary" | "incremental" | "full",
-  sync_strategy="none" | "checksum" | "watermark",
-  extraction_strategy="regular" | "unload" | "tpt" | "write_nos" | "dbms_cloud",
+  sync_strategy="none" | "full-replace" | "checksum" | "watermark",
+  extraction_strategy="odbc" | "bcp" | "pg_copy" | "tpt" | "unload" |
+                      "write_nos" | "dbms_cloud" | "cet_as" | "export_data" |
+                      "cloud_direct",   # "regular" = legacy "leave the worker as-is"
+  external_stage="<DB.SCHEMA.STAGE>",  # server/cloud methods, first application only
   target_table_type="native" | "iceberg",  # iceberg: Redshift sources only
 )
 ```
@@ -139,12 +145,17 @@ Notes:
   existing file** (preserves your edits). Pass `force_regenerate=true` only
   when you intentionally want a fresh file from scai (previous file copied to
   `.yaml.bak`).
-- On first generation, the MCP server fills missing `source.databaseName` (from
+- Setup always writes the normalized extraction strategy (`odbc` / `bcp` /
+  `pg_copy` / `tpt` → workflow `regular`) and the `extraction.externalStage`,
+  reusing the stage already in the file when no new one is passed. The strategy
+  is setup-owned: re-running re-applies the persisted method over a hand-edit, so
+  change it with `extraction_strategy=` rather than by editing the YAML.
+- On first generation, the MCP server also fills missing `source.databaseName` (from
   the scai source connection), `target.databaseName` (from
   `configure(snowflake_database=...)`), and Oracle `columnNamesToPartitionBy`
   (`ROWID`) when the CLI left them empty.
 
-> **Duplicate data on re-run:** `migration_type=full` or `preliminary`, or `sync_strategy=none`, performs a **full extract and load every run**. Re-running the same workflow against a target that already has rows from a prior run **appends duplicate/extra data**. For repeatable runs, use `sync_strategy=watermark` or `checksum` (and set `primaryKeyColumns` / `watermarkColumn` / `checksumExpression` as needed — see [workflow-config-reference.md](./references/workflow-config-reference.md#synchronizationstrategy)). **Never** `TRUNCATE` or bulk-`DELETE` the target without explicit user confirmation — the table may legitimately contain pre-existing or expected rows. Before any cleanup: confirm with the user, compare source vs target row counts, and prefer switching to incremental sync for future runs.
+> **Duplicate data on re-run:** `migration_type=full` or `preliminary`, or `sync_strategy=none`, performs a **full extract and load every run**. Re-running the same workflow against a target that already has rows from a prior run **appends duplicate/extra data**. For a repeatable **full reload** that overwrites the whole table (or partition) each run without needing a monotonic/change-tracking column, use `sync_strategy=full-replace` — it deletes the target partition before loading, so no duplicates. For row-level incremental sync, use `sync_strategy=watermark` or `checksum` (and set `primaryKeyColumns` / `watermarkColumn` / `checksumExpression` as needed — see [workflow-config-reference.md](./references/workflow-config-reference.md#synchronizationstrategy)). **Never** `TRUNCATE` or bulk-`DELETE` the target manually without explicit user confirmation — the table may legitimately contain pre-existing or expected rows. Before any manual cleanup: confirm with the user, compare source vs target row counts, and prefer `full-replace` or incremental sync for future runs.
 
 ### Step 2a: Display, optional edits, confirm
 
@@ -154,6 +165,12 @@ Notes:
    - **Large files** — show the path, `tables:` count, `defaultTableConfiguration`, and table names; offer to show the full file or specific tables on request.
    - Note whether setup **reused** an existing file (`workflow_reused`) or regenerated it.
 3. **Summarize:** table count, `migration_type`, sync strategy, extraction strategy, `target_table_type`, and any `partition_key_findings` and `computed_column_findings` from setup.
+   - **Incremental with no `sync_strategy`:** setup does not pick one. Recommend a strategy **per table** (a `synchronization` block on each `tables[]` entry, with `defaultTableConfiguration.synchronization` only as the shared fallback), using the registry / generated YAML columns and `partition_key_findings`:
+     1. **`watermark`** when the table has a monotonic timestamp column (`watermarkColumn`). Add `trackModifications` / `trackDeletions` only when a PK is available (`primaryKeyColumns`) and the target is already populated.
+     2. **`checksum` with a custom `checksumExpression`** when a cheap change signal beats the full hash — Oracle `MAX(ORA_ROWSCN)`, a SQL Server `rowversion` column.
+     3. **Plain `checksum`** otherwise. Tell the user it rewrites the whole partition whenever anything in it changes.
+
+     Show each table's choice with its reason and confirm before run. If the user already knows the strategy, call `migrate_data(mode="setup", sync_strategy=..., force_regenerate=true)` instead; an explicit `sync_strategy` is applied as given.
 4. Ask verbatim:
 
 > Here is the migration workflow at `<workflow_path>`.
@@ -168,12 +185,13 @@ Notes:
 
    | User goal | Workflow fields |
    |-----------|-----------------|
+   | Repeatable full reload (overwrite, no duplicates) | `synchronization.strategy: full-replace` |
    | Incremental sync | `synchronization.strategy`, `watermarkColumn`, `trackModifications`, `trackDeletions`, `primaryKeyColumns` |
    | Limit rows (preliminary) | `whereClauseCriteria` |
    | Reduce source locking | `queryModifiers` (or worker TOML `query_modifiers`) |
    | Large table performance | `columnNamesToPartitionBy`, `targetPartitionSizeMb` / `targetPartitionSizeRows`, `executionTimeoutMinutes` (Analyze boundaries only; default 20) |
    | Column rename/type map | `columnNameMappings`, `columnTypeMappings` |
-   | Server-side export | `extraction.strategy`, `externalStage` + worker TOML (UNLOAD/WRITE_NOS/DBMS_CLOUD) |
+   | Server/cloud export | `extraction.strategy`, `extraction.externalStage` + worker TOML |
    | Iceberg target | `target.tableType`, `target.icebergConfig`, `migrationStrategy` |
    | Teradata mixed charsets / untranslatable bytes | `onUntranslatable` (`substitute` default, `fail` to stop on Error 6706); applies to ODBC, TPT, and `write_nos` — see `dmvf/docs/data-migration-orchestrator/teradata-charset-extraction.md` |
 
@@ -431,7 +449,6 @@ Number fixes in the **same category order** as **Errors** (Preprocessing → Ext
 - [Troubleshooting Reference](./references/troubleshooting-reference.md) for worker/orchestrator/partition issues
 - YAML / TOML edits: `whereClauseCriteria`, partitions, `source.databaseName`, extraction strategy, worker connection fields — as required by the error category
 - **Re-run only as a follow-up:** mention `migrate_data(mode="run", workflow_path=...)` in `### Suggested fixes` only when prerequisites are clear, or label it “after the steps above” — do not list re-run as the first or only fix. Before suggesting re-run, confirm the workflow uses incremental sync (`watermark` / `checksum`) or that the user accepts a full reload; a non-incremental re-run against a populated target duplicates rows (see duplicate-data callout in Step 2).
-- After all tables succeed → offer [validation](../../../validate-objects/actions/validate_tables.md) for the same scope
 
 Do **not** include a per-table markdown table unless the user asks for a full audit.
 
@@ -445,7 +462,7 @@ Do **not** include a per-table markdown table unless the user asks for a full au
 **Result:** Success — <N>/<N> tables loaded
 **Workflow:** `<workflowName>`
 
-No errors. You can run validation for this scope or continue the wave.
+No errors.
 ```
 
 **Failures:**
@@ -484,7 +501,7 @@ Omit empty category subsections. If every table completed **and Step 5.C does no
 
 **After the summary:**
 
-- **All tables succeeded** — offer validation for this scope or continuing the wave.
+- **All tables succeeded** — return control to the parent skill; its state machine chooses the next task.
 - **Any failures** — do **not** jump to re-run. Summarize the prerequisite actions from `### Suggested fixes`, then **ask the user** how to proceed, for example:
   1. Apply fixes (YAML/TOML/config) — you or the user edits files; confirm when done
   2. Re-run the same workflow — only after prerequisites are done or the user explicitly accepts re-run without fixes (e.g. transient infra). **Warn:** if `sync_strategy=none` (or no `synchronization` block), re-run reloads all rows and **duplicates data** on the target; prefer adding `watermark`/`checksum` or scoped cleanup confirmed with the user — never blind `TRUNCATE`/`DELETE`.
@@ -544,7 +561,7 @@ Return control to the parent skill.
 
 ## Reference
 
-- [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md) — rate limiting, preflight, incremental/revalidate DV
+- [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md) — rate limiting, preflight, incremental sync
 - [Background monitoring](./references/background-monitoring.md)
 - [Workflow Config Reference](./references/workflow-config-reference.md)
 - [Task Model Reference](./references/task-model-reference.md)
