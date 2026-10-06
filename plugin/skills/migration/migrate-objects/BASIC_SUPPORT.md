@@ -1,6 +1,6 @@
 ---
 name: basic-support
-description: Post-conversion guidance for code-conversion-only dialects (Sybase, Spark, BigQuery, etc.). Offers deployment and next-step options. For full-migration sources (SQL Server, Redshift, Oracle, Teradata), use [migrate-objects](./SKILL.md) instead.
+description: Post-conversion guidance for code-conversion-only dialects (Sybase, Spark, Databricks, etc.). Offers deployment and next-step options. For full-migration sources (SQL Server, Redshift, Oracle, Teradata), use [migrate-objects](./SKILL.md) instead.
 parent_skill: migrate-objects
 license: Proprietary. See License-Skills for complete terms
 ---

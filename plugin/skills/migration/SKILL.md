@@ -83,7 +83,7 @@ Present the narrative summary followed by the progress checklist, then continue 
 ## Prescribed Path
 
 <prescribed-path>
-Use `routing` from the status JSON to delegate to the next step:
+Use `routing` from the status JSON to delegate to the next step. If the user already named a stopping point, do not follow this table past it. A request to stop after conversion does not load `./assessment/SKILL.md`.
 
 | Condition | Sub-skill |
 |-----------|-----------|
@@ -155,6 +155,7 @@ Match the user's request to the most relevant skill and load it.
   - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
   - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
   - **tableau-repointing** — collect `.twb`/`.tds` folder path and `--tableauRepointing` flag for Tableau repointing. Triggers: tableau, tableau migration, tableau repointing, migrate tableau, repoint tableau → `./tableau-repointing/SKILL.md`
+  - **dbt-consolidation** — confirm opt-in `--consolidate-dbt-model-chains` and SSIS `--consolidate-dbt-projects` before convert → `./dbt-consolidation/SKILL.md`
 - **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
 
 ### Migration & validation

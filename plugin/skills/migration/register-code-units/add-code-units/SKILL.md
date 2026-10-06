@@ -31,14 +31,15 @@ Otherwise, ask the user for the path to their source SQL files:
 
 ### Step 2: Annotate Multi-Object Files with sc-tags
 
-`scai code add` uses the arrange engine to split files into one object per code unit. For non-T-SQL dialects the engine splits on `/* <sc-...> */` boundary tags. Before importing, call the `split_code` MCP tool to detect files that contain more than one top-level object and inject those tags automatically.
+`scai code add` uses the arrange engine to split files into one object per code unit. For non-T-SQL dialects the engine splits on `/* <sc-...> */` boundary tags. Before importing, call the `split_code` MCP tool to detect files that need tags (more than one top-level object, or one object and no SC tag yet) and inject those tags automatically.
 
 ```
 split_code(input_path="<INPUT_PATH>")
 ```
 
-- If all files are single-object, the tool says so and you can skip ahead to Step 3 using `<INPUT_PATH>` directly.
-- If multi-object files are found, the tool copies all `.sql` files to `artifacts/source_split/`, injects the sc-tags, verifies the result, and tells you to use `artifacts/source_split` as the input for Step 3.
+- If no file needs tags, the tool says so and you can skip ahead to Step 3 using `<INPUT_PATH>` directly.
+- Otherwise the tool copies all files to `artifacts/source_split/` (leaving out macOS `__MACOSX/` / `._*` metadata), injects the sc-tags, verifies the result, and tells you to use `artifacts/source_split` as the input for Step 3.
+- If it lists files that still have no SC tag, apply the fix it gives for each before Step 3 — do not fall back to `--code-already-split`.
 
 The tool handles the full detect → inject → verify cycle in one call. It is OS-agnostic and does not require Python.
 
@@ -60,7 +61,7 @@ SELECT * FROM sales.public.customers WHERE active = 1;
 
 ### Step 3: Add Code to Project
 
-Use the path returned by `split_code` (or `<INPUT_PATH>` directly if no multi-object files were found):
+Use the path returned by `split_code` (or `<INPUT_PATH>` directly if no file needed tags):
 
 ```bash
 scai code add -i <INPUT_PATH> --json
@@ -155,7 +156,7 @@ Get-ChildItem -Recurse -Filter *.sql source/ | Select-Object -First 20
 
 ```
 artifacts/source_raw/    Original files copied from input path
-artifacts/source_split/  sc-tag annotated copies (only created when multi-object files exist)
+artifacts/source_split/  sc-tag annotated copies (only created when some file needed tags)
 source/                  Arranged source files ready for conversion
 source/_etl/             ETL packages (when present)
 source/BI/PowerBI/       Power BI `.pbit` templates (inventory only, not converted)

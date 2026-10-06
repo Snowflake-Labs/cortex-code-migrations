@@ -7,14 +7,15 @@ license: Proprietary. See License-Skills for complete terms
 # Validate ETL Repair
 
 Repair one `kind=etl` unit from its exact deploy or ETL validation failure.
-This is both a standalone entry point and the isolated future
-`validateEtlRepair` executor. It is not a router: do not load the live
+This is both a standalone entry point and the isolated `validateEtlRepair`
+executor. It is not a router: do not load the live
 `migrate-etl/SKILL.md`, SQL-object `migrate-object/DIAGNOSE_FIX.md`,
 `rule-engine/apply/SKILL.md`, or any stabilization fixer.
 
-Do not call `transition_status` or stamp `fixCode`, `applyRules`, `etlValidate`,
-or `validateEtlRepair`. The machine owns retry and status transitions when it
-eventually dispatches this skill.
+Never stamp or reset `fixCode`, `applyRules`, or live-flow `etlValidate`.
+When the machine dispatches this skill, follow the validate-only lifecycle in
+Step 6: reset failed `validateEtlValidate`, then complete
+`validateEtlRepair`. Those are the only task-status writes this skill owns.
 
 ## Contract
 
@@ -143,7 +144,30 @@ Do not comment out behavior or create stub tasks or procedures.
   `scai test etl-validate` for the unit.
 - Environment failure: do not run comparison until the pre-flight succeeds.
 
-## Step 6: Report and stop
+## Step 6: Return validation to the machine
+
+After the repair is verified enough to return `ready-for-validation`, clear
+the failed comparison before completing repair:
+
+1. Call `transition_status(status="reset", task="validateEtlValidate",
+   where="id = '<ETL_ID>'")`.
+2. Confirm `codeStatus.validateEtlValidate` is pending.
+3. Call `transition_status(status="advance", task="validateEtlRepair",
+   outcome="completed", where="id = '<ETL_ID>'")`.
+4. Confirm the response reports retryable `validateEtlValidate`. If it does
+   not, stop with `failed`; do not stamp or reset another task to force it.
+
+The completed transition returns the object to retryable
+`validateEtlValidate`. Never reverse these calls: a completed repair with a
+failed validation stamp would route straight back into repair. For
+`ready-for-deploy`, `not-applicable`, `needs-user`, or `failed`, report the
+status without completing `validateEtlRepair`.
+
+Do not reset `validateEtlRepair`. Its machine status is attempt-scoped to
+`codeStatus.validateEtlValidate`: each newer validation attempt automatically
+re-arms repair if that attempt fails.
+
+## Step 7: Report and stop
 
 Return exactly one status:
 

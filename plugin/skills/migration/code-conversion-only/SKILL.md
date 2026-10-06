@@ -81,14 +81,14 @@ Any ETL imported by `scai code add` lands in `source/_etl/`. That is where `conv
 Check whether `source/_etl/` exists and contains ETL files — `.dtsx` for SSIS, `.xml` for Informatica PowerCenter (use whichever portable form fits the host).
 
 - If it is **missing or empty**, there is no ETL to convert; proceed to Step 4.
-- If it contains **SSIS** packages only, no conversion-target prompt is needed; proceed to Step 4.
+- If it contains **SSIS** packages only, no conversion-target prompt is needed. Load `../dbt-consolidation/SKILL.md`, then proceed to Step 4.
 - If it contains **Informatica** PowerCenter XML, ask the remaining ETL questions up front, in one sequence, before running the conversion:
     1. Conversion target, via `ask_user_question` (`multiSelect = false`):
        > "How should Informatica mappings be converted?
        > 1. **dbt** (default): each mapping becomes a dbt model orchestrated by Snowflake Tasks.
        > 2. **Snowflake Scripting** (preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Stabilization and deploy are skipped for this preview flavor."
-    2. If the answer is **dbt**, also ask (`multiSelect = false`): "Consolidate dbt model chains to reduce the number of generated model files?". On yes, set `CONSOLIDATE_DBT = true` for Step 5.
-    3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 5.
+    2. If the answer is **dbt**, load `../dbt-consolidation/SKILL.md`. It asks the user to confirm model-chain consolidation (and project consolidation only when SSIS is also present). Return here when complete.
+    3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 5. Do **not** load `dbt-consolidation`.
 
     Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`.
 
@@ -117,15 +117,15 @@ scai code convert --json
 | Append | When |
 |--------|------|
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 3 (Informatica target is Snowflake Scripting) |
-| `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set in Step 3 (Informatica target is dbt and the user chose to consolidate model chains) |
-| `--consolidate-dbt-projects` | SSIS dbt target: one dbt project per package instead of one per Data Flow. Independent of `--consolidate-dbt-model-chains`. |
+| `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set by `../dbt-consolidation/SKILL.md` |
+| `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS only) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 4 |
 
 The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. Either combines with `--powerbi-repointing`. If none of the conditions hold, run the base command as-is.
 
 Substitute `<PBIT_PATH>` with the actual folder path you stored. Do not emit literal placeholder tokens to the shell.
 
-Per-EWI details (code, description, severity) are written to `reports/SnowConvert/Issues.*.csv`; read those files in Step 6 when working on **Review EWIs** or **Resolve EWIs with Cortex Code**.
+Per-EWI details (code, description, severity) are in the latest `Issues.*.csv`. Find that file in `<project_dir>/.scai/reports/SnowConvert/` first; if it is not there, use `<project_dir>/reports/SnowConvert/` then `<project_dir>/Reports/SnowConvert/`. Do not use a leftover older folder when `.scai` already has the file. Read those CSVs in Step 6 for **Review EWIs** or **Resolve EWIs with Cortex Code**; do not send the user to browse them.
 
 For Power BI output paths and the CHECKPOINT addendum, see `../powerbi-repointing/SKILL.md`.
 
@@ -136,9 +136,8 @@ For Power BI output paths and the CHECKPOINT addendum, see `../powerbi-repointin
 | `-x, --show-ewis` | Show detailed EWI breakdown |
 | `--overwrite-working-directory` | Overwrite output files in `snowflake/` and registry |
 | `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor. |
-| `--consolidate-dbt-model-chains` | Consolidate Informatica dbt model chains to reduce the number of generated model files. Applies when the Informatica target is dbt. |
-| `--consolidate-dbt-projects` | Consolidate SSIS dbt output into one dbt project per package instead of one project per Data Flow. Independent of model-chain consolidation. |
 
+For dbt consolidation options, see `../dbt-consolidation/SKILL.md`.
 For Power BI options, see `../powerbi-repointing/SKILL.md`.
 
 ### Step 6: Ask the user
@@ -146,8 +145,8 @@ For Power BI options, see `../powerbi-repointing/SKILL.md`.
 After conversion, ask:
 
 > "What would you like to do next?"
-> 1. **Review converted output** — inspect `snowflake/`, `reports/SnowConvert/`, conversion logs, and (if Power BI repointing ran) `artifacts/repointing_output/` and `snowflake/power_bi_sql_queries/`
-> 2. **Review EWIs** — summarize issues from the latest conversion reports and identify high-priority items
+> 1. **Review converted output** — inspect `snowflake/`, conversion reports via AIM Assessment, conversion logs, and (if Power BI repointing ran) `artifacts/repointing_output/` and `snowflake/power_bi_sql_queries/`
+> 2. **Review EWIs** — summarize conversion issues and identify high-priority items
 > 3. **Resolve EWIs with Cortex Code** — work through selected converted files/issues and apply fixes
 > 4. **Add more source files and re-run conversion** — return to Step 2
 > 5. **Stop here** — leave the converted output ready for manual review

@@ -27,12 +27,12 @@ The project-default `.scai/config/dew_configuration.toml` (path relative to the 
 | `[connections.source.sqlserver]` | `host` | String | Source host. Bare `localhost` is treated as `127.0.0.1` for IPv4-only SQL Server instances. |
 | `[connections.source.sqlserver]` | `use_bcp` | Boolean | Optional (default `false`). Routes **bulk** extraction through the `bcp` utility instead of ODBC — materially faster, and set by the SQL Server worker container. Requires `bcp` on the worker PATH; there is no ODBC fallback if it is missing. Needs no orchestrator `extraction.strategy` change. The `[bulk_utility.bcp]` section some templates carry neither enables nor tunes it — the worker hardcodes BCP's terminators and encoding. |
 | `[connections.source.oracle]` | `oracle_connection_mode` | String | Required. Use `"basic"` for standard username/password (EZ Connect). |
-| `[connections.source.oracle]` | `database` | String | Oracle **service name** (same value as `service_name` in `~/.snowflake/snowct/oracle.toml`). |
-| `[connections.source.teradata]` | `database` | String | Teradata **database name** (same value as `database` in `~/.snowflake/snowct/teradata.toml`). |
+| `[connections.source.oracle]` | `database` | String | Oracle **service name** (same value as `service_name` in `~/.snowflake/scai/connections/oracle.toml`). |
+| `[connections.source.teradata]` | `database` | String | Teradata **database name** (same value as `database` in `~/.snowflake/scai/connections/teradata.toml`). |
 | `[connections.source.teradata]` | `authentication` | String | Optional. Set to `"LDAP"` when the scai connection uses `--auth ldap` (`auth_method = "ldap"` in `teradata.toml`). Omit for standard username/password (TD2). |
 | `[connections.source.teradata]` | `auto_detect_driver` | Boolean | Optional (default `true`). Picks the newest registered Teradata ODBC driver when `teradatasql` is unavailable. |
 | `[connections.source.postgresql]` | `use_copy` | Boolean | Default `true`. `true` for selected method `pg_copy` — `psql` on PATH is preferred, and the worker falls back to ODBC on its own when it is absent. `false` for selected method `odbc`, which then requires an ODBC driver. Both use workflow strategy `regular`. |
-| `[connections.source.postgresql]` | `database` | String | PostgreSQL database name (same value as `database` in `~/.snowflake/snowct/postgresql.toml`). |
+| `[connections.source.postgresql]` | `database` | String | PostgreSQL database name (same value as `database` in `~/.snowflake/scai/connections/postgresql.toml`). |
 | `[connections.source.postgresql]` | `host` | String | PostgreSQL hostname. |
 | `[connections.source.postgresql]` | `port` | Integer | TCP port (default: `5432`). |
 | `[connections.source.azure_synapse]` | `mode` | String | Auth mode. `"sql_auth"` (username/password) or `"azure_ad"` (Azure AD app + client secret). The worker's vocabulary differs from scai's — see [Azure Synapse auth modes](#azure-synapse-auth-modes). |
@@ -42,9 +42,9 @@ The project-default `.scai/config/dew_configuration.toml` (path relative to the 
 
 ## scai source credentials vs worker keys
 
-scai stores source connections in `~/.snowflake/snowct/<engine>.toml`. The worker reads a **different** vocabulary under `[connections.source.<engine>]`. `scai data worker generate-config` writes `connection_name = "…"` (no secrets). Hydration at `worker start` translates through `DewConfigBuilder.ExtractSourceConnectionInfo`. Copy-pasting a scai TOML into the worker file does **not** work.
+scai stores source connections in `~/.snowflake/scai/connections/<engine>.toml`. The worker reads a **different** vocabulary under `[connections.source.<engine>]`. `scai data worker generate-config` writes `connection_name = "…"` (no secrets). Hydration at `worker start` translates through `DewConfigBuilder.ExtractSourceConnectionInfo`. Copy-pasting a scai TOML into the worker file does **not** work.
 
-| Meaning | scai (`snowct/<engine>.toml`) | Worker (`[connections.source.<engine>]`) |
+| Meaning | scai (`scai/connections/<engine>.toml`) | Worker (`[connections.source.<engine>]`) |
 |---------|-------------------------------|------------------------------------------|
 | Login | `user` | `username` |
 | SQL Server / Synapse host | `server_url` | `host` |

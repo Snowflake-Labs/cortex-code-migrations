@@ -189,7 +189,7 @@ Notes:
    | Incremental sync | `synchronization.strategy`, `watermarkColumn`, `trackModifications`, `trackDeletions`, `primaryKeyColumns` |
    | Limit rows (preliminary) | `whereClauseCriteria` |
    | Reduce source locking | `queryModifiers` (or worker TOML `query_modifiers`) |
-   | Large table performance | `columnNamesToPartitionBy`, `targetPartitionSizeMb` / `targetPartitionSizeRows`, `executionTimeoutMinutes` (Analyze boundaries only; default 20) |
+   | Large table performance | `columnNamesToPartitionBy` (leading column must be one the source can prune on), `targetPartitionSizeMb` / `targetPartitionSizeRows`, `executionTimeoutMinutes` (Analyze boundaries only; default 20) |
    | Column rename/type map | `columnNameMappings`, `columnTypeMappings` |
    | Server/cloud export | `extraction.strategy`, `extraction.externalStage` + worker TOML |
    | Iceberg target | `target.tableType`, `target.icebergConfig`, `migrationStrategy` |
@@ -197,9 +197,9 @@ Notes:
 
    For stalled or partially finished runs, see [Task model reference](./references/task-model-reference.md) and [Troubleshooting reference](./references/troubleshooting-reference.md).
 
-6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7).
+6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7). A `partition_key_findings` row whose label starts with `Partition prune:` is not an agent-only edit: show the physical column and the leading `columnNamesToPartitionBy` entry, and wait for the user to confirm before changing the YAML or calling `migrate_data(mode="run")`. Adding workers does not fix a leading column the source cannot prune.
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
-   - Resolve `partition_key_findings` and required `columnNamesToPartitionBy` per `edit_hints` (empty `[]` finishes the workflow without moving data; SQL Server / Redshift need an explicit PK or partition column; Oracle defaults to `ROWID`; PostgreSQL: monotonic integer PK or timestamp — avoid `ctid`).
+   - Resolve `partition_key_findings` other than a `Partition prune:` row (confirm that in step 6; do not rewrite it silently) and required `columnNamesToPartitionBy` per `edit_hints` (empty `[]` finishes the workflow without moving data; SQL Server / Redshift need an explicit PK or partition column; Oracle defaults to `ROWID`; PostgreSQL: monotonic integer PK or timestamp — avoid `ctid`).
 
      **Show the table's columns first.** A partition column can only be judged against
      the alternatives, and the user sees your edit as a one-line diff — so in the message

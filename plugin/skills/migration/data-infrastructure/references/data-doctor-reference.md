@@ -91,7 +91,7 @@ Omit `-c` or `--source-connection` only when not yet configured; those sections 
 
 ### Partition-key analysis (setup, not run)
 
-`migrate_data(mode="setup")` runs the partition-key probe (`--analyze-partition-keys`: NULL-ratio and cardinality queries against the source, plus PK-based suggestions from the Code Unit Registry) and returns `partition_key_findings`. Resolve or accept those while editing the YAML — they are advisory and never block. Validation configs have no partition-key analysis.
+`migrate_data(mode="setup")` runs the partition-key probe (`--analyze-partition-keys`: NULL-ratio and cardinality queries against the source, plus PK-based suggestions from the Code Unit Registry) and returns `partition_key_findings`. `validate_data` setup does not call that probe yet; run `scai data doctor --config <workflow> --analyze-partition-keys` and read the same `Partition key` section. For a table large enough to partition, doctor compares the leading `columnNamesToPartitionBy` entry to the column the source can prune on (Redshift sort key, SQL Server or Synapse clustered index, Teradata primary index, PostgreSQL partition or cluster key, Oracle partition key, Snowflake clustering key). A mismatch is a `Partition prune:` warning. Show it and wait for confirmation before editing the YAML or starting the run. Other partition findings stay advisory and never block. Date-named primary keys remain the suggestion fallback when the catalog has no physical order.
 
 ### Manual invocation (debugging only)
 

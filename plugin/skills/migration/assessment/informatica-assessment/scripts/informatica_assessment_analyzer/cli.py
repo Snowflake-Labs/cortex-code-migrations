@@ -27,6 +27,21 @@ from .services import (
 )
 
 
+def infer_source_dir(elements_file: str):
+    """Return <project>/source for an ETL.Elements under <project>[/.scai]/reports/SnowConvert.
+
+    Returns None when the CSV is not in that layout or the source folder is missing.
+    """
+    reports_dir = Path(elements_file).resolve().parent
+    if reports_dir.name != "SnowConvert" or reports_dir.parent.name.lower() != "reports":
+        return None
+    project_dir = reports_dir.parent.parent
+    if project_dir.name == ".scai":
+        project_dir = project_dir.parent
+    source_dir = project_dir / "source"
+    return str(source_dir) if source_dir.is_dir() else None
+
+
 def handle_informatica_commands():
     """Handle Informatica analysis JSON reading commands."""
     if len(sys.argv) < 4:
@@ -192,12 +207,16 @@ def main():
     issues_file = sys.argv[2]
     output_folder = sys.argv[3]
 
-    # Optional source dir for XML enrichment
+    # Source dir: workflow XML used to link split mapping files; defaults to <project>/source
     source_dir = None
     if "--source-dir" in sys.argv:
         idx = sys.argv.index("--source-dir")
         if idx + 1 < len(sys.argv):
             source_dir = sys.argv[idx + 1]
+    else:
+        source_dir = infer_source_dir(elements_file)
+        if source_dir:
+            print(f"Inferred --source-dir: {source_dir}")
 
     # Optional conversion mode (dbt or scripting)
     conversion_mode = "dbt"

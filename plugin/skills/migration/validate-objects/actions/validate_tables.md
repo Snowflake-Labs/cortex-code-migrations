@@ -90,7 +90,8 @@ The setup response contains:
    - **Small/medium files** — show the full YAML in chat.
    - **Large files** — show the path, `validationConfiguration`, sync block, `tables:` count, and table names; offer to show the full file or specific tables on request.
    - Note whether setup **reused** an existing file (`regenerated: false`).
-3. **Summarize:** table count, validation mode/sync, effective validation toggles (`schema_validation`, `metrics_validation`, `row_validation`, `continue_on_failure`), and which levels will run (e.g. schema + row; metrics off unless enabled).
+3. **Summarize:** table count, validation mode/sync, effective validation toggles (`schema_validation`, `metrics_validation`, `row_validation`, `continue_on_failure`), which levels will run (e.g. schema + row; metrics off unless enabled), and partition findings.
+   - If setup did not return `partition_key_findings`, run `scai data doctor -c <snowflake_connection> --source-connection <source_connection> --config <workflow_path> --analyze-partition-keys --json` and read the `Partition key` checks. This is the same probe migration setup already runs.
 4. Ask verbatim:
 
 > Here is the validation workflow at `<workflow_path>`.
@@ -109,14 +110,15 @@ The setup response contains:
    | Skip L2 on wide tables | `excludeMetrics` or disable `metricsValidation` |
    | Whitelist known diffs | `acceptedTransformations` |
    | Rename / remap columns | `columnMappings`, `indexColumnList`, `targetIndexColumnList` |
-   | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber` |
+   | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber`, and a leading `columnNamesToPartitionBy` the source can prune on |
+   | Partition column the source cannot prune | `columnNamesToPartitionBy` — put the column from the `Partition prune` finding first |
    | Reduce source locking | `queryModifiers` |
    | Incremental watermark | `synchronization.watermarkColumn` (+ `columnNamesToPartitionBy`) |
    | L3 extract via object storage | `validationConfiguration.extraction.strategy` + `extraction.externalStage` (see [L3 pushdown](../../setup/data-validation/l3-pushdown/SKILL.md)) |
 
    For stalled or partially finished runs, see [Task model reference](./references/task-model-reference.md) and [Troubleshooting reference](./references/troubleshooting-reference.md).
 
-6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7).
+6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7). A `partition_key_findings` row whose label starts with `Partition prune:` is not discretionary and not an agent-only edit: show the physical column and the leading `columnNamesToPartitionBy` entry, and wait for the user to confirm before changing the YAML or calling `validate_data(mode="run")`. Early stopping and extra workers do not fix a leading column the source cannot prune.
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
    - When `row_validation` is on: ensure each table has usable `indexColumnList` (and `targetIndexColumnList` when names differ) per `edit_hints`.
    - When incremental **watermark**: ensure `watermarkColumn` is set on `defaultTableConfiguration.synchronization` (or per table).

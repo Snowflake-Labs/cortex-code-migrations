@@ -31,5 +31,6 @@ dev = [
 
 [tool.uv]
 constraint-dependencies = [
-    "pyjwt>=2.14.0",
+    "pyjwt>=2.15.0",
+    "snowflake-connector-python>=4.7.3,<4.8",
 ]

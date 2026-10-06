@@ -9,7 +9,7 @@ license: Proprietary. See License-Skills for complete terms
 
 One-time infrastructure setup for validating migrated data between a source database and Snowflake using the **Cloud Data Validation** feature via the **scai CLI**.
 
-> **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL, Snowflake
+> **Supported sources**: SQL Server, Azure Synapse, Redshift, Oracle, Teradata, PostgreSQL, BigQuery, Snowflake
 > **Supported target**: Snowflake
 
 ## Prerequisite

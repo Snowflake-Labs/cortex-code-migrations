@@ -25,7 +25,9 @@ odbcinst -q -d 2>/dev/null | grep -i "ODBC Driver"
 
 **If the command returns a driver name** (e.g. `[ODBC Driver 18 for SQL Server]`), the driver is present — continue to Step 1.
 
-**If the command returns nothing**, the driver is missing. **Stop here and ask the user to install it** — do not attempt installation yourself, as it requires `sudo` and interactive steps that cannot be automated.
+**If the command returns nothing**, the driver is missing. **Do not start the local worker.** Do **not** attempt installation yourself (`sudo` / interactive).
+
+**Do not abandon orchestrator placement.** Missing ODBC is a worker-host problem. If the parent skill has not brought the shared orchestrator up yet, **return to** [`../SKILL.md`](../SKILL.md): keep the **SPCS** recommendation, confirm the compute pool, and call `data_infrastructure(mode="up", compute_pool="<POOL>", start_worker=false)`. Then tell the user to install ODBC and resume the worker later.
 
 Tell the user:
 

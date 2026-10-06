@@ -110,15 +110,16 @@ The four bool toggles can be set via setup-mode params (`schema_validation=true`
 | `columnMappings` | `{"source_col": "TARGET_COL"}` for renamed columns |
 | `indexColumnList` | Row-identity columns for L3. Snake_case alias: `index_column_list`. |
 | `targetIndexColumnList` | Target-side index columns when different. Snake_case alias: `target_index_column_list`. |
-| `columnNamesToPartitionBy` | Partition columns for large-table validation |
+| `columnNamesToPartitionBy` | Partition columns for large-table validation. The first column should be one the source can prune on (sort key, clustered index, primary index, partition key, or clustering key). |
 | `targetPartitionSizeRows` / `targetPartitionSizeMb` | Per-table partition sizing (mutually exclusive) |
-| `isCaseSensitive` | Case-sensitive identifier comparison for this object |
 | `validationConfiguration` | Per-object override of validation toggles |
 | `synchronization` | Opt into **incremental validation** (or override `defaultTableConfiguration`) |
 | `acceptedTransformations` | Per-object accepted transformations |
 | `validationCustomTypes` / `validationCustomMetrics` / `validationCustomNormalizations` | Per-object custom template overrides |
 | `queryModifiers` | Per-object SQL hints |
 | `intervalHandling` | Per-object interval mapping override |
+
+Physical Snowflake target names (table, schema, and column identifiers) resolve from catalog metadata, not from an operator flag. Spell stored case in `targetName` / `targetDatabase` / `targetSchema` when overriding location; do not emit `isCaseSensitive` or `is_case_sensitive` (unknown keys are rejected).
 
 ## Incremental validation (`synchronization`)
 

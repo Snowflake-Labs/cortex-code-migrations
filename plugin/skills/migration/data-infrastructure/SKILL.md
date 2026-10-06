@@ -13,7 +13,7 @@ Before starting any configuration, tell the user verbatim:
 
 > Snowflake's Data Migration and Validation Framework is a fault-tolerant, scalable system for Snowflake Migrations. It uses a two-component architecture: an **Orchestrator** that runs inside your Snowflake account (on Snowpark Container Services) and breaks migration work into parallel tasks, and one or more **Workers** that run in an environment of your choice, connect and read data from your source system, and upload it to your Snowflake account.
 
-> You make **two independent placement choices** in Step 0: where the **orchestrator** runs — **local** (on your machine, no compute pool — simplest) or **SPCS** (on a Snowpark Container Services compute pool — scalable) — and where each **worker** runs (usually **your machine**, since it reads your source; optionally other VMs, SPCS, or Kubernetes). The two don't have to match; nothing about compute pools matters until you put the orchestrator on SPCS.
+> You make **two independent placement choices** in Step 0: where the **orchestrator** runs — **SPCS** (on a Snowpark Container Services compute pool in the customer Snowflake account — **recommended** for real migrations) or **local** (on this machine, no compute pool — laptop / PoC only) — and where each **worker** runs (usually **your machine**, since it reads your source; optionally other VMs, SPCS, or Kubernetes). The two don't have to match; nothing about compute pools matters until you put the orchestrator on SPCS. Ask first, **recommend SPCS** when they have not chosen, and wait for confirmation. Do not start infrastructure until they confirm.
 
 > **You are in full control of what gets migrated and how.** You decide which tables to include, how they are partitioned for extraction, whether to use incremental synchronization or full loads, and how many workers run in parallel. You can filter rows, remap column names and types, and stop or resume the process at any point without losing progress. Nothing runs until you review and approve the configuration.
 >
@@ -23,7 +23,7 @@ Before starting any configuration, tell the user verbatim:
 
 > **Always use the official tooling for data movement and validation.** Route table migration through `migrate_data` and validation through `validate_data`. Do not suggest ad-hoc extract/copy/compare scripts — the DMVF orchestrator and workers handle partitioning, loading, and multi-level validation.
 
-> **Supported sources**: SQL Server, Redshift, Oracle, Teradata, PostgreSQL, Snowflake (validation only)
+> **Supported sources**: SQL Server, Azure Synapse, Redshift, Oracle, Teradata, PostgreSQL, BigQuery, Snowflake (validation only)
 > **Supported target**: Snowflake
 
 ## Architecture
@@ -93,19 +93,29 @@ placement choices **before** any compute pool, role, or warehouse details.
 
 The orchestrator runs inside your Snowflake account, breaking work into tasks and issuing `COPY INTO` / validation queries. This is the **only** choice that decides whether you need a compute pool — it is **independent** of where the worker runs (0.c).
 
-| Orchestrator | What it means | Choose when |
-|--------------|---------------|-------------|
-| **Local** | Runs on your machine — **no compute pool** | Simplest; small tables, dev/PoC, or an account that can't use SPCS. Runs only while your session is up. |
-| **SPCS** | Runs on a Snowpark Container Services **compute pool** | Scalable + fault-tolerant, lives in your Snowflake account, survives your local session. Large/production migrations. Needs a compute pool. |
+**Ask before any `data_infrastructure(mode="up")`.** Do not silently bring infrastructure up, and do not treat a coin-flip menu as a recommendation.
 
-Ask:
+Do **not** add a third menu option such as “let’s chat / I need clarification” and then treat that as permission to pick **local**. If they defer, stay in Step 0.b: recommend **SPCS** in your own words and ask them to confirm **SPCS** vs **explicit local**. Do not proceed with local because they “left it to you.”
 
-> Where should the data-migration **orchestrator** run — **local** (simplest, no compute pool) or **SPCS** (scalable, needs a compute pool)?
+| Orchestrator | What it means | Recommend when |
+|--------------|---------------|----------------|
+| **SPCS** | Runs on a Snowpark Container Services **compute pool** in the Snowflake account | **Default recommendation** for a real customer migration: scalable, fault-tolerant, survives the local session. |
+| **Local** | Runs on this machine — **no compute pool** | Only when they **explicitly** want a laptop / PoC / session-bound run, or the account cannot use SPCS. Do not frame this as the simplest default. |
+
+Ask, then **state the recommendation in your own words** before they pick:
+
+> For a real customer Snowflake account I recommend **SPCS** (orchestrator on a compute pool in the account). Local is for a laptop proof-of-concept or when SPCS is not available. Do you want SPCS, or do you explicitly want local?
+
+If they are undecided or say they do not know: **recommend SPCS again** and wait for confirmation. Do not pick for them, and do not start `up` until they confirm.
+
+**Never recommend local because the current source looks small, is an eval fixture, has few tables, or is "only reachable from this host."** Workload size is not a placement signal. Treat this as a customer Snowflake account unless they **explicitly** ask for a laptop / PoC / local-only run. Do not say "for this project I still recommend local" after recommending SPCS for production.
+
+**Missing Microsoft ODBC (or any local worker driver) does not change orchestrator placement.** Do not switch to a local orchestrator, and do not stop the whole skill, because a local worker cannot start yet. Keep **SPCS** for the orchestrator. If the worker cannot start, call `data_infrastructure(mode="up", compute_pool="<POOL>", start_worker=false)` after they confirm SPCS and the pool, relay the ODBC/install gap, and stop before migrate/validate.
 
 | Answer | Next step |
 |--------|-----------|
-| **Local** | **Skip Question 0** (no compute pool). Bring it up later with `data_infrastructure(mode="up")` (omit `compute_pool`). |
-| **SPCS** | Now that SPCS is chosen, call `configure(needs_compute_pools=true)` so the response lists the accessible pools, then resolve the pool in **Question 0**. Bring it up with `data_infrastructure(mode="up", compute_pool="<POOL>")`. |
+| **SPCS** (or they accept the SPCS recommendation) | Call `configure(needs_compute_pools=true)` so the response lists the accessible pools, then resolve the pool in **Question 0**. Bring it up with `data_infrastructure(mode="up", compute_pool="<POOL>")`. |
+| **Local** (they explicitly chose laptop / PoC / cannot use SPCS) | **Skip Question 0** (no compute pool). Bring it up later with `data_infrastructure(mode="up")` (omit `compute_pool`). |
 
 ### 0.c — Where should each worker run?
 

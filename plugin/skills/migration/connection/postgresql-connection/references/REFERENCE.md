@@ -189,7 +189,7 @@ Network: the worker host must reach the PostgreSQL server on the configured port
 
 Worker TOML `[connections.source.postgresql].database` must match `source.databaseName` in migration/validation workflow YAML.
 
-## scai TOML Fields (`~/.snowflake/snowct/postgresql.toml`)
+## scai TOML Fields (`~/.snowflake/scai/connections/postgresql.toml`)
 
 Populated by `scai connection add-postgresql`. The MCP server reads this file when generating the DEW worker config.
 

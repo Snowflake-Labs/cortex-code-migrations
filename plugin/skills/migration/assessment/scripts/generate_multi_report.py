@@ -29,17 +29,18 @@ Uses Vue.js 3, Chart.js, and Tailwind CSS following Snowflake styling.
 import argparse
 import base64
 import csv
+import html as html_escape_module
 import json
 import os
 import re
 import sys
 import tempfile
 import traceback
-import html as html_escape_module
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
+from urllib.parse import quote as url_quote
 
 _scripts_dir = str(Path(__file__).resolve().parent)
 if _scripts_dir not in sys.path:
@@ -103,6 +104,14 @@ try:
 except ImportError as e:
     print(f"Warning: Data lineage report generator not available: {e}", file=sys.stderr)
     DATA_LINEAGE_SUPPORT = False
+
+from conversion_issues_report import (
+    conversion_issues_css,
+    conversion_issues_initial_panel,
+    load_conversion_issues,
+    render_conversion_issues_nav,
+    render_conversion_issues_tab,
+)
 
 # Effort estimation artifact loader and renderers
 try:
@@ -1084,6 +1093,14 @@ def _find_toplevel_code_units_csv(snowconvert_reports_dir: Path) -> Path:
     return None
 
 
+def _conversion_issues_artifact(project_dir: Path = None, conversion_issues_json: Path = None) -> Dict:
+    """Load the stable artifact. A missing file is an empty tab, not a failure."""
+    path = conversion_issues_json
+    if path is None and project_dir is not None:
+        path = Path(project_dir) / "artifacts" / "assessment" / "conversion-issues.json"
+    return load_conversion_issues(path)
+
+
 def generate_multi_report(
     output_file: Path,
     exclusion_json: Path = None,
@@ -1099,6 +1116,7 @@ def generate_multi_report(
     workload_insights_json: Path = None,
     data_lineage_json: Path = None,
     project_dir: Path = None,
+    conversion_issues_json: Path = None,
 ) -> None:
     """Generate multi-tab HTML report"""
 
@@ -1107,6 +1125,8 @@ def generate_multi_report(
     dynamic_sql_data = None
     waves_info = None
     default_tab = 'exclusion'
+    initial_active_tab = 'journey'
+    initial_discovery_tab = 'lineage'
 
     if exclusion_json:
         print(f"Loading exclusion data from {exclusion_json}...")
@@ -1164,7 +1184,9 @@ def generate_multi_report(
         try:
             has_anti_patterns = Path(anti_patterns_json).is_file()
             if has_anti_patterns and not exclusion_json and not dynamic_sql_json and not waves_info and not ssis_data and not informatica_data:
-                default_tab = 'risks'
+                default_tab = 'overview'
+                initial_active_tab = 'discovery'
+                initial_discovery_tab = 'optimization'
         except Exception as e:
             print(f"Warning: Could not load anti-patterns data: {e}", file=sys.stderr)
             has_anti_patterns = False
@@ -1404,7 +1426,11 @@ def generate_multi_report(
         effort_artifact_name=effort_artifact_name,
         testing_readiness=testing_readiness,
         data_migration_readiness=data_migration_readiness,
-        assessment_name=resolve_assessment_name(project_dir)
+        assessment_name=resolve_assessment_name(project_dir),
+        initial_active_tab=initial_active_tab,
+        initial_discovery_tab=initial_discovery_tab,
+        project_dir=project_dir,
+        conversion_issues_artifact=_conversion_issues_artifact(project_dir, conversion_issues_json),
     )
     
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -1415,6 +1441,41 @@ def generate_multi_report(
     print(f"  Size: {output_file.stat().st_size:,} bytes")
     print(f"\nOpen the report in your browser:")
     print(f"  open {output_file}")
+
+
+_WORKLOAD_INVENTORY_LABELS = {
+    "PARAMETER_REF": "PARAMETER REFERENCES",
+}
+_PARAMETER_REFERENCES_TOOLTIP = (
+    "Object names in scripts and mappings that still contain a parameter, "
+    "so the referenced object could not be identified."
+)
+
+
+def _workload_inventory_type_cards(objects_by_type, extra_after_table=""):
+    """One Workload Inventory card per object type.
+
+    Most labels are the category plus a trailing "s". PARAMETER_REF uses a
+    display name and a tooltip; the category key itself is unchanged.
+    """
+    cards = []
+    for obj_type, count in objects_by_type.items():
+        label = _WORKLOAD_INVENTORY_LABELS.get(obj_type, f"{obj_type}s")
+        tooltip = ""
+        if obj_type == "PARAMETER_REF":
+            escaped = html_escape_module.escape(_PARAMETER_REFERENCES_TOOLTIP, quote=True)
+            tooltip = f' data-tooltip="{escaped}"'
+        cards.append(
+            f'''
+                <div class="effort-card"{tooltip}>
+                    <div class="effort-card-num">{count}</div>
+                    <div class="effort-card-lbl">{html_escape_module.escape(label)}</div>
+                </div>
+            '''
+        )
+        if str(obj_type).upper() == "TABLE":
+            cards.append(extra_after_table)
+    return "".join(cards)
 
 
 def generate_html_template(
@@ -1460,7 +1521,11 @@ def generate_html_template(
     effort_artifact_name: str = "",
     testing_readiness: Any = None,
     data_migration_readiness: Any = None,
-    assessment_name: str = ""
+    assessment_name: str = "",
+    initial_active_tab: str = "journey",
+    initial_discovery_tab: str = "lineage",
+    project_dir: Path = None,
+    conversion_issues_artifact: Dict = None,
 ) -> str:
     """Generate the complete HTML template"""
     dynamic_sql_meta_json = json.dumps(dynamic_sql_meta or {}, ensure_ascii=False)
@@ -1785,6 +1850,11 @@ def generate_html_template(
         else ""
     )
 
+    workload_inventory_type_cards = _workload_inventory_type_cards(
+        overview_stats.get("objects_by_type", {}) if overview_stats else {},
+        external_tables_card_html + temporal_tables_card_html,
+    )
+
     # Overview tab HTML
     overview_html = f"""
         <!-- Overview Tab -->
@@ -1821,12 +1891,7 @@ def generate_html_template(
                     <div class="effort-card-lbl">In {overview_stats.get('total_waves', 'N/A')} Waves</div>
                 </div>
                 
-                {''.join([f'''
-                <div class="effort-card">
-                    <div class="effort-card-num">{count}</div>
-                    <div class="effort-card-lbl">{obj_type}s</div>
-                </div>
-                ''' + (external_tables_card_html + temporal_tables_card_html if obj_type.upper() == 'TABLE' else '') for obj_type, count in overview_stats.get('objects_by_type', {}).items()])}
+                {workload_inventory_type_cards}
             </div>
 
             {effort_section_b_html}
@@ -1920,7 +1985,7 @@ def generate_html_template(
 
     journey_steps = [
         ('overview', 'Code/ETL Conversion',
-         'Convert your database code and ETL pipelines to Snowflake. Review conversion readiness, dependencies, object exclusions, dynamic SQL, and optimization opportunities.'),
+         'Convert your database code and ETL pipelines to Snowflake. Review conversion readiness, dependencies, object exclusions, and dynamic SQL.'),
         ('data-migration', 'Data Migration &amp; Validation',
          'Move your data into Snowflake and validate it row-for-row against the source, so nothing is lost in translation.'),
         ('testing', 'Testing',
@@ -1948,7 +2013,7 @@ def generate_html_template(
             (
                 'discovery',
                 'Discovery',
-                f'Explore data lineage and insights from the {capture_name}: execution volume, duration, statement mix, {workload_dimensions}.',
+                f'Explore data lineage and insights from the {capture_name}: execution volume, duration, statement mix, {workload_dimensions}. It also lists optimization opportunities that need review before migration.',
             ),
         )
     else:
@@ -1957,7 +2022,7 @@ def generate_html_template(
             (
                 'discovery',
                 'Discovery',
-                'Explore data lineage to understand how information moves through the workload.',
+                'Explore data lineage and optimization opportunities to understand the workload.',
             ),
         )
     if not show_virtualization:
@@ -1985,6 +2050,27 @@ def generate_html_template(
         if show_virtualization
         else 'converting code and ETL, moving and validating data, and testing'
     )
+    journey_download_html = ""
+    if project_dir:
+        archive_path = project_dir / ".scai" / "reports" / "conversion-reports.zip"
+        try:
+            relative_archive_path = Path(
+                os.path.relpath(archive_path, start=output_file.parent)
+            ).as_posix()
+        except ValueError:
+            # Windows cannot form a relative path across drives. The report itself remains useful,
+            # so omit only the download control instead of aborting HTML generation.
+            relative_archive_path = ""
+        if relative_archive_path:
+            safe_archive_href = html_escape_module.escape(
+                url_quote(relative_archive_path, safe="/"),
+                quote=True,
+            )
+            journey_download_html = f"""
+                    <a class="journey-download" href="{safe_archive_href}" download="conversion-reports.zip">
+                        Download conversion reports
+                    </a>
+            """
     journey_overview_html = f"""
         <!-- Migration Journey Overview (entry point) -->
         <div class="tab-content" :class="{{active: activeTab === 'journey'}}">
@@ -1994,7 +2080,10 @@ def generate_html_template(
                     This report guides you through every phase of migrating your workload to Snowflake &mdash;
                     {journey_phases_copy}. Choose any phase below to see what it involves and what to expect.
                 </p>
-                <span class="journey-pill">Source platform: {safe_source_dialect}</span>
+                <div class="journey-actions">
+                    <span class="journey-pill">Source platform: {safe_source_dialect}</span>
+                    {journey_download_html}
+                </div>
             </div>
             <div class="journey-grid">
                 {journey_cards_html}
@@ -2085,14 +2174,15 @@ def generate_html_template(
     if has_anti_patterns and ANTI_PATTERNS_SUPPORT and anti_patterns_json:
         ap_content, anti_patterns_js, anti_patterns_css = generate_anti_patterns_html_content(anti_patterns_json)
         anti_patterns_html = f"""
-            <!-- Anti-Patterns Report Tab -->
-            <div class="tab-content" :class="{{active: activeTab === 'risks'}}">
+            <div v-show="discoveryTab === 'optimization'" class="discovery-panel"
+                 role="tabpanel" aria-label="Optimization Opportunities">
                 {ap_content}
             </div>
         """
     else:
         anti_patterns_html = """
-            <div class="tab-content" :class="{active: activeTab === 'risks'}">
+            <div v-show="discoveryTab === 'optimization'" class="discovery-panel"
+                 role="tabpanel" aria-label="Optimization Opportunities">
                 <div style="margin-bottom: 32px;">
                     <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
                         Optimization Opportunities
@@ -2194,6 +2284,12 @@ def generate_html_template(
                     Lineage
                 </button>
                 {query_logs_tab_html}
+                <button type="button" role="tab" data-discovery-tab="optimization"
+                        :aria-selected="discoveryTab === 'optimization'"
+                        :class="{{active: discoveryTab === 'optimization'}}"
+                        @click="selectDiscoveryTab('optimization')">
+                    Optimization Opportunities
+                </button>
             </div>
             <div v-show="discoveryTab === 'lineage'" class="discovery-panel"
                  role="tabpanel" aria-label="Lineage">
@@ -2229,6 +2325,7 @@ def generate_html_template(
                 </div>
             </div>
             {query_logs_panel_html}
+            {anti_patterns_html}
         </div>
     """
 
@@ -2891,6 +2988,7 @@ def generate_html_template(
         .effort-cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 1.5rem; }}
         .effort-card {{ background: white; border: 1px solid #E2E8F0; border-radius: 12px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); transition: all 0.2s; }}
         .effort-card:hover {{ transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.15); }}
+        #workload-inventory + .effort-cards .effort-card[data-tooltip] {{ cursor: help; }}
         .effort-card-num {{ font-size: 28px; font-weight: 800; color: #1E252F; }}
         .effort-card-lbl {{ font-size: 14px; font-weight: 400; color: #5D6A85; line-height: 1.25rem; margin-top: 4px; }}
         .effort-table-wrap {{ overflow-x: auto; margin-bottom: 24px; }}
@@ -3085,11 +3183,10 @@ def generate_html_template(
             background: #D6E6FF;
             color: #1A6CE7;
         }}
-        /* The badge row would otherwise let the flex label give way to the badge;
-           "Optimization Opportunities" is the longest label and sits ~7px inside
-           the 268px sidebar, close enough that a wider font fallback would wrap it. */
-        .nav-link[data-tab="effort-estimates"],
-        .nav-link[data-tab="risks"] {{
+        /* The badge row would otherwise let the flex label give way to the badge.
+           Effort Estimates is the longest Code/ETL label and sits close enough
+           to the sidebar edge that a wider font fallback would wrap it. */
+        .nav-link[data-tab="effort-estimates"] {{
             white-space: nowrap;
         }}
         .nav-sublist {{
@@ -3161,16 +3258,36 @@ def generate_html_template(
             margin: 0;
             max-width: 760px;
         }}
+        .journey-actions {{
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 20px;
+        }}
         .journey-pill {{
             display: inline-flex;
             align-items: center;
-            margin-top: 20px;
             background: #E0F2FE;
             color: #0284C7;
             padding: 6px 14px;
             border-radius: 999px;
             font-size: 0.85rem;
             font-weight: 600;
+        }}
+        .journey-download {{
+            display: inline-flex;
+            align-items: center;
+            background: #0284C7;
+            color: #FFFFFF;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 700;
+            text-decoration: none;
+        }}
+        .journey-download:hover {{
+            background: #0369A1;
         }}
         .journey-grid {{
             display: flex;
@@ -5654,6 +5771,7 @@ def generate_html_template(
             margin-top: 12px;
             color: #102E46;
         }}
+        {conversion_issues_css()}
     </style>
 </head>
 <body>
@@ -5691,6 +5809,7 @@ def generate_html_template(
                     </div>
                     {effort_nav_link}
                     {effort_nav_sublist}
+                    {render_conversion_issues_nav()}
                     <a @click="activeTab = 'waves'" class="nav-link" data-tab="waves" :class="{{active: activeTab === 'waves'}}">
                         Dependencies Report
                     </a>
@@ -5705,9 +5824,6 @@ def generate_html_template(
                         ETL Report
                     </a>
                     {etl_nav_sublist}
-                    <a @click="activeTab = 'risks'" class="nav-link" data-tab="risks" :class="{{active: activeTab === 'risks'}}">
-                        Optimization Opportunities
-                    </a>
                 </div>
                 <a @click="activeTab = 'data-migration'" class="nav-section" data-tab="data-migration" :class="{{active: activeTab === 'data-migration'}}">
                     <span>Data Migration &amp; Validation</span>
@@ -5723,12 +5839,12 @@ def generate_html_template(
             {journey_overview_html}
             {discovery_html}
             {overview_html}
+            {render_conversion_issues_tab(conversion_issues_artifact)}
             {effort_tab_html}
             {exclusion_html}
             {dynamic_sql_html}
             {waves_html}
             {etl_tab_content}
-            {anti_patterns_html}
             {data_migration_html}
             {testing_html}
             {virtualization_html}
@@ -5862,15 +5978,15 @@ def generate_html_template(
             mixins: window.__EFFORT_MIXIN__ ? [window.__EFFORT_MIXIN__] : [],
             data() {{
                 return {{
-                    activeTab: 'journey',
-                    discoveryTab: 'lineage',
+                    activeTab: '{initial_active_tab}',
+                    discoveryTab: '{initial_discovery_tab}',
                     lineageView: 'data',
                     queryLogsView: 'analysis',
                     objectLineagePromptCopied: false,
                     sourceDialect: {source_dialect_json},
                     // Must list every nav-link inside the group: the group is
                     // v-show'd on membership, so an omitted tab hides its own sub-nav.
-                    codeEtlTabs: ['overview', 'effort-estimates', 'waves', 'exclusion', 'dynamic-sql', 'etl', 'risks'],
+                    codeEtlTabs: ['overview', 'conversion-issues', 'effort-estimates', 'waves', 'exclusion', 'dynamic-sql', 'etl'],
                     jsonData: dynamicSqlData,
                     searchQuery: '',
                     complexityFilter: 'all',
@@ -5880,7 +5996,12 @@ def generate_html_template(
                     showAllPatterns: false,
                     occurrenceTabs: {{}},
                     windowWidth: (typeof window !== 'undefined' ? window.innerWidth : 9999),
-                    isDetailModalOpen: false
+                    isDetailModalOpen: false,
+                    ciPanel: '{conversion_issues_initial_panel(conversion_issues_artifact)}',
+                    ciOpenDetail: null,
+                    ciOpenMenu: null,
+                    ciFilters: {{}},
+                    ciCodeFull: {{}}
                 }}
             }},
             computed: {{
@@ -6196,6 +6317,51 @@ def generate_html_template(
                 }}
             }},
             methods: {{
+                ciSelectPanel(id) {{
+                    this.ciPanel = id;
+                    this.ciOpenMenu = null;
+                    this.ciOpenDetail = null;
+                }},
+                ciToggleDetail(id) {{
+                    this.ciOpenDetail = this.ciOpenDetail === id ? null : id;
+                }},
+                ciToggleMenu(id) {{
+                    this.ciOpenMenu = this.ciOpenMenu === id ? null : id;
+                }},
+                ciFilterOn(key, value) {{
+                    const selected = this.ciFilters[key] || [];
+                    return selected.indexOf(value) !== -1;
+                }},
+                ciToggleFilter(key, value, checked) {{
+                    const selected = (this.ciFilters[key] || []).slice();
+                    const index = selected.indexOf(value);
+                    if (checked && index === -1) selected.push(value);
+                    if (!checked && index !== -1) selected.splice(index, 1);
+                    this.ciFilters = Object.assign({{}}, this.ciFilters, {{ [key]: selected }});
+                    this.ciOpenDetail = null;
+                }},
+                ciClearFilter(key) {{
+                    this.ciFilters = Object.assign({{}}, this.ciFilters, {{ [key]: [] }});
+                    this.ciOpenDetail = null;
+                }},
+                ciRowVisible(panel, code, type) {{
+                    const codes = this.ciFilters[panel + ':code'] || [];
+                    const types = this.ciFilters[panel + ':type'] || [];
+                    const codeOk = codes.length === 0 || codes.indexOf(code) !== -1;
+                    const typeOk = types.length === 0 || types.indexOf(type) !== -1;
+                    return codeOk && typeOk;
+                }},
+                ciCodeIsFull(id) {{
+                    return this.ciCodeFull[id] === true;
+                }},
+                ciShowFullCode(id) {{
+                    this.ciCodeFull = Object.assign({{}}, this.ciCodeFull, {{ [id]: true }});
+                }},
+                ciShowFocusedCode(id) {{
+                    const next = Object.assign({{}}, this.ciCodeFull);
+                    delete next[id];
+                    this.ciCodeFull = next;
+                }},
                 selectDiscoveryTab(tab) {{
                     this.discoveryTab = tab;
                 }},
@@ -6344,6 +6510,15 @@ def generate_html_template(
                     }}
                 }};
                 window.addEventListener('keydown', onKeyDown);
+
+                const closeCiMenu = (event) => {{
+                    const target = event && event.target;
+                    if (target && target.closest && (target.closest('.ci-filter-menu') || target.closest('.ci-filter-arrow'))) {{
+                        return;
+                    }}
+                    this.ciOpenMenu = null;
+                }};
+                document.addEventListener('click', closeCiMenu);
             }}
         }}).mount('#app');
         
@@ -6954,8 +7129,10 @@ def generate_html_template(
                 tip.style.top = y + 'px';
             }}
 
+            const tooltipCard = '.tab-content.dependencies-tab .metric-card[data-tooltip], #workload-inventory + .effort-cards .effort-card[data-tooltip]';
+
             document.addEventListener('mouseover', function(e) {{
-                const card = e.target.closest('.tab-content.dependencies-tab .metric-card[data-tooltip]');
+                const card = e.target.closest(tooltipCard);
                 if (!card) return;
                 if (tip) tip.remove();
                 tip = document.createElement('div');
@@ -6970,7 +7147,7 @@ def generate_html_template(
             }});
 
             document.addEventListener('mouseout', function(e) {{
-                const card = e.target.closest('.tab-content.dependencies-tab .metric-card[data-tooltip]');
+                const card = e.target.closest(tooltipCard);
                 if (!card) return;
                 if (tip) {{
                     tip.remove();
@@ -7072,7 +7249,7 @@ def main():
     parser.add_argument(
         '--project-dir',
         type=Path,
-        help='Path to the scai project root. When provided, --registry-dir and --snowconvert-reports-dir default to <project-dir>/registry and <project-dir>/reports respectively.'
+        help='Path to the scai project root. When provided, --registry-dir defaults to <project-dir>/registry and --snowconvert-reports-dir searches <project-dir>/.scai/reports before legacy report locations.'
     )
 
     parser.add_argument(
@@ -7091,6 +7268,12 @@ def main():
         '--data-lineage-json',
         type=Path,
         help='Path to data-lineage.json produced by `scai assessment data-lineage`.'
+    )
+
+    parser.add_argument(
+        '--conversion-issues-json',
+        type=Path,
+        help='Path to conversion-issues.json produced by `scai assessment conversion-issues`.'
     )
 
     parser.add_argument(
@@ -7119,10 +7302,19 @@ def main():
             else:
                 print(f"Warning: no registry dir found at {candidate}", file=sys.stderr)
         if not args.snowconvert_reports_dir:
-            candidate = args.project_dir / "reports"
-            if candidate.is_dir():
-                args.snowconvert_reports_dir = candidate
-                print(f"Using SnowConvert reports dir: {candidate}", file=sys.stderr)
+            candidates = [
+                args.project_dir / ".scai" / "reports",
+                args.project_dir / "reports",
+                args.project_dir / "Reports",
+            ]
+            for candidate in candidates:
+                snowconvert_dir = candidate / "SnowConvert"
+                if snowconvert_dir.is_dir() and any(
+                    path.is_file() for path in snowconvert_dir.iterdir()
+                ):
+                    args.snowconvert_reports_dir = candidate
+                    print(f"Using SnowConvert reports dir: {candidate}", file=sys.stderr)
+                    break
         if not args.exclusion_json:
             matches = sorted((args.project_dir / "artifacts" / "assessment").glob("object_exclusion_analysis_*.json"))
             if matches:
@@ -7314,6 +7506,7 @@ def main():
                 effort_estimates_json=getattr(args, 'effort_estimates_json', None),
                 workload_insights_json=getattr(args, 'workload_insights_json', None),
                 data_lineage_json=getattr(args, 'data_lineage_json', None),
+                conversion_issues_json=getattr(args, 'conversion_issues_json', None),
                 project_dir=getattr(args, 'project_dir', None),
             )
     except Exception as e:

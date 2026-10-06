@@ -1918,6 +1918,13 @@ def _generate_css() -> str:
     - .exclusion-table, .exclusion-table thead, .exclusion-table th, .exclusion-table td
     """
     return """
+    /* The page background is light-only; !important beats an agent-authored inline
+       `color-scheme: light dark`, so `light-dark()` text can't go near-white in OS dark mode. */
+    #informatica-report,
+    #informatica-report * {
+        color-scheme: light !important;
+    }
+
     /* Section heading style — matches SSIS h2 design */
     #informatica-report h2 {
         font-size: 1.5rem;

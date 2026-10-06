@@ -77,7 +77,7 @@ says `# PREFERRED`), it survives a new shell, and it keeps the credential out of
 entirely. Keep the other available rather than deciding for the user:
 
 - **Register a connection once** — the recommended fix. Note the trade honestly: a connection keeps
-  the password in **cleartext** under `~/.snowflake/snowct/`, protected only by file permissions, so
+  the password in **cleartext** under `~/.snowflake/scai/connections/`, protected only by file permissions, so
   it buys scope rather than encryption.
 - **Export the variables.** `INFORMATICA_USERNAME` / `INFORMATICA_PASSWORD` resolve the check just as
   well and keep the password nowhere on disk. Offer this when the user does not want it on disk, when

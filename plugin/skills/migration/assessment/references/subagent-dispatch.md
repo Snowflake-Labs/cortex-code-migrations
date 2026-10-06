@@ -107,6 +107,19 @@ Return the common JSON contract for analyzing-sql-dynamic-patterns with
 total/REVIEWED/PENDING counts.
 ```
 
+### Conversion issues
+
+```text
+Read and follow plugin/skills/migration/assessment/conversion-issues/SKILL.md.
+You are a non-interactive sub-agent. Do not ask questions.
+Context: project_dir.
+Call configure(project_dir), run scai assessment conversion-issues, research
+each summary-panel pair, write artifacts/assessment/conversion-issues/updates.json,
+and rerun with --updates. Return the common JSON contract for conversion-issues
+with artifacts/assessment/conversion-issues.json.
+ASM0045 is error, not skipped. Zero pairs is ok. Do not upload the ZIP.
+```
+
 ## ETL and Discovery runners
 
 ### SSIS
