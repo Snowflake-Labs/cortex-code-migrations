@@ -63,7 +63,7 @@ Resolve without prompting:
 | Input | Location |
 |---|---|
 | Project | `project_dir` containing `.scai/` and `registry/` |
-| SnowConvert reports | `<project_dir>/reports/SnowConvert/` |
+| SnowConvert reports | First directory that contains the needed conversion files: `<project_dir>/.scai/reports/SnowConvert/`, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. A leftover older folder can be stale if `.scai` already has the files. |
 | Dynamic SQL issues | newest `Issues.*.csv` |
 | SSIS inputs | newest `ETL.Elements.*.csv` and `ETL.Issues.*.csv`, when present |
 | Power BI templates | `<project_dir>/source/BI/PowerBI/**/*.pbit` |
@@ -71,6 +71,7 @@ Resolve without prompting:
 
 Scan `.pbix` only to explain that it is unsupported; never process or stage it.
 Waves always come from `scai assessment waves` over the registry.
+Conversion CSVs under `.scai/` or the legacy `reports/` folders are for tooling. Point users at AIM Assessment (HTML report or the conversion-reports zip), not at those folders.
 
 ## Step 3: Confirm Scope
 
@@ -82,11 +83,12 @@ I will run:
 2. Optimization Opportunities (SQL Server only)
 3. Effort Estimates (SQL Server and Redshift only)
 4. Dynamic SQL Patterns
-5. Discovery (SQL Server, Teradata, and Redshift — query-log files are optional, asked next)
-6. ETL/SSIS Assessment (only if present)
-7. Informatica Assessment (only if present)
-8. Data Lineage (optional reporting layer such as Power BI — asked next)
-9. HTML Report (shareable export; the live dashboard opens when finished)
+5. Conversion issues (registry EWIs, Jira ZIP, share link)
+6. Discovery (SQL Server, Teradata, and Redshift — query-log files are optional, asked next)
+7. ETL/SSIS Assessment (only if present)
+8. Informatica Assessment (only if present)
+9. Data Lineage (optional reporting layer such as Power BI — asked next)
+10. HTML Report (shareable export; the live dashboard opens when finished)
 
 Proceed with all, or pick a subset?
 ```
@@ -158,6 +160,8 @@ When Data Lineage returns a manifest, verify the manifest and
 `artifacts/assessment/powerbi/enrichment.json` exist. Do not inspect the
 registry to re-audit enrichment.
 
+Conversion issues does not skip a missing registry: `ASM0045` is `error`. Zero pairs is `ok`. The parent does not upload the ZIP; the HTML tab shows the ZIP path and the Share issues link.
+
 When Informatica returns `"ok"`, also verify
 `<project_dir>/assessment/informatica/ai_informatica_summary.html` exists and
 is non-empty. Otherwise fail with `error: "AI summary missing or empty"`.
@@ -169,10 +173,11 @@ Create a `results` table in this order:
 3. effort-estimate
 4. anti-patterns
 5. analyzing-sql-dynamic-patterns
-6. workload-insights
-7. etl-assessment
-8. informatica-assessment
-9. data-lineage
+6. conversion-issues
+7. workload-insights
+8. etl-assessment
+9. informatica-assessment
+10. data-lineage
 
 Synthesize skipped rows for excluded/inapplicable analyses.
 
@@ -262,6 +267,7 @@ Then perform On Completion. Do not stop after generating artifacts.
 | Effort | `effort-estimate/SKILL.md` |
 | Anti-patterns | `anti-patterns/SKILL.md` |
 | Dynamic SQL | `analyzing-sql-dynamic-patterns/SKILL.md` |
+| Conversion issues | `conversion-issues/SKILL.md` |
 | Discovery | `workload-insights/SKILL.md` after input collection |
 | SSIS | `etl-assessment/SKILL.md` |
 | Informatica | `informatica-assessment/SKILL.md` |

@@ -18,9 +18,11 @@ this object's `where`). Reconstructing the call, pass `where` with object id.
 
 This is **source-only**. It deploys the object's source DDL (`scai code deploy
 -t source`) into the shared source catalog and, for a table, runs `scai
-testbed load --source-only --where` so it has fixture rows. Snowflake is
-untouched — that is the later `deploy` task. CREATE is skipped when the object
-already exists.
+testbed load --source-only --where` so it has fixture rows.
+For an extracted project without those bindings, the connected catalog is the
+customer's live source: the tool skips DDL and fixture loading, records the
+object ready, and preserves its rows. Snowflake is untouched — that is the later
+`deploy` task.
 
 Do **not** pass `--profile` or `--database-bindings` — the tool injects them.
 Do **not** call `deploy`. Schema/ETL/BTEQ units and units with no source come

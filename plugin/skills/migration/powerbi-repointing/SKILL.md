@@ -26,7 +26,7 @@ When `--powerbi-repointing` is used, `scai code convert` writes:
 - Repointed `.pbit` files → `artifacts/repointing_output/<timestamp>/<pbit_folder_name>/`
 - Extracted embedded queries → `source/power_bi_sql_queries/`
 - Converted Snowflake SQL for those queries → `snowflake/power_bi_sql_queries/`
-- Per-query summary → `reports/SnowConvert/ETLAndBiRepointing.*.csv`
+- Per-query summary → `ETLAndBiRepointing.*.csv` in the conversion reports ZIP, downloadable from the Assessment HTML report. Do not present `.scai/reports/` to the user.
 
 ## Option Reference
 
@@ -36,18 +36,20 @@ When `--powerbi-repointing` is used, `scai code convert` writes:
 
 ## CHECKPOINT Addendum
 
+Resolve `<conversion_reports_dir>` as the first directory that contains `ETLAndBiRepointing.*.csv`: `<project_dir>/.scai/reports/SnowConvert/`, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. Do not use a leftover older folder when `.scai` already has the file. These CSVs are for tooling; do not send the user to browse them.
+
 After the calling skill's conversion CHECKPOINT, also confirm:
 - [ ] Repointed `.pbit` files appear in `artifacts/repointing_output/<timestamp>/<pbit_folder_name>/`
-- [ ] Per-query summary appears in `reports/SnowConvert/ETLAndBiRepointing.*.csv`
+- [ ] Per-query summary appears as `<conversion_reports_dir>/ETLAndBiRepointing.*.csv`
 
 Then return to the calling skill.
 
 ## Post-Conversion Check: Unsupported Queries
 
-After the conversion CHECKPOINT, scan the repointing report in the scai project:
+After the conversion CHECKPOINT, scan `<conversion_reports_dir>/ETLAndBiRepointing.*.csv`:
 
 ```bash
-grep -c "Unsupported" reports/SnowConvert/ETLAndBiRepointing*.csv
+grep -c "Unsupported" "<conversion_reports_dir>"/ETLAndBiRepointing*.csv
 ```
 
 If any rows have `Status=Unsupported`, tell the user:

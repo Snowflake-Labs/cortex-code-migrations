@@ -30,7 +30,7 @@ Before Step 1, look for an object-store extract already used for **data migratio
 
 - Workflow YAML under `artifacts/data_migration/` (or equivalent): `extraction.strategy` in `unload` | `write_nos` | `dbms_cloud` | `cet_as` | `export_data` | `cloud_direct` **and** a non-empty `extraction.externalStage`
 - And/or `plugin.yml` `data_migration_extraction_strategy` with the same object-store values, plus that stage on the DM workflow
-- Worker TOML (`.scai/config/dew_configuration.toml`) already has matching extras (`unload_*`, `export_data_gcs_*`, `write_nos_*`, `dbms_cloud_*`, `cet_as_*`, or `[connections.target.s3|gcs|blob]`), **or** those dump keys are on the named connection in `~/.snowflake/snowct/<engine>.toml`
+- Worker TOML (`.scai/config/dew_configuration.toml`) already has matching extras (`unload_*`, `export_data_gcs_*`, `write_nos_*`, `dbms_cloud_*`, `cet_as_*`, or `[connections.target.s3|gcs|blob]`), **or** those dump keys are on the named connection in `~/.snowflake/scai/connections/<engine>.toml`
 
 If that is present, **do not ask** the Step 1 question. Copy `strategy` + `externalStage` into the validation workflow (`validationConfiguration.extraction`), keep the existing worker TOML, skip stage creation, and go to Step 4.
 
@@ -99,7 +99,7 @@ validationConfiguration:
 
 Object-store strategies **fail closed** without `externalStage`. Do not run until both keys are set.
 
-**Worker TOML:** dump keys for native export (`unload_*`, `export_data_*`, `write_nos_*`, `dbms_cloud_*`, `cet_as_*`) must live on the **named scai connection** (`~/.snowflake/snowct/<engine>.toml`) **or** on an **inlined** `[connections.source.<engine>]` in `.scai/config/dew_configuration.toml`. Do not add them next to `connection_name` — worker start hydrates that name and drops the extras. `[connections.target.s3|gcs|blob]` for `cloud_direct` stays in the project worker file. Restart the worker after TOML changes (`data_infrastructure` / `scai data worker start`).
+**Worker TOML:** dump keys for native export (`unload_*`, `export_data_*`, `write_nos_*`, `dbms_cloud_*`, `cet_as_*`) must live on the **named scai connection** (`~/.snowflake/scai/connections/<engine>.toml`) **or** on an **inlined** `[connections.source.<engine>]` in `.scai/config/dew_configuration.toml`. Do not add them next to `connection_name` — worker start hydrates that name and drops the extras. `[connections.target.s3|gcs|blob]` for `cloud_direct` stays in the project worker file. Restart the worker after TOML changes (`data_infrastructure` / `scai data worker start`).
 
 Show the user the YAML and TOML diffs. For a reused data-migration landing, only the validation YAML should change; do not restart the worker unless you edited TOML.
 

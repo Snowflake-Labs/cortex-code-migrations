@@ -222,6 +222,7 @@ pending — do not invent completion from chat history.
 
 1. **Follow sub-skill instructions** — Complete each sub-skill fully before returning
 2. **Confirm transitions** — Ask user before moving to next stage
+3. **A requested stop is the end of this run** — If the user asked to stop after conversion, stop when conversion is done. Do not load `../assessment/SKILL.md` and do not run `scai assessment`, even when `progress_setup` names assessment as the next task. Tell the user assessment is the next stage and wait.
 
 ## On Completion
 

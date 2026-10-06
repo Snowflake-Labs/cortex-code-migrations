@@ -49,9 +49,9 @@ validationConfiguration:
 
 Restart the worker after edits (`data_infrastructure` / `scai data worker start`).
 
-`scai data worker generate-config` typically writes `[connections.source.<engine>]` as `connection_name = "…"` and hydrates that name from `~/.snowflake/snowct/<engine>.toml` at start. Extra dump keys placed **next to** `connection_name` in `.scai/config/dew_configuration.toml` are dropped. Do **one** of:
+`scai data worker generate-config` typically writes `[connections.source.<engine>]` as `connection_name = "…"` and hydrates that name from `~/.snowflake/scai/connections/<engine>.toml` at start. Extra dump keys placed **next to** `connection_name` in `.scai/config/dew_configuration.toml` are dropped. Do **one** of:
 
-1. **Named connection** — keep `connection_name` and add the dump keys (`unload_*`, `export_data_*`, `write_nos_*`, `dbms_cloud_*`, `cet_as_*`) on that connection in `~/.snowflake/snowct/<engine>.toml`.
+1. **Named connection** — keep `connection_name` and add the dump keys (`unload_*`, `export_data_*`, `write_nos_*`, `dbms_cloud_*`, `cet_as_*`) on that connection in `~/.snowflake/scai/connections/<engine>.toml`.
 2. **Inline** — remove `connection_name` and write the full worker source section in `.scai/config/dew_configuration.toml` (worker key names from [worker-config-reference.md](../../../data-infrastructure/references/worker-config-reference.md), plus the dump keys below).
 
 `[connections.target.s3]` / `.gcs` / `.blob` are not name-hydrated; those stay in the project worker file.

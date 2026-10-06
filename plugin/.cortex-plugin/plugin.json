@@ -1,7 +1,7 @@
 {
   "name": "snowflake-migration",
-  "version": "2.47.0",
-  "description": "Snowflake AIM for Data Warehouses \u2014 end-to-end database migration to Snowflake: assessment, conversion, validation, and deployment",
+  "version": "2.49.0-Pr.527",
+  "description": "Snowflake AIM for Data Warehouses migrates a database to Snowflake. It does the assessment, conversion, validation, and deployment. When a session starts, this plugin and scai update to the latest version of the channel. The channels are stable, preview, and dev. With the dev channel, scai uses dev and this plugin uses preview. To change the channel, run `scai settings set channel=<channel>`. Then start a new session. You can also set the SCAI_CHANNEL environment variable to the channel before you start Cortex Code. SCAI_CHANNEL has priority over the scai setting. To pin a version, edit ~/.snowflake/migration-plugin/config.json. Add {\"plugin\": {\"version\": \"<version>\"}, \"scai\": {\"version\": \"<version>\"}}. Then start a new session. To use the latest version of the channel again, remove the pin.",
   "author": {
     "name": "db-eng-migrations"
   },
@@ -92,6 +92,15 @@
           }
         ],
         "matcher": "^(mcp__mcp__)?(query_source|sql_execute|snowflake_sql_execute|[Bb]ash|[Ss]hell)$"
+      },
+      {
+        "hooks": [
+          {
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mcp-hook.cmd deny-before-configure",
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
       }
     ],
     "PostToolUse": [
@@ -103,6 +112,15 @@
           }
         ],
         "matcher": "^([Tt]ask|[Aa]gent[_-]?[Oo]utput|[Kk]ill[_-]?[Aa]gent|[Aa]gent[_-]?[Kk]ill)$"
+      },
+      {
+        "hooks": [
+          {
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mcp-hook.cmd mark-configured-project",
+            "type": "command"
+          }
+        ],
+        "matcher": "*"
       }
     ],
     "SubagentStart": [

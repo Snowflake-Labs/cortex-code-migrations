@@ -218,6 +218,15 @@ def _build_object(
         # the engine without leaving the table.
         category = "ETL"
         subtype = (source.get("platform") or "").upper()
+    elif entry.get("kind") == "script":
+        # Scripts (BTEQ) have no objectType; use the script format as the subtype.
+        category = "SCRIPT"
+        subtype = (source.get("format") or "").upper()
+    elif entry.get("kind") == "parameterizedReference":
+        # Unresolved parameter references (Informatica $$VAR, BTEQ ${VAR})
+        # have no objectType.
+        category = "PARAMETER_REF"
+        subtype = (source.get("platform") or "").upper()
     else:
         category = (source.get("objectType") or "").upper() or "UNKNOWN"
         subtype = ""

@@ -78,7 +78,7 @@ Collect `TABLEAU_PATH` (Shared steps). Return to `convert`. When it runs `scai c
 When `--tableauRepointing` is used, `scai code convert` writes:
 
 - Repointed `.twb` / `.tds` → `artifacts/repointing_output/tableauResults/`
-- Per-query / connection summary → `reports/SnowConvert/ETLAndBiRepointing.*.csv`
+- Per-query / connection summary → `ETLAndBiRepointing.*.csv` in the conversion reports ZIP, downloadable from the Assessment HTML report. Do not present `.scai/reports/` to the user.
 
 The JSON result envelope contains:
 
@@ -107,4 +107,4 @@ After conversion, also confirm:
 
 - [ ] Convert exited successfully and the envelope reports no conversion errors
 - [ ] `result.tableauRepointing.processedFiles` is greater than zero and `outputPath` is present
-- [ ] Per-query summary appears in `reports/SnowConvert/ETLAndBiRepointing.*.csv` when the engine emitted one
+- [ ] Per-query summary appears as `ETLAndBiRepointing.*.csv` when the engine emitted one. Look in `<project_dir>/.scai/reports/SnowConvert/` first, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. Do not use a leftover older folder when `.scai` already has the file.

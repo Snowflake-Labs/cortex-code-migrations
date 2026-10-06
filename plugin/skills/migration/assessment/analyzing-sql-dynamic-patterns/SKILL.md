@@ -60,7 +60,7 @@ On `skip`: `"status": "skipped"`, `"output_json": null`. On failure: `"status": 
 **CRITICAL FIRST STEP:** Before classifying patterns, determine the source platform.
 
 **Detection methods:**
-1. Check `TopLevelCodeUnits.*.csv` — `SourceLanguage` column (e.g. `Transact` for SQL Server, `RedShift` for Redshift, `Oracle` for Oracle, `Teradata` for Teradata).
+1. Resolve `<conversion_reports_dir>` as the first directory that contains the needed CSV: `<project_dir>/.scai/reports/SnowConvert/`, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. Do not use a leftover older folder when `.scai` already has the file. Read `SourceLanguage` from `<conversion_reports_dir>/TopLevelCodeUnits.*.csv` (e.g. `Transact` for SQL Server, `RedShift` for Redshift, `Oracle` for Oracle, `Teradata` for Teradata).
 2. Examine code syntax in the procedure source (visible in the analysis JSON):
    - **SQL Server indicators:** `sp_executesql`, `EXEC(@sql)`, `QUOTENAME()`, `sys.*` catalog views.
    - **Redshift indicators:** `EXECUTE ... USING`, `QUOTE_IDENT()`, `QUOTE_LITERAL()`, `pg_catalog.*`, `plpgsql` functions.
@@ -83,13 +83,13 @@ The parent `assessment` skill resolves all inputs from `project_dir`. Do **not**
 | Input | Where it lives under `project_dir` |
 |-------|------------------------------------|
 | Project directory (preferred) | The project root itself — pass via `--project-dir` |
-| `Issues.*.csv` (CSV mode) | `reports/SnowConvert/` |
-| `TopLevelCodeUnits.*.csv` (CSV mode) | `reports/SnowConvert/` |
+| `Issues.*.csv` (CSV mode) | `<conversion_reports_dir>/Issues.*.csv` |
+| `TopLevelCodeUnits.*.csv` (CSV mode) | `<conversion_reports_dir>/TopLevelCodeUnits.*.csv` |
 | Source code directory | `source/` |
 
 **Mode selection:**
 1. **Project mode (preferred)** — `scai assessment sql-dynamic generate --project-dir <project_dir> --output <path>`. SCAI auto-detects the registry / CSV reports and the source directory.
-2. **CSV mode (fallback)** — `scai assessment sql-dynamic generate --csv-dir <reports_dir> --source-dir <source_dir> --output <path>` when the project layout is not standard.
+2. **CSV mode (fallback)** — `scai assessment sql-dynamic generate --csv-dir <conversion_reports_dir> --source-dir <source_dir> --output <path>` when the project layout is not standard. Pass `<conversion_reports_dir>` as `--csv-dir`.
 
 ## Workflow
 
@@ -110,7 +110,7 @@ scai assessment sql-dynamic generate \
 
 # CSV mode (fallback)
 scai assessment sql-dynamic generate \
-  --csv-dir <project_dir>/reports/SnowConvert \
+  --csv-dir <conversion_reports_dir> \
   --source-dir <project_dir>/source \
   --output <project_dir>/assessment/json/sql_dynamic_analysis.json
 ```
@@ -127,7 +127,7 @@ Group occurrences by file or by code unit:
 ```bash
 # All occurrences in the file containing a given record (or with no --id, list all files)
 scai assessment sql-dynamic show-file <analysis.json>
-scai assessment sql-dynamic show-file <analysis.json> --file <fileName>
+scai assessment sql-dynamic show-file <analysis.json> --filename <fileName>
 
 # Full code unit view including the procedure source and every occurrence inside it
 scai assessment sql-dynamic show-code-unit <analysis.json> --code-unit-id "[DB].[schema].[ProcName]"

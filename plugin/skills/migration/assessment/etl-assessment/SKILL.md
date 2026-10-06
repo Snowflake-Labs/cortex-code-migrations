@@ -92,17 +92,19 @@ Analysis Progress:
 
 ## Step 1: Locate Input Files (auto-detected)
 
-**Do NOT prompt the user for paths.** Inputs are resolved automatically from `project_dir` configured by the parent `assessment` skill:
+**Do NOT prompt the user for paths.** Inputs are resolved automatically from `project_dir` configured by the parent `assessment` skill.
+
+Resolve `<conversion_reports_dir>` as the first directory that contains both `ETL.Elements.*.csv` and `ETL.Issues.*.csv`: `<project_dir>/.scai/reports/SnowConvert/`, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. Do not use a leftover older folder when `.scai` already has both files.
 
 | Input | Auto-resolution |
 |-------|-----------------|
-| `ETL.Elements.csv` | Latest `<project_dir>/reports/SnowConvert/ETL.Elements.*.csv` |
-| `ETL.Issues.csv` | Latest `<project_dir>/reports/SnowConvert/ETL.Issues.*.csv` |
+| `ETL.Elements.csv` | Latest `<conversion_reports_dir>/ETL.Elements.*.csv` |
+| `ETL.Issues.csv` | Latest `<conversion_reports_dir>/ETL.Issues.*.csv` |
 | SSIS source dir | `<project_dir>/source/_etl/` |
 | Output dir | `<project_dir>/assessment/ssis/` (create if missing) |
 
 **Validation (silent — only surface a problem to the user if validation fails):**
-- Confirm both `ETL.*` CSVs exist. If they don't, ETL was not converted — return to the parent and ask the parent to re-run register (`code add`) then `convert`. Do not ask the user to upload paths.
+- Confirm both `ETL.*` CSVs exist in `<conversion_reports_dir>`. If they don't, ETL was not converted — return to the parent and ask the parent to re-run register (`code add`) then `convert`. Do not ask the user to upload paths.
 - Confirm the SSIS source directory contains `.dtsx` files.
 
 ---

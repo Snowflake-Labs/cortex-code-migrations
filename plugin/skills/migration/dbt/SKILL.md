@@ -589,8 +589,10 @@ sites, not prose like `-- TODO cannot use dbt_utils.surrogate_key here`.
 
 ### 5.1 Scan Remaining EWIs
 
-Check `reports/SnowConvert/Issues.csv` for any issues in `snowflake/models/`
-files. Common fixable patterns:
+Check the latest `Issues.*.csv` for issues in `snowflake/models/` files. Look in
+`<project>/.scai/reports/SnowConvert/` first, then `<project>/reports/SnowConvert/`,
+then `<project>/Reports/SnowConvert/`. Stop at the first hit. Do not use a leftover
+older folder when `.scai` already has the file. Common fixable patterns:
 
 | Pattern | Fix |
 |---|---|
@@ -656,7 +658,7 @@ state.
 
 ### 5.4 CHECKPOINT — Refined SQL
 
-- [ ] No remaining fixable EWIs in `reports/SnowConvert/Issues.csv`
+- [ ] No remaining fixable EWIs in the resolved `Issues.*.csv` (lookup in Step 5.1)
 - [ ] No `SSC-EWI-0001` blocks remain in any model — each was restored from source or genuinely translated
 - [ ] Every model has a live `FROM` clause; no `ref()` survives only inside a comment
 - [ ] Every `{{ ref() }}` call resolves to an existing model
@@ -674,7 +676,7 @@ Tell the user:
 > **dbt repointing complete.**
 >
 > Repointed models: `snowflake/models/`
-> Reports: `reports/SnowConvert/`
+> Conversion reports: AIM Assessment (HTML report or the conversion-reports zip). Do not send the user to browse conversion CSV folders.
 > Items needing manual review: K *(list if K > 0)*
 
 **K is a sum, not the EWI count.** Compute it as:

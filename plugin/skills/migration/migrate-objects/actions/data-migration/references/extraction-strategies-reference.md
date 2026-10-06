@@ -178,6 +178,9 @@ Synapse has **no BCP** path.
 
 1. **`export_data`** (preferred): BigQuery `EXPORT DATA` to GCS; requires source and Snowflake service
    accounts plus a matching Snowflake external stage.
+   Put the bucket (and prefix) in the workflow config as top-level `exportDataGcsBucket` /
+   `exportDataGcsPrefix` (`scai data migrate generate-config --export-data-gcs-bucket <BUCKET>
+   --export-data-gcs-prefix <PREFIX>`); `scai data migrate start` writes them into the local worker config.
 2. **`regular`**: worker BigQuery client fallback.
 
 ## DB2 (`Db2`)

@@ -148,7 +148,7 @@ Then return to the calling skill.
 
 - **NEVER** log or display secrets (passwords) in plain text, and never echo a password the user gave you.
 - **Prefer the interactive form in Step 3 when your bash is a tty** — its prompt is hidden. **When bash has no tty** (desktop app, CI), use the inline form once; do not run a prompting command that will fail after approval.
-- A credential manager helps only when it resolves the value inside the same command (1Password `op run`). Storing the password elsewhere first does not, because `scai` reads credentials only from its own files under `~/.snowflake/snowct/`.
+- A credential manager helps only when it resolves the value inside the same command (1Password `op run`). Storing the password elsewhere first does not, because `scai` reads credentials only from its own files under `~/.snowflake/scai/connections/`.
 - For managed PG, keep `--ssl-mode Require` (or stricter). Only relax for trusted local dev.
 
 ## Quick Reference

@@ -87,7 +87,27 @@ use the connection's own database / schemas.)
    - **Redshift / Postgresql:** `SELECT datname FROM pg_database WHERE datistemplate = false`.
    - **Teradata:** `SELECT DatabaseName FROM DBC.DatabasesV WHERE DBKind = 'D'`.
 2. **Ask which to extract** via `ask_user_question` (`multiSelect = true`), defaulting to the
-   connection's own database.
+   connection's own database. Show the databases you found and ask even when the list has only
+   one database: one candidate on the server is not the user saying it is the one to migrate.
+   Never skip this question.
+
+   **Wait for the user's response — do not proceed until they choose.**
+
+**The connection's database is missing or wrong.** When the connection's configured database
+does not exist on the server (e.g. SQL Server `Cannot open database "<name>"`), do not pick a
+replacement yourself. List the databases as in step 1 above, then tell the user:
+
+> The connection `<CONNECTION_NAME>` points at database `<CONFIGURED_DB>`, which doesn't exist on
+> this server. I found: `<DATABASE_LIST>`. Which database should I use?
+
+and ask via `ask_user_question`, even when only one database is listed.
+
+**Wait for the user's response — do not proceed until they choose.**
+
+Never change a connection's database without the user's confirmation: every later step
+(registry, conversion, deployment, data migration) inherits it, and an unconfirmed switch
+migrates the wrong database. This holds for `-d`, re-adding the connection, or editing its
+settings alike.
 3. **Run one extraction** with every selected database:
 
 ```bash

@@ -6,17 +6,25 @@ brief** instead. This guide replaces a source-navigation guide with a brief-navi
 
 ## Locating the brief
 
-Walk upward from the unit folder for `Reports/SnowConvert/` (the same convention `scan_unit.py`
-already uses to find `reports_dir`). The brief lives beside it:
+Find `reports_dir` the same way `scan_unit.py` does. Walk upward from the unit folder and take
+the first folder that holds `ETL.Elements.*.csv`, checking every folder above the unit for
+`.scai/reports/SnowConvert/` first, then `reports/SnowConvert/`, then `Reports/SnowConvert/` or
+`Reports/`.
+
+The brief is not in `reports_dir`. It is at:
 
 ```
-{output_root}/Reports/AiFirstRemediation/remediation-brief.json
+{ai_first_reports}/AiFirstRemediation/remediation-brief.json
 ```
 
-`{output_root}` is `reports_dir`'s grandparent (`reports_dir = {output_root}/Reports/SnowConvert`).
+| `reports_dir` | `{ai_first_reports}` |
+|---|---|
+| `{project}/.scai/reports/SnowConvert` | `{project}/snowflake/Reports` |
+| any other folder named `SnowConvert` | the folder that holds `reports_dir` |
+| a folder named `Reports` | `reports_dir` itself |
 
 If this path does not exist:
-- **AI-First unit** (has `{output_root}/Reports/AiFirstIssues/issues.json`): fail loudly. Do not
+- **AI-First unit** (has `{ai_first_reports}/AiFirstIssues/issues.json`): fail loudly. Do not
   proceed as if this were a known platform, and do not invent an intent repair with no brief to
   point at (`findings/61` SS13.2 row 3). The scanner (`scan_unit.py`) already enforces this at
   scan time; this profile must not silently retry past that failure.

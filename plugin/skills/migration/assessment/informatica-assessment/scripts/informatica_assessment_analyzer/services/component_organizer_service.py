@@ -15,16 +15,22 @@
 
 """ComponentOrganizerService — routes components into WorkflowAnalysis structures."""
 
+import re
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from ..models import Component, Mapping, WorkflowAnalysis
+
+_MAPPINGNAME = re.compile(r'\bMAPPINGNAME\s*=\s*"([^"]+)"')
 
 
 class ComponentOrganizerService:
     """Routes components into WorkflowAnalysis by file_name, category, and entry_kind."""
 
     def organize_by_workflows(
-        self, components_by_key: Dict[Tuple[str, str], Component]
+        self,
+        components_by_key: Dict[Tuple[str, str], Component],
+        source_dir: Optional[str] = None,
     ) -> Dict[str, WorkflowAnalysis]:
         """Organize components into workflow analysis structures.
 
@@ -41,6 +47,9 @@ class ComponentOrganizerService:
         - Files with workflow_tasks or has_workflow_declaration are always included.
         - Files with only source/target defs are included ONLY if no file in the
           dataset has primary workflow signals (i.e. pre-Arrange legacy export).
+
+        With source_dir, mappings from dropped files (after Arrange, each mapping
+        is its own file) join the workflows whose XML names them in MAPPINGNAME.
         """
         all_entries: Dict[str, WorkflowAnalysis] = {}
 
@@ -59,7 +68,51 @@ class ComponentOrganizerService:
             if self._is_workflow_file(wa, dataset_has_workflow_signals)
         }
 
+        if source_dir:
+            self._attach_split_mappings(workflows, all_entries, Path(source_dir))
+
         return workflows
+
+    @staticmethod
+    def _attach_split_mappings(
+        workflows: Dict[str, WorkflowAnalysis],
+        all_entries: Dict[str, WorkflowAnalysis],
+        source_dir: Path,
+    ) -> None:
+        """Move each dropped file's mappings into the workflows that run them.
+
+        A workflow's XML names the mappings its sessions run in MAPPINGNAME;
+        mappings are matched by name, so the mapping file's own name does not matter.
+        """
+        dropped_by_name: Dict[str, Dict[str, Mapping]] = {}
+        for path, entry in all_entries.items():
+            if path in workflows:
+                continue
+            for mapping_path, mapping in entry.mappings.items():
+                dropped_by_name.setdefault(mapping.name, {})[mapping_path] = mapping
+
+        for path, workflow in workflows.items():
+            xml = ComponentOrganizerService._find_xml(source_dir, path)
+            if xml is None:
+                continue
+            text = xml.read_text(encoding="utf-8", errors="ignore")
+            for name in sorted(set(_MAPPINGNAME.findall(text))):
+                workflow.mappings.update(dropped_by_name.get(name, {}))
+
+    @staticmethod
+    def _find_xml(source_dir: Path, path: str) -> Optional[Path]:
+        """Locate a workflow's XML under source_dir.
+
+        ETL.Elements paths are relative to the project's source/ folder
+        (_etl/<repo>/<folder>/tasks/wf.xml), but source_dir may be source/_etl,
+        so retry with the path's leading folders dropped.
+        """
+        parts = Path(path).parts
+        for start in range(len(parts)):
+            xml = source_dir.joinpath(*parts[start:])
+            if xml.is_file():
+                return xml
+        return None
 
     @staticmethod
     def _is_workflow_file(wa: WorkflowAnalysis, dataset_has_workflow_signals: bool) -> bool:
