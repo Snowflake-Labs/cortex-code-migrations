@@ -30,6 +30,7 @@ Record that exact version tag (e.g., `1.11.1`). Use it as `<version>` in all sub
 | Source system | `DATA_SOURCE_TYPE` |
 |---------------|--------------------| 
 | SQL Server    | `sqlserver`        |
+| Azure Synapse | `azure_synapse`    |
 | Redshift      | `redshift`         |
 | Oracle        | `oracle`           |
 | Teradata      | `teradata`         |
@@ -56,6 +57,8 @@ Tell the user:
 > This custom worker needs an explicit affinity label. Proposed label: **`<label>`**. I will set it once with `configure(affinity="<label>")` and use the same value as the worker's `AGENT_AFFINITY`. Confirm or provide a different label.
 
 Wait for the user to confirm or override, then set it: `configure(affinity="<label>")`. **Note the final label — it is used in Steps 4 and 5 as `AGENT_AFFINITY`; it must equal the workflow affinity.**
+
+**Azure Synapse:** `scai data worker setup` provisions this dialect. Set `DATA_SOURCE_TYPE` to `azure_synapse`. Dedicated vs serverless is `DATA_SOURCE_POOL_TYPE` (`dedicated` / `serverless`). SQL auth uses the username/password secrets in Step 3. Service principal (`--auth service-principal`) becomes `DATA_SOURCE_MODE=azure_ad`; the same Snowflake password secret is mounted as `DATA_SOURCE_CLIENT_ID` / `DATA_SOURCE_CLIENT_SECRET`. `interactive` cannot run on a headless worker.
 
 ## Step 3 — Snowflake Secrets for Source Credentials
 

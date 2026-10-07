@@ -27,6 +27,16 @@ snow stage list-files @<TESTING_RESULTS_DATABASE>.VALIDATION.BASELINES \
   -c <SNOWFLAKE_CONNECTION_NAME>
 ```
 
+`sql_execute` is equally acceptable — it is the same server-side filter:
+
+```sql
+LIST @<TESTING_RESULTS_DATABASE>.VALIDATION.BASELINES
+  PATTERN = '.*<schema>\.<object_name>.*';
+```
+
+Either channel satisfies this step. `PATTERN = '.*'` does not: it lists the whole stage, so it
+cannot show that *this* object's baselines landed.
+
 ## Step 3 (BTEQ scripts only): mark capture complete
 
 For BTEQ scripts the baseline is uploaded to the stage and `VALIDATION.BASELINE_METADATA` is not written, so the state machine cannot infer capture from Snowflake — stamp the task explicitly:

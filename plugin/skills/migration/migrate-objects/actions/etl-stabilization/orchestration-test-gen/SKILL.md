@@ -195,7 +195,7 @@ Identify what mock objects and data are needed:
    - Map each package variable to a `control_variables` row using the platform's data type codes
    - Identify read/write variables per element
 
-3. **From assessment CSVs** (supplementary): `SqlObjects.csv`, `ObjectDependencies.csv`, `ObjectReferences.csv`
+3. **From assessment CSVs** (supplementary): latest `SqlObjects.*.csv`, `ObjectDependencies.*.csv`, `ObjectReferences.*.csv`. Look in `<project_dir>/.scai/reports/SnowConvert/` first, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. Do not use a leftover older folder when `.scai` already has the files.
 
 For each read-dependency table, design 3-5 synthetic rows:
 - At least one row matching all downstream conditions, one that does NOT match

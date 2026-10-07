@@ -19,7 +19,7 @@ This guide explains how to translate unsupported PowerQuery expressions from var
 
 **Important**: 
 - This guide uses the correct Snowflake connector pattern with `Value.NativeQuery()` and `Implementation="2.0"` as documented in the [official Microsoft Power Query Snowflake connector documentation](https://learn.microsoft.com/en-us/power-query/connectors/snowflake).
-- The source SQL dialect should be identified from `Reports/SnowConvert/Assessment.<timestamp>.csv` in the SnowConvert output folder.
+- Resolve `<conversion_reports_dir>` as the first directory that contains `Assessment.<timestamp>.csv`: `<project_dir>/.scai/reports/SnowConvert/`, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. Read the source SQL dialect from `<conversion_reports_dir>/Assessment.<timestamp>.csv`.
 - Apply dialect-specific SQL syntax translations based on the identified source database.
 
 ## Why LLM Translation?
@@ -138,7 +138,7 @@ Before saving translated expression, verify:
 
 **How to Identify**:
 1. **From SnowConvert Assessment File** (preferred):
-   - File location: `<OUTPUT_FOLDER>/Reports/SnowConvert/Assessment.<timestamp>.csv`
+   - File location: `<conversion_reports_dir>/Assessment.<timestamp>.csv`
    - Look for line: `SourceLanguage,<dialect name>`
    - Examples: `SourceLanguage,Transact`, `SourceLanguage,Oracle`, `SourceLanguage,Teradata`
 

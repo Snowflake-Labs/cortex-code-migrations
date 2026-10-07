@@ -28,6 +28,7 @@ Record that exact version tag (e.g., `1.11.1`). Use it as `<version>` in all sub
 | Source system | `DATA_SOURCE_TYPE` |
 |---------------|--------------------|
 | SQL Server    | `sqlserver`        |
+| Azure Synapse | `azure_synapse`    |
 | Redshift      | `redshift`         |
 | Oracle        | `oracle`           |
 | Teradata      | `teradata`         |

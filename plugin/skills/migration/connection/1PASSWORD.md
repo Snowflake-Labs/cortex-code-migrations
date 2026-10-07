@@ -26,7 +26,7 @@ USER="op://vault_name/item_name/username"
 PASSWORD="op://vault_name/item_name/password"
 EOF
 ) -- bash -c 'scai connection add-sql-server \
-  --connection <CONNECTION_NAME> \
+  -s <CONNECTION_NAME> \
   --auth standard \
   --server-url "$SERVER_URL" \
   --port 1433 \
@@ -45,7 +45,7 @@ USER="op://migrations_demo/sqlserver_adventureworks/username"
 PASSWORD="op://migrations_demo/sqlserver_adventureworks/password"
 EOF
 ) -- bash -c 'scai connection add-sql-server \
-  --connection sqlserver_adventureworks \
+  -s sqlserver_adventureworks \
   --auth standard \
   --server-url "$SERVER_URL" \
   --port 1433 \
@@ -82,7 +82,7 @@ ACCESS_KEY_ID="op://vault_name/item_name/access_key_id"
 SECRET_ACCESS_KEY="op://vault_name/item_name/secret_access_key"
 EOF
 ) -- bash -c 'scai connection add-redshift \
-  --connection <CONNECTION_NAME> \
+  -s <CONNECTION_NAME> \
   --auth iam-provisioned-cluster \
   --user "$REDSHIFT_USER" \
   --cluster-id "$REDSHIFT_CLUSTER_ID" \
@@ -104,7 +104,7 @@ ACCESS_KEY_ID="op://migrations_demo/redshift_scd_usw2/access_key_id"
 SECRET_ACCESS_KEY="op://migrations_demo/redshift_scd_usw2/secret_access_key"
 EOF
 ) -- bash -c 'scai connection add-redshift \
-  --connection redshift_scd_usw2 \
+  -s redshift_scd_usw2 \
   --auth iam-provisioned-cluster \
   --user "$REDSHIFT_USER" \
   --cluster-id "$REDSHIFT_CLUSTER_ID" \
@@ -141,7 +141,7 @@ PG_USER="op://vault_name/item_name/username"
 PG_PASSWORD="op://vault_name/item_name/password"
 EOF
 ) -- bash -c 'scai connection add-postgresql \
-  -c <CONNECTION_NAME> \
+  -s <CONNECTION_NAME> \
   --auth standard \
   --host "$PG_HOST" \
   --port "${PG_PORT:-5432}" \
@@ -162,7 +162,7 @@ PG_USER="op://migrations_demo/postgresql_northwind/username"
 PG_PASSWORD="op://migrations_demo/postgresql_northwind/password"
 EOF
 ) -- bash -c 'scai connection add-postgresql \
-  -c postgresql_northwind \
+  -s postgresql_northwind \
   --auth standard \
   --host "$PG_HOST" \
   --port "${PG_PORT:-5432}" \

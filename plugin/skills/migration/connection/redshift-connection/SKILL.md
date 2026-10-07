@@ -24,7 +24,7 @@ Tell the user:
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `-c, --connection` | Yes | Friendly name for this connection |
+| `-s, --source-connection` | Yes | Friendly name for this connection |
 | `--auth` | Yes | `iam-provisioned-cluster` |
 | `--cluster-id` | Yes | Redshift cluster identifier |
 | `--database` | Yes | Database name to connect to |
@@ -37,7 +37,7 @@ Tell the user:
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `-c, --connection` | Yes | Friendly name for this connection |
+| `-s, --source-connection` | Yes | Friendly name for this connection |
 | `--auth` | Yes | `iam-serverless` |
 | `--workgroup` | Yes | Redshift Serverless workgroup name |
 | `--database` | Yes | Database name to connect to |
@@ -49,7 +49,7 @@ Tell the user:
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `-c, --connection` | Yes | Friendly name for this connection |
+| `-s, --source-connection` | Yes | Friendly name for this connection |
 | `--auth` | Yes | `standard` |
 | `--host` | Yes | Redshift endpoint hostname |
 | `--port` | No | Port number (default: 5439) |
@@ -92,7 +92,7 @@ scai connection add-redshift
 **IAM Provisioned Cluster (inline):**
 ```bash
 scai connection add-redshift \
-  -c <CONNECTION_NAME> \
+  -s <CONNECTION_NAME> \
   --auth iam-provisioned-cluster \
   --user <USER> \
   --cluster-id <CLUSTER_ID> \
@@ -105,7 +105,7 @@ scai connection add-redshift \
 **IAM Serverless (inline):**
 ```bash
 scai connection add-redshift \
-  -c <CONNECTION_NAME> \
+  -s <CONNECTION_NAME> \
   --auth iam-serverless \
   --workgroup <WORKGROUP> \
   --database <DATABASE> \
@@ -117,7 +117,7 @@ scai connection add-redshift \
 **Standard auth (inline):**
 ```bash
 scai connection add-redshift \
-  -c <CONNECTION_NAME> \
+  -s <CONNECTION_NAME> \
   --auth standard \
   --host <HOST> \
   --port 5439 \
@@ -125,6 +125,11 @@ scai connection add-redshift \
   --user <USERNAME> \
   --password <PASSWORD>
 ```
+
+Connections require TLS by default for the connection test (`--ssl-mode Require`);
+pass another Npgsql SSL mode only if the endpoint genuinely does not accept TLS.
+`--ssl-mode` is stored in `redshift.toml` and honored by `scai connection test`;
+data-migration / validation DEW configs do not yet emit `ssl_mode` for Redshift.
 
 ### Step 4: Save and Test Source Connection
 
@@ -165,10 +170,10 @@ Then return to the calling skill.
 | Action | Command |
 |--------|---------|
 | Add connection (interactive) | `scai connection add-redshift` |
-| Add IAM provisioned | `scai connection add-redshift -c NAME --auth iam-provisioned-cluster --cluster-id CLUSTER --database DB --region REGION --user USER --access-key-id KEY --secret-access-key SECRET` |
-| Add IAM serverless | `scai connection add-redshift -c NAME --auth iam-serverless --workgroup WG --database DB --region REGION --access-key-id KEY --secret-access-key SECRET` |
-| Add standard auth | `scai connection add-redshift -c NAME --auth standard --host HOST --database DB --user USER --password PASS` |
+| Add IAM provisioned | `scai connection add-redshift -s NAME --auth iam-provisioned-cluster --cluster-id CLUSTER --database DB --region REGION --user USER --access-key-id KEY --secret-access-key SECRET` |
+| Add IAM serverless | `scai connection add-redshift -s NAME --auth iam-serverless --workgroup WG --database DB --region REGION --access-key-id KEY --secret-access-key SECRET` |
+| Add standard auth | `scai connection add-redshift -s NAME --auth standard --host HOST --database DB --user USER --password PASS` |
 | Test connection | `configure(source_connection=NAME)` (runs the test internally) |
 | List connections | `scai connection list -l redshift --json` |
-| Set default | `scai connection set-default -l redshift -c NAME` |
+| Set default | `scai connection set-default -l redshift -s NAME` |
 | Extract code | `scai code extract -s NAME --json` |

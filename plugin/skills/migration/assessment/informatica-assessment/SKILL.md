@@ -62,17 +62,19 @@ Analysis Progress:
 
 ## Step 1: Locate Input Files (auto-detected)
 
-**Do NOT prompt the user for paths.** Inputs are resolved automatically from `project_dir` configured by the parent `assessment` skill:
+**Do NOT prompt the user for paths.** Inputs are resolved automatically from `project_dir` configured by the parent `assessment` skill.
+
+Resolve `<conversion_reports_dir>` as the first directory that contains both `ETL.Elements.*.csv` and `ETL.Issues.*.csv`: `<project_dir>/.scai/reports/SnowConvert/`, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. Do not use a leftover older folder when `.scai` already has both files.
 
 | Input | Auto-resolution |
 |-------|-----------------|
-| `ETL.Elements.csv` | Latest `<project_dir>/reports/SnowConvert/ETL.Elements.*.csv` |
-| `ETL.Issues.csv` | Latest `<project_dir>/reports/SnowConvert/ETL.Issues.*.csv` |
+| `ETL.Elements.csv` | Latest `<conversion_reports_dir>/ETL.Elements.*.csv` |
+| `ETL.Issues.csv` | Latest `<conversion_reports_dir>/ETL.Issues.*.csv` |
 | Informatica source dir | `<project_dir>/source/_etl/` |
 | Output dir | `<project_dir>/assessment/informatica/` (create if missing) |
 
 **Validation (silent — only surface a problem to the user if validation fails):**
-- Confirm both `ETL.*` CSVs exist. If they don't, ETL was not converted — return to the parent and ask the parent to re-run register (`code add`) then `convert`.
+- Confirm both `ETL.*` CSVs exist in `<conversion_reports_dir>`. If they don't, ETL was not converted — return to the parent and ask the parent to re-run register (`code add`) then `convert`.
 - Confirm the Informatica source directory contains `.xml` files (PowerCenter XML exports).
 
 ---
@@ -85,7 +87,7 @@ Run with the auto-detected paths from Step 1:
 uv run python -m informatica_assessment_analyzer <ETL.Elements> <ETL.Issues> <OUTPUT> [--source-dir <XML_SOURCE_DIR>] [--conversion-mode dbt|scripting]
 ```
 
-- `--source-dir` enables CONNECTOR extraction from the Informatica XML, enriching the analysis with data flow edge details.
+- `--source-dir` is where the analyzer reads each workflow's XML to link split mapping files (`pipelines/m_*.xml`) to their workflow through `MAPPINGNAME`. `<project_dir>/source/_etl/` and `<project_dir>/source/` both work. If omitted, it defaults to `<project_dir>/source/`, inferred from the `ETL.Elements` location, when that folder exists; without it, mapping files have no workflow and their EWIs/FDMs are left out.
 - `--conversion-mode` records the target conversion mode in the output JSON (`dbt` by default). Pass `scripting` when the user selected Snowflake Scripting. The HTML report uses this value to render mode-specific content.
 
 ## Step 3: Analyze Informatica Workflows

@@ -1,6 +1,6 @@
 ---
 name: etl-validate
-description: Run scai test etl-validate to compare live ETL pipeline output (SSIS/Informatica natively, any platform via an external_command opt-in) against the converted Snowflake output. The CLI stamps codeStatus.etlValidate — do not invent advance outcomes.
+description: Run scai test etl-validate to compare live ETL pipeline output (SSIS/Informatica natively, any platform via an external_command opt-in) against the converted Snowflake output. The CLI stamps codeStatus.etlValidate or codeStatus.validateEtlValidate from the dispatched task. Do not invent advance outcomes.
 parent_skill: migrate-etl
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -9,7 +9,9 @@ license: Proprietary. See License-Skills for complete terms
 
 Runs `scai test etl-validate --platform <platform>` against a single ETL code unit, verifying that the original source package and its Snowflake equivalent produce identical output. Requires the ETL unit to be **deployed** and a **test YAML** to exist for it.
 
-**Deploy, the test YAML, and connections are all enforced by the state machine, not this skill.** `etlValidate` has deterministic preconditions: `deploy` (the unit is deployed to Snowflake), `artifactExists` on `etl-test/*.y*ml` (a `kind: etl` test YAML — `.yml` or `.yaml`, from `etlSeed`/`scai test seed` or hand-authored — is present under the unit's artifacts dir), and `configureSourceConnectionExtract` + `configureSnowflakeTarget`. The executor only dispatches this skill once all hold, so it is safe to run standalone (targeted directly at `etlValidate`): the machine will not dispatch it against an undeployed unit, one with no test YAML, or an unconfigured session. `scai test etl-validate` reads the connection details from the project's `settings/test_config.yaml`; named-connection overrides can be passed with `-c` / `-s`.
+This skill is the executor for both `etlValidate` and `validateEtlValidate`. The machine chooses the task and its preconditions; confirm only that task's stamp. Do not write the other field.
+
+**Deploy, the test YAML, and connections are all enforced by the state machine, not this skill.** Each dispatched task has deterministic preconditions: `deploy` (the unit is deployed to Snowflake), `artifactExists` on `etl-test/*.y*ml` (a `kind: etl` test YAML — `.yml` or `.yaml`, from the seed task for that flow or hand-authored — is present under the unit's artifacts dir), and `configureSourceConnectionExtract` + `configureSnowflakeTarget`. The executor only dispatches this skill once all hold, so it is safe to run standalone: the machine will not dispatch it against an undeployed unit, one with no test YAML, or an unconfigured session. `scai test etl-validate` reads the connection details from the project's `settings/test_config.yaml`; named-connection overrides can be passed with `-c` / `-s`.
 
 ## Step 0: Resolve Unit
 
@@ -134,7 +136,12 @@ If the session uses named-connection overrides, append:
 
 The command streams per-package results. Watch for the summary line reporting the failed-unit count.
 
-**The CLI owns the registry stamp.** On each unit it actually ran, `scai test etl-validate` writes `codeStatus.etlValidate`:
+**The CLI owns the registry stamp.** On each unit it actually ran, `scai test etl-validate` writes the field for this dispatch:
+
+| Dispatch | Registry field |
+|---|---|
+| `etlValidate` | `codeStatus.etlValidate` |
+| `validateEtlValidate` | `codeStatus.validateEtlValidate` |
 
 | CLI outcome | Registry stamp |
 |---|---|
@@ -144,9 +151,9 @@ The command streams per-package results. Watch for the summary line reporting th
 
 ## Step 3: Confirm stamp — do not invent advance
 
-**Do not** call `transition_status(status="advance", …)` to invent a green or red outcome from narration. Re-read the unit via `query_registry` / `migration_status` and confirm `codeStatus.etlValidate` matches the CLI summary.
+**Do not** call `transition_status(status="advance", …)` to invent a green or red outcome from narration. Re-read the unit via `query_registry` / `migration_status` and confirm the dispatched field matches the CLI summary.
 
-- All packages passed → registry should already read `completed`; the ETL flow is terminal.
+- All packages passed → registry should already read `completed`. For `etlValidate` the live ETL flow is terminal. For `validateEtlValidate` confirm the stamp only; the machine owns any successor.
 - One or more packages failed → registry should read `failed` with `error: "comparison"`. Surface the failed package names and row-level differences from the CLI output so the user can investigate the conversion gap.
 
 If the CLI exited non-zero but the stamp is missing (registry write failed), say so explicitly and do **not** stamp green yourself — ask the user to re-run or investigate the registry write error.
@@ -161,4 +168,4 @@ tasks:
     enabled: false
 ```
 
-A disabled task reads as **excluded** by the state machine, so the ETL flow reaches its terminal state without running the comparison. This is **project-wide** — it disables `etlValidate` for every ETL unit. Per-unit exclusion is not supported: writing `codeStatus.etlValidate=excluded` on a single entry reads back as *completed*, not excluded.
+A disabled task reads as **excluded** by the state machine, so the live ETL flow reaches its terminal state without running the comparison. This is **project-wide** — it disables `etlValidate` for every ETL unit and does not skip `validateEtlValidate`. Per-unit exclusion is not supported: writing `codeStatus.etlValidate=excluded` on a single entry reads back as *completed*, not excluded.

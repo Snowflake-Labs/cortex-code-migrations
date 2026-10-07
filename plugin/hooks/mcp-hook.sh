@@ -7,7 +7,10 @@
 # pay CLR startup (~130ms).
 #
 # After the first successful locate, the absolute path is written to
-# `$PWD/.scai/tmp/mcp-server-bin` so later hooks skip PATH / wrapper work.
+# `$PWD/.scai/tmp/mcp-server-bin` so later hooks skip wrapper work. Line 2
+# records the resolved `scai` it came from: when `scai` on PATH now resolves
+# elsewhere (upgraded or relinked), the cache is stale and is rebuilt, so an
+# old server never keeps answering for a new install (SNOW-4210868).
 # Cortex command hooks run with cwd = the project.
 
 set -eu
@@ -61,6 +64,8 @@ sibling_of() {
 bin_from_wrapper() {
   script=$1
   [ -f "$script" ] || return 0
+  # A compiled scai is not a script: sed on it only prints byte-sequence errors.
+  [ "$(head -c 2 "$script" 2>/dev/null)" = "#!" ] || return 0
   wrapped=$(sed -n 's/^export MIGRATION_MCP_SERVER_BIN="\([^"]*\)".*/\1/p' "$script" | tail -n 1)
   if [ -n "$wrapped" ] && ensure_exec "$wrapped"; then
     printf '%s\n' "$wrapped"
@@ -74,21 +79,39 @@ bin_from_wrapper() {
 
 cache="${PWD:-.}/.scai/tmp/mcp-server-bin"
 
+# The scai this hook would locate from, resolved; empty when there is none.
+current_scai() {
+  scai=${SCAI_CLI:-}
+  if [ -z "$scai" ]; then
+    scai=$(command -v scai 2>/dev/null) || return 0
+  fi
+  [ -n "$scai" ] && resolve_path "$scai"
+}
+
+# Cache hit only while it was written for the scai found now. With no scai
+# found (PATH trimmed), the cached path still stands.
 read_cache() {
   [ -f "$cache" ] || return 1
   path=$(sed -n '1s/[[:space:]]*$//p' "$cache")
-  [ -n "$path" ] && ensure_exec "$path" && printf '%s\n' "$path"
+  from=$(sed -n '2s/[[:space:]]*$//p' "$cache")
+  [ -n "$path" ] && ensure_exec "$path" || return 1
+  if [ -n "$scai_now" ] && [ "$from" != "$scai_now" ]; then
+    return 1
+  fi
+  printf '%s\n' "$path"
 }
 
 write_cache() {
   path=$1
   mkdir -p "$(dirname "$cache")" 2>/dev/null || return 0
-  printf '%s\n' "$path" >"$cache" 2>/dev/null || true
+  printf '%s\n%s\n' "$path" "$scai_now" >"$cache" 2>/dev/null || true
 }
 
+scai_now=
 if [ -n "${MIGRATION_MCP_SERVER_BIN:-}" ] && ensure_exec "$MIGRATION_MCP_SERVER_BIN"; then
   bin=$MIGRATION_MCP_SERVER_BIN
 else
+  scai_now=$(current_scai || true)
   bin=$(read_cache || true)
   if [ -z "$bin" ]; then
     scai=${SCAI_CLI:-}

@@ -81,7 +81,7 @@ informatica:
 > say `# PREFERRED` for the same reason. It carries the credentials plus `service` / `domain`,
 > survives a new shell, and keeps the secret out of the repository entirely: with one registered
 > these credential fields are unnecessary, not merely overridden. It is not encryption — that file is
-> cleartext too, just machine-level under `~/.snowflake/snowct/` instead of a project file that gets
+> cleartext too, just machine-level under `~/.snowflake/scai/connections/` instead of a project file that gets
 > committed and pasted into issues. Say that plainly if the user asks where the password ends up.
 > Do not register one from here: `etl-validate` does, in
 > [Step 1 of `../etl-validate/SKILL.md`](../etl-validate/SKILL.md), and only when its

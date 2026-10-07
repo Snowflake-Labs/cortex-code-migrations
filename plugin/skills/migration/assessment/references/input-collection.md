@@ -139,11 +139,11 @@ default to `generate-only`, or allow `skip` after Informatica is in scope.
 - Anti-patterns needs no prompt and is SQL Server-only.
 - For unsupported dialects, do not dispatch; synthesize a skipped result.
 
-### 5.7 Discovery (SQL Server and Teradata)
+### 5.7 Discovery (SQL Server, Teradata, and Redshift)
 
-Discovery is in scope only for SQL Server or Teradata. For every other dialect,
-ask nothing and synthesize a skipped result. On either supported dialect,
-always ask; never search for files or answer for the user.
+Discovery is in scope only for SQL Server, Teradata, or Redshift. For every
+other dialect, ask nothing and synthesize a skipped result. On any supported
+dialect, always ask; never search for files or answer for the user.
 
 First explain what the dialect's Discovery report adds:
 
@@ -154,6 +154,9 @@ First explain what the dialect's Discovery report adds:
   timeline, statement types, applications/users, touched databases,
   long-running requests, and errors versus aborts. Nothing is installed on
   Teradata and SnowConvert never connects to it.
+- **Redshift:** `SYS_QUERY_HISTORY` request volume, duration mix and
+  percentiles, daily timeline, statement types, databases and users,
+  long-running requests, and outcomes. Redshift has no application dimension.
 
 Then ask the matching question, retaining its disclaimer and all choices.
 
@@ -179,14 +182,25 @@ Then ask the matching question, retaining its disclaimer and all choices.
 > 2. I have the CSV export
 > 3. Give me the SQL, I'll provide the file later
 
+**Redshift:**
+
+> Disclaimer: the metrics export is used for reporting only. It contains
+> query metadata, not SQL text or error messages.
+>
+> How do you want to handle Discovery?
+> 1. Skip for this run
+> 2. I have the CSV export
+> 3. Give me the SQL, I'll provide the file later
+
 Map to `skip`, `have_extract`, or `later`.
 
 - `skip`: empty paths; no SQL or collection steps.
 - `have_extract`: collect absolute paths. For SQL Server, accept `.xel` files
   (a folder/glob only when it resolves to rollover files). For Teradata,
-  accept uncompressed `.csv` metrics exports and reject statement text. Never
-  copy, rename, or move inputs under the project. Empty paths are invalid; ask
-  again or let the user choose skip/later.
+  accept uncompressed `.csv` metrics exports and reject statement text. For
+  Redshift, accept uncompressed `.csv` metrics exports and reject statement
+  text. Never copy, rename, or move inputs under the project. Empty paths
+  are invalid; ask again or let the user choose skip/later.
 - `later`: empty paths and do not dispatch. In the same turn, show the
   dialect-specific guidance and SQL below. The assessment continues now.
 
@@ -293,6 +307,39 @@ CSV export**, and provide its path. The current assessment does not wait.
 Use skipped summary `probe and export SQL provided; re-run assessment with the
 metrics file`. Do not model the export as pending work.
 
+#### 5.7c `later` on Redshift
+
+Paste
+`workload-insights/references/redshift-sys-query-history.sql` unchanged. Do not
+summarize the SQL. This copy is shared with the HTML/dashboard empty state.
+
+The SQL is delivered now during input gathering—never defer it, add it as a
+later task, or mention it again after the normal skipped result.
+
+> Disclaimer: the metrics file is used for reporting only. It contains query
+> metadata, not SQL text or error messages.
+>
+> **1. Export the query history.** Run this from a SQL client or the Redshift
+> Query Editor. Redshift keeps `SYS_QUERY_HISTORY` for only **7 days**, so one
+> export covers at most the last week. For a longer window, schedule the same
+> `UNLOAD` to run at least weekly or enable Redshift's AWS-native system-view
+> stream. **Have a DBA review and run this.** Redshift system views show only
+> the current user's activity unless the account is a SUPERUSER or holds
+> `SYSLOG ACCESS UNRESTRICTED`, so run by anyone else the export succeeds and
+> silently covers one user. The `UNLOAD` also writes to an S3 bucket under an
+> IAM role — both belong to whoever administers the cluster. The nine columns
+> are the whole extract: no query text, no error messages, no query hashes.
+>
+> **2. Re-run assessment** with
+> `scai assessment workload-insights --input /path/to/querylogs.csv`.
+> Repeat `--input` to merge split exports.
+
+After the SQL, tell the user to re-run assessment later, choose **I have the
+CSV export**, and provide its path. The current assessment does not wait.
+
+Use skipped summary `extract SQL provided; re-run assessment with the Redshift
+metrics file`. Do not model the export as pending work.
+
 ### 5.8 Snapshot the inputs
 
 Keep this in working context only; never write it to disk:
@@ -311,7 +358,7 @@ assessment_inputs:
   anti_patterns: {}
   workload_insights:
     mode: have_extract | skip | later
-    input_paths: [<abs .xel path (SQL Server) or metrics CSV path (Teradata)>, ...]
+    input_paths: [<abs .xel path (SQL Server) or metrics CSV path (Teradata/Redshift)>, ...]
   dynamic_sql:
     review_mode: generate-only | auto-review-all | skip
     output_dir: <project_dir>/assessment/json

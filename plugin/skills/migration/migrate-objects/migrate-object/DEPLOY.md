@@ -17,6 +17,16 @@ substitutes; `-d` only when convert wrote no bindings file.
 
 **Do NOT deploy by executing the CREATE PROCEDURE/FUNCTION SQL directly.** Always use the `deploy` tool to ensure proper tracking and consistency.
 
+## ETL units (`kind=etl`)
+
+Do **not** call `deploy` with `object_name` for ETL units. ETL `source.objectType` is `other`, so it does not provide the ETL deployment scope.
+
+Use the `deploy` MCP tool with `where` = `id = '<etl_id>'` or `kind = 'etl'`.
+
+This guide only handles the current `deploy` task. It does not select an ETL flow or advance a unit to `deploy`. Any required stabilization and ROADMAP work must already be complete.
+
+`scai code deploy` deploys the supporting helpers, dbt project(s), and orchestration task graph. The task graph is created suspended; do not `EXECUTE TASK` here.
+
 ## Pre-deploy file checks
 
 Converted files may contain issues that need manual fixes before deployment:
@@ -49,7 +59,7 @@ When you make code changes, you **MUST** edit the SQL file in `snowflake/` — d
 
 Workflow:
 1. Edit the file in `snowflake/`
-2. Deploy using `deploy` with `where`: `object_id IN (<your_object_ids>)`
+2. Deploy using `deploy` with `where`: `object_id IN (<your_object_ids>)`. For ETL, use the `id` or `kind` selector above.
 
 ## After deployment
 

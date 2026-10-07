@@ -111,10 +111,11 @@ class RegisterSourcesTests(unittest.TestCase):
         self.assertEqual(by_name["build_region"]["source"]["objectType"], "table")
 
     def test_dependency_edges(self):
-        # score_customers reads STG.region; build_region creates WORK.region.
-        # These do not overlap, so add an explicit cross-file dependency:
-        (self.src / "score_customers.sas").write_text(
-            PROC_MACRO.replace("STG.region", "WORK.region"), encoding="utf-8"
+        # build_region creates WORK.region; score_customers reads STG.region.
+        # Make build_region publish to the shared STG libref so a real
+        # cross-file edge exists (WORK is session scratch and never links files).
+        (self.src / "build_region.sas").write_text(
+            PURE_SQL.replace("WORK.region", "STG.region"), encoding="utf-8"
         )
         _, entries = self._register()
         by_name = {e["source"]["name"]: e for e in entries}
@@ -122,6 +123,24 @@ class RegisterSourcesTests(unittest.TestCase):
         self.assertIn(unit_id("build_region"), dep_ids)
         self.assertIn(unit_id("score_customers"), by_name["build_region"]["dependencies"]["requiredBy"])
         self.assertGreaterEqual(by_name["score_customers"]["planning"]["topologicalRank"], 1)
+
+    def test_work_name_collision_is_not_an_edge(self):
+        # Both files touch WORK.region: two different session tables, no dependency.
+        (self.src / "score_customers.sas").write_text(
+            PROC_MACRO.replace("STG.region", "WORK.region"), encoding="utf-8"
+        )
+        _, entries = self._register()
+        by_name = {e["source"]["name"]: e for e in entries}
+        self.assertEqual(by_name["score_customers"]["dependencies"]["dependsOn"], [])
+        self.assertEqual(by_name["build_region"]["dependencies"]["requiredBy"], [])
+
+    def test_crlf_source_checksum_is_raw_bytes(self):
+        raw = PURE_SQL.replace("\n", "\r\r\n").encode("utf-8")
+        (self.src / "build_region.sas").write_bytes(raw)
+        _, entries = self._register()
+        by_name = {e["source"]["name"]: e for e in entries}
+        import hashlib
+        self.assertEqual(by_name["build_region"]["files"]["source"]["checksum"], hashlib.md5(raw).hexdigest())
 
     def test_idempotent(self):
         emitter, _ = self._register()

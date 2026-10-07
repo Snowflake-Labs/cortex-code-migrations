@@ -22,18 +22,36 @@ Tell the user:
 1. `configure(project_dir=<project dir>, subagent_mode=true, snowflake_connection=<the user's target connection — the one they named for deployment, NOT the system-reminder "active SQL connection" which is the agent's inference account>)`. Read the appended migration-status block. Autonomous
    always migrates data — do not ask, and do not skip. Bring
    the shared data infrastructure up: `data_infrastructure(mode="up")`. Relay its
-   `cost_reminder`. `status="not_ready"` is not a green light — a first local bring-up 
-   runs every schema migration and can need more than one call, so follow its `remediation` 
+   `cost_reminder`. `status="not_ready"` is not a green light — a first local bring-up
+   runs every schema migration and can need more than one call, so follow its `remediation`
    and call `up` again until it reports `ready`. Once means one *successful* bring-up for
    the wave, not one call.
 2. If `configure()` reports setup is not finished, read
    [../../setup/SKILL.md](../../setup/SKILL.md) then come back here.
 
+- If `configure` or `migration_status` is deferred, use the host's tool
+  discovery to load both tools, then call `configure`.
+- A **Connected** label in the MCP manager is not readiness evidence; a
+  successful tool call is. Extra user MCPs attach serially before the
+  migration MCP, so a first-turn miss is expected.
+- If either tool is absent or reports a disconnected MCP, wait 15 seconds
+  (`Bash` `sleep 15` only), refresh tool discovery, and retry `configure`.
+  Repeat until both tools are callable or 3 minutes have elapsed. Do not
+  stop after one retry.
+- If both tools are still unavailable after 3 minutes, stop and ask the
+  user to reconnect or restart the plugin. In an unattended session, report
+  the unavailable tool names and end the run immediately. The final
+  response is the report; do not run commands or inspect files to record
+  the blocker elsewhere. Do not inspect the plugin directory, project
+  directory, `.scai`, or the MCP implementation; do not try `fdbt`, `scai`,
+  or any shell except `sleep N`. Do not read `registry/`, infer
+  `next_objects`, or hand-pick object ids. Do not dispatch a probe child.
+
 `subagent_mode` attributes writes per Cortex conversation. Set it once here; it lasts the
 life of the server and cannot be turned off. Cortex stamps identity on every MCP call —
-do not pass `agent_id`. The parent hook injects the PreToolUse `session_id` while this latch is on: park a looping
-object, reset a remediated transient failure, and relay non-terminal guidance.
-Acknowledge unreviewed notes only in Step 3 (`review`), never in the dispatch
+do not pass `agent_id`. The parent hook injects the PreToolUse `session_id` while this latch
+is on: park a looping object, reset a remediated transient failure, and relay non-terminal
+guidance. Acknowledge unreviewed notes only in Step 3 (`review`), never in the dispatch
 loop. Object-level outcomes stay parked for a person in an interactive session.
 `deploy`, `migrate_data`, and `validate_data` are not binding-checked — keep
 each agent on its own object. They do still require the *claim holder's* identity:
@@ -77,11 +95,18 @@ live-child slot count. Stop settles a yielded walker: a
 `waiting` / `partial` / `reopened` / `stuck` waiter stays harvested on the
 ledger (`agentId` remains, `flight` is `none`, not a leftover) until a later
 `task(resume=…)`; `completed` leaves the roster. `flight=idle` is unsettled
-(stop not folded yet) — re-read the board; do not call `agent_output`. Do not overlay
+(stop not folded yet) — re-read the board. Do not overlay
 `hub(mode="status")` for
 dispatch — the board already stamped walker liveness (running wins over idle).
 Two live children on one object are forbidden: if `flight` is `running` or
 `idle`, do not first-send another.
+
+If Cortex explicitly reports that a walker was cancelled, killed, failed, or
+completed but the board still shows it `running`, call
+`agent_output(agent_id=<that walker's stored resume id>, wait=false)` once.
+This is a terminal-status reconciliation, not transcript polling: its
+PostToolUse hook drops the dead ledger row and mirrored claim. Re-read the board
+and `next_objects`; the open database claim then appears in `leftover_claims`.
 
 Do not call `my_objects_summary`, `my_objects_details`, `next_task`, or
 `task_views`. Those name the current task and why it is waiting; they are for
@@ -171,7 +196,8 @@ reason:             <from a `reopened` return — only when there is one>
 `task` returns an `agentId` (UUID). Store it as this object's `resume` id. That
 is the conversation. A later `task(resume=…)` returns a
 **different** UUID — a wait handle for that send only. Do not overwrite the
-stored `resume` id with it. Do not call `agent_output`.
+stored `resume` id with it. Do not call `agent_output` except for the explicit
+terminal-status reconciliation in 2a.
 
 One imperative line, then values. The line matters: four bare `key: value` pairs
 read as context rather than a request, and an agent handed only context asks
@@ -267,8 +293,9 @@ hub wakes. First-send every `leftover_claims` entry (new child, no
 first send and every pending wake in this turn (background `task` calls).
 Do not start a wait while leftovers or free slots remain. A live Cortex child on one object does not
 block filling the other slots. Neither does a `waiting` object or an
-escalation. Do not call `agent_output` — Cortex does not need it to settle
-a yielded child.
+escalation. Do not poll live children with `agent_output`; use it once only
+when Cortex explicitly reports a terminal child that the board still calls
+`running`.
 
 A `Background agent finished` line, a Monitor
 `wake up <parent session id>`, and `bash sleep` mean re-read the board (2a/2b).
@@ -300,7 +327,8 @@ That is a later send: `task(resume=<that UUID>)` with the `relay_wake:` line
 (the UUID is the child's `agentId`). Do not spawn a new `general_task`
 for it. That later send is the live child; it occupies a slot only while
 the board lists it `flight=running`. A wake naming the parent session id means
-2a/2b. Do not inspect the event. Do not call `agent_output`.
+2a/2b. Do not inspect the event. Do not call `agent_output` unless 2a's
+terminal-status reconciliation applies.
 
 Report from the board (`bucket`, leftover, escalations), not from a child's
 final JSON. A harvested waiter with `flight=none` keeps its `resume` id until
@@ -373,7 +401,9 @@ parking leaves Escalations at 0/0 and the object Open.
 
 Do not settle an open row yourself. `status='answer'` is refused under
 `subagent_mode` — you are not a person, and a parent write would look like
-one. An interactive session records it (`ANSWERED_BY_AGENT` empty,
+one. The autonomous parent may relay an explicit user reply from this Cortex
+conversation with `status='answer'`; walkers cannot answer. An interactive
+session records it (`ANSWERED_BY_AGENT` empty,
 `human: true` on `answered`). When `answered` shows a new human row,
 later-send with `guidance: <their words>` if the resolution was
 `guidance` or `decompose`. `needs_repair` stays parked — do not send
@@ -448,24 +478,22 @@ somewhere else, and re-reading beats remembering:
 | Question | Source |
 |---|---|
 | What claimed work is ready? | `my_objects_board` → `bucket=ready` |
-| What unclaimed object can take a free slot? | `next_objects` |
+| What unclaimed object can take a free slot? | `next_objects` → `objects` |
+| What claim has no walker left? | `next_objects` → `leftover_claims` |
 | Which Cortex children are live vs yielded? | `my_objects_board` → `flight` (`running` / `idle` / `none`); `walkerRunning` is the slot count |
-| Did a walker yield? | Stop already settled it. `flight=none` with `agentId` is a harvested waiter; without a walker it is gone. Do not call `agent_output`. |
+| Did a walker yield? | Stop already settled it. `flight=none` with `agentId` is a harvested waiter; without a walker it is gone. Use `agent_output(wait=false)` only for 2a's explicit terminal-status reconciliation. |
 | What is parked on a person? | `my_objects_board` → `bucket=escalated`, and `escalations` for the asks |
 | What is claimed, by whom? | `my_objects_board` → `agentId` (live session when `flight` is `running` / `idle`; harvested waiter when `flight=none` still carries one) |
-| Who to wake for a relay event? | The wake line (`resume` that UUID). A parent-session wake → 2a/2b. Do not read the job. Do not call `agent_output`. |
+| Who to wake for a relay event? | The wake line (`resume` that UUID). A parent-session wake → 2a/2b. Do not read the job. |
 | Is an object done? | `bucket=done` — the machine closes a verified terminal (`isDone`) |
 | What is waiting on a human, and what did they decide? | `escalations` → `escalations` and `answered` |
+| Who to wake for a relay event? | The wake line (`resume` that UUID); a parent-session wake means re-read the board |
 | Unreviewed judgments (count only, mid-loop) | `escalations` → `unreviewedCount` |
 
-Do not call `next_task`, `my_objects_details`, or `task_views`. You do not
-need where an object is in its pipeline or why it failed.
-
-Do not keep a private live-child set. Board `flight=idle` is unsettled (stop
-not folded yet); counting a yielded child as live from memory parks
-the wave on sleeps while Monitor's wake is already consumed. A leftover
-first-send vs resume is still: new child when `flight=none` and leftover_claims
-lists it; `task(resume=<board agentId>)` when a wake names that UUID.
+Do not call `next_task`, `my_objects_summary`, `my_objects_details`, or
+`task_views`. You do not need where an object is in its pipeline or why it
+failed. Do not keep a private live-child set: counting a yielded child as live
+from memory parks the wave on sleeps while Monitor's wake is already consumed.
 
 Escalations survive the session — read them, don't remember them.
 
@@ -473,11 +501,11 @@ Escalations survive the session — read them, don't remember them.
 
 Call `migration_status()` and report as [../SKILL.md](../SKILL.md) Step 3 does,
 plus what autonomous mode adds: objects finished without intervention, objects
-escalated (open asks, as in 2e), unreviewed notes as **object + task** only
-(do not pass `details=true`; do not quote SQL or choice text), then
-`transition_status(status="review", …)` in one batch.
-Also: subagents dispatched, remediated tasks reset, and outcomes stamped by
-an agent because the machine could not observe them.
+escalated (open asks), unreviewed notes as **object + task** only (do not pass
+`details=true`; do not quote SQL or choice text), then
+`transition_status(status="review", …)` in one batch. Also: subagents dispatched,
+remediated tasks reset, and outcomes stamped by an agent because the machine
+could not observe them.
 
 A stage count is not a done count. Take the finished number from the
 `migration_status()` you already called — `objects_done` — and leave `stage_totals`
@@ -487,10 +515,9 @@ the active wave, so when the status payload carries a `wave`, name it and
 `in_scope_all_waves` rather than presenting that wave's total as the migration's;
 `doneCount` on `my_objects_board` counts only what you hold a claim on.
 
-Build every line the board can confirm from the board. A walker's final JSON
-is not a channel to the dispatcher. Nothing counts remediated resets for you — take those from the board and
-what you recorded when you reset, and if you cannot tell how many there were,
-say what you saw instead of a number.
+Build every line the board can confirm from the board. A walker's final JSON is
+not a channel to the dispatcher. If the board still has `escalated` rows or
+`openCount` is non-zero, say so — the run finished, the wave did not.
 
 Then tear down: `data_infrastructure(mode="down")`, or
 [../../data-infrastructure/teardown/SKILL.md](../../data-infrastructure/teardown/SKILL.md)
@@ -500,10 +527,12 @@ when the project configured a `compute_pool` and data work ran.
 
 A killed session loses your dispatch bookkeeping and nothing else. Claims live in
 Snowflake, task stamps in the registry, merges in git, escalations and their
-answers in Snowflake. Re-enter this skill: Step 0, then 2a, and the board shows
-exactly where the wave stands — including objects whose subagent died mid-task,
-which resolve back to that task as pending (`reclaimed_from_other_sessions` names
-the ones taken back from the dead session). Nothing needs manual cleanup.
+answers in Snowflake. Re-enter this skill: Step 0, then read the board, and it
+shows exactly where the wave stands — including objects whose subagent died
+mid-task, which resolve back to that task as pending
+(`reclaimed_from_other_sessions` names the ones taken back from the dead
+session). Nothing needs manual cleanup; the details are in
+[Escalate and terminate](references/escalate-and-terminate.md).
 
 Read `migration_status(mode="escalations")` before dispatching anything. A question
 you asked before the session died is still open, and an answer the user gave is

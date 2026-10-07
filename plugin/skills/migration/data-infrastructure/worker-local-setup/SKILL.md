@@ -25,7 +25,9 @@ odbcinst -q -d 2>/dev/null | grep -i "ODBC Driver"
 
 **If the command returns a driver name** (e.g. `[ODBC Driver 18 for SQL Server]`), the driver is present — continue to Step 1.
 
-**If the command returns nothing**, the driver is missing. **Stop here and ask the user to install it** — do not attempt installation yourself, as it requires `sudo` and interactive steps that cannot be automated.
+**If the command returns nothing**, the driver is missing. **Do not start the local worker.** Do **not** attempt installation yourself (`sudo` / interactive).
+
+**Do not abandon orchestrator placement.** Missing ODBC is a worker-host problem. If the parent skill has not brought the shared orchestrator up yet, **return to** [`../SKILL.md`](../SKILL.md): keep the **SPCS** recommendation, confirm the compute pool, and call `data_infrastructure(mode="up", compute_pool="<POOL>", start_worker=false)`. Then tell the user to install ODBC and resume the worker later.
 
 Tell the user:
 
@@ -50,9 +52,19 @@ Tell the user:
 
 Once the user confirms the driver is installed, re-run the check and continue.
 
-### PostgreSQL — `regular` (COPY)
+### PostgreSQL — `pg_copy` or `odbc`
 
-No ODBC driver. The worker uses bundled Npgsql with `use_copy = true`. Skip the ODBC pre-flight above.
+For selected method `pg_copy`, `use_copy = true` (the DEA default); `psql` on the worker `PATH` is
+preferred but not required, because the worker falls back to the ODBC parquet reader on its own when
+it is missing. For selected method `odbc`, `use_copy = false` and the PostgreSQL ODBC driver is then
+mandatory. Either way the workflow strategy stays `regular` — do not describe COPY as a workflow
+extraction strategy.
+
+### SQL Server — `bcp`
+
+`use_bcp = true`; verify `bcp` is on the worker `PATH`, because there is no fallback. BCP covers bulk
+`data_movement` only, so the ODBC pre-flight above still applies. Workflow strategy remains `regular`.
+For selected method `odbc`, `use_bcp = false` and only the ODBC pre-flight matters.
 
 ### Oracle — `regular` (ODP.NET)
 
@@ -68,7 +80,9 @@ Add `unload_s3_bucket` and `unload_iam_role_arn` to `[connections.source.redshif
 
 ### Teradata — `tpt`
 
-Install Teradata TTU on the worker host (`tbuild`). Optional `tpt_*` fields in TOML. Workflow may use `extraction.strategy: tpt`.
+Install Teradata TTU on the worker host (`tbuild`) and configure the required `tpt_*` TOML fields.
+Workflow strategy is `regular`; `tpt` is the persisted worker method, not a canonical DMO strategy.
+`use_tpt_for_bulk` defaults to `true`, so only the explicit `odbc` method turns TPT off.
 
 ### Teradata — `write_nos`
 
@@ -105,7 +119,10 @@ After running, handle the result:
 >
 > **Azure Synapse:** scai `--auth service-principal` becomes worker `mode = "azure_ad"` with `client_id` / `client_secret` — not `mode = "service_principal"`. `interactive` cannot start a worker (headless). Confirm `mode` after generate-config. See [Azure Synapse auth modes](../references/worker-config-reference.md#azure-synapse-auth-modes).
 >
-> **PostgreSQL:** The worker uses PostgreSQL's native COPY protocol (`use_copy = true`) for all data extraction. The `database` field is the actual PostgreSQL database name. No special driver is required — Npgsql is bundled with the worker.
+> **PostgreSQL:** `data_infrastructure(mode="up")` applies the selected method after generation:
+> `pg_copy` → `use_copy = true` (psql preferred, ODBC fallback automatic); `odbc` → `use_copy = false`
+> and an ODBC driver is then required. Legacy `regular` leaves the flag as generated. The `database`
+> field is the actual PostgreSQL database name.
 
 See [`../references/worker-config-reference.md`](../references/worker-config-reference.md) for the field reference and advanced options (e.g., Redshift UNLOAD, Teradata TPT / WRITE_NOS).
 

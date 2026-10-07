@@ -16,6 +16,7 @@ _SCHEMA_VERSION = 3
 _SOURCE_DIALECTS = {
     ("extended_events", "sqlserver"),
     ("dbql", "teradata"),
+    ("sys_query_history", "redshift"),
 }
 _MAPPING_FIELDS = ("summary", "percentiles", "long_running", "errors")
 _SEQUENCE_FIELDS = (
@@ -59,8 +60,34 @@ def is_sql_server(source_dialect: str) -> bool:
 
 
 def is_workload_insights_dialect(source_dialect: str) -> bool:
-    """Return whether the multi-report dialect has a renderer."""
-    return source_dialect in {"Transact", "Teradata"}
+    """Return whether the multi-report dialect has a renderer.
+
+    SnowConvert writes `RedShift` in TopLevelCodeUnits, so match case-insensitively.
+    """
+    return str(source_dialect).strip().lower() in {"transact", "teradata", "redshift"}
+
+
+def missing_analysis_html() -> str:
+    """Notice shown when Query Logs Analysis has no artifact yet."""
+    return """
+<p class="wi-empty-notice"><strong>No query logs analysis in this project yet.</strong>
+Open the Extract Log tab for capture instructions, then re-run the assessment
+to populate this tab.</p>"""
+
+
+def render_extract_pane(how_to: str) -> str:
+    """Wrap dialect capture instructions for the Extract Log view."""
+    return (
+        f'<div id="workload-insights-extract" class="wi-pane" v-pre>{how_to}</div>'
+    )
+
+
+def render_empty_analysis_pane(header: str) -> str:
+    """Wrap the analysis header plus the shared no-artifact notice."""
+    return (
+        f'<div id="workload-insights-report" class="wi-pane" v-pre>'
+        f"{header}{missing_analysis_html()}</div>"
+    )
 
 
 def _is_mapping_sequence(value: Any) -> bool:
@@ -402,8 +429,9 @@ document.addEventListener("click", function(event) {
 
 def workload_insights_chart_js(payload: Optional[Mapping[str, Any]]) -> str:
     """Return chart bootstrap JavaScript for emission after the Vue mount."""
+    copy_js = _copy_script_js()
     if not payload or not payload.get("found"):
-        return _copy_script_js()
+        return copy_js
     data = _safe_json(_chart_data(payload))
     colors = _safe_json(_COLORS)
     return f"""
@@ -479,182 +507,183 @@ make("wi-chart-long",{{
   title:{{display:true,text:"Count",...axes}}}}}}}}}});
 window.__workloadInsightsCharts=charts;
 }};
-}})();"""
+}})();""" + copy_js
 
 
 def workload_insights_css() -> str:
     """Return tab-scoped Workload Insights styles."""
     return """
-#workload-insights-report { color: #102E46; }
-#workload-insights-report .wi-header h1 {
+.wi-pane { color: #102E46; }
+.wi-pane .wi-header h1 {
   margin: 0 0 12px; font-size: 1.875rem; font-weight: 800; color: #102E46;
 }
-#workload-insights-report .wi-notice {
+.wi-pane .wi-notice {
   color: #374151; background: #F3F4F6; border: 1px solid #D1D5DB;
   border-left: 4px solid #9CA3AF; border-radius: 6px; padding: 10px 12px;
   font-size: 0.78rem; line-height: 1.45; margin: 0 0 12px;
 }
-#workload-insights-report .wi-blurb { color: #64748B; font-size: 1.1rem; margin: 0; }
-#workload-insights-report .wi-summary {
+.wi-pane .wi-blurb { color: #64748B; font-size: 1.1rem; margin: 0; }
+.wi-pane .wi-header + .wi-empty-notice { margin-top: 24px; }
+.wi-pane .wi-summary {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 16px; margin: 24px 0; color: #64748B; font-size: 0.85rem;
 }
-#workload-insights-report .wi-kpis {
+.wi-pane .wi-kpis {
   display: grid; grid-template-columns: repeat(5, 1fr); border: 1px solid #E2E8F0;
   border-radius: 12px; overflow: hidden;
 }
-#workload-insights-report .wi-kpi {
+.wi-pane .wi-kpi {
   display: flex; flex-direction: column; text-align: center; padding: 18px 10px;
   border-right: 1px solid #E2E8F0;
 }
-#workload-insights-report .wi-kpi:last-child { border-right: 0; }
-#workload-insights-report .wi-kpi-value { font-size: 1.35rem; font-weight: 800; }
-#workload-insights-report .wi-kpi-label {
+.wi-pane .wi-kpi:last-child { border-right: 0; }
+.wi-pane .wi-kpi-value { font-size: 1.35rem; font-weight: 800; }
+.wi-pane .wi-kpi-label {
   color: #64748B; font-size: 0.68rem; text-transform: uppercase;
 }
-#workload-insights-report .wi-section { margin: 44px 0; }
-#workload-insights-report .wi-section h2 {
+.wi-pane .wi-section { margin: 44px 0; }
+.wi-pane .wi-section h2 {
   font-size: 1.5rem; font-weight: 700; color: #102E46; margin: 0 0 20px;
 }
-#workload-insights-report .wi-insights {
+.wi-pane .wi-insights {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 14px; margin-bottom: 20px;
 }
-#workload-insights-report .wi-insight {
+.wi-pane .wi-insight {
   border: 1px solid #E2E8F0; border-radius: 10px; padding: 18px 16px;
   text-align: center; min-width: 0;
 }
-#workload-insights-report .wi-insight-value {
+.wi-pane .wi-insight-value {
   font-size: 1.75rem; font-weight: 900; line-height: 1; margin-bottom: 5px;
 }
-#workload-insights-report .wi-insight-label {
+.wi-pane .wi-insight-label {
   color: #64748B; font-size: 0.7rem; text-transform: uppercase;
   letter-spacing: 0.4px;
 }
-#workload-insights-report .wi-insight-sub {
+.wi-pane .wi-insight-sub {
   color: #64748B; font-size: 0.72rem; margin-top: 4px;
 }
-#workload-insights-report .wi-tiles {
+.wi-pane .wi-tiles {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px;
 }
-#workload-insights-report .wi-tile {
+.wi-pane .wi-tile {
   background: #F8FAFC; border-radius: 8px; padding: 16px; text-align: center;
   min-width: 0;
 }
-#workload-insights-report .wi-tile-value { font-size: 1.9rem; font-weight: 800; }
-#workload-insights-report .wi-tile-label {
+.wi-pane .wi-tile-value { font-size: 1.9rem; font-weight: 800; }
+.wi-pane .wi-tile-label {
   color: #64748B; font-size: 0.75rem; margin-top: 4px;
 }
-#workload-insights-report .wi-tile-sub { color: #64748B; font-size: 0.7rem; }
-#workload-insights-report .wi-card {
+.wi-pane .wi-tile-sub { color: #64748B; font-size: 0.7rem; }
+.wi-pane .wi-card {
   border: 1px solid #E2E8F0; border-radius: 10px; padding: 20px 22px;
   margin-bottom: 16px; min-width: 0;
 }
-#workload-insights-report .wi-card-centered {
+.wi-pane .wi-card-centered {
   max-width: 85%; margin-left: auto; margin-right: auto;
 }
-#workload-insights-report .wi-card h3 {
+.wi-pane .wi-card h3 {
   color: #64748B; font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
   letter-spacing: 0.6px; margin: 0 0 14px;
 }
-#workload-insights-report .wi-grid-2 {
+.wi-pane .wi-grid-2 {
   display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px;
 }
-#workload-insights-report .wi-chart-frame { position: relative; height: 290px; }
-#workload-insights-report .wi-chart-frame-tall { height: 340px; }
-#workload-insights-report .wi-callout,
-#workload-insights-report .wi-danger-callout,
-#workload-insights-report .wi-empty-notice {
+.wi-pane .wi-chart-frame { position: relative; height: 290px; }
+.wi-pane .wi-chart-frame-tall { height: 340px; }
+.wi-pane .wi-callout,
+.wi-pane .wi-danger-callout,
+.wi-pane .wi-empty-notice {
   border-radius: 8px; padding: 13px 17px; margin: 0 0 18px;
   font-size: 0.83rem; line-height: 1.55;
 }
-#workload-insights-report .wi-callout { background: #FEF9E7; border-left: 4px solid #FF9F36; }
-#workload-insights-report .wi-danger-callout { background: #FDEDEC; border-left: 4px solid #D9534F; }
-#workload-insights-report .wi-empty-notice { background: #F0F9FF; border: 1px solid #BAE6FD; }
-#workload-insights-report .wi-stat-grid {
+.wi-pane .wi-callout { background: #FEF9E7; border-left: 4px solid #FF9F36; }
+.wi-pane .wi-danger-callout { background: #FDEDEC; border-left: 4px solid #D9534F; }
+.wi-pane .wi-empty-notice { background: #F0F9FF; border: 1px solid #BAE6FD; }
+.wi-pane .wi-stat-grid {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;
   margin-bottom: 16px;
 }
-#workload-insights-report .wi-stat-grid-2 { grid-template-columns: repeat(2, 1fr); }
-#workload-insights-report .wi-stat {
+.wi-pane .wi-stat-grid-2 { grid-template-columns: repeat(2, 1fr); }
+.wi-pane .wi-stat {
   display: flex; flex-direction: column; text-align: center; padding: 18px;
   border: 1px solid #E2E8F0; border-radius: 10px;
 }
-#workload-insights-report .wi-stat strong { font-size: 1.7rem; }
-#workload-insights-report .wi-stat small { color: #64748B; }
-#workload-insights-report .wi-table-wrap {
+.wi-pane .wi-stat strong { font-size: 1.7rem; }
+.wi-pane .wi-stat small { color: #64748B; }
+.wi-pane .wi-table-wrap {
   overflow-x: auto; border: 1px solid #E2E8F0; border-radius: 8px;
 }
-#workload-insights-report table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
-#workload-insights-report th {
+.wi-pane table { width: 100%; border-collapse: collapse; font-size: 0.83rem; }
+.wi-pane th {
   padding: 10px 13px; text-align: left; background: #F8FAFC; white-space: nowrap;
 }
-#workload-insights-report td { padding: 9px 13px; border-top: 1px solid #E2E8F0; }
-#workload-insights-report td:not(:first-child),
-#workload-insights-report th:not(:first-child) { text-align: right; }
-#workload-insights-report .wi-long-table th:last-child,
-#workload-insights-report .wi-long-table td:last-child { text-align: left; }
-#workload-insights-report .wi-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
-#workload-insights-report .wi-how-to-title {
+.wi-pane td { padding: 9px 13px; border-top: 1px solid #E2E8F0; }
+.wi-pane td:not(:first-child),
+.wi-pane th:not(:first-child) { text-align: right; }
+.wi-pane .wi-long-table th:last-child,
+.wi-pane .wi-long-table td:last-child { text-align: left; }
+.wi-pane .wi-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.wi-pane .wi-how-to-title {
   font-size: 1.35rem; font-weight: 700; color: #102E46; margin: 40px 0 16px;
 }
-#workload-insights-report .wi-how-to { margin: 0; }
-#workload-insights-report .wi-step { align-items: flex-start; cursor: default; }
-#workload-insights-report .wi-step:hover {
+.wi-pane .wi-how-to { margin: 0; }
+.wi-pane .wi-step { align-items: flex-start; cursor: default; }
+.wi-pane .wi-step:hover {
   border-color: #E2E8F0; box-shadow: none; transform: none;
 }
-#workload-insights-report .wi-step pre {
+.wi-pane .wi-step pre {
   white-space: pre-wrap; overflow-wrap: anywhere; background: #F8FAFC;
   border-radius: 6px; padding: 10px 12px; margin: 10px 0 0;
   font-size: 0.82rem; color: #102E46;
 }
-#workload-insights-report .wi-howto-sql { margin-top: 12px; }
-#workload-insights-report .wi-script-actions { display: flex; gap: 8px; margin: 10px 0 8px; }
-#workload-insights-report .wi-copy-btn {
+.wi-pane .wi-howto-sql { margin-top: 12px; }
+.wi-pane .wi-script-actions { display: flex; gap: 8px; margin: 10px 0 8px; }
+.wi-pane .wi-copy-btn {
   font: inherit; font-size: 0.74rem; font-weight: 600; color: #0369A1;
   background: #FFFFFF; border: 1px solid #BAE6FD; border-radius: 6px;
   padding: 5px 11px; cursor: pointer;
 }
-#workload-insights-report .wi-copy-btn:hover { background: #F0F9FF; }
-#workload-insights-report .wi-dba-note {
+.wi-pane .wi-copy-btn:hover { background: #F0F9FF; }
+.wi-pane .wi-dba-note {
   color: #7F2A26; background: #FDEDEC; border: 1px solid #F1C4C1;
   border-left: 4px solid #D9534F; border-radius: 6px; padding: 10px 12px;
   font-size: 0.85rem; line-height: 1.55; margin: 14px 0 0;
 }
-#workload-insights-report .wi-config-lead {
+.wi-pane .wi-config-lead {
   color: #64748B; font-size: 0.88rem; line-height: 1.55; margin: 12px 0 14px;
 }
-#workload-insights-report .wi-config {
+.wi-pane .wi-config {
   display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 12px;
 }
-#workload-insights-report .wi-config-card {
+.wi-pane .wi-config-card {
   background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 14px 16px;
 }
-#workload-insights-report .wi-config-careful {
+.wi-pane .wi-config-careful {
   background: #FEF9E7; border-color: #FDE68A;
 }
-#workload-insights-report .wi-config-card h4 {
+.wi-pane .wi-config-card h4 {
   margin: 0 0 8px; font-size: 0.82rem; font-weight: 700; color: #102E46;
 }
-#workload-insights-report .wi-config-card ul {
+.wi-pane .wi-config-card ul {
   margin: 0; padding-left: 18px; color: #475569; font-size: 0.8rem; line-height: 1.55;
 }
-#workload-insights-report .wi-config-card li { margin: 0 0 8px; }
-#workload-insights-report .wi-config-card li:last-child { margin-bottom: 0; }
-#workload-insights-report .wi-howto-sql summary {
+.wi-pane .wi-config-card li { margin: 0 0 8px; }
+.wi-pane .wi-config-card li:last-child { margin-bottom: 0; }
+.wi-pane .wi-howto-sql summary {
   cursor: pointer; font-size: 0.85rem; font-weight: 600; color: #11567F;
 }
-#workload-insights-report .wi-howto-sql pre {
+.wi-pane .wi-howto-sql pre {
   max-height: 320px; overflow: auto; white-space: pre; line-height: 1.5;
 }
-#workload-insights-report .wi-unlocks {
+.wi-pane .wi-unlocks {
   margin: 0; padding-left: 22px; list-style: disc outside;
   color: #64748B; font-size: 0.9rem; line-height: 1.9;
 }
 @media (max-width: 1000px) {
-  #workload-insights-report .wi-kpis { grid-template-columns: repeat(2, 1fr); }
-  #workload-insights-report .wi-grid-2,
-  #workload-insights-report .wi-stat-grid,
-  #workload-insights-report .wi-config { grid-template-columns: 1fr; }
+  .wi-pane .wi-kpis { grid-template-columns: repeat(2, 1fr); }
+  .wi-pane .wi-grid-2,
+  .wi-pane .wi-stat-grid,
+  .wi-pane .wi-config { grid-template-columns: 1fr; }
 }
 """

@@ -59,7 +59,7 @@ validate_data(
   where="<registry filter>",
   validation_type="full" | "incremental",   # from state machine; persisted
   sync_strategy="none" | "checksum" | "watermark",  # from state machine; persisted
-  schema_validation=true | false,    # optional; persisted as a session default
+  schema_validation=true,            # optional; false is refused — L1 is always required
   metrics_validation=true | false,   # optional; scai default is false — pass true only if user wants metrics
   row_validation=true | false,       # optional; scai default is true
   continue_on_failure=true | false,  # optional; persisted as a session default
@@ -90,7 +90,8 @@ The setup response contains:
    - **Small/medium files** — show the full YAML in chat.
    - **Large files** — show the path, `validationConfiguration`, sync block, `tables:` count, and table names; offer to show the full file or specific tables on request.
    - Note whether setup **reused** an existing file (`regenerated: false`).
-3. **Summarize:** table count, validation mode/sync, effective validation toggles (`schema_validation`, `metrics_validation`, `row_validation`, `continue_on_failure`), and which levels will run (e.g. schema + row; metrics off unless enabled).
+3. **Summarize:** table count, validation mode/sync, effective validation toggles (`schema_validation`, `metrics_validation`, `row_validation`, `continue_on_failure`), which levels will run (e.g. schema + row; metrics off unless enabled), and partition findings.
+   - If setup did not return `partition_key_findings`, run `scai data doctor -c <snowflake_connection> --source-connection <source_connection> --config <workflow_path> --analyze-partition-keys --json` and read the `Partition key` checks. This is the same probe migration setup already runs.
 4. Ask verbatim:
 
 > Here is the validation workflow at `<workflow_path>`.
@@ -109,18 +110,21 @@ The setup response contains:
    | Skip L2 on wide tables | `excludeMetrics` or disable `metricsValidation` |
    | Whitelist known diffs | `acceptedTransformations` |
    | Rename / remap columns | `columnMappings`, `indexColumnList`, `targetIndexColumnList` |
-   | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber` |
+   | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber`, and a leading `columnNamesToPartitionBy` the source can prune on |
+   | Partition column the source cannot prune | `columnNamesToPartitionBy` — put the column from the `Partition prune` finding first |
    | Reduce source locking | `queryModifiers` |
    | Incremental watermark | `synchronization.watermarkColumn` (+ `columnNamesToPartitionBy`) |
+   | L3 extract via object storage | `validationConfiguration.extraction.strategy` + `extraction.externalStage` (see [L3 pushdown](../../setup/data-validation/l3-pushdown/SKILL.md)) |
 
-   For stalled or partially finished runs, see [Task model reference](../../migrate-objects/actions/data-migration/references/task-model-reference.md) and [Troubleshooting reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md).
+   For stalled or partially finished runs, see [Task model reference](./references/task-model-reference.md) and [Troubleshooting reference](./references/troubleshooting-reference.md).
 
-6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7).
+6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7). A `partition_key_findings` row whose label starts with `Partition prune:` is not discretionary and not an agent-only edit: show the physical column and the leading `columnNamesToPartitionBy` entry, and wait for the user to confirm before changing the YAML or calling `validate_data(mode="run")`. Early stopping and extra workers do not fix a leading column the source cannot prune.
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
    - When `row_validation` is on: ensure each table has usable `indexColumnList` (and `targetIndexColumnList` when names differ) per `edit_hints`.
    - When incremental **watermark**: ensure `watermarkColumn` is set on `defaultTableConfiguration.synchronization` (or per table).
    - When incremental: ensure partition columns (`columnNamesToPartitionBy`) are present.
    - Verify `targetDatabase` / per-table targets match the deployed Snowflake objects.
+   - **L3 extract (non-Snowflake sources, `rowValidation` on):** if `validationConfiguration.extraction` is missing, load [../../setup/data-validation/l3-pushdown/SKILL.md](../../setup/data-validation/l3-pushdown/SKILL.md) and complete it before run (reuse DM object storage without asking; otherwise bucket question / wait / continue without). Skip for Snowflake-source workflows. Do not dispatch `validate_data(mode="run")` while they are waiting on a bucket. Never say strategy enum names to the user.
    - Tell the user what you changed and why before confirming.
 8. **Apply user-requested edits before run (hard gate).** If the user already asked to change the workflow (turn metrics off, narrow tables, etc.), those edits are **not optional**:
    - Write them into `workflow_path`, re-display the changed sections, and only then accept “Proceed” / confirmation to run.
@@ -130,7 +134,7 @@ The setup response contains:
    names or source/target type pairs. Validate the configured columns and
    report mismatches. Any deterministic normalization or exclusion belongs in
    product configuration, not agent guesswork.
-10. **Pre-run verification (hard gate).** Before calling `validate_data(mode="run")`, **re-read `workflow_path`** and confirm every user-requested edit from steps 5/8 is actually written to the file and `metricsValidation` matches the agreed value. If a requested edit is missing, apply it now; do not run until the on-disk YAML matches what the user asked for. Then get **explicit confirmation** to run with the final workflow and continue to Step 3.
+10. **Pre-run verification (hard gate).** Before calling `validate_data(mode="run")`, **re-read `workflow_path`** and confirm every user-requested edit from steps 5/8 is actually written to the file, `metricsValidation` matches the agreed value, and (for non-Snowflake L3) object-store strategies include `extraction.externalStage`. If a requested edit is missing, apply it now; do not run until the on-disk YAML matches what the user asked for. Then get **explicit confirmation** to run with the final workflow and continue to Step 3.
 
 **Optional — explain validation levels:** After the “update any fields?” question (or while the user is reviewing), offer a brief explanation unless they are clearly repeating a prior run or only asked to execute:
 
@@ -258,7 +262,7 @@ whether `details.progress.output.isFinished == true` **and** any of:
 
 1. List pending tables under **Execution** as “never validated” — use `errorMessage` when set; otherwise `details.reports.files.data_validation_errors` or “Table not validated — check task errors”.
 2. Pull detail from `details.reports.files` before guessing. Do **not** treat `metricsValidated: null` as failure when metrics was disabled.
-3. If messages are thin, follow [Workflow finished but tables incomplete](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md#workflow-finished-but-tables-incomplete) — query `TASK_QUEUE` for the workflow. Worker/orchestrator issues are one cause, not the only one.
+3. If messages are thin, follow [Validation workflow finished but tables incomplete](./references/troubleshooting-reference.md#validation-workflow-finished-but-tables-incomplete) — query `TASK_QUEUE` for the workflow. Worker/orchestrator issues are one cause, not the only one.
 4. Do **not** suggest re-run until prerequisites are identified.
 
 ---

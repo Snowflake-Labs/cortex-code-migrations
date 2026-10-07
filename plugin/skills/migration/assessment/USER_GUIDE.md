@@ -281,18 +281,18 @@ dashboard** and opens `/assessment`. A saved dashboard opt-out is respected.
 The skill still writes `assessment/multi_report.html` as a shareable export and
 opens it as the fallback when the dashboard is disabled or unavailable.
 
-The generated HTML report opens on the **Migration Journey** page. For SQL Server
-and Teradata, **Discovery** appears next, followed by the conversion tabs grouped
+The generated HTML report opens on the **Migration Journey** page. For SQL Server,
+Teradata, and Redshift, **Discovery** appears next, followed by the conversion tabs grouped
 under **Code/ETL Conversion** and the later migration phases. Most tabs appear only
-when the report has data to fill them. Discovery uses SQL Server Extended Events
-or a Teradata DBQL metrics export. Without input, the tab stays and explains how
+when the report has data to fill them. Discovery uses SQL Server Extended Events,
+a Teradata DBQL metrics export, or a Redshift `SYS_QUERY_HISTORY` metrics export. Without input, the tab stays and explains how
 to collect the appropriate files and re-run the assessment. Other dialects omit
 the tab.
 
 | Tab | Contents |
 |-----|----------|
 | **Migration Journey** | Landing page — what each phase of your migration involves, one card per phase |
-| **Discovery** | SQL Server Extended Events or Teradata DBQL volume, duration mix, statement types, applications, users, long-running executions, and errors. No input yet: dialect-specific collection steps and re-run guidance. Hidden on unsupported dialects. |
+| **Discovery** | SQL Server Extended Events, Teradata DBQL, or Redshift SYS_QUERY_HISTORY volume, duration mix, statement types, applications, users, long-running executions, and errors. No input yet: dialect-specific collection steps and re-run guidance. Hidden on unsupported dialects. |
 | **Waves** | Deployment sequence with objects per wave, dependencies |
 | **Object Exclusion** | Temporary, staging, deprecated objects identified |
 | **Optimization Opportunities** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |

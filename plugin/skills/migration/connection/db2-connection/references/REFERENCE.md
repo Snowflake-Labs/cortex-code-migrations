@@ -70,7 +70,7 @@ the `ibm_db` driver, which is bundled with the worker — no separate ODBC insta
 Worker TOML `[connections.source.db2].database` must match `source.databaseName` in the
 migration/validation workflow YAML.
 
-## scai TOML Fields (`~/.snowflake/snowct/db2.toml`)
+## scai TOML Fields (`~/.snowflake/scai/connections/db2.toml`)
 
 Populated by `scai connection add-db2`. The MCP server reads this file when generating
 the DEW worker config.
@@ -148,7 +148,7 @@ DB2 has no portable system row identifier suitable for partitioning. Use:
 ## Verifying Connectivity
 
 ```bash
-scai connection test -l db2 -c <CONNECTION_NAME> --json
+scai connection test -l db2 -s <CONNECTION_NAME> --json
 ```
 
 Manual network test:

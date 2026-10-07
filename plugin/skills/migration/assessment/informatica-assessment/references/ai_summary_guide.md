@@ -88,6 +88,7 @@ Adapt recommendations based on `informatica_target`:
 - **Use data from the summary command output** to populate tables with real counts and percentages
 - **Keep narrative text minimal** - let structured tables and layouts carry the information
 - **Use inline styles** (not CSS classes) since this is an embedded HTML snippet
+- **Use the template's fixed light-theme colors.** Do not add `color-scheme` or `light-dark()`: the report background is always light, so dark-mode values render near-white text
 - **Pick the top 4 risks** based on not-supported element counts, custom transform prevalence, and external dependencies
 - **Classify sources/destinations as Internal vs External** based on DATABASETYPE analysis
 - **Use specific numbers** - don't say "many workflows", say "8 workflows"

@@ -8,7 +8,7 @@ Detailed reference for PostgreSQL connection options, authentication methods, SS
 
 | Parameter | Flag | Description |
 |-----------|------|-------------|
-| Connection name | `-c, --connection` | Unique identifier for this connection |
+| Connection name | `-s, --source-connection` | Unique identifier for this connection |
 | Authentication | `--auth` | Authentication method: `standard` |
 | Host | `--host` | PostgreSQL hostname or IP address |
 | Database | `--database` | Database name (bound at connection time) |
@@ -31,7 +31,7 @@ The only supported authentication method for PostgreSQL.
 
 ```bash
 scai connection add-postgresql \
-  -c my-postgres \
+  -s my-postgres \
   --auth standard \
   --host pg-server.example.com \
   --port 5432 \
@@ -48,7 +48,7 @@ scai connection add-postgresql \
 
 ```bash
 scai connection add-postgresql \
-  -c my-postgres \
+  -s my-postgres \
   --auth standard \
   --host pg-server.example.com \
   --port 5432 \
@@ -67,7 +67,7 @@ Managed services require encrypted connections. Use `Require` (default) or stric
 
 ```bash
 scai connection add-postgresql \
-  -c managed-pg \
+  -s managed-pg \
   --auth standard \
   --host my-instance.us-east-1.rds.amazonaws.com \
   --database mydb \
@@ -82,7 +82,7 @@ For environments requiring full certificate chain verification:
 
 ```bash
 scai connection add-postgresql \
-  -c strict-pg \
+  -s strict-pg \
   --auth standard \
   --host pg-server.example.com \
   --database mydb \
@@ -97,7 +97,7 @@ For local PostgreSQL instances without TLS configured:
 
 ```bash
 scai connection add-postgresql \
-  -c local-pg \
+  -s local-pg \
   --auth standard \
   --host localhost \
   --port 5432 \
@@ -128,7 +128,7 @@ Most PostgreSQL instances use the default port:
 
 ```bash
 scai connection add-postgresql \
-  -c my-postgres \
+  -s my-postgres \
   --auth standard \
   --host pg-server.example.com \
   --database mydb \
@@ -142,7 +142,7 @@ For PostgreSQL instances on custom ports:
 
 ```bash
 scai connection add-postgresql \
-  -c my-postgres \
+  -s my-postgres \
   --auth standard \
   --host pg-server.example.com \
   --port 5433 \
@@ -165,7 +165,7 @@ scai connection add-postgresql \
 
 ## Data Exchange Worker (cloud migration / validation)
 
-The worker connects via Npgsql using the same credentials as `scai connection add-postgresql`. The generated worker TOML uses the COPY protocol for all data extraction:
+The worker uses the same credentials as `scai connection add-postgresql`. The selected extraction method controls whether it uses `psql \copy` or ODBC:
 
 ```toml
 [connections.source.postgresql]
@@ -174,22 +174,22 @@ password = "<password>"
 database = "<database_name>"
 host = "<host>"
 port = 5432
-use_copy = true
+use_copy = true # pg_copy; set false for ODBC
 ```
 
-`use_copy = true` is always enabled — the COPY protocol provides higher throughput than row-by-row reads.
+`use_copy = true` (the default) is the `pg_copy` method: the worker prefers `psql \copy` and falls back to the ODBC parquet reader on its own if `psql` is not on `PATH`. `use_copy = false` is the explicit `odbc` method and makes an ODBC driver mandatory. Both use workflow `extraction.strategy: regular`.
 
 Ensure the PostgreSQL user has:
 
 - `SELECT` on all tables being migrated or validated
 - `USAGE` on schemas containing those tables
-- For `COPY` protocol: no additional grants beyond `SELECT` are required
+- For client-side `psql \copy`: no additional server-side `COPY` grant beyond `SELECT` is required
 
-Network: the worker host must reach the PostgreSQL server on the configured port. For SPCS workers, ensure `EXTERNAL_ACCESS_INTEGRATIONS` covers the database host. PostgreSQL does **not** require a separate driver download (unlike Oracle/Teradata) — Npgsql is bundled with the worker.
+Network: the worker host must reach the PostgreSQL server on the configured port. For SPCS workers, ensure `EXTERNAL_ACCESS_INTEGRATIONS` covers the database host. The `pg_copy` path prefers `psql` on `PATH`; the `odbc` method requires a PostgreSQL ODBC driver. Npgsql used by scai connection handling does not satisfy either worker prerequisite.
 
 Worker TOML `[connections.source.postgresql].database` must match `source.databaseName` in migration/validation workflow YAML.
 
-## scai TOML Fields (`~/.snowflake/snowct/postgresql.toml`)
+## scai TOML Fields (`~/.snowflake/scai/connections/postgresql.toml`)
 
 Populated by `scai connection add-postgresql`. The MCP server reads this file when generating the DEW worker config.
 
@@ -401,7 +401,7 @@ WHERE table_schema = 'public'
 ### Test with scai
 
 ```bash
-scai connection test -l postgresql -c <CONNECTION_NAME> --json
+scai connection test -l postgresql -s <CONNECTION_NAME> --json
 ```
 
 ### Manual Network Test

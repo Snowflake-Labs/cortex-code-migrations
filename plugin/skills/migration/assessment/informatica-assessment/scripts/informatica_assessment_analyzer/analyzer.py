@@ -53,6 +53,7 @@ class InformaticaAssessmentAnalyzer:
     ):
         self.elements_file = elements_file
         self.issues_file = issues_file
+        self.source_dir = source_dir
         self.workflows: Dict[str, WorkflowAnalysis] = {}
 
         self.issue_effort_service = IssueEffortService.from_bundled_reference()
@@ -86,7 +87,9 @@ class InformaticaAssessmentAnalyzer:
         return repository.load_and_attach_issues(components_by_key)
 
     def _organize_by_workflows(self, components_by_key):
-        return self.organizer_service.organize_by_workflows(components_by_key)
+        return self.organizer_service.organize_by_workflows(
+            components_by_key, self.source_dir
+        )
 
     def export_to_json(self, output_path: str, conversion_mode: str = "dbt") -> None:
         """Export analysis results to JSON."""

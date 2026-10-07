@@ -74,6 +74,52 @@ printf '%s\n' "$out" | grep -Fq "BIN=$test_root/orch/migration-mcp-server" \
 grep -Fxq "$test_root/orch/migration-mcp-server" "$cache" \
   || fail "stale cache was not rewritten: $(cat "$cache")"
 
+# SNOW-4210868: scai relinked to a newer build after the cache was written.
+# The cache must follow the new scai, not keep exec'ing the old server.
+mkdir -p "$test_root/v2/orch"
+cp "$bin" "$test_root/v2/orch/migration-mcp-server"
+chmod +x "$test_root/v2/orch/migration-mcp-server"
+printf '%s\n' '#!/bin/sh' 'echo apphost' >"$test_root/v2/orch/scai-apphost"
+chmod +x "$test_root/v2/orch/scai-apphost"
+clear_cache
+env -u MIGRATION_MCP_SERVER_BIN -u SCAI_CLI PATH="$test_root/bin:$PATH" \
+  sh "$hook" stamp-agent-id </dev/null >/dev/null
+grep -Fxq "$test_root/orch/migration-mcp-server" "$cache" \
+  || fail "relink setup: $(cat "$cache")"
+ln -sf "$test_root/v2/orch/scai-apphost" "$test_root/bin/scai"
+out=$(
+  env -u MIGRATION_MCP_SERVER_BIN -u SCAI_CLI PATH="$test_root/bin:$PATH" \
+    sh "$hook" stamp-agent-id </dev/null
+)
+printf '%s\n' "$out" | grep -Fq "BIN=$test_root/v2/orch/migration-mcp-server" \
+  || fail "relinked scai still ran the cached server: $out"
+grep -Fxq "$test_root/v2/orch/migration-mcp-server" "$cache" \
+  || fail "relink did not rewrite cache: $(cat "$cache")"
+
+# A one-line cache from an older shim is re-resolved against scai on PATH.
+printf '%s\n' "$test_root/orch/migration-mcp-server" >"$cache"
+out=$(
+  env -u MIGRATION_MCP_SERVER_BIN -u SCAI_CLI PATH="$test_root/bin:$PATH" \
+    sh "$hook" stamp-agent-id </dev/null
+)
+printf '%s\n' "$out" | grep -Fq "BIN=$test_root/v2/orch/migration-mcp-server" \
+  || fail "legacy one-line cache was trusted over scai: $out"
+ln -sf "$test_root/orch/scai-apphost" "$test_root/bin/scai"
+
+# A compiled scai (not a wrapper script) is not fed to sed.
+compiled="$test_root/compiled/scai"
+mkdir -p "$test_root/compiled"
+printf '\177ELF\377\376\000binary' >"$compiled"
+chmod +x "$compiled"
+cp "$bin" "$test_root/compiled/migration-mcp-server"
+chmod +x "$test_root/compiled/migration-mcp-server"
+clear_cache
+err=$(
+  env -u MIGRATION_MCP_SERVER_BIN SCAI_CLI="$compiled" PATH="/usr/bin:/bin" \
+    sh "$hook" stamp-agent-id </dev/null 2>&1 >/dev/null
+)
+[ -z "$err" ] || fail "compiled scai printed to stderr: $err"
+
 # make-temp wrapper: export MIGRATION_MCP_SERVER_BIN, exec elsewhere.
 wrapper="$test_root/wrapper-scai"
 printf '%s\n' \

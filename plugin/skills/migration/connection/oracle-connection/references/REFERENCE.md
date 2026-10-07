@@ -52,7 +52,7 @@ Note: `--driver-path` alone is not sufficient — it must accompany another flag
 
 | Parameter | Flag | Description |
 |-----------|------|-------------|
-| Connection name | `-c, --connection` | Unique identifier for this connection |
+| Connection name | `-s, --source-connection` | Unique identifier for this connection |
 | Authentication | `--auth` | Authentication method: `standard` |
 | Host | `--host` | Oracle hostname or IP address |
 | Service name | `--service-name` | Oracle service name |
@@ -74,7 +74,7 @@ The only supported authentication method for Oracle.
 
 ```bash
 scai connection add-oracle \
-  --connection my-oracle \
+  --source-connection my-oracle \
   --auth standard \
   --host oracle-server.example.com \
   --service-name ORCL \
@@ -89,7 +89,7 @@ Password will be prompted securely.
 **Full inline example with all options:**
 ```bash
 scai connection add-oracle \
-  --connection my-oracle \
+  --source-connection my-oracle \
   --auth standard \
   --host oracle-server.example.com \
   --port 1521 \
@@ -117,7 +117,7 @@ Most Oracle instances use the default listener port:
 
 ```bash
 scai connection add-oracle \
-  --connection my-oracle \
+  --source-connection my-oracle \
   --auth standard \
   --host oracle-server.example.com \
   --service-name ORCL \
@@ -130,7 +130,7 @@ For Oracle instances on custom ports:
 
 ```bash
 scai connection add-oracle \
-  --connection my-oracle \
+  --source-connection my-oracle \
   --auth standard \
   --host oracle-server.example.com \
   --port 1522 \

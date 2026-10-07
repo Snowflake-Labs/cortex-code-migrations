@@ -80,9 +80,7 @@ from .content import (
     TOPOLOGY_LEDE,
     TOPOLOGY_TITLE,
     UNLOAD_QUESTION,
-    VALIDATION_BODY,
     VALIDATION_LABELS,
-    VALIDATION_TITLE,
     WORKER_OPTIONS,
     WORKER_TITLE,
     DocLink,
@@ -364,7 +362,7 @@ def _topology() -> str:
             _matrix(),
             _bullet_card(WORKER_TITLE, WORKER_OPTIONS),
             f'<div class="dmv-sub"><div class="dmv-sub-title">{BOTTLENECK_TITLE}</div>'
-            + '<ul class="dmv-list">'
+            + '<ul class="dmv-bullet-list">'
             + "".join(f"<li>{item}</li>" for item in BOTTLENECKS)
             + "</ul></div>",
         ],
@@ -381,14 +379,6 @@ def _suggestions(readiness: DataMigrationReadiness) -> str:
         SUGGESTIONS_TITLE.format(dialect=_dialect_name(readiness)),
         [_bullet_card("", items)],
         anchor="dmv-suggestions",
-    )
-
-
-def _validation() -> str:
-    return _card(
-        VALIDATION_TITLE,
-        [f"<p class='dmv-para'>{para}</p>" for para in VALIDATION_BODY],
-        anchor="dmv-validation-differs",
     )
 
 
@@ -429,7 +419,6 @@ def generate_data_migration_html_content(
         _scripts(readiness),
         _topology(),
         _suggestions(readiness),
-        _validation(),
         _links(readiness),
     ]
 
@@ -719,20 +708,20 @@ DATA_MIGRATION_CSS = """
             padding: 1px 4px;
         }
         #data-migration-phase .dmv-list { margin: 0 0 0 18px; padding: 0; }
-        #data-migration-phase .dmv-list li {
+        /* The report's global reset sets `list-style: none` on every ul, so the
+           marker has to be asked for back by a selector that outranks it. */
+        #data-migration-phase .dmv-bullet-list {
+            margin: 0;
+            padding: 0 0 0 18px;
+            list-style: disc outside;
+        }
+        #data-migration-phase .dmv-list li,
+        #data-migration-phase .dmv-bullet-list li {
             font-size: 0.83rem;
             color: #475569;
             line-height: 1.55;
             margin-bottom: 5px;
         }
-        #data-migration-phase .dmv-para {
-            font-size: 0.88rem;
-            color: #475569;
-            line-height: 1.65;
-            margin: 0 0 12px 0;
-            max-width: 82ch;
-        }
-        #data-migration-phase .dmv-para:last-child { margin-bottom: 0; }
         #data-migration-phase .dmv-links { margin: 0 0 0 18px; padding: 0; }
         #data-migration-phase .dmv-links li { font-size: 0.85rem; margin-bottom: 6px; }
         #data-migration-phase .dmv-links a { color: #0369A1; }

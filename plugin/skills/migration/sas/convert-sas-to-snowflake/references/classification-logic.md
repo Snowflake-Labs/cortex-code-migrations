@@ -30,11 +30,9 @@ def classify_block_sql_first(block_content, block_type='DATA_STEP'):
     if 'declare hash' in content_lower:
         return ('pyspark', 'HASH objects - no SQL equivalent, use SCOS')
     
-    if 'call execute' in content_lower:
-        return ('pyspark', 'CALL EXECUTE - dynamic code generation, use SCOS')
-    
     if ('do until' in content_lower or 'do while' in content_lower):
-        if 'symput' in content_lower or content_lower.count('call ') > 2:
+        other_calls = content_lower.count('call ') - content_lower.count('call execute')
+        if 'symput' in content_lower or other_calls > 2:
             return ('pyspark', 'DO loop with external state - use SCOS')
     
     # Statistical modeling (canonical list — keep in sync with block-tiering-spec.md)
@@ -46,7 +44,9 @@ def classify_block_sql_first(block_content, block_type='DATA_STEP'):
             return ('pyspark', f'Statistical modeling: {proc} - use SCOS')
     
     # === TIER 2: Stored Procedure ===
-    if 'retain ' in content_lower and 'first.' in content_lower:
+    if 'call execute' in content_lower:
+        return ('stored_proc', 'CALL EXECUTE - dynamic dispatch, use SP with EXECUTE IMMEDIATE / cursor loop')
+        if 'retain ' in content_lower and 'first.' in content_lower:
         if '= 0' in content_lower or '= .' in content_lower:
             return ('stored_proc', 'RETAIN with conditional reset - use SP')
     

@@ -8,7 +8,7 @@
 |------|-----------|---------------|-----------|-------------|
 | Tier 1 (SQL) | 0.5 | 1.5 | 4 | Direct SQL translation — CTAS, CTEs, window functions |
 | Tier 2 (Stored Proc) | 2 | 5 | 12 | Procedural logic — cursors, state management, multi-step |
-| Tier 3 (PySpark/SCOS) | 4 | 10 | 20 | Complex patterns — HASH, CALL EXECUTE, statistical modeling |
+| Tier 3 (PySpark/SCOS) | 4 | 10 | 20 | Complex patterns — HASH, statistical modeling (CALL EXECUTE is Tier 2) |
 
 ### Effort Multipliers
 
