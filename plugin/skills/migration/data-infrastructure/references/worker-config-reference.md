@@ -20,18 +20,19 @@ The project-default `.scai/config/dew_configuration.toml` (path relative to the 
 | `[application]` | `snowflake_database_for_metadata` | String | Database containing migration/validation metadata procedures |
 | `[application]` | `snowflake_schema_for_data_migration_metadata` | String | Schema for migration task queue procedures (default metadata schema) |
 | `[application]` | `snowflake_schema_for_data_validation_metadata` | String | Schema for validation-specific metadata objects |
-| `[connections.source.*]` | N/A | Object | Source system connection config. SQL Server and Redshift use ODBC; Oracle uses ODP.NET (`Oracle.ManagedDataAccess.Core`); Teradata uses **`teradatasql`** (preferred) or Teradata ODBC (`auto_detect_driver` default); PostgreSQL uses Npgsql. SCAI code extraction uses the separate .NET `Teradata.Client.Provider` NuGet package — not the worker runtime. |
+| `[connections.source.*]` | N/A | Object | Source system connection config. SQL Server and Redshift use ODBC (SQL Server adds BCP for bulk when `use_bcp`); Oracle uses ODP.NET (`Oracle.ManagedDataAccess.Core`); Teradata uses **`teradatasql`** (preferred) or Teradata ODBC (`auto_detect_driver` default); PostgreSQL uses `psql \copy` or ODBC according to `use_copy`. SCAI code extraction uses the separate .NET `Teradata.Client.Provider` NuGet package — not the worker runtime. |
 | `[connections.source.*]` | `database` | String | **Must match** `source.databaseName` in the workflow YAML. For SQL Server/Redshift/Teradata/PostgreSQL this is the database name. For **Oracle** it is the **service name**. A mismatch causes empty metadata/schema extraction. |
 | `[connections.source.sqlserver]` | `trust_server_certificate` | Boolean | Optional. Forwarded from the scai SQL Server connection. When omitted, ODBC Driver 18 defaults apply (certificate not trusted). |
 | `[connections.source.sqlserver]` | `encrypt` | Boolean | Optional. Forwarded from the scai SQL Server connection. When omitted, ODBC Driver 18 defaults to `encrypt=on`. |
 | `[connections.source.sqlserver]` | `host` | String | Source host. Bare `localhost` is treated as `127.0.0.1` for IPv4-only SQL Server instances. |
+| `[connections.source.sqlserver]` | `use_bcp` | Boolean | Optional (default `false`). Routes **bulk** extraction through the `bcp` utility instead of ODBC — materially faster, and set by the SQL Server worker container. Requires `bcp` on the worker PATH; there is no ODBC fallback if it is missing. Needs no orchestrator `extraction.strategy` change. The `[bulk_utility.bcp]` section some templates carry neither enables nor tunes it — the worker hardcodes BCP's terminators and encoding. |
 | `[connections.source.oracle]` | `oracle_connection_mode` | String | Required. Use `"basic"` for standard username/password (EZ Connect). |
-| `[connections.source.oracle]` | `database` | String | Oracle **service name** (same value as `service_name` in `~/.snowflake/snowct/oracle.toml`). |
-| `[connections.source.teradata]` | `database` | String | Teradata **database name** (same value as `database` in `~/.snowflake/snowct/teradata.toml`). |
+| `[connections.source.oracle]` | `database` | String | Oracle **service name** (same value as `service_name` in `~/.snowflake/scai/connections/oracle.toml`). |
+| `[connections.source.teradata]` | `database` | String | Teradata **database name** (same value as `database` in `~/.snowflake/scai/connections/teradata.toml`). |
 | `[connections.source.teradata]` | `authentication` | String | Optional. Set to `"LDAP"` when the scai connection uses `--auth ldap` (`auth_method = "ldap"` in `teradata.toml`). Omit for standard username/password (TD2). |
 | `[connections.source.teradata]` | `auto_detect_driver` | Boolean | Optional (default `true`). Picks the newest registered Teradata ODBC driver when `teradatasql` is unavailable. |
-| `[connections.source.postgresql]` | `use_copy` | Boolean | Always `true`. Enables PostgreSQL's native COPY protocol for data extraction (higher throughput than direct reads). |
-| `[connections.source.postgresql]` | `database` | String | PostgreSQL database name (same value as `database` in `~/.snowflake/snowct/postgresql.toml`). |
+| `[connections.source.postgresql]` | `use_copy` | Boolean | Default `true`. `true` for selected method `pg_copy` — `psql` on PATH is preferred, and the worker falls back to ODBC on its own when it is absent. `false` for selected method `odbc`, which then requires an ODBC driver. Both use workflow strategy `regular`. |
+| `[connections.source.postgresql]` | `database` | String | PostgreSQL database name (same value as `database` in `~/.snowflake/scai/connections/postgresql.toml`). |
 | `[connections.source.postgresql]` | `host` | String | PostgreSQL hostname. |
 | `[connections.source.postgresql]` | `port` | Integer | TCP port (default: `5432`). |
 | `[connections.source.azure_synapse]` | `mode` | String | Auth mode. `"sql_auth"` (username/password) or `"azure_ad"` (Azure AD app + client secret). The worker's vocabulary differs from scai's — see [Azure Synapse auth modes](#azure-synapse-auth-modes). |
@@ -41,9 +42,9 @@ The project-default `.scai/config/dew_configuration.toml` (path relative to the 
 
 ## scai source credentials vs worker keys
 
-scai stores source connections in `~/.snowflake/snowct/<engine>.toml`. The worker reads a **different** vocabulary under `[connections.source.<engine>]`. `scai data worker generate-config` writes `connection_name = "…"` (no secrets). Hydration at `worker start` translates through `DewConfigBuilder.ExtractSourceConnectionInfo`. Copy-pasting a scai TOML into the worker file does **not** work.
+scai stores source connections in `~/.snowflake/scai/connections/<engine>.toml`. The worker reads a **different** vocabulary under `[connections.source.<engine>]`. `scai data worker generate-config` writes `connection_name = "…"` (no secrets). Hydration at `worker start` translates through `DewConfigBuilder.ExtractSourceConnectionInfo`. Copy-pasting a scai TOML into the worker file does **not** work.
 
-| Meaning | scai (`snowct/<engine>.toml`) | Worker (`[connections.source.<engine>]`) |
+| Meaning | scai (`scai/connections/<engine>.toml`) | Worker (`[connections.source.<engine>]`) |
 |---------|-------------------------------|------------------------------------------|
 | Login | `user` | `username` |
 | SQL Server / Synapse host | `server_url` | `host` |
@@ -154,7 +155,10 @@ For advanced extraction scenarios, set `plugin_class` on a source connection:
 plugin_class = "my_package.plugins.CustomExtractor"
 ```
 
-The class must be importable on the worker host and subclass `ExtractionPlugin`. Prefer built-in extraction strategies in workflow YAML (`regular`, `unload`, `tpt`, `write_nos`, `dbms_cloud`) before custom plugins.
+The class must be importable on the worker host and subclass `ExtractionPlugin`. Prefer built-in
+workflow strategies (`regular`, `unload`, `write_nos`, `dbms_cloud`, `cet_as`, `export_data`,
+`cloud_direct`) before custom plugins. BCP, PostgreSQL COPY, and TPT are worker methods under
+workflow strategy `regular`.
 
 ## SPCS worker connectivity
 
@@ -166,8 +170,8 @@ Default extraction is `regular` (ODBC / `teradatasql` → Snowflake internal sta
 
 | Workflow `extraction.strategy` | Worker TOML extras | When to use |
 |-------------------------------|-------------------|-------------|
-| `regular` (default) | Standard `[connections.source.teradata]` only | Most tables |
-| `tpt` | Optional `tpt_delimiter`, `tpt_max_sessions`; worker host needs Teradata TTU (`tbuild`) | Large bulk loads |
+| `regular` + selected method `odbc` | Standard `[connections.source.teradata]` only, `use_tpt_for_bulk = false` | Most tables |
+| `regular` + selected method `tpt` | `use_tpt_for_bulk = true` (the default) plus `tpt_*` connection settings; worker host needs Teradata TTU (`tbuild`) | Large worker-side bulk loads |
 | `write_nos` | `write_nos_*` fields under `[connections.source.teradata]` | Server-side export to cloud storage + Snowflake external stage |
 
 See migrations-data-validation docs (`teradata-odbc-extraction.md`, `tpt-extraction.md`, `write-nos-extraction.md`) for full `write_nos` and TPT setup.
@@ -205,6 +209,20 @@ extraction:
   strategy: unload
   externalStage: MY_DB.MY_SCHEMA.S3_EXTERNAL_STAGE
 ```
+
+## Advanced: cloud_direct (any of S3 / GCS / Azure Blob)
+
+Worker streams Parquet to object storage (no local disk PUT). Used for PostgreSQL/Db2 L3 pushdown and as a fallback when the source cannot natively UNLOAD/EXPORT to the user's bucket.
+
+```toml
+[connections.target.s3]
+bucket_name = "my-migrations-bucket"
+# prefix = "dv-signatures"
+
+# or [connections.target.gcs] / [connections.target.blob]
+```
+
+Workflow YAML: `extraction.strategy: cloud_direct` plus `externalStage` covering the same prefix. Full L3 decision tree: [l3-pushdown-extraction.md](../../setup/data-validation/references/l3-pushdown-extraction.md).
 
 ## Advanced: Secrets management
 

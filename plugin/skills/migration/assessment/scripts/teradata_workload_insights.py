@@ -24,6 +24,8 @@ from workload_insights_common import (
     _section,
     _table,
     _text,
+    render_empty_analysis_pane,
+    render_extract_pane,
     workload_insights_css,
 )
 
@@ -83,7 +85,7 @@ FROM DBC.DBQLogTbl;"""
 def _header() -> str:
     return """
 <header class="wi-header">
-  <h1>Discovery</h1>
+  <h1>Query Logs Analysis</h1>
   <p class="wi-notice"><strong>Disclaimer:</strong> This report uses metadata only;
   no SQL text shown or stored. No query text, parameters, query identifiers, or
   error messages appear in the assessment artifact or this report.</p>
@@ -307,8 +309,6 @@ def _errors_section(payload: Mapping[str, Any]) -> str:
 
 def _how_to() -> str:
     return f"""
-<p class="wi-empty-notice"><strong>No DBQL workload extract in this project yet.</strong>
-This phase is optional; the rest of the assessment does not depend on it.</p>
 <p>If DBQL logging is on, Teradata already recorded this history &mdash; nothing
 has to be installed, started, or waited for, and the export below reads what is
 already stored.</p>
@@ -352,13 +352,18 @@ already stored.</p>
 </ul>"""
 
 
+def render_teradata_workload_insights_extract_html() -> str:
+    """Render Teradata extract instructions for the Extract Log tab."""
+    return render_extract_pane(_how_to())
+
+
 def render_teradata_workload_insights_tab_html(
     payload: Optional[Mapping[str, Any]],
 ) -> str:
     """Render inner Teradata Workload Insights HTML from artifact values."""
     if not payload or not payload.get("found"):
-        return f'<div id="workload-insights-report" v-pre>{_header()}{_how_to()}</div>'
-    return f"""<div id="workload-insights-report" v-pre>
+        return render_empty_analysis_pane(_header())
+    return f"""<div id="workload-insights-report" class="wi-pane" v-pre>
 {_header()}
 {_summary(payload)}
 {_kpis(payload)}
@@ -377,13 +382,13 @@ def teradata_workload_insights_css() -> str:
     return (
         workload_insights_css()
         + """
-#workload-insights-report .wi-kpis {
+.wi-pane .wi-kpis {
   display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
   border: 1px solid #E2E8F0; border-radius: 12px; overflow: hidden;
 }
-#workload-insights-report .wi-kpi { min-width: 0; }
+.wi-pane .wi-kpi { min-width: 0; }
 @media (max-width: 1000px) {
-  #workload-insights-report .wi-kpis {
+  .wi-pane .wi-kpis {
     grid-auto-flow: row; grid-template-columns: repeat(2, 1fr);
   }
 }

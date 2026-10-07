@@ -20,16 +20,18 @@ end-to-end path is fully defined in `SKILL.md`.
 | Migration effort/hours | `effort-estimate/SKILL.md` |
 | SQL Server migration risks/anti-patterns | `anti-patterns/SKILL.md` |
 | Dynamic SQL patterns | `analyzing-sql-dynamic-patterns/SKILL.md` |
-| SQL Server Extended Events or Teradata DBQL discovery | Parent input collection, then `workload-insights/SKILL.md` |
+| SQL Server Extended Events, Teradata DBQL, or Redshift SYS_QUERY_HISTORY discovery | Parent input collection, then `workload-insights/SKILL.md` |
 | SSIS packages | `etl-assessment/SKILL.md` |
 | Informatica PowerCenter | `informatica-assessment/SKILL.md` |
 | Source → pipeline → target → report lineage | Parent input collection, then `data-lineage/SKILL.md` |
 
 Discovery triggers include `discovery`, `workload insights`, `query logs`,
-`extended events`, `xel`, `dbql`, and `querylogs`. It accepts SQL Server `.xel`
-captures or Teradata DBQL metrics `.csv`; statement text is never a Teradata
-input. With no files, route through the parent input collection so it offers
-skip / existing files / later and shows the dialect-specific collection SQL.
+`extended events`, `xel`, `dbql`, `SYS_QUERY_HISTORY`, and `querylogs`. It
+accepts SQL Server `.xel` captures, Teradata DBQL metrics `.csv`, or Redshift
+`SYS_QUERY_HISTORY` metrics `.csv`; statement text is never a Teradata or
+Redshift input. With no files, route through the parent input collection so it
+offers skip / existing files / later and shows the dialect-specific collection
+SQL.
 
 Power BI templates are optional Data Lineage input. Do not confuse assessment
 lineage with `../powerbi-repointing/SKILL.md`, which rewrites templates after
@@ -101,8 +103,9 @@ scai assessment report \
 An explicitly supplied source overrides discovery. A partial assessment passes
 only available sources, but still passes `--project-dir`.
 
-The workload-insights artifact may come from SQL Server Extended Events or a
-Teradata DBQL metrics export. Statement text is never a Teradata input.
+The workload-insights artifact may come from SQL Server Extended Events, a
+Teradata DBQL metrics export, or a Redshift `SYS_QUERY_HISTORY` metrics export.
+Statement text is never a Teradata or Redshift input.
 
 ## Readiness-only topics
 

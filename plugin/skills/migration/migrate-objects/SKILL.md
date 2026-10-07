@@ -22,7 +22,7 @@ Tell the user:
 
 The Snowflake target (connection + database) and the testing path are
 configured by the **`setup` state machine**, not here — they're the last
-steps of setup, after the post-assessment `chooseRunMode` prompt. A user
+steps of setup, after the post-assessment continue gate and `chooseRunMode` prompt. A user
 who stopped at assessment has none of them yet.
 
 Call `progress_setup()`.
@@ -35,8 +35,8 @@ Call `progress_setup()`.
 
 This is also the path for a user who skipped migration setup and has since
 changed their mind: the prompt is re-offered, and answering it walks them
-through the Snowflake target and testing setup. Do not submit
-`run_mode=autonomous` — setup does not offer that mode.
+through the Snowflake target and testing setup. Do not stamp `run_mode` here —
+manual vs autonomous is `chooseRunMode`'s question.
 
 ## Advancing and reporting
 
@@ -53,8 +53,13 @@ The outcome and error vocabulary is defined once in [../extensibility/TASKS.md](
 
 ## Autonomous mode
 
-If the user asks to run the wave unattended — "autonomous", "auto-pilot", "just
-migrate everything", "run objects in parallel" — load
+**Autonomous runs only in the SnowConvert desktop app.** The MCP server refuses
+the sub-agent latch for every other caller, so outside the app the answer is
+that autonomous is not available here and the wave runs interactively — say so
+and continue with the loop below rather than starting a run that cannot finish.
+
+Inside the app, if the user asks to run the wave unattended — "autonomous",
+"auto-pilot", "just migrate everything", "run objects in parallel" — load
 [autonomous/SKILL.md](autonomous/SKILL.md) instead of the loop below and follow
 it. That skill claims work itself and dispatches one subagent per ready task
 group, up to the project parallelism configured during setup, escalating only
@@ -107,7 +112,7 @@ Then ask the user to pick a next action. **Only list actions you are actually of
 migration_status(mode="my_objects_details", group=<group.id>)
 ```
 
-When `object_type == "etl"`, the group is an ETL stabilization batch — load [migrate-etl/SKILL.md](migrate-etl/SKILL.md) and follow it. SQL object types (`table`, `view`, `procedure`, `function`, `bteq`) follow the loop already described by `instructions` (BTEQ scripts skip deploy).
+When `object_type == "etl"`, the group is an ETL stabilization batch — load [migrate-etl/SKILL.md](migrate-etl/SKILL.md) and follow it. When `object_type == "dbt"`, the group is a dbt Jinja repointing batch — load [../dbt/SKILL.md](../dbt/SKILL.md) and follow it. SQL object types (`table`, `view`, `procedure`, `function`, `bteq`) follow the loop already described by `instructions` (BTEQ scripts skip deploy).
 
 VERY IMPORTANT: **Wait for user input before acting.** Once the user confirms which objects to operate on, follow the `instructions` field on the response.
 

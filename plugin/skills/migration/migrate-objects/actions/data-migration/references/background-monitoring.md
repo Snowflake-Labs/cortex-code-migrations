@@ -2,8 +2,6 @@
 
 Passive completion and trouble reporting for long-running `migrate_data(mode="run")` jobs. The MCP relay polls the workflow and appends state changes to a log; Claude Code **Monitor** tails that log for you.
 
-For data validation, see [validation background monitoring](../../../../validate-objects/actions/references/background-monitoring.md).
-
 ---
 
 ## Goals

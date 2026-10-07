@@ -15,7 +15,7 @@ Tell the user:
 > Here's what I'll do:
 > 1. Run the deterministic code conversion engine against your source SQL files, transforming each into Snowflake SQL syntax (optionally tailoring conversion settings to your source first, or going with defaults).
 > 2. Generate reports flagging anything that needs manual review (EWIs, FDMs, performance remarks, out-of-scope items).
-> 3. Save converted code under `snowflake/` and reports under `reports/SnowConvert/`.
+> 3. Save converted code under `snowflake/`; conversion reports are available through AIM Assessment.
 
 Convert source code to Snowflake SQL using the deterministic code conversion engine.
 
@@ -36,7 +36,29 @@ Confirm `source/` contains `.sql` files (use whichever portable form fits the ho
 
 If `source/` is empty, continue to Steps 2–3.5. After those steps, if there is still no SQL **and** `TABLEAU_PATH` is unset **and** `PBIT_PATH` is unset, return to the parent setup skill so it can re-query `progress_setup()`. Tableau-only conversions (Step 3.5 sets `TABLEAU_PATH`) are allowed with an empty `source/`.
 
+### Step 1.5: dbt Fast-Path
+
+A dbt workload was routed here from the dbt branch of the Setup machine. Detect it
+deterministically — `dbt_project.yml` lands in `source/` when the dbt project is added
+(via `scai code add`) — and shortcut the generic conversion questions:
+
+> If `source/dbt_project.yml` exists (a dbt Jinja project), this is a **dbt conversion**.
+> Skip Steps 2, 3, and 3.5 entirely (no ETL, no Power BI, no custom settings) and run
+> the dbt-specific conversion in Step 4:
+> ```bash
+> scai code convert --dbt --json
+> ```
+> The `--dbt` flag is an internal engine detail, never surfaced — the Jinja tokenization,
+> translation, and restoration all happen inside the engine. Repointed models land in
+> `snowflake/models/`. After a successful envelope, the Setup machine routes to the dbt
+> repointing skill for agentic YAML/macro refinement.
+
+If `source/dbt_project.yml` does **not** exist, continue to Step 2 normally.
+
 ### Step 2: Check for ETL Code
+
+**Skip this entire step if `source/dbt_project.yml` exists** (see Step 1.5). A dbt workload has no
+SSIS or Informatica packages — do not ask any ETL question, go straight to Step 4.
 
 Any ETL in this project was imported during register (`scai code add`), which arranges the packages into `source/_etl/`. That is where `convert` reads them from.
 
@@ -49,14 +71,14 @@ Check whether `source/_etl/` exists and contains ETL files (use whichever portab
 > 3. **Something else** — my platform isn't listed (for example DataStage, Pentaho, Azure Data Factory, or Alteryx)
 
 - If `source/_etl/` is **missing or empty**, there is no ETL to convert; proceed to Step 3.
-- If it contains **SSIS** packages only, no conversion-target prompt is needed; proceed to Step 3. Do not route SSIS to AI-First.
+- If it contains **SSIS** packages only, no conversion-target prompt is needed. Do not route SSIS to AI-First. Load `../dbt-consolidation/SKILL.md`, then proceed to Step 3.
 - If it contains **Informatica** Power Center XML, ask the remaining ETL questions up front, in one sequence, before running the conversion:
     1. Conversion target, via `ask_user_question` (`multiSelect = false`):
        > "How should Informatica mappings be converted?
        > 1. **dbt** (default): each mapping becomes a dbt model orchestrated by Snowflake Tasks. Supports ETL stabilization and deploy.
        > 2. **Snowflake Scripting** (preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Stabilization and deploy are skipped for this preview flavor."
-    2. If the answer is **dbt**, also ask (`multiSelect = false`): "Consolidate dbt model chains to reduce the number of generated model files?". On yes, set `CONSOLIDATE_DBT = true` for Step 4.
-    3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 4.
+    2. If the answer is **dbt**, load `../dbt-consolidation/SKILL.md`. It asks the user to confirm model-chain consolidation (and project consolidation only when SSIS is also present). Return here when complete.
+    3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 4. Do **not** load `dbt-consolidation`.
 
     Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`. When the target is Snowflake Scripting, the `--informatica-to-snowflake-scripting` convert flag in Step 4 additionally records the project-level `etl_target` in `project.yml` that gates the scripting-preview routing.
 
@@ -109,13 +131,14 @@ scai code convert <SETTINGS_FLAGS> --json
 
 `--json` is always required so you can parse the result envelope. Substitute `<SETTINGS_FLAGS>` with the confirmed flags from Step 3.6 (or omit the token when empty). Then append one flag per decision already recorded in the steps above — nothing else. Do **not** pass `--etl-replatform-sources-path`; ETL already lives under `source/_etl/` from register.
 
-Always append `--generate-source-bindable-format --generate-snowflake-bindable-format` (**default on / opt-out**). They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Omit both flags only when the user explicitly opts out. Deploy stays legacy-safe: projects converted earlier, with no bindings file, still use `-d snowflake_database`. Bare `scai code convert` without these flags (engine default) is also opt-out.
+Always append `--generate-source-bindable-format --generate-snowflake-bindable-format` (**default on / opt-out**), **except on the dbt repointing path** — they are invalid alongside `--dbt` and the engine rejects the command (see `dbt/SKILL.md` Step 2). They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Omit both flags only when the user explicitly opts out. Deploy stays legacy-safe: projects converted earlier, with no bindings file, still use `-d snowflake_database`. Bare `scai code convert` without these flags (engine default) is also opt-out.
 
 | Append | When |
 |--------|------|
-| `--generate-source-bindable-format --generate-snowflake-bindable-format` | Default on (interactive and `subagent_mode`). Skip only on explicit opt-out. |
+| `--generate-source-bindable-format --generate-snowflake-bindable-format` | Default on (interactive and `subagent_mode`). Skip only on explicit opt-out, or on the `--dbt` path where they are invalid. |
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 2 (Informatica target is Snowflake Scripting) |
-| `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set in Step 2 (Informatica target is dbt and the user chose to consolidate model chains) |
+| `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set by `../dbt-consolidation/SKILL.md` |
+| `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS only) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 3 |
 | `--tableauRepointing <TABLEAU_PATH>` | `TABLEAU_PATH` was set in Step 3.5 |
 
@@ -136,12 +159,11 @@ Its registry step defers to `./etl-aifirst/SKILL.md`, which is the contract for 
 
 Conversion writes:
 - **Converted code** in `snowflake/`
-- **Reports** in `reports/SnowConvert/`
+- **Conversion reports** under `.scai/reports/SnowConvert/` — for tooling only. Users get them through AIM Assessment
 - **Logs** in `logs/`
 
-Name those locations so the user knows where to look. Reading them is the
-assessment's job, or something to do later if the user asks a question the
-envelope can't answer.
+Name the converted-code and log locations. Direct users to Assessment for reports.
+Do not present `.scai/reports/` as a place for users to browse.
 
 ### Conversion Options
 
@@ -150,8 +172,8 @@ envelope can't answer.
 | `-x, --show-ewis` | Show detailed EWI breakdown |
 | `--overwrite-working-directory` | Overwrite output files in `snowflake/` and registry |
 | `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; ETL stabilization and deploy are skipped for these units. |
-| `--consolidate-dbt-model-chains` | Consolidate Informatica dbt model chains to reduce the number of generated model files. Applies when the Informatica target is dbt. |
 
+For dbt consolidation options, see `../dbt-consolidation/SKILL.md`.
 For Power BI options, see `../powerbi-repointing/SKILL.md`. For Tableau options, see `../tableau-repointing/SKILL.md`.
 
 **Example with options:**
@@ -191,18 +213,21 @@ snowflake/
         ├── <package_name>.sql         # Snowflake Task graph
         └── <data_pipeline>/
             └── models/                # dbt models (staging, intermediate, marts) when target is dbt
+.scai/
+└── reports/
+    ├── SnowConvert/
+    │   ├── TopLevelCodeUnits.*.csv
+    │   ├── Issues.*.csv
+    │   ├── ObjectReferences.*.csv
+    │   ├── Assessment.*.json
+    │   ├── ETL.Elements.*.csv             # ETL elements processed (packages, tasks, data flows)
+    │   └── ETL.Issues.*.csv               # ETL-specific conversion issues
+    ├── GenericScanner/
+    ├── ArrangeReports/
+    └── conversion-reports.zip
 reports/
-├── SnowConvert/
-│   ├── TopLevelCodeUnits.*.csv
-│   ├── Issues.*.csv
-│   ├── ObjectReferences.*.csv
-│   ├── Assessment.*.json
-│   ├── ETL.Elements.*.csv             # ETL elements processed (packages, tasks, data flows)
-│   └── ETL.Issues.*.csv               # ETL-specific conversion issues
-├── AiFirstIssues/                     # Present only after Step 4.5 (AI-First "Something else" ETL path)
-│   └── <package_name>/
-├── ArrangeReports/
-└── GenericScanner/
+└── AiFirstIssues/                     # Present only after Step 4.5 (AI-First "Something else" ETL path)
+    └── <package_name>/
 logs/
 artifacts/
 └── repointing_output/
@@ -219,6 +244,7 @@ For Power BI output paths, see `../powerbi-repointing/SKILL.md`. For Tableau, us
 The envelope's own status is the check — don't go looking for corroboration.
 
 - [ ] The convert command exited successfully and the envelope reports no conversion errors
+- [ ] If dbt consolidation was offered, follow the CHECKPOINT addendum in `../dbt-consolidation/SKILL.md`
 - [ ] If Power BI reports were included, follow the CHECKPOINT addendum in `../powerbi-repointing/SKILL.md`
 - [ ] If Tableau workbooks were included, follow the CHECKPOINT addendum in `../tableau-repointing/SKILL.md`
 
@@ -232,7 +258,7 @@ Show a concise result line using only values from the JSON envelope:
 > **Conversion complete.** SQL: `<codeConversion.filesProcessed>` files processed,
 > `<codeConversion.codeUnitsConverted>` code units converted. ETL:
 > `<etlReplatforming.processedFiles>` files processed. Converted code is in
-> `snowflake/`; reports are in `reports/SnowConvert/`.
+> `snowflake/`; conversion reports are available through AIM Assessment.
 
 If the envelope has no `etlReplatforming` result, omit the ETL sentence. Never
 invent a missing count.
@@ -251,7 +277,7 @@ If you appended the bindable-format flags (the default), also tell the user once
 
 Skip that line when the user opted out of the flags.
 
-Then one line on what's next, and move on:
+Then one line on what's next. Return to the parent setup flow after conversion. Do not open `assessment/SKILL.md` directly from this skill; the parent controls the transition and honors explicit stop requests:
 
 > Next, we'll run an assessment to plan your migration: dependency waves, object categorization, and a deployment plan.
 

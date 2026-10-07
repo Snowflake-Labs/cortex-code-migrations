@@ -76,7 +76,7 @@ Network: the worker host must reach `bigquery.googleapis.com` and
 Worker TOML `[connections.source.bigquery].project_id` (and `dataset`, when set) must
 match `source.databaseName` / dataset scoping in the migration/validation workflow YAML.
 
-## scai TOML Fields (`~/.snowflake/snowct/bigquery.toml`)
+## scai TOML Fields (`~/.snowflake/scai/connections/bigquery.toml`)
 
 Populated by `scai connection add-bigquery`. The MCP server reads this file when
 generating the DEW worker config.
@@ -157,7 +157,7 @@ BigQuery has no portable system row identifier suitable for partitioning. Use:
 ## Verifying Connectivity
 
 ```bash
-scai connection test -l bigquery -c <CONNECTION_NAME> --json
+scai connection test -l bigquery -s <CONNECTION_NAME> --json
 ```
 
 Manual network test:

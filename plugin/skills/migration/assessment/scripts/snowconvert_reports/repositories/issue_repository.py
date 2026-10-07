@@ -20,11 +20,16 @@ with optional fields (name, component_full_name have defaults). Each ETL tool
 populates what it needs without requiring separate repository implementations.
 """
 
+import re
 from pathlib import Path
 from typing import Dict, Tuple
 
 from ..loaders import read_csv_rows
 from ..models import Issue, Component
+
+# ETL.Issues may add a role suffix such as "[target]" to a component name that
+# ETL.Elements writes without it.
+_ROLE_SUFFIX = re.compile(r"\[[^\]]+\]$")
 
 
 class IssueRepository:
@@ -74,6 +79,11 @@ class IssueRepository:
 
             parent_file_name = row.get("ParentFileName", "").strip()
             component_key = (parent_file_name, component_full_name)
+            if component_key not in components_by_key:
+                component_key = (
+                    parent_file_name,
+                    _ROLE_SUFFIX.sub("", component_full_name),
+                )
 
             if component_key in components_by_key:
                 components_by_key[component_key].issues.append(issue)

@@ -20,7 +20,7 @@ level (e.g. "Statistical modeling appears in 4 files") rather than listing every
 | Construct | What to grep for | Why it's complex |
 |-----------|------------------|------------------|
 | HASH objects | `declare hash`, `hash(` | No SQL equivalent; in-memory key lookup |
-| Dynamic code gen | `call execute` | Runtime-generated SAS; needs procedural rewrite |
+| Dynamic code gen | `call execute` | Runtime-generated SAS; Tier 2 procedural rewrite (EXECUTE IMMEDIATE) |
 | Statistical PROCs | `proc reg`, `proc glm`, `proc logistic`, `proc cluster`, `proc factor`, `proc phreg`, `proc lifetest`, `proc mixed`, `proc genmod`, `proc nlmixed` | Requires ML/stats libraries, not SQL |
 | Stateful DO loops | `do until` / `do while` + `symput` or many `call ` | External state mutation across iterations |
 
@@ -45,6 +45,7 @@ translatable to window functions / CTEs but worth calling out as complexity driv
 |--------|------------------|--------|
 | Nested/heavy macros | >2 `%macro` | LOW confidence |
 | Dynamic %INCLUDE | `%include` + `&` | LOW confidence (resolved at runtime) |
+| %INCLUDE outside scope | `external_includes[].in_scope = false` | Code not assessed — collect before sizing |
 | External DB engines | `oracle`, `teradata`, `db2`, `sqlsvr`, `odbc`, `oledb` | LOW confidence; passthrough/function mapping |
 | Date interval funcs | `intck`, `intnx` | MEDIUM confidence; SAS vs Snowflake alignment differs |
 | NOTSORTED BY | `notsorted` | MEDIUM confidence; ordering assumptions |

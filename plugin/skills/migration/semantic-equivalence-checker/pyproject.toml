@@ -28,3 +28,9 @@ packages = ["scripts/conversion_checker"]
 dev = [
     "pytest>=9.0.3",
 ]
+
+[tool.uv]
+constraint-dependencies = [
+    "pyjwt>=2.15.0",
+    "snowflake-connector-python>=4.7.3,<4.8",
+]

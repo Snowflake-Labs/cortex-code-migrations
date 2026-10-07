@@ -85,6 +85,7 @@ Match the user's request to the most relevant skill and load it.
   - **snowflake-connection** — create or repair a Snowflake target authenticator. Use for Microsoft Entra ID / Azure AD / OIDC (`oauth_authorization_code`); do not use `externalbrowser` for Entra → `./connection/snowflake-connection/SKILL.md`
   - **configure-testing** — pick or change the testing path (source-data vs synthetic) for procedure/function equivalence tests. Triggers: "change testing path", "switch to synthetic tests", "use query logs" → `./setup/configure-testing.md`
   - **data-validation-setup** — configure cloud data validation: schema, metrics, row-level checks → `./setup/data-validation/SKILL.md`
+    - **l3-pushdown-setup** — L3 signature extract via object storage (faster) + Snowflake external stage; wait if they still need a bucket. Triggers: "L3 pushdown", "UNLOAD for validation", "external stage for DV", "S3/GCS bucket for row validation" → `./setup/data-validation/l3-pushdown/SKILL.md`
   - **data-infrastructure-teardown** — suspend SPCS service + compute pool, stop local worker (cost-saving) → `./data-infrastructure/teardown/SKILL.md`
 
 ### Data infrastructure (reusable actions)
@@ -99,6 +100,7 @@ Match the user's request to the most relevant skill and load it.
   - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
   - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
   - **tableau-repointing** — collect `.twb`/`.tds` folder path and `--tableauRepointing` flag for Tableau repointing. Triggers: tableau, tableau migration, tableau repointing, migrate tableau, repoint tableau → `./tableau-repointing/SKILL.md`
+  - **dbt-consolidation** — confirm opt-in `--consolidate-dbt-model-chains` and SSIS `--consolidate-dbt-projects` before convert → `./dbt-consolidation/SKILL.md`
 - **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
 
 ### Migration & validation
@@ -107,6 +109,7 @@ Match the user's request to the most relevant skill and load it.
   - **data-migration-setup** — choose approach, generate workflow YAML, create target database for `migrate_data` → `./migrate-objects/actions/data-migration/SKILL.md`
   - **testbed-generator** — mine → validate → compile → generate the synthetic testbed for a workload: run/resume each phase, inspect unsolved constraints, readiness, and data-coupling clusters. Triggers: generate testbed, mine testbed, validate testbed, compile testbed, testbed data source → `./migrate-objects/baseline-capture/testbed-generator/SKILL.md`
 - **validate-objects** — validate data between a source and Snowflake, including project-based Snowflake-to-Snowflake validation. Triggers: "validate Snowflake to Snowflake", "compare Snowflake tables/databases", "run SF-to-SF DV" → `./validate-objects/SKILL.md`
+  - **l3-pushdown-setup** — configure L3 extract transport (object storage vs through the worker) before row validation runs → `./setup/data-validation/l3-pushdown/SKILL.md`
 
 ### Object metadata
 - **tag-objects** — tag or untag code units with the user's own labels (`extensions.tags`), and find objects by tag. Tags render as chips on the object rows in the Objects panel. Triggers: "tag this table", "label these objects", "untag", "which objects are tagged" → `./tag-objects/SKILL.md`

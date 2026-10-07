@@ -1,14 +1,14 @@
 # Task Model Reference (DMVF)
 
-Condensed reference for debugging migration and validation workflows. Full internal docs: `dmvf/docs/data-migration-orchestrator/task-model.md` and `scopes.md`.
+Condensed reference for debugging migration workflows. Full internal docs: `dmvf/docs/data-migration-orchestrator/task-model.md` and `scopes.md`.
 
 ## Executors
 
 | Executor | Runs on | Typical tasks |
 |----------|---------|---------------|
-| `orchestrator` | SPCS (or local) | Partition strategy, task fan-out, staged-data processing, validation evaluate |
-| `data-exchange-agent` | Worker (local or SPCS) | Source extraction, checksum collection, validation query execution |
-| `warehouse` | Snowflake warehouse | `COPY INTO`, DDL, Snowpipe drain barriers |
+| `orchestrator` | SPCS (or local) | Partition strategy, task fan-out, staged-data processing |
+| `data-exchange-agent` | Worker (local or SPCS) | Source extraction, checksum collection |
+| `warehouse` | Snowflake warehouse | `COPY INTO`, DDL, Snowpipe |
 
 ## Task structure
 
@@ -47,8 +47,6 @@ Preprocessing (metadata + schema + partition strategy)
     → Complete partition metadata
 ```
 
-Validation adds L1/L2/L3 chains with Snowpipe drain barriers when `useSnowpipeForResults` is true.
-
 ## Scope grammar
 
 Every task has a `SCOPE`: a hierarchical string of `::`-joined fragments, ordered least → most specific, describing the task's purpose and target. Scopes drive prefix queries, **rate limiting** (`RATE_LIMIT.SCOPE_PATTERN`), and the pause/resume/cancel procedures — all match `SCOPE` with SQL `LIKE`. The owning workflow is tracked separately in `TASK_QUEUE.WORKFLOW_ID` (not embedded in table/partition scopes).
@@ -68,25 +66,6 @@ Every task has a `SCOPE`: a hierarchical string of `::`-joined fragments, ordere
 
 The table identifier in `Table[...]` is the **normalized source FQN** (for example `MY_DB.DBO.CUSTOMERS`).
 
-### Data validation scopes
-
-Validation tasks are prefixed with `DV::` so they never collide with migration scopes.
-
-| Pattern | Meaning |
-|---------|---------|
-| `DV::Table[ID]::Preprocessing` | Validation metadata / table prep |
-| `DV::Table[ID]::SchemaValidation` | L1 schema validation |
-| `DV::Table[ID]::Partition[N]::MetricsValidation` | L2 metrics validation |
-| `DV::Table[ID]::Partition[N]::RowValidation` | L3 row-hash validation |
-| `DV::Table[ID]::Partition[N]::CellDrilldown` | Hybrid L3 cell drill-down (may carry `Batch[k]` before the op) |
-| `DV::Table[ID]::Partition[N]::WriteResults[row\|cell]` | Write results (row-hash or cell); batched as `...::Batch[k]::WriteResults[cell]` |
-| `DV::Table[ID]::Evaluate[LEVEL]` | Evaluate a completed level |
-| `DV::Table[ID]::ReconcilePossibleMismatches` | Post-drilldown reconcile of `POSSIBLE_MISMATCH` |
-| `DV::Table[ID]::L3EarlyStopMonitor` | Periodic L3 early-stop monitor |
-| `DV::Table[ID]::DetectionComplete` / `::SyncBaseline` / `::SyncFinalize` | Incremental validation bookkeeping |
-| `DV::Pipe[KEY]::SnowpipeSetup\|SnowpipeTeardown\|SnowpipeDrain\|SnowpipePrepareDrain` | Snowpipe ops for validation results |
-| `DV::ObjectTypeDetection::Preprocessing` | Object-type dispatch task |
-
 ### Querying / matching by scope
 
 ```sql
@@ -98,7 +77,7 @@ WHERE WORKFLOW_ID = <id>
 ORDER BY ID;
 ```
 
-The same `LIKE` matching powers rate-limit `SCOPE_PATTERN` rules (e.g. `Table[%]::Loading` caps concurrent loads) and scope-filtered queries or pause/cancel (e.g. `DV::Table[%]::Partition%::RowValidation` selects L3 tasks). See [rate limiting](../../../../data-infrastructure/references/advanced-operations-reference.md#rate-limiting-protect-source-or-shared-resources).
+The same `LIKE` matching powers rate-limit `SCOPE_PATTERN` rules (e.g. `Table[%]::Loading` caps concurrent loads) and scope-filtered queries or pause/cancel (e.g. `Table[%]::Partition%::Extraction` selects extraction tasks). See [rate limiting](../../../../data-infrastructure/references/advanced-operations-reference.md#rate-limiting-protect-source-or-shared-resources).
 
 ## Dependency model
 
@@ -138,10 +117,6 @@ Cross-reference `TaskName` / `LastErrorMessage` with MCP `reports.files.errors`.
 | `Engine 'X' not found in source connections` | Worker claiming wrong workflow / stale tasks / missing connection section |
 | ODBC / network timeout | Firewall, wrong host/port, missing egress allowlist for SPCS worker |
 | Syntax error near `TOP`/`LIMIT` in extraction | Invalid `whereClauseCriteria` |
-
-### 4. `POSSIBLE_MISMATCH` after completion
-
-Hybrid L3 may stop early when `earlyStoppingForRowHashing` or `maxFailedRowsNumber` triggers. A finished workflow can report `POSSIBLE_MISMATCH` — this is **not** a clean pass. Review L3 result rows before signing off.
 
 ## Workflow management procedures
 

@@ -37,10 +37,12 @@ Next 5 ready objects (12 total):
 4. [Reporting].[v_daily_sales]    view        pending at 'validateView'
 5. [Reporting].[sp_load_sales]    procedure   pending at 'createTests'
 
-Pick one or more by number or name, or say "all", "first 3", or "show more".
+Pick one or more by number or name, or say "all 5 shown", "first 3", or "show more".
 ```
 
 **Do not call `transition_status` until the user names which objects to claim in this turn.** Without a specific pick, there is nothing to claim — re-prompt instead of guessing.
+
+> **A bare "all" means the objects shown, not `total_available`.** The picker is one page of the ready set, so offer the page size in the option wording ("all 5 shown") rather than an unscoped "all" a user reads as the whole set. Resolving it to the page is right — a large claim starves teammates — but say so in the reply; a user who wants the rest asks for a numeric `limit` (Step 1).
 
 ## Step 3: Claim
 
@@ -50,8 +52,17 @@ transition_status(status="begin", where="id IN ('<id1>', '<id2>')")
 
 The `where` clause must be `id IN (...)` with the specific IDs the user picked in Step 2 — never a category predicate.
 
+Say how many objects you claimed out of the `total_available` ready ones — a pick the user phrased as a whole-set word is otherwise indistinguishable from the whole set, and they cannot tell from your reply that it was narrowed to the page.
+
 Surface any error and stop without retry.
 
 If the response includes `reclaimed_from_other_sessions`, tell the user which objects were re-claimed from a previous session (include the session ID and timestamp) before proceeding with any deployment or migration work.
+
+After a successful claim, call
+`migration_status(mode="my_objects_summary")` again and follow the returned
+group's `user_label` and `instructions`. For ETL, the machine may return
+**Stabilize ETL package** or **Deploy** according to the project's persisted
+`etl_flow`; do not assume either route and do not load an executor skill before
+reading the machine result.
 
 Return to [../SKILL.md](../SKILL.md).

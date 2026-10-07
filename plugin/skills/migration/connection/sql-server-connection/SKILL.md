@@ -81,6 +81,7 @@ Call the `configure` tool with `source_connection` set to `<SOURCE_CONNECTION_NA
 
 - **On success:** the response includes `connection_test: ok`.
 - **On failure:** the tool returns an error containing the scai message. Surface it to the user, help them fix the issue, then re-run `configure(source_connection=<SOURCE_CONNECTION_NAME>)`. See `./references/REFERENCE.md` for troubleshooting.
+- **Database does not exist** (`Cannot open database "<name>"`): list the server's user databases with `SELECT name FROM sys.databases WHERE database_id > 4`, show them, and ask which to use via `ask_user_question`, even when only one is listed. **Wait for the user's response — do not proceed until they choose.** Never change a connection's database without the user's confirmation: everything extracted, converted and migrated afterwards comes from that database.
 
 ## CHECKPOINT
 

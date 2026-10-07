@@ -23,12 +23,14 @@ from workload_insights_common import (
     _section,
     _table,
     _text,
+    render_empty_analysis_pane,
+    render_extract_pane,
 )
 
 def _header() -> str:
     return """
 <header class="wi-header">
-  <h1>Discovery</h1>
+  <h1>Query Logs Analysis</h1>
   <p class="wi-notice"><strong>Disclaimer:</strong> Captured Extended Events data,
   including SQL statement text, is used for <strong>reporting only</strong>.
   Statement text is read only to classify the type of query
@@ -478,13 +480,15 @@ def _how_to() -> str:
     )
     unlocks = "".join(f"<li>{item}</li>" for item in _HOW_TO_UNLOCKS)
     return f"""
-<p class="wi-empty-notice"><strong>No workload capture in this project yet.</strong>
-This phase is <strong>optional</strong> &mdash; the rest of the assessment does not
-depend on it.</p>
 <h2 class="wi-how-to-title">How to capture workload data</h2>
 <div class="journey-grid wi-how-to">{steps}</div>
 <h2 class="wi-how-to-title">What a capture adds to this report</h2>
 <ul class="wi-unlocks">{unlocks}</ul>"""
+
+
+def render_workload_insights_extract_html() -> str:
+    """Render SQL Server capture instructions for the Extract Log tab."""
+    return render_extract_pane(_how_to())
 
 
 def render_workload_insights_tab_html(
@@ -493,8 +497,8 @@ def render_workload_insights_tab_html(
 ) -> str:
     """Render inner SQL Server Workload Insights HTML from artifact values."""
     if not payload or not payload.get("found"):
-        return f'<div id="workload-insights-report" v-pre>{_header()}{_how_to()}</div>'
-    return f"""<div id="workload-insights-report" v-pre>
+        return render_empty_analysis_pane(_header())
+    return f"""<div id="workload-insights-report" class="wi-pane" v-pre>
 {_header()}
 {_summary(payload)}
 {_kpis(payload)}
@@ -506,4 +510,8 @@ def render_workload_insights_tab_html(
 {_errors_section(payload)}
 </div>"""
 
-__all__ = ("render_workload_insights_tab_html",)
+
+__all__ = (
+    "render_workload_insights_extract_html",
+    "render_workload_insights_tab_html",
+)

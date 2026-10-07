@@ -158,10 +158,10 @@ Then return to the calling skill.
   are masked there, so paste them freely when reporting what happened
 - **`informatica.toml` stores the password in cleartext**, exactly as every other `scai` connection
   file does. Masking applies to command output, not to the file. So if the user asks where the
-  secret ends up, tell them it is a plain file under `~/.snowflake/snowct/` protected by nothing but
+  secret ends up, tell them it is a plain file under `~/.snowflake/scai/connections/` protected by nothing but
   filesystem permissions — what registering buys is that the secret lives in one machine-level file
   instead of in a committed project file and in every shell's environment, not that it is encrypted.
-  Suggest they restrict it to their own account (`chmod 600 ~/.snowflake/snowct/informatica.toml`):
+  Suggest they restrict it to their own account (`chmod 600 ~/.snowflake/scai/connections/informatica.toml`):
   the shared TOML writer creates the file with the process umask, so it is not owner-only by default
 
 ## Quick Reference

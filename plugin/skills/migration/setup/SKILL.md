@@ -115,12 +115,16 @@ Note: `progress_setup()` also handles git commits automatically — when a
 task with `commitOnComplete` completes, the tool commits and pushes
 project files. You do not need to run git commands manually.
 
-Tasks the machine routes through, in order:
+Tasks the machine routes through, in order. Sub-skill paths below are relative
+to the `migration/` skill root, **not** to this file's directory — `dbt/setup.md`
+means `migration/dbt/setup.md`, a sibling of `setup/`.
 
 | Task id                          | How the agent handles it                                          |
 |----------------------------------|-------------------------------------------------------------------|
 | `validateEmptyDir`               | sub-skill: `setup/validate-empty-dir.md`                          |
 | `confirmProjectDir`              | sub-skill: `setup/confirm-project-dir.md`                         |
+| `detectDbt`                      | router — auto-routes a detected dbt workload to `dbtSetup`, else the normal flow |
+| `dbtSetup`                       | sub-skill: `dbt/setup.md` (dbt path only — resolves dialect from profiles.yml, inits) |
 | `recommendSafeTools`             | inline prompt — arrives with the next two queued in `then_ask`     |
 | `chooseSourceDialect`            | inline prompt (queued)                                            |
 | Snowflake branch                 | `configureSnowflakeTarget` → `setupDataInfrastructure` → `dataStrategy` |
@@ -130,12 +134,15 @@ Tasks the machine routes through, in order:
 | `configureSourceConnectionExtract`      | sub-skill: `setup/configure-source-connection.md` (extract path only) |
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
+| `dbtRepoint`                     | sub-skill: `dbt/SKILL.md` (dbt path only — agentic YAML/macro refinement after `--dbt`) |
 | `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
-| `chooseEtlFlow`                  | inline prompt (`next_prompt`) — recommended stabilize-first vs. validate-first ETL routing; writes `etl_flow=stabilize|validate`, then continues to `chooseRunMode` |
-| `chooseRunMode`                  | inline prompt (`next_prompt`) — continue to migration setup; writes `run_mode=manual`. Do not offer autonomous. AIM pre-sets `run_mode=manual` (see `bootConfigureParams`) so this prompt is not asked there. |
+| `chooseEtlFlow`                  | inline prompt (`next_prompt`) — recommended stabilize-first vs. validate-first ETL routing; writes `etl_flow=stabilize|validate`, then continues to `continueToMigration` |
+| `continueToMigration`            | inline prompt (`next_prompt`) — continue into migration setup or stop at the assessment report; autonomous only |
+| `chooseRunMode`                  | inline prompt (`next_prompt`) — pick manual vs autonomous run mode; each answer carries its `then` |
+| `chooseAutonomousSubagentCount`  | inline prompt (`next_prompt`) — autonomous only; persist the project-wide concurrent sub-agent limit |
 | `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md`                  |
-| `configureSandboxProfile`        | sub-skill: `setup/configure-sandbox-profile.md`. AIM currently pre-sets `sandbox_profile=sandbox` (see `bootConfigureParams`); do not ask this until that default is removed. |
+| `configureSandboxProfile`        | sub-skill: `setup/configure-sandbox-profile.md`                     |
 | `configureSourceConnectionTesting` | sub-skill: `setup/configure-source-connection.md` (source-data testing path only) |
 | `configureTesting`               | sub-skill: `setup/configure-testing.md`                           |
 | `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (testbed path; also the legacy synthetic path) |
@@ -145,19 +152,21 @@ Tasks the machine routes through, in order:
 
 Conversion and assessment come first on purpose: neither needs a Snowflake
 target, so a user reaches their assessment report before opting into
-migration setup. The ETL flow choice follows assessment; everything else —
-git included — follows the `chooseRunMode` prompt.
+migration setup. The ETL flow choice follows assessment; the continue gate
+follows that, then run mode. Everything else — git included — follows the
+`chooseRunMode` prompt.
 
 The milestone commits (`registerCode`, `convertCode`, `runAssessment`) need git,
 which now comes after that prompt. They land together on the first
 `progress_setup()` after `configureGit` rather than one at a time when git was
 skipped earlier in the flow.
 
-The `assessment` skill's closing menu option 3 is continue-to-migration, so
-on "Move on to migration" it submits
-`progress_setup(answers={"run_mode": "manual"})` instead of a bare
-call. A bare call there would put the question a second time. Do not submit
-`"autonomous"` — setup does not offer that mode.
+The `assessment` skill's closing menu asks whether to move on, not how to run,
+so on "Move on to migration" it submits
+`progress_setup(answers={"continue_to_migration": "true"})`. Never answer
+`run_mode` on the user's behalf there or anywhere else: manual vs autonomous is
+the `chooseRunMode` prompt's question, and submitting a value for it marks the
+question answered (`run_mode_confirmed`) so the user is never shown it.
 
 The testing choice also decides the last step: **testbed** (and legacy
 **synthetic**) walks into `generateTestbed`, while **source-data** ends
@@ -205,6 +214,7 @@ pending — do not invent completion from chat history.
 | — | data-strategy | `./data-strategy/SKILL.md` |
 | — | data-migration-setup | `../migrate-objects/actions/data-migration/SKILL.md` |
 | — | data-validation-setup | `./data-validation/SKILL.md` |
+| — | l3-pushdown-setup | `./data-validation/l3-pushdown/SKILL.md` |
 | — | data-infrastructure-teardown | `../data-infrastructure/teardown/SKILL.md` |
 | — | discover-extras (custom assets the engine doesn't generate — FiveTran, SSAS, Oracle PACKAGE, scripts) | `./discover-extras/SKILL.md` |
 
@@ -212,6 +222,7 @@ pending — do not invent completion from chat history.
 
 1. **Follow sub-skill instructions** — Complete each sub-skill fully before returning
 2. **Confirm transitions** — Ask user before moving to next stage
+3. **A requested stop is the end of this run** — If the user asked to stop after conversion, stop when conversion is done. Do not load `../assessment/SKILL.md` and do not run `scai assessment`, even when `progress_setup` names assessment as the next task. Tell the user assessment is the next stage and wait.
 
 ## On Completion
 

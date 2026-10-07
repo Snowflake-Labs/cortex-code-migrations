@@ -22,10 +22,35 @@ An orchestrator that dispatches subagents calls `configure(subagent_mode=true)` 
 - `transition_status(status="begin")` records the stamped id on the object's claim, and every later write for that object must carry the same one. A write aimed at an object another agent holds is refused, naming both agents. A leftover first-send is a new child; `begin` reclaims a dead conversation's hold.
 - `override_accept_case` is refused for the claim holder (the runTests walker) unless `.scai/config/plugin.yml` has `require_independent_override_accept: false`. After the fix loop, spawn one `test_case_verifier` with fresh context for the remaining failing cases on that object. Do not set `subagent_mode` for that — the latch is the autonomous orchestrator's, before dispatching walkers. Omitting `agent_id` is refused only after that latch is already on; Cortex stamps the verifier. On by default (key absent or `true`).
 - `update_registry(patch={"dotted.path": <json>}, reason=..., objects|where=...)` is reserved for a hook-stamped `cur_reconciler`. It bypasses the normal field and object-binding allowlists and records the actor, reason, and exact patch in `TASK_EVENTS`.
-- The parent session id is the orchestrator's, for `reset`, `escalate`, and `review`. It cannot `begin`, `finish`, stamp, `bypass`, `note`, `mark_done`, `skip`, `answer`, `deploy`, or dispatch `migrate_data` / `validate_data`. `status='answer'` is interactive only so that row cannot look like a person when a parent or walker writes it. A `test_case_verifier` honors override-accept from an `answered` row with `human: true`.
+- The parent session id is the orchestrator's, for `reset`, `escalate`, `review`, and relaying an explicit user answer from the parent Cortex conversation. It cannot directly `begin`, `finish`, stamp, `bypass`, `note`, use setup `skip`, `deploy`, or dispatch `migrate_data` / `validate_data`; walkers cannot `answer`. An answer resolution of `skip` takes the object out of scope; `mark_done` records the decision but stays parked until an interactive session finishes it. A `test_case_verifier` honors override-accept from an `answered` row with `human: true`.
 - The mode lasts the life of the server: omitting the parameter leaves it as it is, and `false` does not switch it off. Sessions that never set it are unaffected — `agent_id` stays optional.
 - After the latch is on, a later `configure` is attach-only: it names the caller (hook-stamped `agent_id`), `source_connection`, the Snowflake connection, and `active_bindings` (the YAML whose `source:` / `snow:` maps are the catalogs to qualify against), and announces any live job to that id. It does not bind a dashboard, persist plugin.yml, or rewrite session defaults. Walkers, a `test_case_verifier`, and a `sandbox_specialist` omit `agent_id`.
 - `ORCHESTRATION.AGENTS` has one row per Cortex child (and the parent session id) keyed with the MCP run as `SESSION_ID`, so `TASK_EVENTS` joins. `ORCHESTRATION.AGENT_ACTIONS` records `subagent_start`, `subagent_stop`, and MCP `tool_call` (tool name / agent_type / object_id — not prompts). Non-MCP tools such as Bash are not logged. The hub spool (`.scai/monitor`) is the live view; Snowflake is the durable log. Cortex `SubagentStart` does not carry the child prompt, so the parent's `PostToolUse` on `task` is what joins returned `agentId` to `objectId` in the prompt (and `resume` on a later send) while the walker is still `running`.
+
+### Autonomous mode (desktop app only, off by default)
+
+**The standalone plugin never offers autonomous mode**, whatever its
+environment says. It is a desktop-app surface, gated on the same
+`SCAI_CALLER=aim-app` the app-only tools use, so a marketplace install driven
+by the `cortex` CLI always runs a project manually.
+
+Within the app it is behind `AIM_AUTONOMOUS`, read once at startup; set it to
+`1` or `true` before launching to turn it on. While it is off:
+
+- `chooseRunMode` asks only whether to continue to migration setup, and
+  `chooseAutonomousSubagentCount` is not part of the setup machine at all.
+- `configure(run_mode="autonomous")` and `configure(subagent_mode=true)` are
+  refused, so the dispatcher skill cannot start a wave a user asked for in chat.
+
+A GUI launch does not see a shell's environment; on macOS use
+`launchctl setenv AIM_AUTONOMOUS 1` before starting the app, or launch it from a
+terminal that already exports it.
+
+The desktop app drops the variable before launching anything when its own build
+is a preview (`-pr`), so a value exported for a dev build does not follow the
+user into a preview install — the variable lives on the machine, not in the
+bundle. Running the plugin through the `cortex` CLI does not go through the app
+and so is not subject to that.
 
 ### Local dashboard (opt-in)
 
@@ -63,9 +88,9 @@ The server can host a small read-only HTML dashboard on `127.0.0.1` (no data lea
 | Tool | Description |
 |------|-------------|
 | `deploy` | Deploy converted objects via `scai code deploy`. Three walker calls: (1) `sandbox=true` omit `mode` = transitive closure into the sandbox (creates `AIMSBX_*` unless leftover yaml already names the pair — then no DROP/CLONE, but still deploys tables, functions, views, and this object); (2) `sandbox=true` `mode=redeploy_object` = this object only into a live pair; (3) omit `sandbox` = this object only onto the common catalogs. Procedures take (1) as the `deploySandbox` task and (3) after tests. `mode=reload_tables` reloads closure CSVs (wipes AIMSBX DML). |
-| `setup_sandbox` | Shared source catalog: source DDL (CREATE skipped when the object already exists) plus testbed load for tables. `mode=load_only` reloads this object's CSV. Failure JSON carries `failure_class` (SQL 547 is `fixture_fk`; unmapped is `other`), `sample_rows`, and `next_invocation`. |
+| `setup_sandbox` | Shared source catalog: source DDL plus testbed load for tables in local projects and when database bindings route extracted projects to an isolated source catalog. Extracted projects without bindings preserve the connected live source without DDL or fixture loading. Existing bound objects still receive isolated fixture rows. `mode=load_only` reloads this object's isolated CSV and is refused for an unbound live source. Failure JSON carries `failure_class` (SQL 547 is `fixture_fk`; unmapped is `other`), `sample_rows`, and `next_invocation`. |
 | `run_tests` | `mode="validate"` (default) runs `scai test validate`; `mode="capture"` runs `scai test capture`. Injects `--profile` / `--database-bindings` from the session pair; bound isolation only on validate when restore is set. |
-| `query_source` | Run a SQL query against the source database via `scai query` (TEMP: writes allowed — CREATE / ALTER / EXEC) |
+| `query_source` | Run SQL against the source database via `scai query`. SELECT plus CREATE / ALTER / EXEC / DML. When a live sandbox binding exists, mutating SQL that names a common catalog is refused (qualify `AIMSBX_*`). |
 | `testbed` | Drive one Synthetic Testbed Generator phase (`phase` = mine \| validate \| enrich \| compile \| generate) via `scai testbed`. Each phase is idempotent (its view file is the completion predicate) and resumes from on-disk state; returns `{phase, rc, message}`. The deterministic critics, envelope assembly, ledger, and quarantine loop are native Rust (`src/testbed/`) — the LLM boundary stays the on-disk `fragments/` + `verdict.json` handoff. Replaces the former Python `run_pipeline.py` orchestration. |
 | `migrate_data` | Two-mode tool. `mode="setup"` requires `where` and generates a per-`where` workflow YAML at `artifacts/data_migration/workflows/<hash>.yaml` (forwarding `where` to scai's `--where`); `where` is **not** stored on the session. Wave-level knobs persist under `data_migration:` in `plugin.yml`. The agent reviews/edits before running. `mode="run"` takes the `workflow_path` and binds objects from that file's `tables:` list (pure dispatch against the shared orchestrator + worker). |
 | `validate_data` | Validate migrated data between source and Snowflake. `mode="setup"` generates workflow YAML; `mode="run"` executes it; `mode="revalidate"` retries failed partitions from a finished parent workflow. Uses cloud validation (SPCS) when configured. |
@@ -90,7 +115,7 @@ plugin/mcp-server/bin/migration-mcp-server
 scai mcp run
 ```
 
-`scai mcp run` locates the binary next to the `scai` executable (or via `MIGRATION_MCP_SERVER_BIN`) and runs it with inherited stdio. Cortex plugin hooks are the same binary as one-shots (`migration-mcp-server hook <name>`); `hooks/mcp-hook.cmd` finds that sibling and execs it so PreToolUse does not start the .NET apphost. The resolved path is cached at `<cwd>/.scai/tmp/mcp-server-bin` so later hooks skip the locate. SessionStart stays a plugin shell script because it installs `scai`.
+`scai mcp run` locates the binary next to the `scai` executable (or via `MIGRATION_MCP_SERVER_BIN`) and runs it with inherited stdio. Cortex plugin hooks are the same binary as one-shots (`migration-mcp-server hook <name>`); `hooks/mcp-hook.cmd` finds that sibling and execs it so PreToolUse does not start the .NET apphost. The resolved path is cached at `<cwd>/.scai/tmp/mcp-server-bin` so later hooks skip the locate. The cache also records the resolved `scai` it came from and is rebuilt when `scai` on PATH resolves elsewhere (an upgrade or relink). A hook name the server does not implement (plugin and scai on different versions) exits 0 with a note on stderr instead of denying the tool call: a guard that build cannot run is skipped rather than blocking every Bash call. SessionStart stays a plugin shell script because it installs `scai`.
 
 ## Dependencies
 

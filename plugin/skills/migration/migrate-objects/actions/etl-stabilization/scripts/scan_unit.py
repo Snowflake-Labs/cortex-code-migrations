@@ -308,23 +308,43 @@ def _is_ai_first_flat_reports_dir(candidate: Path) -> bool:
 def find_reports_dir(unit_path: Path) -> Path | None:
     """Walk upward from the unit folder for the directory that states the ETL assessment.
 
-    Two layouts are real. A native SnowConvert run nests the CSVs under `Reports/SnowConvert/`;
-    other runs, including the AI-First convert path, write them directly into `Reports/`. Looking
-    only for the nested form found nothing in a flat tree, and the scan then reported no reports
-    directory at all -- which reads as "this unit has no assessment" rather than "one layout was
-    searched".
+    Project conversion writes under `.scai/reports/SnowConvert/`. Older native SnowConvert runs
+    nest the CSVs under `Reports/SnowConvert/`; AI-First runs may write them directly into
+    `Reports/`.
     """
     current = unit_path.resolve()
+    ancestors: list[Path] = []
     while current != current.parent:
-        # Only a Reports/ (nested or flat) that actually states elements ends the walk. An
-        # empty or unrelated one must not stop it and mask a real assessment further up.
+        ancestors.append(current)
+        # A project marker ends this project. Reports above it belong to another project.
+        if (current / ".scai" / "config" / "project.yml").is_file():
+            break
+        current = current.parent
+
+    # Layout priority is global across the ancestor chain. Otherwise stale reports beside the
+    # conversion output can win before the walk reaches the project's current hidden reports.
+    for current in ancestors:
+        hidden = current / ".scai" / "reports" / "SnowConvert"
+        if hidden.is_dir() and any(hidden.glob("ETL.Elements.*.csv")):
+            return hidden
+
+    for current in ancestors:
+        lowercase_reports_root = next(
+            (child for child in current.iterdir() if child.name == "reports"),
+            None,
+        )
+        if lowercase_reports_root is not None:
+            project_legacy = lowercase_reports_root / "SnowConvert"
+            if project_legacy.is_dir() and any(project_legacy.glob("ETL.Elements.*.csv")):
+                return project_legacy
+
+    for current in ancestors:
         nested = current / "Reports" / "SnowConvert"
         if nested.is_dir() and any(nested.glob("ETL.Elements.*.csv")):
             return nested
         flat = current / "Reports"
         if flat.is_dir() and any(flat.glob("ETL.Elements.*.csv")):
             return flat
-        current = current.parent
     return None
 
 
@@ -880,6 +900,13 @@ def _ai_first_reports_root(reports_dir: Path) -> Path:
     so the AiFirst* siblings are `reports_dir`'s own children. The two shapes are
     distinguished by `reports_dir`'s own name, which `find_reports_dir` fully determines.
     """
+    if (
+        reports_dir.name == "SnowConvert"
+        and reports_dir.parent.name == "reports"
+        and reports_dir.parent.parent.name == ".scai"
+    ):
+        project_root = reports_dir.parent.parent.parent
+        return project_root / "snowflake" / "Reports"
     return reports_dir.parent if reports_dir.name == "SnowConvert" else reports_dir
 
 

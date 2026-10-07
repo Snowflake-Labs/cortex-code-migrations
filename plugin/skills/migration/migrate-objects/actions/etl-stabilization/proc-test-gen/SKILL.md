@@ -94,6 +94,8 @@ loop is **headless**:
 > **Grade-query execution.** The batched assert query is run against the populated target and its PASS/FAIL
 > rows read back with `snow sql -c <conn> --database <db> --schema <test_schema> --format json -q "<assert>"`
 > — the same headless path the deploy-and-call executor itself shells to, so this step needs no extra plumbing.
+> When the attach briefing lists `snowflake_role` / `snowflake_warehouse`, add `--role <role> --warehouse <warehouse>`:
+> the project overrides the connection's own, and `snow sql` does not read the project.
 
 ## Workflow
 

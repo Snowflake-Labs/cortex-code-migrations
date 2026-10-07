@@ -1,7 +1,7 @@
 ---
 name: convert-sas-to-snowflake
 parent_skill: sas
-description: "Preview. Convert SAS code to Snowflake SQL and stored procedures. Use for: DATA steps, PROC SQL, macros, PROC steps, EGP projects (extracted .sas files only). Triggers: convert SAS, migrate SAS, SAS to Snowflake, translate SAS code, SAS migration, SAS analysis, SAS dependency diagram, validate SAS conversion. Note: For .egp files, extract the embedded .sas code first using SAS Enterprise Guide export."
+description: "Preview. Convert SAS code to Snowflake SQL and stored procedures. Use for: DATA steps, PROC SQL, macros, PROC steps, EGP projects (extracted .sas files only). Triggers: convert SAS, migrate SAS, SAS to Snowflake, translate SAS code, SAS migration, SAS analysis, SAS dependency diagram, validate SAS conversion. Note: For .egp files, run the assess-sas-migration skill first; it extracts the embedded .sas code and the process-flow order into egp_extracted/."
 license: Proprietary. See License-Skills for complete terms
 ---
 
@@ -11,7 +11,7 @@ license: Proprietary. See License-Skills for complete terms
 
 Expert SAS to Snowflake migration - **ALWAYS outputs `.sql` by default**, with PySpark/SCOS as last resort.
 
-**Output:** `.sql` by default (Tier 1 SQL + Tier 2 Stored Procedures). PySpark/SCOS notebook = LAST RESORT (HASH objects, CALL EXECUTE, statistical procs only). See SQL-First Classification below for full tier tables.
+**Output:** `.sql` by default (Tier 1 SQL + Tier 2 Stored Procedures). PySpark/SCOS notebook = LAST RESORT (HASH objects, statistical procs only). See SQL-First Classification below for full tier tables.
 
 **Snowflake Interaction Policy:** ALL Snowflake operations (object creation, compilation, testing) require explicit user confirmation. See `workflows/steps-8-10-post-conversion.md` for confirmation patterns and testing mode selection.
 
@@ -112,6 +112,7 @@ Analyze User Request
 | >5 IF/WHEN branches in a DATA step | DATA-step SELECT/WHEN or IF/THEN (not PROC SQL CASE WHEN) | Complex business logic |
 | Row-by-row state changes | Previous row affects current | Cursor-like processing |
 | Iterative calculations | Values build on prior iterations | Sequential dependency |
+| CALL EXECUTE | `call execute` | Dynamic dispatch → EXECUTE IMMEDIATE / cursor loop |
 
 **Stored Procedure Pattern:**
 ```sql
@@ -147,7 +148,6 @@ $$;
 | Pattern | Detection | Why PySpark Required |
 |---------|-----------|---------------------|
 | HASH objects | `declare hash` | In-memory key-value lookups |
-| CALL EXECUTE | `call execute` | Dynamic code generation at runtime |
 | DO UNTIL/WHILE + external | `do until` + `symput`/`call` | True iteration with external state |
 | External file I/O | `infile`/`file` non-Snowflake | Reading/writing local files |
 | Complex SYMPUT chains | Multiple `call symput` with dependencies | Cross-step variable passing |
@@ -250,7 +250,7 @@ A persistent JSON file written incrementally throughout the workflow to track pe
 1. SAS code source (file path, directory, or paste)
 2. Target schema (e.g., `DATABASE.SCHEMA`)
 3. Migration mode:
-   - **1:1 Direct** (default) — Each SAS file converts to one .sql file. PySpark notebook generated ONLY for true Tier 3 edge cases (HASH objects, CALL EXECUTE, statistical procs).
+   - **1:1 Direct** (default) — Each SAS file converts to one .sql file. PySpark notebook generated ONLY for true Tier 3 edge cases (HASH objects, statistical procs).
    - **Optimize & Consolidate** — Merges related SAS files into fewer .sql files where dependencies allow. Same SQL-first tiering applies.
 
 **⚠️ STOP**: Confirm understanding of SAS code.
@@ -345,9 +345,11 @@ c) Use placeholder names: {PLACEHOLDER_DB}.{PLACEHOLDER_SCHEMA}.{table}
 
 **Store mapping in `conversion_state.json` under `source_mappings`** (see state-tracker-schema.md).
 
+**Tables (`tables.json`).** If the assessment wrote `tables.json`, copy it to `<output_dir>/tables.json`; that copy is the working one. Add to the same prompt: (1) "Where are the input tables, or a file describing their columns?" (2) "Do real SAS results exist to compare against?" Record answers with `../assess-sas-migration/tool/tables.py update` (`columns`, `--fqn`, `--sample`); mark guesses `--from inferred`. When compile or execute finds a wrong or missing column, update that row and regenerate `source_table_ddl.sql` with `tables.py render-ddl` — never write a `*_fix.sql`. `stamp` each expected-results CSV with the tables it was traced against; `check-stale` flags ones to regenerate.
+
 **During Step 5 (Generation):** Use the mapping to resolve external table references. If LIBNAME `EUDB` with `qualifier=ChargemasterEnforcement_Prod schema=dbo` references `dbo.MyTable`, convert to the user-provided `TARGET_DB.TARGET_SCHEMA.MYTABLE`.
 
-**If NO external sources detected:** Skip this step silently. No prompt needed.
+**If NO external sources detected:** Skip the mapping table; still ask the two tables questions if `tables.json` has inputs.
 
 ### Step 3: Classify Each Block (with Dependency Tracking)
 
@@ -419,9 +421,9 @@ per-file tier identical to what `/assess-sas-migration` reports.
 | SAS Pattern | Tier | Snowflake Approach |
 |-------------|------|--------------------|
 | `declare hash` | 3-SCOS | No SQL equivalent |
-| `call execute` | 3-SCOS | Dynamic code generation |
 | `do until/while` + `symput` + external state | 3-SCOS | Iteration with external state |
 | `proc reg/glm/logistic/cluster/factor/phreg/lifetest/surveyselect/mixed/genmod/nlmixed` | 3-SCOS | Statistical modeling |
+| `call execute` | 2-SP | Dynamic dispatch → EXECUTE IMMEDIATE / cursor loop |
 | `retain` + `first.` + reset | 2-SP | State management across rows |
 | `first./last.` + multiple `output` | 2-SP | Multi-step BY-group logic |
 | Multiple `output` destinations | 2-SP | Conditional routing |
@@ -526,7 +528,7 @@ Does your Snowflake role have CREATE PROCEDURE privilege on the target schema?
 - Persist cross-block variables via EXECUTE IMMEDIATE SET
 
 **For TIER 3 (PySpark/SCOS) blocks:**
-- ONLY for HASH objects, CALL EXECUTE, DO UNTIL with external state, or PROC REG/GLM
+- ONLY for HASH objects, DO UNTIL with external state, or PROC REG/GLM
 - Use Snowpark Connect (SCOS) template from TIER 3 section
 - Generate .ipynb notebook with SCOS setup cell
 - Keep PySpark scope minimal - only the blocks that truly need it
@@ -703,7 +705,7 @@ All output files MUST include the standard file header (Converted from, Target S
 
 - ✅ ALL blocks attempted as SQL first
 - ✅ Stored Procedures used before PySpark
-- ✅ PySpark only for true edge cases (HASH, CALL EXECUTE, statistical procs)
+- ✅ PySpark only for true edge cases (HASH, statistical procs)
 - ✅ All code compiles successfully
 - ✅ Confidence levels documented
 - ✅ Low-confidence blocks clearly marked with MANUAL_REVIEW_REQUIRED

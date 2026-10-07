@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 # Configure Snowflake target
 
 Invoked by the setup state machine once the user has opted into object
-migration at the `chooseRunMode` step. Conversion and assessment
+migration after the continue gate and `chooseRunMode`. Conversion and assessment
 have already run — they don't need a Snowflake target, which is why this
 question waits until now.
 
@@ -82,18 +82,54 @@ values in a single call:
 configure(snowflake_connection="<name>", snowflake_database="<db>")
 ```
 
-## Step 4: Handle a missing database
+## Step 4: Handle a missing or unreachable database
 
 The `configure()` response now carries `schema_status_*` and
-`prereq_status_*` lines. Only one matters here — the rest are checked by
+`prereq_status_*` lines. Only two matter here — the rest are checked by
 `configure-testing.md`:
 
+- `schema_status_metadata: error("…not visible…recreate_metadata_database=true")`
+  → quote the message. Ask whether to restore/GRANT USAGE / repoint
+  `metadata_database`, or start fresh. Only after they confirm starting
+  fresh, call `configure(recreate_metadata_database=true)`. Do **not**
+  treat this as a connection/PAT problem or a transient recheck.
+- `schema_status_metadata: error("…cannot tell whether…already bootstrapped…")`
+  → quote the message. If the user confirms the metadata database already
+  exists, call `configure(ensure_metadata_schema=true)`. Only after they
+  confirm starting **empty**, call `configure(recreate_metadata_database=true)`.
+- `schema_status_metadata: error("…not reachable…")` → quote the message;
+  rename the mixed-case database (same remedy as
+  `database_name_unresolvable` below). Do **not** recreate.
+- `schema_status_metadata: error("…could not verify…still exists…")` → quote
+  the message; retry `configure(ensure_metadata_schema=true)` once the
+  session is healthy. Do **not** recreate.
+- `schema_status_*: error("…")` (any other) → quote the error text to the
+  user. Typical causes: PAT profile missing `token` / `token_file_path`, a
+  connection name that is not in `~/.snowflake/connections.toml`, incomplete
+  key-pair material, or a failed login. Do **not** guess a different
+  authenticator or retry Entra SSO to "fix" a PAT error. Load
+  `../connection/snowflake-connection/SKILL.md` when the user needs to
+  edit the profile, then `configure(ensure_metadata_schema=true)` after
+  they save.
 - `schema_status_validation: database_missing` → the configured database
   does not exist. **Ask before creating it** — the name may be a typo:
   > `<db>` doesn't exist yet. Create it, or did you mean a different name?
 
   On confirmation run `CREATE DATABASE <snowflake_database>;`, then
   `configure(ensure_metadata_schema=true)` to refresh.
+
+- `schema_status_validation: database_name_unresolvable("<stored>")` → the
+  database exists, but under a name that only a quoted reference reaches.
+  Every later statement — here and in `scai` — names it unquoted, which
+  Snowflake folds to upper case, so deploy would fail object by object with
+  "does not exist". Don't work around it; the name has to change:
+  > `<stored>` was created as a quoted, mixed-case name, so `USE DATABASE
+  > <stored>` resolves to `<STORED>` and fails. Rename it to `<STORED>`, or
+  > point me at a different database?
+
+  On confirmation run `ALTER DATABASE "<stored>" RENAME TO <STORED>;` and
+  re-persist the upper-case name, then `configure(ensure_metadata_schema=true)`.
+  Never create a target database with a quoted name.
 
 ## If the user won't name a database
 

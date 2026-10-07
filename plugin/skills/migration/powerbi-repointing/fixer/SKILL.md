@@ -70,9 +70,17 @@ This ensures all scripts write intermediate files to `<project_dir>/artifacts/pb
 
 ### Step 2: Build Ordered Inventory by PBIT File
 
-Find the SnowConvert report:
+Find the SnowConvert report. Check `<OUTPUT_FOLDER>/.scai/reports/SnowConvert/`, then `<OUTPUT_FOLDER>/reports/SnowConvert/`, then `<OUTPUT_FOLDER>/Reports/SnowConvert/`, and use the newest `ETLAndBiRepointing.*.csv` in the first folder that has one as `<report_path>`. Do not use a leftover older folder when `.scai` already has the file.
 ```bash
-find <OUTPUT_FOLDER> -path "*/reports/SnowConvert/ETLAndBiRepointing*.csv" -type f
+for d in \
+  "<OUTPUT_FOLDER>/.scai/reports/SnowConvert" \
+  "<OUTPUT_FOLDER>/reports/SnowConvert" \
+  "<OUTPUT_FOLDER>/Reports/SnowConvert"
+do
+  report_path=$(ls -t "$d"/ETLAndBiRepointing.*.csv 2>/dev/null | head -1)
+  [ -n "$report_path" ] && break
+done
+echo "$report_path"
 ```
 
 Build inventory using the MCP tool:
