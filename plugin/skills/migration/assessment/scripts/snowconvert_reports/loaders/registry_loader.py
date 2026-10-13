@@ -78,8 +78,61 @@ def iter_in_scope_non_missing(entries: list[dict]):
         yield entry
 
 
-def load_registry_entries(registry_dir: Path | str) -> list[dict]:
-    """Parse all JSON files in *registry_dir*, skipping malformed ones."""
+def is_temp_table_stub(entry: dict) -> bool:
+    """True for the ``isMissing`` stub SnowConvert records for a SQL Server
+    ``#``/``##`` temp table, which the procedure using it creates at runtime."""
+    if not entry.get("isMissing", False):
+        return False
+    block = entry.get("source") or entry.get("target") or {}
+    return (block.get("name") or "").strip().strip("[]").startswith("#")
+
+
+def _dependency_lists(entry: dict) -> list[list]:
+    """The entry's ``dependsOn`` lists: top-level and one per ETL part."""
+    owners = [entry] + [p for p in entry.get("parts", []) or [] if isinstance(p, dict)]
+    lists = []
+    for owner in owners:
+        deps = (owner.get("dependencies") or {}).get("dependsOn")
+        if isinstance(deps, list):
+            lists.append(deps)
+    return lists
+
+
+def temp_table_dependencies(entries: list[dict]) -> dict[str, set[str]]:
+    """Registry id -> ids of the temp-table stubs it depends on."""
+    stub_ids = {e.get("id") for e in entries if e.get("id") and is_temp_table_stub(e)}
+    result: dict[str, set[str]] = {}
+    for entry in entries:
+        for deps in _dependency_lists(entry):
+            for dep in deps:
+                dep_id = dep.get("id") if isinstance(dep, dict) else None
+                if dep_id in stub_ids:
+                    result.setdefault(entry.get("id") or "", set()).add(dep_id)
+    return result
+
+
+def drop_temp_table_stubs(entries: list[dict]) -> list[dict]:
+    """*entries* without temp-table stubs or the ``dependsOn`` edges to them,
+    so no report section lists one as an object or a missing dependency."""
+    stub_ids = {e.get("id") for e in entries if e.get("id") and is_temp_table_stub(e)}
+    kept = [e for e in entries if not is_temp_table_stub(e)]
+    if stub_ids:
+        for entry in kept:
+            for deps in _dependency_lists(entry):
+                deps[:] = [
+                    d for d in deps if not (isinstance(d, dict) and d.get("id") in stub_ids)
+                ]
+    return kept
+
+
+def load_registry_entries(
+    registry_dir: Path | str, *, keep_temp_table_stubs: bool = False
+) -> list[dict]:
+    """Parse all JSON files in *registry_dir*, skipping malformed ones.
+
+    Temp-table stubs are dropped (see :func:`drop_temp_table_stubs`) unless
+    *keep_temp_table_stubs* is set.
+    """
     registry_dir = Path(registry_dir)
     entries: list[dict] = []
     for path in sorted(registry_dir.glob("*.json")):
@@ -88,7 +141,7 @@ def load_registry_entries(registry_dir: Path | str) -> list[dict]:
                 entries.append(json.load(f))
         except (json.JSONDecodeError, OSError) as exc:
             warnings.warn(f"Skipping malformed registry file {path.name}: {exc}")
-    return entries
+    return entries if keep_temp_table_stubs else drop_temp_table_stubs(entries)
 
 
 def build_id_to_name_map(entries: list[dict]) -> dict[str, str]:

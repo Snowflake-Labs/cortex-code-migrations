@@ -1,14 +1,22 @@
 # Diagnose & Fix
 
 `fixCode` for one object. Read the failures, name a root cause, apply a
-faithful fix or stop. The machine retries the failed task when you stamp
-`completed` — do not jump to [SKILL.md](SKILL.md) by hand.
+faithful fix or stop. Do not spawn `test_case_verifier` here — `runTests`
+does that after you stamp.
 
-You diagnose. Do not spawn a review agent, and do not spawn investigators
-because a later step is titled "swarm". Read `VALIDATION.LATEST`, the source
-SQL, and the converted SQL yourself. The one
-[`test_case_verifier`](../../../../agents/test_case_verifier.md) is spawned
-from `runTests` after you stamp, not from here.
+## Step 0: Record skill start
+
+```
+transition_status(status="started", task="fixCode", where="id = '<objectId>'")
+```
+
+Do this once at entry. Whenever this guide says "stamp `fixCode` completed", call:
+
+```
+transition_status(status="advance", task="fixCode", outcome="completed", where="id = '<objectId>'")
+```
+
+Do not leave completion to `next_task` alone.
 
 ## Step 1: Iteration context
 
@@ -29,20 +37,15 @@ Approaches to avoid:
 query_registry(where="id = '<objectId>'", fields="id,source,files,target")
 ```
 
-Hold `files.source.path`, `files.converted.path`, `files.artifacts.path`.
-When `files.source` is missing (SnowConvert UDF helper), there is no
-`VALIDATION.LATEST` and no test YAML. The oracle is `invalidation.reason`
-on `next_task` (waiter-named inputs): `query_source` of the source builtin
-vs this helper. Edit `files.converted.path`, `deploy` with no `sandbox`
-(common catalogs), re-probe. Matching those inputs is enough; do not
-build a grammar corpus of the builtin.
+The oracle is `invalidation.reason` on `next_task` (waiter-named inputs):
+`query_source` of the source builtin vs this helper. Edit
+`files.converted.path`, `deploy` with no `sandbox` (common catalogs),
+re-probe. Do not change or deploy another object onto `common`.
 
-Otherwise read `<metadata_database>.VALIDATION.LATEST` (`metadata_database` in
-`.scai/config/plugin.yml`; it is not the migration target). There is no
-`<project_dir>/test-results/results.json`. For each `FAIL` / `ERROR` on
-this object, take `params_hash`, `parameters`, `error_message`, and
-`differences`. Then read the source SQL and the converted SQL. A deploy
-error is the context when this loop entered from a compile failure.
+Read `VALIDATION.LATEST` diffs, then the source SQL and converted SQL.
+Fix each failure on this object when a converted-SQL edit would match
+source. A deploy error is the context when this loop entered from a
+compile failure. Re-run tests via "./RUN_TESTS.md" as needed.
 
 ## Step 3: Known shortcuts
 
@@ -55,20 +58,23 @@ not a swarm.
 - Mixed-quote PIVOT identifiers — fix quoting.
 - All-rows-different from column order, case, or formatting — reorder /
   alias / cast when that still means what the source means.
-- Decimal / rounding / timestamp precision — normalize only when that
-  still means what the source means. A wall-clock expression (`GETDATE`,
-  `CURRENT_TIMESTAMP`, age-from-today) is not a normalize: go to Step 5.
+- SQL Server `DECIMAL` / `MONEY` division **truncates**; Snowflake
+  `NUMBER` **rounds**. A cent-level miss after `ROUND(..., 2)` is
+  `TRUNCATE(expr, source_scale)` on each division. Extra CSV digits
+  are not a diagnosis.
+- Other decimal / timestamp precision — match source in converted SQL.
+- A wall-clock expression (`GETDATE`, `CURRENT_TIMESTAMP`, age-from-today)
+  that can never match between capture and validate: go to Step 5.
 - Snowflake 001187 (`COPY INTO` refused on CHECK constraints) — delete
   the `CONSTRAINT … CHECK` clauses from the converted `snowflake/` file,
   then deploy. Do not `ALTER TABLE … DROP CONSTRAINT` on the live table.
 
 **Dynamic SQL** in the error or the converted file (`EXECUTE IMMEDIATE`,
-`IDENTIFIER(`, `sp_executesql`, `EXEC(` / `EXEC @`): read
-[../../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md](../../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md)
-and use those patterns in the edit.
+`IDENTIFIER(`, `sp_executesql`, `EXEC(` / `EXEC @`): use
+"../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md" for help.
 
 **YAML `steps:` do not match the proc** — this is not a SQL bug. Load
-[`EDIT_TEST_YAML.md`](EDIT_TEST_YAML.md) when the failure smells like:
+"./EDIT_TEST_YAML.md" when the failure smells like:
 
 | Smell | Recipe |
 |---|---|
@@ -81,8 +87,7 @@ and use those patterns in the edit.
 | Teradata 5315 on the source side | Teradata cross-database GRANTs |
 
 Apply the recipe under `<project_dir>/<files.artifacts.path>/test/` (glob
-`*.yml`; `files.artifacts.path` verbatim). Recapture with
-`scai test capture --where "source.canonicalName ILIKE '%<object_name>%'"`,
+`*.yml`; `files.artifacts.path` verbatim). Recapture using "../baseline-capture/CAPTURE.md"
 then stamp `fixCode` completed so the machine retries `runTests`. Nothing
 to redeploy.
 
@@ -97,7 +102,8 @@ an accept. A name starting `[AVOID]` is an approach not to repeat.
 |---|---|
 | Converted logic ≠ source | Edit converted SQL |
 | Source-less helper, converted result ≠ source builtin on the named inputs | Edit converted SQL |
-| Missing schema prefix | Add the prefix |
+| Missing schema prefix that is not a catalog-binding problem | Add the prefix |
+| Unknown function / procedure / object, or a two-part `PUBLIC.X` / tokenless catalog, for a project object of any kind | Spawn **one** foreground `cur_reconciler`. Wait. `repaired` / `clean` → `deploy(sandbox=true)` omit `mode`. Do not inline, stub, or write SNAP into this file. |
 | Source function left as T-SQL | Snowflake equivalent |
 | YAML `steps:` mismatch | Step 3 recipe, recapture |
 | Precision / collation / padding, and a CAST or `RTRIM` still means what the source means | Edit converted SQL, then **note** (you chose among meanings) |
@@ -111,8 +117,9 @@ Override-accept is last. "The baseline moved by a day" is not enough if
 CAST, a prefix, YAML shape, or a collation/`RTRIM` would make the case
 pass.
 
-A missing reference is an escalation, not a `-- NEEDS-USER:` comment and
-not a stub (`NULL` / `WHERE FALSE`) or a borrowed object.
+A missing or non-bindable reference is `cur_reconciler`, not a
+`-- NEEDS-USER:` comment and not a stub (`NULL` / `WHERE FALSE`) or a
+borrowed object. Escalate only when that child returns `escalate`.
 
 ## Step 5: Wall-clock — stop, do not overlay here
 
@@ -122,8 +129,7 @@ against now, age-from-today), a code change would lie. Do not edit. Do
 not call `override_accept_case` yourself. Do not spawn a verifier.
 
 Stamp `fixCode` completed. The machine retries `runTests`; that guide
-hands every remaining hash to one
-[`test_case_verifier`](../../../../agents/test_case_verifier.md).
+hands every remaining hash to one `subagent_type = test_case_verifier`.
 Rejected hashes come back as `error="sql"`.
 
 ## Step 6: Apply a code fix
@@ -137,11 +143,13 @@ Do not rewrite the database qualifier to the SNAP / configure name —
 leading `USE DATABASE`; the tool comments it out.
 
 If the edit chose among meanings (CHECK drop so COPY can run, `RTRIM` for
-trailing-space collation), **note** per
-[general_task.md](../../../../agents/general_task.md) §4.
+trailing-space collation), **note** per your agent definition.
 
 Push the edited SQL before you stamp — a leftover sandbox yaml does not
 make disk live.
+
+Exhaust converted-SQL fixes (`files.converted.path`) before blaming the
+fixture, spawning a verifier, or escalating.
 
 **Interactive session:** `deploy(where="id = '<objectId>'")` — no `sandbox`.
 Do not spawn `sandbox_specialist`.
@@ -151,7 +159,7 @@ Do not spawn `sandbox_specialist`.
 | Need | Call |
 |---|---|
 | This object only into the live sandbox | `deploy(sandbox=true, mode=redeploy_object, where="id = '<objectId>'")` |
-| Closure into the live sandbox (a helper / view / function also changed) | `deploy(sandbox=true, where="id = '<objectId>'")` — omit `mode`. Tables (CSV reload), functions, views, **and this object**. No DROP / CLONE. |
+| Closure into the live sandbox (a helper / view / function also changed) | `deploy(sandbox=true, where="id = '<objectId>'")` — omit `mode`. Tables (CSV reload), peer functions/views. No DROP / CLONE. Then `mode=redeploy_object` for this object's Snowflake body. |
 | This object only onto the common catalogs | `deploy(where="id = '<objectId>'")` — no `sandbox`. `next_task` is `deploy`, or a source-less helper. |
 
 A source `already exists` on the sandbox twin is a skip; Snowflake is

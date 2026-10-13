@@ -7,6 +7,20 @@ license: Proprietary. See License-Skills for complete terms
 
 # Code Conversion Only
 
+## Not the right skill for ETL
+
+If the user's local files are ETL — SSIS `.dtsx`, Informatica PowerCenter XML repo
+export, Talend jobs, Alteryx `.yxmd`, Informatica Cloud / IICS mappings, DataStage
+`.dsx`, Pentaho `.ktr` / `.kjb`, Azure Data Factory pipelines, or any other ETL
+platform — this is **not** the skill to run. `code-conversion-only` is for the SQL
+dialects listed in the table below (Sybase, Spark, Databricks, Greenplum, Netezza,
+Vertica, Hive, DB2, and legacy PostgreSQL / BigQuery / Azure Synapse projects).
+Do not set `project_type: code_conversion_only` for an ETL migration; the CLI's `code_conversion_only` project type has no ETL step and would silently drop those files.
+Leave this skill and follow **setup → register local ETL → convert** — the convert
+skill's Step 4 handles native SSIS / Informatica PowerCenter and Step 4.5 handles
+every other ETL platform through AI-First. Stay here only when the user has one of
+the SQL dialects in the table below.
+
 ## On Entry
 
 Tell the user:
@@ -87,7 +101,7 @@ Check whether `source/_etl/` exists and contains ETL files — `.dtsx` for SSIS,
        > "How should Informatica mappings be converted?
        > 1. **dbt** (default): each mapping becomes a dbt model orchestrated by Snowflake Tasks.
        > 2. **Snowflake Scripting** (preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Stabilization and deploy are skipped for this preview flavor."
-    2. If the answer is **dbt**, load `../dbt-consolidation/SKILL.md`. It asks the user to confirm model-chain consolidation (and project consolidation only when SSIS is also present). Return here when complete.
+    2. If the answer is **dbt**, load `../dbt-consolidation/SKILL.md`. For Informatica with no SSIS it asks one question: consolidate dbt projects and models by folder, or generate 1 project per mapping. Do not ask model-chain consolidation as well. Return here when complete.
     3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 5. Do **not** load `dbt-consolidation`.
 
     Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`.
@@ -118,7 +132,7 @@ scai code convert --json
 |--------|------|
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 3 (Informatica target is Snowflake Scripting) |
 | `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set by `../dbt-consolidation/SKILL.md` |
-| `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS only) |
+| `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS, or Informatica dbt) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 4 |
 
 The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. Either combines with `--powerbi-repointing`. If none of the conditions hold, run the base command as-is.

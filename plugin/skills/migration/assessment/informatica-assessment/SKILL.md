@@ -19,11 +19,9 @@ license: Proprietary. See License-Skills for complete terms
    - DO NOT use grep, jq, or other tools to parse the JSON directly
    - All JSON interactions MUST go through the provided CLI
 
-2. **Quality Over Speed**
-   - Each workflow deserves thorough, individual analysis
-   - Write specific, detailed analysis for each workflow
-   - DO NOT create batch analysis regardless of workflow volume
-   - DO NOT skip analysis steps to save time
+2. **One workflow, one analysis**
+   - Analyze each workflow from its own source XML (the workflow `pending` returns), whatever the volume; never batch or reuse
+     analysis text across workflows, because the report presents each workflow's analysis on its own.
 
 3. **Follow ONLY Provided Analysis Methods**
    - Use ONLY the workflow defined in this skill

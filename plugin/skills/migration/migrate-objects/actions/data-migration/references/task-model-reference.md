@@ -1,5 +1,9 @@
 # Task Model Reference (DMVF)
 
+`<metadata_database>` below is `.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
+overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
+project's.
+
 Condensed reference for debugging migration workflows. Full internal docs: `dmvf/docs/data-migration-orchestrator/task-model.md` and `scopes.md`.
 
 ## Executors
@@ -71,7 +75,7 @@ The table identifier in `Table[...]` is the **normalized source FQN** (for examp
 ```sql
 -- All tasks for one table (migration):
 SELECT ID, NAME, STATUS, LAST_ERROR_MESSAGE
-FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+FROM <metadata_database>.DATA_MIGRATION.TASK_QUEUE
 WHERE WORKFLOW_ID = <id>
   AND SCOPE LIKE 'Table[MY_DB.MY_SCHEMA.MY_TABLE]::%'
 ORDER BY ID;
@@ -101,7 +105,7 @@ The same `LIKE` matching powers rate-limit `SCOPE_PATTERN` rules (e.g. `Table[%]
 
 ```sql
 SELECT ID, NAME, EXECUTOR_TYPE, STATUS, FAILURES, LAST_ERROR_MESSAGE, SCOPE
-FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+FROM <metadata_database>.DATA_MIGRATION.TASK_QUEUE
 WHERE WORKFLOW_ID = <id>
   AND STATUS = 'failed'
 ORDER BY ID;
@@ -120,7 +124,7 @@ Cross-reference `TaskName` / `LastErrorMessage` with MCP `reports.files.errors`.
 
 ## Workflow management procedures
 
-Procedures live in the migration metadata schema (default `SNOWCONVERT_AI.DATA_MIGRATION`):
+Procedures live in the migration metadata schema (default `<metadata_database>.DATA_MIGRATION`):
 
 | Procedure | Effect |
 |-----------|--------|

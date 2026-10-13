@@ -37,7 +37,7 @@ python assess_sas.py /path/to/egps/ --output ./results --egp-extract-only
 | `assessment_report.md` | Human-readable report with tables and distribution analysis |
 | `assessment_report.html` | Self-contained, SCAI-themed HTML report (KPIs, tier mix, complexity/volume charts, dependency DAG, per-file detail). Open in a browser. |
 | `dependency_dag.mmd` | Mermaid diagram showing cross-file data flow dependencies |
-| `tables.json` | Input/output tables (shared librefs only) for conversion to fill with columns; managed by `tables.py` |
+| `tables.json` | Every table the portfolio touches (inputs, outputs; conversion adds intermediates) with location status, columns and their source; managed by `tables.py` (`summary`, `probe`/`ingest`, `import-ddl`, `get`, `gap`, `seed-targets`, `render-ddl`) |
 | `egp_extracted/<project>/` | Only for `.egp` input: one `.sas` per code task (`<project>__<flow><position>_<TaskID>.sas`, in run order), `egp_manifest.json`, `egp_flow.mmd` |
 
 `--format` accepts `json`, `md`, `html`, or `all` (default). The HTML report renders fully offline except the dependency diagram, which uses the Mermaid CDN when opened in a browser (an edges table is the offline fallback).

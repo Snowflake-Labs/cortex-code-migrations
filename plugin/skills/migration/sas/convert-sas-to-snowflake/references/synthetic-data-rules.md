@@ -8,8 +8,10 @@ Rules for generating smart synthetic test data that catches common SAS-to-Snowfl
 |------|---------|
 | Rows per table | 5-8 rows (enough to test logic, small enough for LLM to trace) |
 | Column coverage | Only columns referenced in the converted code (SELECT, WHERE, JOIN, GROUP BY) |
-| Table naming | Use TEMPORARY tables -- bare names only (no schema prefix) |
-| Data realism | Values should be plausible for the column name (e.g., `amount` = numbers, `name` = strings) |
+| Which tables get rows | `tables.py seed-targets tables.json` — source leaves only (read, never created in scope). Never seed intermediate or output tables: the pipeline rewrites them, and pre-seeding hides upstream defects |
+| Where they live | Create source tables at the exact name the converted code reads (inside the validation schema). Only SAS WORK datasets are TEMPORARY/bare |
+| Column width | Truncate every generated string to the declared length — one overflow aborts the whole load |
+| Data realism | Values should be plausible for the column type; realism never outranks join/filter alignment |
 
 ## Join-Aware Data Generation
 
@@ -24,6 +26,9 @@ For every JOIN or MERGE in the converted code, the synthetic data MUST include t
 | Right-only key | (no key 5) | key = 5 | Tests RIGHT/FULL join; inner join should exclude |
 | Duplicate key (one side) | key = 1 (one row) | key = 1 (two rows) | Tests one-to-many join (row multiplication) |
 | Duplicate key (both sides) | key = 2 (two rows) | key = 2 (two rows) | Tests many-to-many (SAS MERGE vs SQL JOIN difference) |
+| Missing key both sides | key = NULL | key = NULL | PROC SQL matches missing to missing; SQL `=` does not |
+| LEFT JOIN `ON` filter | a matched key whose right row fails the extra `ON` condition | — | Row must survive with NULL right columns |
+| MERGE shared column | same key, different values in a shared non-key column | — | Last-listed dataset must win |
 
 ### Example: Two-Table JOIN
 
@@ -58,8 +63,8 @@ Scan the converted SQL for join predicates beyond `a.key = b.key`:
 
 | Predicate pattern | Join type | Alignment requirement |
 |-------------------|-----------|----------------------|
-| `x BETWEEN t.top AND t.base` | Range / depth-interval | child `x` MUST fall inside ≥1 parent `[top, base]` interval |
-| `a.depth >= t.top AND a.depth <= t.base` | Range (expanded) | same as BETWEEN |
+| `x BETWEEN t.lo AND t.hi` | Range / interval | child `x` MUST fall inside ≥1 parent `[lo, hi]` interval |
+| `a.x >= t.lo AND a.x <= t.hi` | Range (expanded) | same as BETWEEN |
 | `a.d BETWEEN t.d - tol AND t.d + tol` | Tolerance / nearest | child `d` within `tol` of a parent `d` |
 | `ROUND(a.x) = ROUND(b.x)` | Bucketed | both sides round to the same bucket |
 | `CONTAINS(a.key, b.name)` / `LIKE` | Substring | child substring actually appears in parent key |
@@ -67,44 +72,33 @@ Scan the converted SQL for join predicates beyond `a.key = b.key`:
 ### Range-join data rule
 
 For every range join, generate child-table values so that:
-1. **At least one child row falls strictly inside a parent interval** — guarantees the join produces rows (positive test). Place it mid-interval, e.g. parent `[1375, 1420]` → child at `1395`.
+1. **At least one child row falls strictly inside a parent interval** — guarantees the join produces rows (positive test). Place it mid-interval, e.g. parent `[100, 200]` → child at `150`.
 2. **At least one child row falls outside all intervals** — negative test (verifies the join filters correctly).
-3. **Boundary rows** at exactly `top` and exactly `base` — verifies inclusive/exclusive bound handling.
+3. **Boundary rows** at exactly `lo` and exactly `hi` — verifies inclusive/exclusive bound handling.
 
 ```sql
--- Parent interval table
-INSERT INTO zone_interval VALUES ('S1','ZONE_A', 1375.0, 1420.0);  -- [top, base] in METERS
--- Child measurement table — depth values chosen to overlap the interval
-INSERT INTO sensor_reading VALUES ('S1', 1380.0, 55.2);  -- inside  (positive)
-INSERT INTO sensor_reading VALUES ('S1', 1410.0, 48.5);  -- inside  (positive)
-INSERT INTO sensor_reading VALUES ('S1', 1375.0, 50.0);  -- top boundary
-INSERT INTO sensor_reading VALUES ('S1', 1600.0, 40.0);  -- outside (negative test)
+INSERT INTO price_band VALUES ('B1', 100, 200);        -- [lo, hi]
+INSERT INTO line_item  VALUES ('L1', 150);             -- inside   (positive)
+INSERT INTO line_item  VALUES ('L2', 100);             -- lo boundary
+INSERT INTO line_item  VALUES ('L3', 950);             -- outside  (negative)
 ```
 
-### Unit-consistency rule (the meters-vs-feet trap)
+### Unit-consistency rule
 
-When the SAME physical quantity appears under different column names or unit suffixes across tables that join on it, generate ALL of them in ONE canonical numeric range so cross-table joins overlap.
+When the same quantity appears in different tables under different names or unit labels (amounts in two currencies, distances in two units, timestamps in two zones) and the tables join or compare on it, seed every column of that family in ONE overlapping range. Do not convert units for test data: overlap beats realism, or every cross-table join silently returns zero rows while each file "passes" on its own. Note the choice in a comment.
 
-**Worked example (canonical failure):** a pipeline joined `SENSOR_READING.DEPTH_M` (meters) to `ZONE_BOUNDARY.TOP_DEPTH`/`BASE_DEPTH`. The interval depths were seeded in feet (4500–5200) while the measurements were in meters (1175–1540). Every `BETWEEN` join returned zero rows, so all downstream tables were empty — yet every file "passed" compilation and isolated execution.
+### Literal-predicate polarity
 
-Rule:
-- Identify quantity families by name stem and unit suffix: `DEPTH`, `DEPTH_FT`, `DEPTH_M`, `TOP_DEPTH`, `BASE_DEPTH`, etc.
-- Pick ONE canonical range for the family (e.g. depths 1170–1580). Seed every table in that family within the canonical range, regardless of the column's unit label.
-- Do NOT mechanically convert (do not put 4500 in a `_FT` column and 1375 in a `_M` column). For synthetic *test* data, consistency-for-overlap beats physical realism. Note this in a comment.
-
-```sql
--- All depth-bearing tables seeded in the SAME 1170-1580 range so joins overlap:
-INSERT INTO measurement_a (SITE_ID, DEPTH_FT, DEPTH_M) VALUES ('S1', 1380.0, 1380.0); -- both cols same range
-INSERT INTO measurement_b (SITE_ID, DEPTH_M) VALUES ('S1', 1390.0);
-INSERT INTO measurement_c (SITE_ID, DEPTH_M) VALUES ('S1', 1395.0);
-```
+A row that satisfies every join is still dropped by a literal filter it fails. For each literal in a `WHERE`/`ON`/`CASE` on a seeded column:
+- **Inclusion** (`= 'X'`, `IN (...)`, `LIKE 'X%'`, after any `TRIM`/`UPPER`): seed at least one row carrying the surviving value.
+- **Exclusion** (`<> 'X'`, `NOT IN`, `NOT LIKE`, `CASE WHEN col IN (...) THEN NULL`): keep the golden-path row *off* the literal; add one separate row *on* it as the negative test.
 
 ### Multi-hop survival rule
 
 A seed row must survive ALL the way to the terminal output tables, not just the first join. For each terminal table in the cross-file DAG:
 1. Walk the dependency chain backward to the source tables it ultimately derives from.
 2. Ensure at least one fully-aligned "golden path" row exists at every hop: matching equality keys AND overlapping range values at each join along the path.
-3. This guarantees the Phase 5 terminal-output assertion (non-empty) can pass for a correctly-converted pipeline.
+3. This guarantees the T3 terminal-output assertion (non-empty) can pass for a correctly-converted pipeline.
 
 Verification heuristic: pick one entity (e.g. `S1`) and ensure it has aligned rows in EVERY source table on the golden path, so it flows through every layer to the terminal tables.
 
@@ -149,6 +143,7 @@ For GROUP BY, FIRST./LAST., PROC SORT NODUPKEY, or any aggregation:
 | Pattern | Minimum Requirement |
 |---------|---------------------|
 | GROUP BY key | At least one key value with 2+ rows |
+| BY + FIRST./LAST./RETAIN | One BY group with 2 rows tied on every sort key (exercises the tiebreak) |
 | FIRST./LAST. processing | At least one BY-group with 3+ rows (to test first, middle, last) |
 | PROC SORT NODUPKEY | Duplicate rows that differ only in non-key columns |
 | SAS MERGE BY | Same key in both tables with different row counts |
@@ -213,7 +208,10 @@ Before finalizing synthetic data, verify:
 - [ ] For BY-group processing, at least one group has 3+ rows
 - [ ] For RETAIN/LAG code, at least 2 partitions with 4+ rows each
 - [ ] INSERT VALUES match the CREATE TABLE column order exactly
-- [ ] No schema prefix on TEMPORARY table names
+- [ ] Source tables created at the names the converted code reads
 - [ ] Every RANGE join (BETWEEN / >=...<=) has ≥1 child row inside a parent interval (positive test) and ≥1 outside (negative test)
-- [ ] All columns in the same physical-quantity family (depths, dates) seeded in ONE canonical range so cross-table joins overlap (no meters-vs-feet mismatch)
+- [ ] Columns of the same quantity family seeded in ONE overlapping range so cross-table joins overlap
+- [ ] Only `seed-targets` tables seeded; generated strings fit declared widths
+- [ ] Inclusion literals carried by a golden-path row; exclusion literals only on negative rows
+- [ ] Each join has a missing-key row, each LEFT JOIN `ON` filter a failing right row, each MERGE a shared column with differing values
 - [ ] At least one "golden path" entity has aligned rows in EVERY source table along its dependency chain so it survives multi-hop joins to the terminal output tables

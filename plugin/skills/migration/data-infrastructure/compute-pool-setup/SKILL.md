@@ -31,6 +31,27 @@ CREATE COMPUTE POOL <COMPUTE_POOL_NAME>
 >
 > **`AUTO_SUSPEND_SECS = 60`** lets the pool go cold ~60s after the orchestrator service suspends, so an idle pool stops billing even if teardown is never run. It stays active while the service is running, and `data_infrastructure(mode="up")` resumes it before the next wave (a ~30–60s warm-up). Raise it if your migration waves run back-to-back and the warm-up is disruptive.
 
+### Sizing a pool that also runs SPCS workers
+
+The values above are for an orchestrator-only pool. When the Data Exchange Worker also runs on SPCS
+([worker-spcs](../worker-spcs/SKILL.md)) in the same pool, size it from the worker's CPU request, and keep
+the minimum at one node:
+
+- **Instance family:** the worker spec requests `cpu: 6`, which needs `CPU_X64_M` (6 vCPU per node). A
+  `CPU_X64_S` pool cannot schedule it.
+- **Node count:** with `cpu: 6`, each worker replica fills a node and the orchestrator needs one more. With a
+  smaller request (`cpu: 0.5`–`2`), the orchestrator and two or three workers share one or two nodes.
+- **Recommend `MIN_NODES = 1`, `MAX_NODES = 2`–`3`, `AUTO_SUSPEND_SECS = 60`**, with 2–3 worker replicas and
+  `MAX_PARALLEL_TASKS = 4`. The source system, not the pool, limits throughput: a pool wider than the source can
+  feed adds cost, not speed.
+- **Never recommend a large fixed minimum** (for example `MIN_NODES = 10`). Every node in `MIN_NODES` bills
+  whenever the pool is resumed, including while the agent waits on a confirmation. For a wave that needs more
+  source concurrency, raise only `MAX_NODES` and the worker's `MAX_INSTANCES` for that wave, then lower them
+  again.
+
+Nothing in the product sizes the pool from table row counts. Tell the user these numbers as a starting point
+and let them decide.
+
 ## Step 3 — Verify the Pool Is Active
 
 Run:

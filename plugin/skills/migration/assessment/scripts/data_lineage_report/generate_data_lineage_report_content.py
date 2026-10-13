@@ -70,6 +70,8 @@ _KIND_LABEL = {
     "etl_pipeline": "ETL pipeline",
     "etl_system": "ETL system",
     "etl_package": "ETL package",
+    "etl_script": "ETL script",
+    "etl_workflow": "ETL workflow",
     "report_system": "Power BI",
     "report_report": "Power BI report",
     "unresolved": "Unresolved",
@@ -542,7 +544,7 @@ def _render_canvas(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], lay
             cards.append(_render_card(child, layout))
         if children:
             rails.append(_render_child_rail(node_id, layout))
-            toggles.append(_render_expand_toggle(node, node_id, layout))
+            toggles.append(_render_expand_toggle(node, node_id, layout, children))
     detail_ids = {node_id for node_id, card in layout.cards.items() if card.parent_id is not None}
     svg = _render_edges_svg(edges, layout, detail_ids)
     return (
@@ -641,6 +643,10 @@ def _grain_nouns(node: Dict[str, Any]) -> Tuple[str, str]:
     a database."""
     kind = str(node.get("Kind") or "").strip().lower()
     platform = str(node.get("Platform") or "").strip()
+    if kind == "etl_script":
+        return "script", "scripts"
+    if kind == "etl_workflow":
+        return "workflow", "workflows"
     if platform == "PowerBI" and kind in ("report_system", "report_report"):
         return "report", "reports"
     if platform == "Ssis" and kind in ("etl_system", "etl_package"):
@@ -660,7 +666,24 @@ def _detail_meta(node: Dict[str, Any]) -> str:
     return singular.capitalize()
 
 
-def _render_expand_toggle(node: Dict[str, Any], parent_id: str, layout: LineageLayout) -> str:
+def _expand_grain(node: Dict[str, Any], children: List[Dict[str, Any]]) -> Tuple[str, str]:
+    """The toggle sits on the parent, whose platform noun is not the child's.
+    A Teradata schema card expands into databases; the same platform's script
+    card expands into scripts. An Informatica folder expands into workflows."""
+    child_kinds = {str(child.get("Kind") or "").strip().lower() for child in children}
+    if "etl_workflow" in child_kinds:
+        return "workflow", "workflows"
+    if "etl_script" in child_kinds:
+        return "script", "scripts"
+    return _grain_nouns(node)
+
+
+def _render_expand_toggle(
+    node: Dict[str, Any],
+    parent_id: str,
+    layout: LineageLayout,
+    children: List[Dict[str, Any]],
+) -> str:
     """The control is a sibling of the card it expands, not a child of it: a
     collapsed card is `role="button"`, so nesting a `<button>` inside it is
     invalid content and folds the toggle's copy into the card's accessible
@@ -675,7 +698,7 @@ def _render_expand_toggle(node: Dict[str, Any], parent_id: str, layout: LineageL
     """
     card = layout.cards[parent_id]
     label = _esc(_fallback_system_card_label(node))
-    plural = _grain_nouns(node)[1]
+    plural = _expand_grain(node, children)[1]
     expand = f"Expand {label} {plural}"
     collapse = f"Collapse {label} {plural}"
     return (
@@ -950,7 +973,7 @@ _JS = """
     var dlExpandedParents = {};
     function dlAnyExpanded() { return Object.keys(dlExpandedParents).length > 0; }
 
-    var KIND_LABELS = { system: 'System', etl_pipeline: 'ETL pipeline', etl_system: 'ETL system', etl_package: 'ETL package', report_system: 'Power BI', report_report: 'Power BI report', unresolved: 'Unresolved' };
+    var KIND_LABELS = { system: 'System', etl_pipeline: 'ETL pipeline', etl_system: 'ETL system', etl_package: 'ETL package', etl_script: 'ETL script', etl_workflow: 'ETL workflow', report_system: 'Power BI', report_report: 'Power BI report', unresolved: 'Unresolved' };
     function dlHumanizeKind(kind) {
         if (KIND_LABELS[kind]) { return KIND_LABELS[kind]; }
         if (!kind) { return 'Unknown'; }

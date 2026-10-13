@@ -1,5 +1,9 @@
 # Advanced operations reference
 
+`<metadata_database>` below is `.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
+overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
+project's.
+
 Use this when a customer asks about **protecting the source**, **bounded migration dry-runs**, **incremental validation**, **re-validating failed partitions**, **throttling concurrent tasks**, **custom L3 normalization**, or **why checksum/incremental sync missed a change**. These are optional — default migrate/validate flows do not require them.
 
 **Related references:** [Metadata storage mode (Hybrid vs standard)](./metadata-storage-mode-reference.md), [DM workflow config](../../migrate-objects/actions/data-migration/references/workflow-config-reference.md), [DV workflow config](../../setup/data-validation/references/workflow-config-reference.md), [validate_tables.md](../../validate-objects/actions/validate_tables.md).
@@ -21,15 +25,15 @@ Use this when a customer asks about **protecting the source**, **bounded migrati
 
 ```sql
 -- At most 5 concurrent loading tasks (any table):
-INSERT INTO SNOWCONVERT_AI.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, TARGET_CONCURRENT_TASKS)
+INSERT INTO <metadata_database>.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, TARGET_CONCURRENT_TASKS)
 VALUES ('Table[%]::Loading', 5);
 
 -- Cap one workflow's partition loads:
-INSERT INTO SNOWCONVERT_AI.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, WORKFLOW_ID, TARGET_CONCURRENT_TASKS)
+INSERT INTO <metadata_database>.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, WORKFLOW_ID, TARGET_CONCURRENT_TASKS)
 VALUES ('Table[%]::Partition[%]::Loading', <workflow_id>, 2);
 
 -- Pause all tasks matching a pattern:
-INSERT INTO SNOWCONVERT_AI.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, TARGET_CONCURRENT_TASKS)
+INSERT INTO <metadata_database>.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, TARGET_CONCURRENT_TASKS)
 VALUES ('Table[MY_DB.%]::%', 0);
 ```
 

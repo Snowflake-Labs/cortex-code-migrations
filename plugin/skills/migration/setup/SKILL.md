@@ -45,29 +45,40 @@ the next step automatically. The flow:
      `error_reason`), `committed: [...]`, `project_initialized: false`
      — emitted only when actionable
 2. If `completed` is `true`, jump to **On Completion** below.
-3. If `next_prompt` is non-null, the engine wants you to ask the user a
-   question directly — no sub-skill load required. Surface the prompt
-   exactly as the engine returned it via `ask_user_question` (`multiSelect = false`):
-   - `next_prompt.question` is the question text.
-   - `next_prompt.options` is the list of `{label, value, description?}`
-     entries to render. Use `label` as the user-facing choice; **never**
-     show `value` to the user.
-   - **If `then_ask` is present, ask every question in one
-     `ask_user_question` call** — `next_prompt` first, then each entry of
-     `then_ask` in the order given, one question per entry,
-     `multiSelect = false` on each. Don't ask them one call at a time.
-     They are queued precisely because the machine reaches all of them
-     whatever the user answers, so nothing you learn from one can make a
-     later one wrong. The queue is capped so a whole run always fits in a
-     single call; never split it.
+3. If `next_prompt` is non-null, AIM is already showing that question as a
+   card (and every `then_ask` entry on the same card). **Do not call
+   `ask_user_question`.** Do not split the card into separate yes/no
+   questions, and do not reword it. A second question is the user being
+   asked twice for a decision they already made or can see. End the turn.
+   The card submits `progress_setup` itself. On your next turn, call
+   `progress_setup()` and continue from the step it names. If it is still
+   this prompt, the user has not answered — wait again, and still do not ask.
+
+   When the user has **already** said the answer in conversation, record it
+   instead of waiting. Do not ask them to say it again.
+   - Submit the option's `value`, never its label. If they picked
+     **Something else**, submit what they typed — not `other`.
+   - If they picked **Snowflake** for the dialect, omit `code_source`.
+   - Use each prompt's `multi_select` value (default `false` when omitted).
+     The user can pick several values when it is true. If they pick
+     **None of these**
+     along with any other option, drop **None of these** and submit the
+     rest. If they pick only **None of these**, submit `none`. Join
+     multiple values as a comma-separated string (`etl,powerbi`). The
+     queued conversion-settings question stays `multiSelect = false`.
+   - A prompt with `text_input` is a plain text field, not an option list.
+     Show `text_input.placeholder`; if the user leaves it blank, submit
+     `text_input.default_value`.
    - Send every answer you collected in **one** call:
      `progress_setup(answers={"<write_to>": "<chosen value>", ...})` —
      keys are each prompt's `write_to`, values the chosen option's
      `value` verbatim (a string, even for a number or a boolean). If they
      pick **Something else** (or type an answer that is not one of the
      listed option values), submit what they typed — not the option's
-     `value`. The engine accepts any answer `configure` would take for
-     that `write_to` (`autonomous_max_subagents` is any integer from 1 to
+     `value`. If what they typed is a question or a request, not an
+     answer ("what does each one do?"), answer it and ask that prompt
+     again before you submit anything. The engine accepts any answer
+     `configure` would take for that `write_to` (`autonomous_max_subagents` is any integer from 1 to
      50). That records the answers *and* returns the next step, so for
      **questions** it replaces both the separate `configure(...)` call and
      the follow-up `progress_setup()`. Go to step 2 with its response.
@@ -111,6 +122,15 @@ the next step automatically. The flow:
    round-trip; the user already said "continue" upstream. When the
    sub-skill returns, go back to step 1.
 
+   **Do not recap what the machine already settled.** `completed_tasks`
+   names questions that were answered, not things the project has, and the
+   user watched themselves answer them. `migration_extras=none` means the
+   user said there is no ETL, Power BI, or Tableau to include — telling
+   them "extras are recorded" states the opposite of their answer. Say what
+   you are about to do instead. When a settled value genuinely matters to
+   the step, name the value ("no extras", "SQL Server via
+   `tastybytes-src`"), never the fact that it is on file.
+
 Note: `progress_setup()` also handles git commits automatically — when a
 task with `commitOnComplete` completes, the tool commits and pushes
 project files. You do not need to run git commands manually.
@@ -126,12 +146,14 @@ means `migration/dbt/setup.md`, a sibling of `setup/`.
 | `detectDbt`                      | router — auto-routes a detected dbt workload to `dbtSetup`, else the normal flow |
 | `dbtSetup`                       | sub-skill: `dbt/setup.md` (dbt path only — resolves dialect from profiles.yml, inits) |
 | `recommendSafeTools`             | inline prompt — arrives with the next two queued in `then_ask`     |
-| `chooseSourceDialect`            | inline prompt (queued)                                            |
-| Snowflake branch                 | `configureSnowflakeTarget` → `setupDataInfrastructure` → `dataStrategy` |
+| `chooseSourceDialect`            | inline prompt — first card; `then_ask` queues extract, extras, and conversion settings (`askWith`). Snowflake omits `code_source`. AIM renders this card from `progress_setup` without waiting for the model. |
+| Snowflake branch                 | after dialect: `configureSnowflakeTarget` → `setupDataInfrastructure` → `dataStrategy` (validation-only; skips conversion) |
 | `chooseEntryMode`                | inline prompt (queued; nothing queues after it — it routes by dialect) |
 | `midwayEntry`                    | sub-skill: `setup/midway-entry.md`                                |
-| `chooseCodeSource`               | inline prompt (`next_prompt`) — extract vs. local files; each answer carries its `then` |
-| `configureSourceConnectionExtract`      | sub-skill: `setup/configure-source-connection.md` (extract path only) |
+| `chooseCodeSource`               | inline prompt — extract vs. local files; asked on the same card as `chooseSourceDialect` when that is the current prompt. Each answer carries its `then` |
+| `configureExtractionSource`      | inline `next_prompt` listing existing connections when scai has any (extract all objects from the picked database). Otherwise sub-skill: `setup/configure-source-connection.md` |
+| `chooseMigrationExtras`          | inline prompt — **multi-select** extras (ETL / Power BI / Tableau / None). Arrives with `chooseConversionSettings` queued in `then_ask`. AIM shows both on one card. Do not ask them yourself, and do not turn them into yes/no questions. Stores `migration_extras` (and derived `has_etl_code` / `has_power_bi` / `has_tableau`). |
+| `chooseConversionSettings`       | inline prompt (queued in `then_ask` from `chooseMigrationExtras`). Stores `tailor_conversion_settings` for the `convert` skill. |
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
 | `dbtRepoint`                     | sub-skill: `dbt/SKILL.md` (dbt path only — agentic YAML/macro refinement after `--dbt`) |
@@ -141,12 +163,12 @@ means `migration/dbt/setup.md`, a sibling of `setup/`.
 | `chooseRunMode`                  | inline prompt (`next_prompt`) — pick manual vs autonomous run mode; each answer carries its `then` |
 | `chooseAutonomousSubagentCount`  | inline prompt (`next_prompt`) — autonomous only; persist the project-wide concurrent sub-agent limit |
 | `configureGit`                   | sub-skill: `setup/git.md`                                         |
-| `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md`                  |
-| `configureSandboxProfile`        | sub-skill: `setup/configure-sandbox-profile.md`                     |
-| `configureSourceConnectionTesting` | sub-skill: `setup/configure-source-connection.md` (source-data testing path only) |
+| Default (non-Snowflake) branch   | `configureGit` → `configureSandboxProfile` → `chooseTestingPath`  |
+| Snowflake-source branch          | `configureSnowflakeTarget` → `setupDataInfrastructure` → `dataStrategy` (skips sandbox profile) |
+| `configureSandboxProfile`        | sub-skill: `setup/configure-sandbox-profile.md` — authoritative source + Snowflake connections and database bindings for migration execution |
+| `configureSnowflakeTarget`       | sub-skill: `setup/configure-snowflake-target.md` (Snowflake-source path only) |
 | `configureTesting`               | sub-skill: `setup/configure-testing.md`                           |
-| `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (testbed path; also the legacy synthetic path) |
-| `configureSourceConnectionData`  | sub-skill: `setup/configure-source-connection.md` (data infrastructure path only) |
+| `generateTestbed`                | sub-skill: `migrate-objects/baseline-capture/testbed-generator/SKILL.md` (bootstrap coupling state; table walkers generate/load CSVs later) |
 | `setupDataInfrastructure`        | sub-skill: `data-infrastructure/SKILL.md`                         |
 | `dataStrategy`                   | sub-skill: `setup/data-strategy/SKILL.md`                         |
 
@@ -157,9 +179,8 @@ follows that, then run mode. Everything else — git included — follows the
 `chooseRunMode` prompt.
 
 The milestone commits (`registerCode`, `convertCode`, `runAssessment`) need git,
-which now comes after that prompt. They land together on the first
-`progress_setup()` after `configureGit` rather than one at a time when git was
-skipped earlier in the flow.
+which is configured after that prompt, so they land together on the first
+`progress_setup()` after `configureGit`.
 
 The `assessment` skill's closing menu asks whether to move on, not how to run,
 so on "Move on to migration" it submits
@@ -169,9 +190,10 @@ the `chooseRunMode` prompt's question, and submitting a value for it marks the
 question answered (`run_mode_confirmed`) so the user is never shown it.
 
 The testing choice also decides the last step: **testbed** (and legacy
-**synthetic**) walks into `generateTestbed`, while **source-data** ends
-setup right after `configureTesting`. Per-object tests on the testbed
-path use `generateTestCases` (query the loaded catalog), not
+**synthetic**) walks into `generateTestbed` to bootstrap non-table coupling
+state, while **source-data** ends setup right after `configureTesting`. In the
+testbed path, each dependency-ready table walker later generates and loads its
+own CSV before per-object tests use `generateTestCases`; they do not use
 `seedSynthetic`.
 
 If `progress_setup()` returns an unexpected `next_task` not listed above,
@@ -221,8 +243,9 @@ pending — do not invent completion from chat history.
 ## Rules
 
 1. **Follow sub-skill instructions** — Complete each sub-skill fully before returning
-2. **Confirm transitions** — Ask user before moving to next stage
+2. **Confirm transitions through the machine** — stage gates arrive as `progress_setup` prompts (`continueToMigration`, `chooseRunMode`); ask those when they come, and otherwise continue into the next sub-skill in the same turn (step 4)
 3. **A requested stop is the end of this run** — If the user asked to stop after conversion, stop when conversion is done. Do not load `../assessment/SKILL.md` and do not run `scai assessment`, even when `progress_setup` names assessment as the next task. Tell the user assessment is the next stage and wait.
+4. **Turn the local dashboard on once `plugin.yml` exists** — It does not start by itself. Call `configure(dashboard_port=-1)` so `.scai/config/plugin.yml` records the default port. Skip only when the user opts out.
 
 ## On Completion
 

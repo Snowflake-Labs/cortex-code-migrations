@@ -13,7 +13,7 @@ Detailed reference for IBM DB2 (LUW) connection options, authentication, extract
 | Host | `--host` | DB2 hostname or IP address |
 | Database | `--database` | Database name (bound at connection time) |
 | Username | `--user` | DB2 username |
-| Password | `--password` | DB2 password |
+| Password | `--password` | DB2 password (prompted securely if omitted) |
 
 ### Optional Parameters
 
@@ -35,9 +35,10 @@ scai connection add-db2 \
   --host db2-server.example.com \
   --port 50000 \
   --database SAMPLE \
-  --user myuser \
-  --password mypassword
+  --user myuser
 ```
+
+The CLI prompts for the password securely. Never include it in the command line.
 
 **When to use:**
 - All DB2 connections (only method available in MVP)

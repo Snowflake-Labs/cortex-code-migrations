@@ -16,6 +16,16 @@ or `"testbed"`. Handles **one object (`<object_name>`)** at a time. Two stages:
 
 ---
 
+## Step 0: Record skill start
+
+Before any work, record a `started` TASK_EVENT for this object's `generateTestCases` task:
+
+```
+transition_status(status="started", task="generateTestCases", where="id = '<object_id>'")
+```
+
+Do this once at entry. Finish with `transition_status` in Step 6 — do not call `transition_status(status='start')` / `begin` here.
+
 ## Step 1: Pull settings from `configure()`
 
 Call `configure()` and read the relevant details.
@@ -40,13 +50,27 @@ From the response, hold onto:
 
 The YAML lives under `<project_dir>/<files.artifacts.path>/test/` — discover it with a glob (`*.yml`) rather than assuming the filename. `scai test seed` derives the filename from the object's scope name and writes one file per object here.
 
-If `files.source` cannot execute as written (INSERT…EXEC column-count mismatch, a comment that the object fails at runtime, or the same defect on a live `EXEC`), **escalate on `generateTestCases` now**. Do not seed, do not spawn the swarm, and do not paper over it in YAML. The customer owns source.
+If `files.source` cannot execute as written on **every legal dataset**
+(INSERT…EXEC column-count mismatch, a comment that the object fails at
+runtime, or the same defect on a live `EXEC`), **escalate on
+`generateTestCases` now**. Do not seed, do not spawn the swarm, and do not
+paper over it in YAML. The customer owns source.
 
 If seed / `EXEC` fails only because **this fixture's rows** are the wrong
-shape (concat into a narrower temp column, a join the fixture never
-produced), spawn
-(`subagent_type="sandbox_specialist"`) with `task=generateTestCases`. Do not
-stamp `error=sql`. After `done`, note the reshape and retry seed.
+shape, or because the AIMSBX pair is missing a table: do not stamp
+`error=sql` or `infra`. Do not edit WAVE_SRC or a table unit's shared CSV.
+
+| Evidence | Do |
+|---|---|
+| `failure_class=missing_object` / 42S02 / unknown function and a named id is not on `dependsOn`, `id` is null, **or** that object's SQL/CUR is not bindable | Spawn **one** foreground `cur_reconciler`, then `next_task`. |
+| `failure_class=missing_object` and every named id is already on `dependsOn` **and** SQL/CUR is bindable | `next_task` (`blockedOn` → `partial`) **or** one foreground `sandbox_specialist` to remint the pair |
+| empty join, VARCHAR concat into a narrower temp column, a filter the fixture never produced | Spawn **one** foreground `sandbox_specialist` (`run_in_background=false`, `subagent_type="sandbox_specialist"`) with `task=generateTestCases` and the evidence |
+
+Would the object succeed on a different legal dataset that still fits the
+table DDL? Then this is the specialist. After `done`, `note` the reshape
+(inverse = drop this AIMSBX pair / reload generated CSVs) and retry seed.
+`escalate` → park with that child's `asks`. `needs_cur` → spawn
+`cur_reconciler`. Leftover sandbox yaml is the binding.
 
 ## Step 3: Run `scai test seed`
 
@@ -69,7 +93,13 @@ Notes:
 If `scai test seed` returns a non-zero exit:
 
 - Print its stderr verbatim.
-- **Stop.** Don't try to recover by hand-writing the YAML — that defeats the seed-first contract. Reroute via `DIAGNOSE_FIX.md` if the state machine retries this task; otherwise the user fixes the seed input (bad log path, malformed CSV) and reruns.
+- 42S02 / `failure_class=missing_object` / unknown function, or this fixture's rows (empty
+  join, VARCHAR concat) → follow Step 2's specialist / `cur_reconciler`
+  split. Do not stamp `error=sql`. Do not hand-write the YAML.
+- Otherwise **stop.** Don't recover by hand-writing the YAML — that
+  defeats the seed-first contract. Reroute via `DIAGNOSE_FIX.md` if the
+  state machine retries this task; otherwise the user fixes the seed
+  input (bad log path, malformed CSV) and reruns.
 
 ## Step 4: Inspect the resulting YAML
 
@@ -139,6 +169,7 @@ stdout as a backup). After all agents complete:
 1. Read each tmp file. Fall back to stdout parsing if a tmp file is missing.
 2. Concatenate `test_cases:` lists. Drop exact duplicates.
 3. Aim for 15–25 rows total. If you have more, prefer keeping data-driven rows over synthetic ones.
+4. Drop rows the source cannot execute before writing the YAML. Read the source at `files.source.path`. If an unguarded `RIGHT`, `LEFT`, or `SUBSTRING` uses a length of `LEN(arg) - N` or `LENGTH(arg) - N`, omit every non-null string for that argument shorter than N. A length of exactly N is legal. SQL Server raises on a negative length; it does not return empty. Keep `null`. `scai test capture` and `scai test validate` drop any row that still violates this and rewrite `validation.test_cases`, but the file you write must already be clean.
 
 ### 5.5 — Apply rows to the YAML
 
@@ -146,9 +177,17 @@ Open the YAML at the artifacts path. Replace its `validation.test_cases:` (curre
 
 The cheat sheet's placeholder table ([`../references/step-based-yaml.md` → Placeholders](../references/step-based-yaml.md#placeholders-and-test_cases)) explains how each row's values become `{0}`, `{1}`, ... substitutions. The agents already produce values in array form; no escaping needed.
 
-## Step 6: Report and return
+## Step 6: Advance and report
 
-Tell the user one line, then return to the state machine:
+When the YAML under `<project_dir>/<files.artifacts.path>/test/` has populated `test_cases:` (from seed, swarm, or both), advance the walk. The oracle re-checks the file — do not invent completion:
+
+```
+transition_status(status="advance", task="generateTestCases", outcome="completed", where="id = '<object_id>'")
+```
+
+If advance refuses (`does not confirm completion`), the YAML is still a stub — fill it (Step 5) and retry. Do not escalate solely because advance refused a stub.
+
+Then tell the user one line and return to the state machine:
 
 ```
 Test cases for <object_name>: <N> cases (<source>).

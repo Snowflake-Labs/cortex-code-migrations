@@ -5,17 +5,47 @@ and per-tier distribution are always computed over the SAME set of blocks and
 reconcile. Mirrors `references/block-tiering-spec.md` (Section 1).
 """
 
-from typing import Iterator
+import re
+from typing import Iterator, List
 
 from .parser import SASScript, SASBlock, BlockType
 
 
-# DI Studio / DataFlow scaffolding macro names — excluded from counts and tiering.
+# DI Studio / DataFlow scaffolding macro names — always excluded from counts and tiering.
 BOILERPLATE_MACRO_NAMES = frozenset({
     'rcset', 'rcsetds', 'etls_startperformancestats', 'etls_setdebug',
     'etls_recordcount', 'etls_endperformancestats', 'etls_recordtable',
     'etls_getrecordcount', 'etls_jobstatus', 'etls_logerror',
 })
+# DI Studio (etls_*) and SAS Studio Flow (_flw_*) generate open-ended macro families. One is
+# scaffolding only when it does no work: no named dataset and no transforming PROC.
+BOILERPLATE_MACRO_PREFIXES = ('etls_', '_flw_')
+TRANSPORT_PROCS = frozenset({'upload', 'download', 'printto', 'options', 'optsave', 'optload'})
+
+# Statistical / modelling PROCs -> Tier 3 (PySpark/SCOS). One canonical list (a floor, not a closed
+# set); block-tiering-spec.md mirrors it. Matched as whole words after string literals are stripped.
+TIER3_STAT_PROCS = (
+    'reg', 'glm', 'logistic', 'cluster', 'fastclus', 'factor', 'phreg', 'lifetest', 'surveyselect',
+    'mixed', 'genmod', 'nlmixed', 'glimmix', 'princomp', 'discrim', 'candisc', 'arima', 'forecast',
+    'esm', 'ucm', 'timeseries', 'npar1way', 'ttest', 'nlin', 'probit', 'catmod', 'varclus',
+    'dmdb', 'dmreg', 'neural', 'arboretum',
+)
+TIER3_STAT_PROC_PREFIXES = ('hp',)   # HPFOREST, HPLOGISTIC, HPSPLIT, ... (high-performance procs)
+TIER3_PREFIX_EXCEPTIONS = frozenset({'hpsort', 'hpsummary', 'hpds2'})   # data utilities, not models
+
+# A HASH object is Tier 3 only when mutated or iterated. A lookup-only hash
+# (defineKey/defineData then find()) is a keyed JOIN -> no Tier-3 trigger.
+HASH_MUTATION_MARKERS = ('.add(', '.replace(', '.remove(', '.output(', 'hiter', '.next(', '.prev(',
+                         '.ref(', '.sum(')
+
+
+def statement_text(content: str) -> str:
+    """Lowercased SAS with comments and string literals removed, so rules match statements,
+    not text inside quotes or comments."""
+    s = re.sub(r'/\*[\s\S]*?\*/', ' ', content)
+    s = re.sub(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"", "''", s)
+    s = re.sub(r'(?m)^\s*\*[^;]*;', ' ', s)
+    return s.lower()
 
 # File-level boilerplate indicators (used by the complexity scorer's discount).
 BOILERPLATE_INDICATORS = (
@@ -38,10 +68,39 @@ SKIP_TYPES = frozenset({
 })
 
 
+def _own_macro_name(block: SASBlock) -> str:
+    m = re.search(r'%macro\s+(\w+)', block.content, re.I)
+    return m.group(1).lower() if m else ''
+
+
 def is_boilerplate_macro(block: SASBlock) -> bool:
-    """True if a MACRO_DEF block is DI Studio / DataFlow scaffolding."""
-    content_lower = block.content.lower()
-    return any(f'%macro {name}' in content_lower for name in BOILERPLATE_MACRO_NAMES)
+    """True if a MACRO_DEF block is DI Studio / DataFlow scaffolding. Judged on the macro's own
+    declared name (never a nested %macro), and an unlisted etls_* macro only when it does no work."""
+    name = _own_macro_name(block)
+    if name in BOILERPLATE_MACRO_NAMES:
+        return True
+    if not name.startswith(BOILERPLATE_MACRO_PREFIXES):
+        return False
+    text = statement_text(block.content)
+    named_data = [d for d in re.findall(r'\bdata\s+([\w.&]+)', text) if d != '_null_']
+    procs = set(re.findall(r'\bproc\s+(\w+)', text)) - TRANSPORT_PROCS
+    return not named_data and not procs and 'create table' not in text
+
+
+def _is_generated_housekeeping(block: SASBlock, later_blocks: List[SASBlock]) -> bool:
+    """Flow-generated noise: a `data _null_` that only PUTs _FLW_ markers, or a PROC DATASETS that
+    only deletes datasets a later step re-creates (CREATE OR REPLACE makes it redundant)."""
+    text = statement_text(block.content)
+    if block.block_type == BlockType.DATA_STEP:
+        return '_flw_' in block.content.lower() and \
+            bool(re.fullmatch(r'\s*data\s+_null_\s*;(\s*%?put\b[^;]*;)*\s*run\s*;\s*', text))
+    if block.block_type == BlockType.PROC_DATASETS:
+        m = re.fullmatch(r'\s*proc\s+datasets\b[^;]*;\s*delete\s+([^;]+);\s*(?:run|quit)\s*;\s*(?:quit\s*;\s*)?', text)
+        if not m:
+            return False
+        later = {d.split('.')[-1].lower() for b in later_blocks for d in b.metadata.get('output_datasets', [])}
+        return all(n.split('.')[-1] in later for n in m.group(1).split())
+    return False
 
 
 def iter_countable_blocks(script: SASScript) -> Iterator[SASBlock]:
@@ -74,8 +133,10 @@ def iter_countable_blocks(script: SASScript) -> Iterator[SASBlock]:
     def within_boilerplate(block: SASBlock) -> bool:
         return any(lo <= block.start_line <= hi for lo, hi in boilerplate_ranges)
 
-    for block in script.blocks:
+    for i, block in enumerate(script.blocks):
         if block.block_type in SKIP_TYPES:
+            continue
+        if _is_generated_housekeeping(block, script.blocks[i + 1:]):
             continue
 
         if block.block_type == BlockType.MACRO_DEF:

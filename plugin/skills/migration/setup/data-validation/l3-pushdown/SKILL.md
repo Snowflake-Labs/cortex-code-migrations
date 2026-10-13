@@ -99,7 +99,7 @@ validationConfiguration:
 
 Object-store strategies **fail closed** without `externalStage`. Do not run until both keys are set.
 
-**Worker TOML:** dump keys for native export (`unload_*`, `export_data_*`, `write_nos_*`, `dbms_cloud_*`, `cet_as_*`) must live on the **named scai connection** (`~/.snowflake/scai/connections/<engine>.toml`) **or** on an **inlined** `[connections.source.<engine>]` in `.scai/config/dew_configuration.toml`. Do not add them next to `connection_name` — worker start hydrates that name and drops the extras. `[connections.target.s3|gcs|blob]` for `cloud_direct` stays in the project worker file. Restart the worker after TOML changes (`data_infrastructure` / `scai data worker start`).
+**Worker TOML:** `scai data worker generate-config --extraction-strategy <strategy>` writes the dump keys (`unload_*`, `export_data_*`, `write_nos_*`, `dbms_cloud_*`, `cet_as_*`) beside `connection_name` as `<TOKEN>` placeholders. `worker start` copies that allow-list into the hydrated source section and drops anything else. Do not put bucket, role, or credential values on the snowct connection profile. `[connections.target.s3|gcs|blob]` for `cloud_direct` stays outside the source section. Restart the worker after TOML changes (`data_infrastructure` / `scai data worker start`).
 
 Show the user the YAML and TOML diffs. For a reused data-migration landing, only the validation YAML should change; do not restart the worker unless you edited TOML.
 
@@ -114,7 +114,7 @@ Show the user the YAML and TOML diffs. For a reused data-migration landing, only
 - [ ] Yes → native strategy if the bucket matches the dialect; else cloud_direct
 - [ ] Stage URL and worker/source writer prefix are the same
 - [ ] validationConfiguration.extraction.strategy + externalStage written
-- [ ] Dump keys on snowct connection or inlined worker source section (not beside `connection_name`); worker restarted if TOML changed
+- [ ] Dump keys beside `connection_name` (allow-list copied on worker start; not on the snowct connection profile); worker restarted if TOML changed
 ```
 
 Return control to the caller (`data-validation-setup` or `validate_tables`).

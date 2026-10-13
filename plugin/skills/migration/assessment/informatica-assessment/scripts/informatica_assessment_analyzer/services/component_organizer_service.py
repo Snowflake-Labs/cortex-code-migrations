@@ -17,11 +17,35 @@
 
 import re
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Set, Tuple
 
 from ..models import Component, Mapping, WorkflowAnalysis
 
 _MAPPINGNAME = re.compile(r'\bMAPPINGNAME\s*=\s*"([^"]+)"')
+_SESSION_TAG = re.compile(r"<SESSION\b[^>]*>", re.IGNORECASE)
+_SESSION_ATTR = re.compile(r'\b(NAME|MAPPINGNAME)\s*=\s*"([^"]*)"', re.IGNORECASE)
+
+
+def _workflow_session_names(workflow: WorkflowAnalysis) -> Set[str]:
+    """Names of the sessions ETL.Elements already listed on this workflow."""
+    return {
+        task.full_name.rsplit(".", 1)[-1]
+        for task in workflow.workflow_tasks
+        if task.category == "Workflow" and task.subtype.lower() == "session" and task.full_name
+    }
+
+
+def _mapping_names_for_sessions(text: str, session_names: Set[str]) -> Set[str]:
+    """MAPPINGNAME values for the given session names, read from the file text.
+
+    Attribute order does not matter. A session tag with no MAPPINGNAME is skipped.
+    """
+    found: Set[str] = set()
+    for tag in _SESSION_TAG.findall(text):
+        attrs = {key.upper(): value for key, value in _SESSION_ATTR.findall(tag)}
+        if attrs.get("NAME") in session_names and attrs.get("MAPPINGNAME"):
+            found.add(attrs["MAPPINGNAME"])
+    return found
 
 
 class ComponentOrganizerService:
@@ -91,6 +115,13 @@ class ComponentOrganizerService:
             for mapping_path, mapping in entry.mappings.items():
                 dropped_by_name.setdefault(mapping.name, {})[mapping_path] = mapping
 
+        kept_by_name: Dict[str, Dict[str, Mapping]] = {}
+        for path, entry in all_entries.items():
+            if path not in workflows or entry.kind != "mapping":
+                continue
+            for mapping_path, mapping in entry.mappings.items():
+                kept_by_name.setdefault(mapping.name, {})[mapping_path] = mapping
+
         for path, workflow in workflows.items():
             xml = ComponentOrganizerService._find_xml(source_dir, path)
             if xml is None:
@@ -98,6 +129,12 @@ class ComponentOrganizerService:
             text = xml.read_text(encoding="utf-8", errors="ignore")
             for name in sorted(set(_MAPPINGNAME.findall(text))):
                 workflow.mappings.update(dropped_by_name.get(name, {}))
+            if workflow.kind != "workflow":
+                continue
+            for name in _mapping_names_for_sessions(text, _workflow_session_names(workflow)):
+                for mapping_path, mapping in kept_by_name.get(name, {}).items():
+                    if mapping_path not in workflow.mappings:
+                        workflow.display_mappings[mapping_path] = mapping
 
     @staticmethod
     def _find_xml(source_dir: Path, path: str) -> Optional[Path]:
@@ -174,6 +211,8 @@ class ComponentOrganizerService:
             workflow.target_definitions.append(component)
         elif subtype in ("Workflow", "Session"):
             workflow.has_workflow_declaration = True
+            if subtype == "Workflow":
+                workflow.declares_workflow = True
 
     def _add_to_mapping(
         self, workflow: WorkflowAnalysis, component: Component

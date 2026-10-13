@@ -94,7 +94,7 @@ scai code convert --dbt --json
 
 **Exactly that command — no other flags.** In particular do not append
 `--generate-source-bindable-format` / `--generate-snowflake-bindable-format`:
-`convert/SKILL.md` calls them "always append", but they are invalid alongside
+`convert/SKILL.md` appends them by default on SqlServer, but they are invalid alongside
 `--dbt` and the engine rejects the whole command. Nothing from
 `convert/SKILL.md`'s flag table applies on this path.
 
@@ -141,74 +141,30 @@ closing tag. Do not guess at placement — the source shows where it belongs.
 
 ### 2.5.2 Headless models (commented-out `FROM` / `ref()`)
 
-The highest-severity failure mode, and completely invisible to `dbt parse`. When
-SnowConvert emits `SSC-EWI-0001` (unrecognized token) it comments out the surrounding
-lines — which can include the `FROM` clause and the `{{ ref() }}` inside it. The result is
-a model that is `SELECT *` with no source. Because the `ref()` is inside a comment, dbt
-never registers the dependency, so **the DAG is silently missing edges** and parse still
-succeeds.
+The highest-severity failure mode, and completely invisible to `dbt parse`. When SnowConvert
+emits `SSC-EWI-0001` (unrecognized token) it comments out the surrounding lines — which can
+include the `FROM` clause and the `{{ ref() }}` inside it. The result is a model that is
+`SELECT *` with no source. Because the `ref()` sits inside a comment, dbt never registers the
+dependency, so **the DAG is silently missing edges** and parse still succeeds.
 
-**Do not detect this by grepping for commented `ref()` in isolation.** SnowConvert also emits
-large legitimate commented-out blocks, so a raw grep returns roughly six times more hits than
-there are real defects (observed: 160 raw hits, 26 real). The only sound signal is a per-file
-diff of **live** `ref()` count — comments stripped — against the `source/` original. `source/`
-is the oracle: any drop is converter-introduced.
+Two checks, both in [Detecting headless models](references/headless-model-detection.md):
 
-```bash
-python3 - <<'PY'
-import os, re
-SRC, DST = 'source', 'snowflake'
+1. **Upstream-call diff** — compare the live `ref()`/`source()` targets per file against the
+   `source/` original. `source/` is the oracle; any drop is converter-introduced.
+2. **No live `FROM`** — a comment-stripped scan of every `SSC-EWI-0001` file.
 
-def live_refs(c):
-    c = re.sub(r'/\*.*?\*/', '', c, flags=re.S)          # block comments
-    c = re.sub(r'^[^\S\n]*--.*$', '', c, flags=re.M)      # line comments
-    return len(re.findall(r'\{\{\s*ref\s*\(', c))
+What must hold, and why each is easy to get wrong:
 
-lost = []
-for root, dirs, files in os.walk(SRC):
-    # skip a self-nested migration dir and build output
-    dirs[:] = [d for d in dirs if d not in ('migration', 'target', 'dbt_packages', '.git')]
-    for f in files:
-        if not f.endswith('.sql'):
-            continue
-        rel = os.path.relpath(os.path.join(root, f), SRC)
-        dst = os.path.join(DST, rel)
-        if not os.path.exists(dst):
-            continue
-        rd = lambda p: open(p, encoding='utf-8', errors='replace').read()
-        s, d = live_refs(rd(os.path.join(root, f))), live_refs(rd(dst))
-        if d < s:
-            lost.append((rel, s, d))
+- **Diff the set of targets, not a count**, and count `source()` alongside `ref()`. A
+  `ref()`-only gate is blind to a `source()`-only staging layer, and a count comparison is
+  fragile wherever a model calls the same `ref()` twice.
+- **Strip comments before matching**, or the converter's own `--    FROM source` reads as live.
+- **Run against the repointed tree, not the raw conversion output.** Jinja is re-injected in a
+  later phase, so running one phase early reports the whole project as gutted.
 
-print('FILES WITH LOST ref():', len(lost),
-      '| DAG EDGES LOST:', sum(s - d for _, s, d in lost))
-for rel, s, d in sorted(lost, key=lambda x: x[2] - x[1]):
-    print(f'  {rel}: {s} -> {d}')
-PY
-```
-
-A file that drops to `0` is the worst case: dbt treats it as a root node and builds it before
-its upstreams, against stale or nonexistent tables.
-
-Every file this reports must be repaired. See 2.5.4 — most are restorable from source verbatim.
-Re-run this script after repairing; it must print `0` before you leave Step 2.5.
-
-Also check for models left with no live `FROM` at all:
-
-```bash
-for f in $(grep -rl 'SSC-EWI-0001' snowflake/models --include='*.sql'); do
-  case "$f" in */macro_tests/*) continue ;; esac
-  grep -qiE '(^|[[:space:]])FROM[[:space:]]' "$f" || echo "HEADLESS: $f"
-done
-```
-
-**Match `FROM` anywhere on the line, not just at line start.** Anchoring to `^[[:space:]]*FROM`
-misses every inline `SELECT a FROM b` and reports it as headless — on a real run that produced
-**95 hits, all false positives**, which makes the check worse than useless because the agent has
-to dismiss all 95 by hand.
-
-Exclude `models/macro_tests/` — those are macro fixtures that legitimately have no `FROM`
-clause and are not defects.
+A file that drops to `0` upstreams is the worst case: dbt treats it as a root node and builds
+it before its upstreams. Every file either check reports must be repaired — see 2.5.4, most are
+restorable from source verbatim — and both must come back clean before you leave Step 2.5.
 
 ### 2.5.3 `SSC-EWI-0001` scan
 
@@ -221,6 +177,22 @@ wrong. **It is frequently a false negative on syntax Snowflake supports natively
 Confirmed example: `SELECT * EXCLUDE <col> FROM ...` is valid Snowflake, and the converter
 rejects it with `UNRECOGNIZED TOKEN ... STARTING AT 'EXCLUDE'`. Before attempting any
 translation, check whether the original already runs on Snowflake.
+
+Also scan the **model** tree for leftover inline markers, not just macros:
+
+```bash
+grep -rn '!!!RESOLVE EWI!!!' snowflake/models --include='*.sql'
+```
+
+These are raw text in the SQL stream, so each one is a syntax error wherever it lands. Step
+4.4's checklist covers macro files only; models need their own pass. One raw tree carried
+**75** of them in models. Any hit is a defect — there is no false-positive case, because the
+marker is never valid SQL.
+
+A related counting trap: the marker names the node it flagged, so a bare grep for a flagged
+construct counts every site twice — once as code and once inside its own marker. In one
+project `grep -ro listaggdistinct` returned 36 for 18 real call sites. Match the call form
+(`name\s*\(`) when counting, not the bare name.
 
 ### 2.5.4 Restore from source when no translation is needed
 
@@ -245,12 +217,16 @@ confirmed-native constructs.
 ### 2.5.5 CHECKPOINT — Integrity
 
 - [ ] Zero unbalanced Jinja files
-- [ ] **Zero files with lost live `ref()`** — the 2.5.2 diff script prints
-      `FILES WITH LOST ref(): 0`. This is a hard gate, and it is the one check that no
-      other signal covers: Jinja balance, `dbt parse`, and the EWI scan all pass green on
-      a project with missing DAG edges. Do not report Step 2.5 clean on the strength of
-      the balance and EWI checks alone — re-run the diff and quote its output.
-- [ ] Zero headless models — every model outside `models/macro_tests/` has a live `FROM`
+- [ ] **Zero files with lost live `ref()` or `source()`** — the diff script in
+      [Detecting headless models](references/headless-model-detection.md) prints BOTH
+      `FILES COMPARED: n / n` and `FILES WITH LOST UPSTREAMS: 0`. Quote both lines. A clean
+      second line with a low first line means the gate never ran, not that the project is
+      healthy — the script skips any source file with no counterpart under `DST`, so a wrong
+      path yields `FILES COMPARED: 0 / n` and an otherwise perfect report. This is a hard
+      gate and the one check no other signal covers: Jinja balance, `dbt parse`, and the EWI
+      scan all pass green on a project with missing DAG edges.
+- [ ] Zero headless models — every model has a live `FROM`, excluding any `macro_tests/`
+      fixture directory if the project has one (many do not)
 - [ ] Every `SSC-EWI-0001` file either restored from source or genuinely translated
 - [ ] Count of files touched here recorded, for the manual-review total in `On Completion`
 
@@ -330,7 +306,7 @@ files in one real run):
 grep -rl 'dbt_utils\.surrogate_key(' snowflake/models snowflake/macros --include='*.sql' | wc -l
 # note: sed -i '' is macOS; on GNU sed use sed -i (no argument)
 grep -rl 'dbt_utils\.surrogate_key(' snowflake/models snowflake/macros --include='*.sql' \
-  | xargs sed -i '' 's/dbt_utils\.surrogate_key(/dbt_utils.generate_surrogate_key(/g'
+  | xargs -r sed -i '' 's/dbt_utils\.surrogate_key(/dbt_utils.generate_surrogate_key(/g'
 ```
 
 Record the count — `generate_surrogate_key` hashes NULLs differently from the old
@@ -354,7 +330,7 @@ Also scan model SQL for the same keys passed through Jinja `config()`, which the
 leaves alone:
 
 ```bash
-grep -rn 'sort=\|dist=\|sort_key=\|dist_key=\|bind=' snowflake/models --include='*.sql'
+grep -rnE '(^|[^[:alnum:]_])(sort|dist|sort_key|dist_key|bind)=' snowflake/models --include='*.sql'
 ```
 
 Remove those arguments from `{{ config(...) }}` calls. Snowflake tolerates unknown config
@@ -369,7 +345,7 @@ cosmetic cleanup into a parse failure that costs another fix pass:
 # after the argument removal, drop any now-empty config calls
 # note: sed -i '' is macOS; on GNU sed use sed -i (no argument)
 grep -rln '{{[[:space:]]*config()[[:space:]]*}}' snowflake/models --include='*.sql' \
-  | xargs sed -i '' '/{{[[:space:]]*config()[[:space:]]*}}/d'
+  | xargs -r sed -i '' '/{{[[:space:]]*config()[[:space:]]*}}/d'
 ```
 
 **Review the `vars:` block for source-behavioral assumptions.** Vars that exist to work
@@ -405,35 +381,30 @@ Locate `sources.yml` and any `schema.yml` under `snowflake/models/`. Fix:
 
 **This file always exists and always has the source adapter.** SnowConvert copies
 `source/profiles.yml` to `snowflake/profiles.yml` unmodified, so it will contain
-`type: redshift` (or bigquery, databricks, ...) on every run. Look for it proactively, and
-**replace the connection block entirely** rather than adding a Snowflake target alongside
-the old one — leaving the source target in place means a stray `--target` or a stale
-`target:` default silently points dbt back at the source platform.
+`type: redshift` (or bigquery, databricks, ...) on every run. Look for it proactively and
+replace the connection details of **every** target, leaving none still typed to the source
+adapter — otherwise a stray `--target` or a stale `target:` default silently points dbt back
+at the source platform.
 
-Replace with:
+Template, authentication options, and the `dbt debug` check:
+[Rewriting profiles.yml](references/profiles-yml.md).
 
-```yaml
-<project_name>:
-  target: snowflake
-  outputs:
-    snowflake:
-      type: snowflake
-      account: "{{ env_var('DBT_SNOWFLAKE_ACCOUNT') }}"
-      user: "{{ env_var('DBT_SNOWFLAKE_USER') }}"
-      role: "{{ env_var('DBT_SNOWFLAKE_ROLE') }}"
-      database: "<TARGET_DATABASE>"
-      warehouse: "<TARGET_WAREHOUSE>"
-      schema: "<TARGET_SCHEMA>"
-      threads: 4
-```
+Three things that must hold:
 
-Fill placeholders from `configure()`. Use `env_var()` for credentials — never
-hardcode.
+- **Keep every existing target name.** `target.name` is frequently load-bearing program logic,
+  not an environment label. Run
+  `grep -rn 'target\.name' snowflake/models snowflake/macros snowflake/dbt_project.yml | wc -l`
+  first; if it is nonzero, rename nothing. A target name missing from
+  `generate_alias_name.sql`'s `in [...]` test silently renames every model in the project, and
+  parse and compile both still pass.
+- **Never write a credential into the file**, not even a dummy that looks real. Everything goes
+  through `env_var()` with a default, as `account`/`user` already do.
+- **Default to key-pair auth.** Snowflake ended single-access password login on 2026-08-31, and
+  `externalbrowser` cannot run unattended.
 
-Give `database`/`warehouse` an `env_var()` default (e.g.
-`"{{ env_var('DBT_SNOWFLAKE_DATABASE', 'dwh') }}"`) so a missing variable degrades to a
-sensible value instead of a hard parse failure — `dbt parse` evaluates these at parse time
-(see Step 5.3).
+`dbt parse` and `dbt compile` never authenticate, so a bad credential first surfaces inside
+Step 5.3's execution gate, looking exactly like a conversion defect. Run `dbt debug` per target
+before you get there.
 
 ### 3.4 CHECKPOINT — Configs
 
@@ -445,7 +416,10 @@ sensible value instead of a hard parse failure — `dbt parse` evaluates these a
 - [ ] `vars:` reviewed for source-behavioral assumptions; anything suspect flagged for manual review
 - [ ] `sources.yml` has no placeholder `database:` or `schema:` values
 - [ ] Column types translated to Snowflake equivalents
-- [ ] `profiles.yml` connection block **replaced** — `type: snowflake`, no source adapter target left behind
+- [ ] `profiles.yml` connection details **replaced** on every target — `type: snowflake`, no source adapter target left behind
+- [ ] Existing target **names** preserved wherever `target.name` is referenced — collapsing targets renames every model if `generate_alias_name` branches on it
+- [ ] Exactly one authentication method configured, entirely via `env_var()` — no credential literal in the file
+- [ ] `dbt debug` reports a passing connection for every target Step 5.3 will use
 
 ---
 
@@ -592,7 +566,13 @@ sites, not prose like `-- TODO cannot use dbt_utils.surrogate_key here`.
 Check the latest `Issues.*.csv` for issues in `snowflake/models/` files. Look in
 `<project>/.scai/reports/SnowConvert/` first, then `<project>/reports/SnowConvert/`,
 then `<project>/Reports/SnowConvert/`. Stop at the first hit. Do not use a leftover
-older folder when `.scai` already has the file. Common fixable patterns:
+older folder when `.scai` already has the file. The filename carries the conversion
+timestamp, so glob rather than assuming it.
+
+**This report is a one-shot artifact of the conversion run and never updates.** It keeps
+listing issues for files you have since repaired, so it cannot be driven to zero and must not
+be used as an exit condition — read it as a worklist, and take the live tree's own scans
+(2.5.3, Step 5.3) as the state of the project. Common fixable patterns:
 
 | Pattern | Fix |
 |---|---|
@@ -610,61 +590,61 @@ in `snowflake/models/`. Common mismatches after repointing:
 - Model was renamed → update `ref()` to match actual filename
 - `source()` database/schema wrong → fix `sources.yml`, not the `source()` call
 
-### 5.3 dbt parse / compile Gate
+**Check the same name against `source/` before "fixing" it.** A `ref()` that resolves to
+nothing may be a pre-existing bug in the customer's project rather than something conversion
+broke, and repointing is not the place to fix it. On one project all 3 unresolved targets were
+unresolved identically in `source/`; treating them as conversion defects would have meant
+editing working customer logic. Only a name that resolves in `source/` and not in the
+converted tree is yours to repair — report the rest as pre-existing.
 
-**Prerequisites — both are mandatory, and `dbt parse` fails immediately without them.**
+### 5.3 Validation gate
 
-1. **Install packages.** `dbt parse` refuses to run when `packages.yml` lists packages that
-   are not installed (`found N package(s) specified in packages.yml, but only 0 package(s)
-   installed`). Step 3.0 must be done first, then:
-   ```bash
-   dbt deps --project-dir <DBT_PROJECT_PATH> --profiles-dir <PROFILES_DIR>
-   ```
-2. **Supply env vars.** `dbt parse` evaluates `env_var()` in `profiles.yml` at parse time
-   even though it never connects, so unset variables abort the parse. When Snowflake
-   credentials are not configured locally, dummy values are sufficient:
-   ```bash
-   DBT_SNOWFLAKE_ACCOUNT=dummy DBT_SNOWFLAKE_USER=dummy \
-   DBT_SNOWFLAKE_ROLE=dummy DBT_SNOWFLAKE_WAREHOUSE=dummy \
-   dbt parse --project-dir <DBT_PROJECT_PATH> --profiles-dir <PROFILES_DIR> --no-partial-parse
-   ```
+Throughout this step, `<DBT_PROJECT_PATH>` is the converted project root (normally
+`<project>/snowflake`) and `<PROFILES_DIR>` is the directory holding its `profiles.yml` —
+the same directory, not `~/.dbt`.
 
-**Always pass `--no-partial-parse` while iterating.** Without it dbt reuses a cached partial
-parse and a stale cache masks newly introduced errors, which turns a handful of real problems
-into many rounds of confusing failures.
+Three gates, each strictly stronger than the last. Run them in order; the deepest one you can
+reach is the one you report.
 
-`<PROFILES_DIR>` is the directory holding the converted `profiles.yml` — normally
-`<project>/snowflake`, not `~/.dbt`.
+1. `dbt parse` — no SQL leaves the machine.
+2. `dbt compile` — resolves `ref()`/`source()` against the catalog. Still submits nothing.
+3. `dbt run --empty`, **twice** — submits the real compiled SQL with 0-row inputs.
 
-If `dbt-snowflake` is installed **and** real credentials are configured, prefer `dbt compile`
-for deeper validation, since it resolves `ref()`/`source()` against the catalog:
-```bash
-dbt compile --project-dir <DBT_PROJECT_PATH> --profiles-dir <PROFILES_DIR>
-```
+**A clean `dbt parse` does not mean the project works, and neither does a clean `dbt compile`.**
+Parse never executes SQL. Compile does not either — it renders Jinja and resolves relations,
+but a function that does not exist on Snowflake, an invalid rewritten expression, or a `ref()`
+commented out in Step 2.5.2 passes both. On one project compile exited 0 with 4,516 artifacts
+while 289 models could not execute. Never report success on an exit code or an artifact count.
 
-For each failing node: read the error, apply the minimum fix, verify with
-`dbt compile --select <node>`. Up to 5 attempts per node; mark as `needs-user`
-on persistent failure.
+Non-negotiables for the execution gate:
 
-If `dbt` is not installed:
-> "Note: `dbt` is not installed — install with `pip install dbt-snowflake` to
-> validate the output."
+- **Run `dbt seed` first**, or unloaded-seed noise buries the real defects.
+- **Run `--empty` twice.** A first build emits `CREATE TABLE AS`, so an incremental model's
+  `MERGE` is never compiled. One project left 86 incremental models untested on a single pass.
+- **Use real credentials**, not the dummy values parse accepts, and confirm with `dbt debug`
+  first — otherwise every node fails for the same reason and it looks like a conversion defect.
+- **Report tallies with limits**, never a boolean. The gate is evidence about the query
+  compiler only: it cannot see wrong results, and its visibility is position-dependent.
 
-**A clean `dbt parse` does not mean the project works.** Parse never executes SQL, so it
-cannot detect a function that does not exist on Snowflake, an invalid rewritten expression,
-or a `ref()` that was commented out (Step 2.5.2). Do not report success on the strength of
-the exit code alone — Step 2.5's checks and the macro fix log are what tell you the real
-state.
+Commands, prerequisites, the per-node fix loop, the full limits, and calibration figures:
+[The validation ladder](references/execution-gate.md).
 
 ### 5.4 CHECKPOINT — Refined SQL
 
-- [ ] No remaining fixable EWIs in the resolved `Issues.*.csv` (lookup in Step 5.1)
+- [ ] Every fixable EWI the conversion report listed is either fixed in the live tree or
+      recorded as `NEEDS-USER` — judged against the tree, not the report, which is a
+      one-shot conversion artifact and never reaches zero (see 5.1)
 - [ ] No `SSC-EWI-0001` blocks remain in any model — each was restored from source or genuinely translated
 - [ ] Every model has a live `FROM` clause; no `ref()` survives only inside a comment
 - [ ] Every `{{ ref() }}` call resolves to an existing model
 - [ ] No deprecated `dbt_utils` macro calls remain (Step 5.0)
 - [ ] `dbt deps` run, and `dbt parse` exits 0 with `--no-partial-parse`
-- [ ] `dbt compile` exits 0 (if dbt is installed and credentials configured)
+- [ ] `dbt compile` exits 0 (if dbt is installed and credentials configured) — the cheaper
+      prior gate, not the deepest one
+- [ ] **`dbt seed` + two consecutive `dbt run --empty` passes clean**, or every remaining
+      error triaged to a named `needs-user` item. The second pass is what covers the
+      incremental `MERGE` path. This is the deepest gate: `dbt compile` exiting 0 does not
+      discharge it, because compile never submits SQL (Step 5.3).
 - [ ] All `needs-user` items listed with file path + error + recommended action
 
 ---
@@ -695,6 +675,14 @@ you do not know K; read it before printing this block.
 
 If `needs-user` items remain, present each with file path, error, and the
 specific manual action needed.
+
+**Do not report success on an exit code or an artifact count.** "`dbt compile` exits 0" and
+"4,516 artifacts written" were both true on a project where 289 models could not execute.
+Report the Step 5.3 execution gate as tallies — PASS / ERROR / SKIP, from the second
+`--empty` pass — and state what the gate did *not* cover: no model's output has been compared
+against the source system, and row-evaluated behaviour (bad casts, invalid timezone or format
+literals, division by zero) is invisible to it. Anything the evaluator decides rather than the
+query compiler is unverified.
 
 Set `codeStatus.dbtRepointing = completed` in the registry to mark this task
 done for the MCP server's state machine.

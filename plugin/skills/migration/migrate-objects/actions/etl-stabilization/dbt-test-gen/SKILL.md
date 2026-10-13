@@ -182,9 +182,7 @@ Before writing tests, produce a coverage matrix. **Every model MUST appear — n
 What varies is test DEPTH, scaled to risk, because hand-deriving expected values for a model that only
 projects columns costs as much as for one that joins and aggregates, and catches far less.
 
-Classify each model first (this is mechanical — run
-`scripts/model_context_bundle.py <project> <out> --source <src>` and read its INDEX, which also gives you
-marker counts and dependency order):
+Classify each model first, reading its SQL for the markers below and its `ref()`s for dependency order:
 
 - **Real-logic model** — contains a join, aggregate, CASE, window function, UNION, QUALIFY, DISTINCT, or any
   filter/routing condition. **Full depth:** hand-derived source-truth expected values plus the

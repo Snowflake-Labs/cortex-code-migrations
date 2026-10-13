@@ -23,6 +23,14 @@ Read the registry entry (the executor passes `object_id`; if entered by name, lo
 
 The `etlSeed` task has a `taskCompleted` precondition on `deploy`, so the executor only dispatches this skill once the unit is deployed — you do not need to re-check deployment here.
 
+## Step 0b: Record skill start
+
+```
+transition_status(status="started", task="etlSeed", where="id = '{ETL_ID}'")
+```
+
+Do this once at entry. Finish with `transition_status` in Step 4.
+
 ## Step 1: Run `scai test seed`
 
 ```bash

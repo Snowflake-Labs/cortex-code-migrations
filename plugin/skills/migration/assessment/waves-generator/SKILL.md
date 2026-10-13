@@ -58,11 +58,13 @@ The parent `assessment` skill has already set `project_dir` and verified the reg
 
 ## Required User Interactions
 
-**These steps are mandatory in inline (standalone) mode.** When invoked as a sub-agent (see [Sub-Agent Mode](#sub-agent-mode)) and the corresponding context-block fields are present, skip the prompts and use the supplied values directly.
+**These steps are mandatory in inline (standalone) mode.** When invoked as a sub-agent (see [Sub-Agent Mode](#sub-agent-mode)) and the corresponding context-block fields are present, skip the prompts and use the supplied values directly. **Do not ask for object prioritization**, partition size, or wave ordering when those fields are in the context block — including when `prioritization_globs` is empty, which means the user chose to skip it.
 
 ### Before Generating Waves
 
-You MUST confirm the following with the user before running `scai assessment waves`:
+When the parent `assessment` skill already collected these via its one-card
+batch, skip the prompts and use those values. Otherwise confirm the following
+before running `scai assessment waves`:
 
 1. **Partition size** — The default is 40-80 objects per wave. Ask:
    > "The default wave size is 40-80 objects per wave. Would you like to keep these defaults, or set custom min/max limits?"

@@ -55,6 +55,27 @@ preflight: true
 preflightKeepSchema: false
 ```
 
+## Identity columns and `continueIdentityColumns`
+
+**When:** the customer will insert new rows on Snowflake after cutover into tables whose keys come from a source identity, auto-increment or `serial` column, or asks why a new insert collides with a migrated key.
+
+**Default:** off. Identity values are copied as ordinary data and the target's generator is left alone, so the next generated value can collide with a migrated key.
+
+**Opt in:** `continueIdentityColumns: true` per table, or under `defaultTableConfiguration` for every table. Tables the orchestrator creates get a sequence default on each source identity column. After the final load, a cleanup task restarts each target identity or sequence-default column at `MAX(column) + 1` (empty tables keep their start value). It also covers existing targets, such as tables SnowConvert created with `IDENTITY`. It replaces the column's generator with a `<table>_<column>_IDENTITY_SEQ` sequence, so offer it only when the customer wants it; do not turn it on by default. Native targets only: Iceberg targets and preflight runs are skipped. For incremental sync it runs at the end of every workflow run. Detail: `dmvf/data-migration-orchestrator/README.md` ("Identity columns and sequences").
+
+```yaml
+defaultTableConfiguration:
+  continueIdentityColumns: true
+tables:
+  - source: { databaseName: SALES, schemaName: dbo, tableName: Orders }
+    target: { databaseName: TARGET_DB, schemaName: DBO, tableName: ORDERS }
+    columnNamesToPartitionBy: [OrderId]
+  - source: { databaseName: SALES, schemaName: dbo, tableName: AuditLog }
+    target: { databaseName: TARGET_DB, schemaName: DBO, tableName: AUDIT_LOG }
+    columnNamesToPartitionBy: [Id]
+    continueIdentityColumns: false   # leave this table's generator alone
+```
+
 ## TableConfiguration
 
 | Property | Type | Required | Description |
@@ -76,6 +97,8 @@ preflightKeepSchema: false
 | `intervalHandling` | `"interval"` \| `"varchar"` | No | Per-table override of top-level `intervalHandling`. |
 | `onUntranslatable` | `"substitute"` \| `"fail"` | No | **Teradata only.** How non-Unicode string columns handle untranslatable bytes during extraction. Default `"substitute"`. Set under `defaultTableConfiguration` for a workflow-wide default, or per table to override. Use `"fail"` when untranslatable non-Unicode bytes must abort the partition (Error 6706) instead of substituting U+FFFD. Detail: `dmvf/docs/data-migration-orchestrator/teradata-charset-extraction.md`. |
 | `executionTimeoutMinutes` | Integer | No | Wall-clock timeout in minutes for the **Analyze boundaries** DEA task only (orchestrator default is **20** when omitted). Does **not** apply to extraction or load. Use per table for large/slow boundary queries, or under `defaultTableConfiguration` to apply to all tables. |
+| `continueIdentityColumns` | Boolean | No | Continue source identity / auto-increment / `serial` generators on the Snowflake target after the final load (default **false**). Per table, or under `defaultTableConfiguration` for all tables. See [Identity columns](#identity-columns-and-continueidentitycolumns). |
+| `resetPartitions` | `"disabled"` \| `"enabled"` \| `"enabledWithDedup"` | No | Discard the partitions a previous workflow created for this table and repartition it on the next incremental (`checksum` / `watermark`) run (default **disabled**; `true` / `false` alias `enabled` / `disabled`). Neither value wipes the target; `enabledWithDedup` merges `watermark` tables on the primary key (not supported with Snowpipe or Iceberg). Set it for one run, then remove it. Per table, or under `defaultTableConfiguration`. Detail: `dmvf/data-migration-orchestrator/README.md` ("Resetting partitions"). |
 
 ## SourceTargetIdentifier
 
@@ -96,24 +119,39 @@ Extends `SourceTargetIdentifier` with optional Iceberg fields.
 | `databaseName` | String | Yes | Database name |
 | `schemaName` | String | Yes | Schema name (always required on Snowflake targets, including Teradata migrations) |
 | `tableName` | String | Yes | Table name |
-| `tableType` | `"native"` \| `"iceberg"` | No | Target table format. Defaults to `"native"`. **`"iceberg"` is Redshift-source only today** (partial support). |
+| `tableType` | `"native"` \| `"iceberg"` | No | Target table format. Defaults to `"native"`. **`"iceberg"` is allowed for any source dialect, but only when the source object is fully relational** — never when the source is itself an Iceberg / external table. |
 | `icebergConfig` | `IcebergConfig` | When `tableType` is `"iceberg"` | Iceberg-specific configuration (see below) |
 
 ## IcebergConfig
 
-> **Scope:** End-to-end Iceberg migration is **Redshift-only** (native → UNLOAD → `copy_files`, or Glue-catalog `catalog_link` / `convert_to_managed`). Do not set `tableType: iceberg` for other source dialects unless product support expands.
+> **Scope:** End-to-end Iceberg migration goes **relational source → Snowflake-managed Iceberg** via
+> `copy_files` (the source's cloud/server extraction strategy writes Parquet to a stage; Snowflake loads
+> it). It is available for every supported source dialect **only when the source object is a fully
+> relational table**. **Do not set `tableType: iceberg` when the source is itself an Iceberg / external /
+> catalog-backed table — stop instead.** The `catalog_link` / `convert_to_managed` strategies below adopt
+> data that is already Iceberg and are therefore **out of scope** under this rule.
 
 Configuration for Iceberg table targets. Required when `tableType` is `"iceberg"`.
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `catalog` | String | No | `"SNOWFLAKE"` (default) for Snowflake-managed Iceberg, or the name of a catalog integration (e.g. a Glue integration) |
-| `externalVolume` | String | When `catalog` is `"SNOWFLAKE"` | Name of the Snowflake external volume |
-| `baseLocationPrefix` | String | No | Prefix for the table's `BASE_LOCATION` path. Only applies when `catalog` is `"SNOWFLAKE"`. |
-| `catalogTableName` | String | When `catalog` is not `"SNOWFLAKE"` | Table name in the external catalog. **If the catalog integration has `CATALOG_NAMESPACE` set, use the bare table name only** (e.g., `"customer"`). The namespace is prepended automatically. Using `"namespace.table"` will cause a double-prefix error. |
-| `catalogSync` | String | No | Catalog integration name to sync Snowflake-managed metadata back to (for dual-engine access) |
-| `sourceDataStage` | String | No | Stage path (must start with `@`) pointing to existing Parquet files. Only applies when `catalog` is `"SNOWFLAKE"`. |
-| `migrationStrategy` | `"catalog_link"` \| `"convert_to_managed"` \| `"copy_files"` | No | Iceberg migration strategy. Auto-detected when omitted (see below). |
+| `catalog` | String | Yes | Must be `"SNOWFLAKE"` — Snowflake-managed catalog is the only released shape. |
+| `icebergSpec` | String | Yes | Iceberg format version. Must be `"v2"` — the only released spec. |
+| `storageMode` | String | Yes | Table storage mode. Must be `"compatible"`. |
+| `loadMode` | String | Yes | Parquet load mode. Must be `"ADD_FILES_COPY"`. |
+| `externalVolume` | String | Yes | Name of the Snowflake external volume. Use `"SNOWFLAKE_MANAGED"` for Snowflake-managed storage. |
+| `baseLocationPrefix` | String | Required unless `externalVolume` is `"SNOWFLAKE_MANAGED"` | Prefix for the table's `BASE_LOCATION` path. **Must be omitted** when `externalVolume` is `"SNOWFLAKE_MANAGED"`. |
+| `migrationStrategy` | `"copy_files"` | No | Omit it (auto-resolves to `copy_files`), or set `"copy_files"` explicitly. `catalog_link` / `convert_to_managed` are not part of the released shape. |
+
+> **Official Iceberg shape — enforced by `scai data migrate create-workflow`.** The CLI gate
+> (`IcebergOfficialProfile.ValidateWorkflowConfig`) rejects the workflow before the orchestrator starts
+> unless every Iceberg table's effective `icebergConfig` matches exactly: `catalog: SNOWFLAKE`,
+> `icebergSpec: v2`, `storageMode: compatible`, `loadMode: ADD_FILES_COPY`, `externalVolume` present,
+> and the `baseLocationPrefix` rule above. These four fixed fields are **required** — an omitted one
+> fails (DMVF's own defaults do not count as approval). The following keys must be **absent**:
+> `sourceDataStage`, `catalogTableName`, `catalogSync`, `externalEngineAccess`, `postLoadOptimize`.
+> `synchronization.strategy` must be `none` or `full-replace` (incremental is not released for Iceberg).
+> Set these once on `defaultTableConfiguration.target.icebergConfig`; they are inherited by every table.
 
 ### Strategy Auto-Detection
 
@@ -144,9 +182,9 @@ The `icebergConfig` at the table level is **merged** with `defaultTableConfigura
 
 | Strategy | Data Movement | DML on Target | Primary Use Case |
 |----------|---------------|---------------|------------------|
-| `catalog_link` | None (zero-copy) | Read-only | Quick access to existing Iceberg data without copying |
-| `convert_to_managed` | None (zero-copy) | Full DML | Take ownership of existing Iceberg data without rewriting files |
-| `copy_files` | Server-side binary copy | Full DML | Create a new Snowflake-managed Iceberg table from staged Parquet files |
+| `catalog_link` | None (zero-copy) | Read-only | Quick access to existing Iceberg data without copying — **source is already Iceberg → out of scope, do not continue** |
+| `convert_to_managed` | None (zero-copy) | Full DML | Take ownership of existing Iceberg data without rewriting files — **source is already Iceberg → out of scope, do not continue** |
+| `copy_files` | Server-side binary copy | Full DML | **Supported path:** create a new Snowflake-managed Iceberg table from a **relational** source's staged Parquet files |
 
 ## ExtractionStrategy
 
@@ -464,9 +502,11 @@ defaultTableConfiguration:
     tableType: iceberg
     icebergConfig:
       catalog: SNOWFLAKE
+      icebergSpec: v2
+      storageMode: compatible
+      loadMode: ADD_FILES_COPY
       externalVolume: my_iceberg_ext_vol
       baseLocationPrefix: migrations/redshift
-      sourceDataStage: "@TARGET_DB.PUBLIC.ICEBERG_SOURCE_STAGE"
   extraction:
     strategy: unload
     externalStage: TARGET_DB.PUBLIC.S3_EXTERNAL_STAGE
@@ -519,9 +559,11 @@ defaultTableConfiguration:
     tableType: iceberg
     icebergConfig:
       catalog: SNOWFLAKE
+      icebergSpec: v2
+      storageMode: compatible
+      loadMode: ADD_FILES_COPY
       externalVolume: my_iceberg_ext_vol
       baseLocationPrefix: migrations/redshift
-      sourceDataStage: "@TARGET_DB.PUBLIC.ICEBERG_SOURCE_STAGE"
   targetPartitionSizeMb: 512
 
 tables:

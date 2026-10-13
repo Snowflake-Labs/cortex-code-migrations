@@ -107,22 +107,30 @@ write_cache() {
   printf '%s\n%s\n' "$path" "$scai_now" >"$cache" 2>/dev/null || true
 }
 
+locate_from_scai() {
+  scai=$1
+  [ -n "$scai" ] || return 0
+  found=$(bin_from_wrapper "$scai" || true)
+  if [ -z "$found" ]; then
+    found=$(sibling_of "$(resolve_path "$scai")" || true)
+  fi
+  printf '%s\n' "$found"
+}
+
 scai_now=
 if [ -n "${MIGRATION_MCP_SERVER_BIN:-}" ] && ensure_exec "$MIGRATION_MCP_SERVER_BIN"; then
   bin=$MIGRATION_MCP_SERVER_BIN
 else
   scai_now=$(current_scai || true)
-  bin=$(read_cache || true)
+  # Live session pins beat the project cache. `make temp` rotates the binary
+  # under /tmp while the cache still points at a previous session's copy.
+  bin=$(locate_from_scai "${SCAI_CLI:-}")
   if [ -z "$bin" ]; then
-    scai=${SCAI_CLI:-}
-    if [ -z "$scai" ]; then
-      scai=$(command -v scai) || skip
-    fi
-    [ -n "$scai" ] || skip
-    bin=$(bin_from_wrapper "$scai" || true)
-    if [ -z "$bin" ]; then
-      bin=$(sibling_of "$(resolve_path "$scai")" || true)
-    fi
+    bin=$(read_cache || true)
+  fi
+  if [ -z "$bin" ]; then
+    scai=$(command -v scai) || skip
+    bin=$(locate_from_scai "$scai")
     [ -n "$bin" ] && [ -x "$bin" ] || skip
   fi
 fi

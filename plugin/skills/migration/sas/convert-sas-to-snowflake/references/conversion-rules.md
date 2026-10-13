@@ -39,6 +39,18 @@ Load at **Steps 5-6** (code generation and self-check). These rules govern seman
 - Preserve defaulting logic built from missing-value checks
 - Use `NULLS FIRST` in ORDER BY when SAS sort order depends on missing values sorting low
 - When SAS checks `IF var NOT IN ('x','X')`, the SQL equivalent **MUST** also handle NULLs explicitly with `OR var IS NULL`, because SQL `NOT IN` evaluates to NULL (not TRUE) when `var` is NULL — SAS treats missing as not-in-list (TRUE). Pattern: `WHERE var NOT IN ('x','X') OR var IS NULL`
+- **Missing keys join each other.** PROC SQL joins and DATA-step `MERGE ... BY` match a missing key to a missing key; SQL `=` never matches NULL. When a join key can be missing (nullable or inferred column), write `a.k IS NOT DISTINCT FROM b.k` (or `EQUAL_NULL(a.k, b.k)`) instead of `a.k = b.k`.
+
+### Rule: Faithful Translation (what SAS does, not what it says)
+- Convert the code, not its label: a step named or commented "dedup" that does not dedup stays a non-dedup. Comments, step titles and variable names never override the statements.
+- Every output column comes from the expression SAS computes; never replace it with a constant, and never re-source it from a different table "that has the same column".
+- A list SAS builds at run time (macro variable from `SELECT ... INTO`, a parameter, a control table) stays dynamic: a subquery, a join, or a `GETVARIABLE` lookup -- never the values you saw in test data.
+- `DICTIONARY.*` / `SASHELP.V*` metadata queries map to `<db>.INFORMATION_SCHEMA` views (`COLUMNS`, `TABLES`); they are never source tables to seed or migrate.
+- Column types come from the registry (`tables.py get tables.json <TABLE>`), not from the column's name.
+
+### Rule: SAS Anchors (required)
+- Before every converted block write `-- SAS: <sas_file>:L<first>-L<last>` naming the SAS lines it translates (the line numbers from the assessment's block list). One anchor per block; a macro expanded N times may share one anchor.
+- `sql_check.py fidelity` uses the anchors to compare join types, `DISTINCT` and anti-joins with the SAS source; blocks without an anchor are reported, not checked.
 
 ### Rule: DATA Step Row-by-Row Semantics
 - Treat DATA step as **row-by-row procedural execution**, not simple set-based SQL
@@ -61,6 +73,9 @@ Load at **Steps 5-6** (code generation and self-check). These rules govern seman
 - Preserve LAG behavior exactly; LAG in SAS always reads from the **input queue** regardless of WHERE
 - Preserve multiple retained variables with interdependent updates
 - If RETAIN or LAG depends on sorted groups, preserve same partitioning and order
+- **Tie order:** SAS processes rows with equal BY/sort keys in input order; ROW_NUMBER/QUALIFY does not.
+  End the ORDER BY with `_SRC_ROW` when the load keeps it, else a deterministic column marked
+  `-- TIEBREAK: assumed <col>; SAS uses input order` plus a `MANUAL_REVIEW_REQUIRED` report entry
 
 ### Rule: MERGE vs JOIN Semantics
 - SAS MERGE is **NOT** automatically equivalent to a SQL JOIN
@@ -70,6 +85,7 @@ Load at **Steps 5-6** (code generation and self-check). These rules govern seman
 - Preserve row survival rules when unmatched keys exist
 - Do NOT silently deduplicate unless SAS explicitly does so
 - For UPDATE/MODIFY semantics: preserve in-place update intent
+- `SET a b ...;` (one SET, N datasets) stacks rows: `UNION ALL BY NAME` of all N inputs, never only the first
 
 ### Rule: WORK / Temp Tables
 - SAS WORK datasets → `CREATE OR REPLACE TEMPORARY TABLE` (no schema prefix)
@@ -91,6 +107,7 @@ Load at **Steps 5-6** (code generation and self-check). These rules govern seman
 - Do NOT use `:var` in IF conditions, assignments, concatenations, or RETURN statements
 - For RAISE: **ONLY** named exceptions declared in DECLARE section — **NEVER** `RAISE USING MESSAGE`
 - For cursors in FOR loop: do NOT use explicit OPEN/CLOSE (FOR opens/closes automatically)
+- Every statement's `;` goes before any trailing `-- comment`; a `;` inside the comment does not end the statement
 
 ### Rule: PROC SORT with NODUPKEY
 - When using ROW_NUMBER() for deduplication, the outer SELECT **MUST use an explicit column list**
@@ -110,19 +127,11 @@ Load at **Steps 5-6** (code generation and self-check). These rules govern seman
 - Pattern: SAS `IF var NOT IN (dimension values)` → SQL `LEFT JOIN dimension_table WHERE match IS NULL`
 - If the dimension table reference is unclear, flag as MANUAL_REVIEW_REQUIRED rather than hardcoding values
 
-### Rule: Validation Reference Table Preservation
-- When SAS validation checks anti-join against a **master/reference table** (e.g., `Ref.CUSTOMER_MASTER`, `Ref.PRODUCT_MASTER`, `Ref.ACCOUNT_MASTER`), the converted SQL **MUST** anti-join against the **same semantic equivalent** — not a derived, subset, or working table
-- A master hierarchy table (e.g., `CUSTOMER_MASTER`) and a working/derived table (e.g., `CUSTOMER_SUBSET`) are **NOT interchangeable** — the master is the authoritative source; the derived table is a user-entered subset
-- **Referential checks** ("does this key exist in the master?") must use anti-join against the master table
-- **Value checks** ("is this value null/zero/invalid?") may use simple WHERE on the target table
-- **NEVER** downgrade a referential check to a value check — checking `WHERE Rate IS NULL` is NOT equivalent to checking `WHERE key NOT IN (SELECT key FROM rate_table)` because the latter catches entirely missing rows
-- During Step 6 self-check, verify: for each anti-join validation, the reference table in the converted SQL matches the reference table in the SAS source — not a derived/subset alternative
-
-### Rule: Validation Check Source Completeness
-- When converting SAS validation scripts (anti-join checks, existence checks, referential integrity), **preserve ALL source tables** referenced in the original SAS check
-- If SAS validates Key_ID against tables A, B, and C, the converted SQL must also validate against A, B, and C — not just A
-- Dropping a validation source is equivalent to removing a quality gate — it is a silent correctness regression
-- During Step 6 self-check, verify: every source table in the SAS validation block appears in the converted SQL validation query
+### Rule: Read-Set and Join-Shape Preservation
+- Every table a SAS block reads is read by the converted block, and no other table is substituted for it — a derived or subset table is never interchangeable with the table the SAS names.
+- Keep each join's type (INNER/LEFT/FULL), keep every `ON` condition in `ON` (a condition on the optional side of a LEFT JOIN `ON` can never drop rows; moving it to `WHERE` or rewriting it as `NOT IN`/`NOT EXISTS` does), and add `DISTINCT` only where SAS has `DISTINCT`/`NODUPKEY`.
+- Never turn an existence check (anti-join against a table) into a value check (`WHERE col IS NULL`), or the reverse: the anti-join also catches rows that are missing entirely.
+- `sql_check.py fidelity` compares these per anchored block; fix what it reports.
 
 ### Rule: Output Column Completeness
 - The converted SQL must produce the **same columns** as the SAS output dataset
@@ -139,7 +148,7 @@ Load at **Steps 5-6** (code generation and self-check). These rules govern seman
   3. Any target in (1) but not in (2) is a **dropped output** — this is a P1 bug
 - If a SAS script's logic is merged into another file, the merged file MUST contain ALL output tables from the original script
 - **NEVER silently drop a SAS script's output tables during consolidation**
-- Consolidation **MUST NOT change which reference table** a validation check validates against — if SAS check N anti-joins against `Ref.CUSTOMER_MASTER`, the consolidated SQL must also anti-join against `CUSTOMER_MASTER` (or its schema-qualified equivalent), not a derived table like `CUSTOMER_SUBSET`
+- Consolidation **MUST NOT change the read set** of any block (Read-Set rule above)
 
 ### Rule: Tier Consistency in Consolidation
 - When consolidating files in Optimize & Consolidate mode, **do not downgrade a file's tier** unless consolidation genuinely eliminates the need for procedural control flow
@@ -165,7 +174,7 @@ Load at **Steps 5-6** (code generation and self-check). These rules govern seman
 - When converting `WHERE flag = 'Y'` / `flag = 'N'` (or `IF`/`CASE` on such a column):
   - If the target column is known `BOOLEAN`: emit `WHERE flag = TRUE` / `flag = FALSE`
   - If the target column is known `VARCHAR`: keep `WHERE flag = 'Y'` / `'N'`
-  - If the type is **unknown** and the column name ends in `_IND` or `_FLAG`: prefer `BOOLEAN` (TRUE/FALSE) and add a comment: `-- NOTE: verify column type (BOOLEAN vs VARCHAR) for <col>`
+  - If the type is **unknown**: keep the SAS literal comparison and add `-- INFERRED_TYPES: <table>.<col> (BOOLEAN vs VARCHAR unverified)`. Never pick a type from the column name alone.
 - **NEVER** blindly copy SAS `'Y'`/`'N'` comparisons without considering a BOOLEAN target — a string compare against a BOOLEAN column errors or silently matches nothing
 
 ### Rule: Loop / Delimited-String NULL Guards
@@ -180,46 +189,24 @@ Load at **Steps 5-6** (code generation and self-check). These rules govern seman
 
 ---
 
-## Migrated-Source Type Traps
+## Type Traps (apply only on type evidence)
 
-These three rules address a common failure class: SAS treats data types permissively, and source engines (Teradata, Oracle, DB2, SQL Server) often coerced types implicitly. When those tables land in Snowflake — which is **strict** about types — otherwise-faithful conversions silently return wrong results (0 rows) or raise errors. Apply these whenever a converted query touches a table that was migrated from a non-Snowflake source.
+Snowflake is strict about types where SAS and many source engines coerce implicitly. These
+three rewrites fix real breaks, but applied blindly they change results: `TRY_TO_*` turns bad
+values into silent NULLs, and casting a numeric key to text makes `'01'` stop matching `1`.
 
-### Rule: Type-Safe JOIN/Comparison on Migrated Keys
-- The **same logical key** can have **different physical types** across tables from different source systems (e.g., an ID is `NUMBER` in one table and `VARCHAR` in another).
-- When joining or comparing key columns, cast **both sides to the same type** (`::VARCHAR` is the safe default for identifiers) whenever:
-  1. The column is an identifier/key (an `*_ID`, `*_GUID`, `*_SK`, customer/account/order key, etc.), **and**
-  2. The two tables originate from **different source systems or schemas**, **and**
-  3. There is any possibility of a `NUMBER` vs `VARCHAR` mismatch.
-  ```sql
-  -- CORRECT: cast both sides
-  ... ON A.CUSTOMER_ID::VARCHAR = B.CUSTOMER_ID::VARCHAR
-  WHERE HDR.ACCOUNT_KEY::VARCHAR = DTL.ACCOUNT_KEY::VARCHAR
-  -- WRONG: raw compare fails silently (0 rows) if one side is NUMBER, other VARCHAR
-  ... ON A.CUSTOMER_ID = B.CUSTOMER_ID
-  ```
-- **Why:** Teradata/Oracle perform permissive implicit conversion; Snowflake does not. A mismatched-type join yields zero rows or a "Numeric value is not recognized" error.
-- Alternative for repeated joins: pre-cast into a clean temp table (`SELECT DISTINCT key::VARCHAR AS key ... WHERE key IS NOT NULL`) and join to that.
+**Evidence first.** Look the types up (`tables.py get tables.json <TABLE>`). Apply a rewrite only
+when one of these holds, and say which in a trailing comment (`-- TYPE: <reason>`):
+- the recorded types of the two sides differ (`columns_from` live or user_file);
+- the SAS itself converts the value (`INPUT(col, fmt.)`, `PUT(col, fmt.)`) before using it;
+- a run failed with `Numeric value ... is not recognized` / a type-mismatch error on that column.
 
-### Rule: Numeric Aggregation on Migrated VARCHAR Columns
-- Migration tools sometimes store numeric measures as `VARCHAR` (to preserve precision). A direct `SUM()`/`AVG()`/`MIN()`/`MAX()` on such a column raises "Numeric value is not recognized".
-- Wrap aggregations with `TRY_TO_DOUBLE` (or `TRY_TO_NUMBER`) — plus `COALESCE(..., 0)` to match SAS's "missing + missing = 0 in SUM" behavior — when the source table was migrated **and** the column type cannot be confirmed numeric **and** the name suggests a measure (`*_AMT`, `*_CNT`, `*_QTY`, `*_DAYS`, `*_COST`, `*_CHRG`, `PAID_*`, `SPLY_*`).
-  ```sql
-  -- CORRECT
-  COALESCE(SUM(TRY_TO_DOUBLE(CPVAL.PAID_AMT::VARCHAR)), 0) AS TOT_PAID
-  -- WRONG (errors if PAID_AMT is VARCHAR)
-  COALESCE(SUM(CPVAL.PAID_AMT), 0) AS TOT_PAID
-  ```
-- `TRY_TO_*` returns NULL (not an error) for non-numeric text, so bad rows are skipped rather than aborting the query.
+With no evidence, convert as written. A column name (`*_ID`, `*_AMT`, `*_DT`) is never evidence.
+`sql_check.py lint` flags `TRY_TO_*`, `::VARCHAR` on join keys, and `TO_DATE(col…)` that lack a
+`-- TYPE:` reason.
 
-### Rule: VARCHAR Date-Column Range Comparison
-- When SAS compares a date column against a date range (e.g., `PAID_DT >= &DTS`), determine whether the **target Snowflake column** is a native `DATE`/`TIMESTAMP` or a `VARCHAR` holding a date string.
-- If the column is (or may be) `VARCHAR`, wrap the **column itself** in `TO_DATE(col, fmt)` — not just the comparison value:
-  ```sql
-  -- CORRECT (column stored as 'DDMONYYYY')
-  WHERE TO_DATE(DTL.CLM_LN_PAID_DT, 'DDMONYYYY') >= TO_DATE($DTS, 'YYYY-MM-DD')
-    AND TO_DATE(DTL.CLM_LN_PAID_DT, 'DDMONYYYY') <= TO_DATE($DTE, 'YYYY-MM-DD')
-  -- WRONG: string comparison, meaningless as a date ('15JAN2024' >= '2024-01-01' is alphabetic)
-  WHERE DTL.CLM_LN_PAID_DT >= $DTS
-  ```
-- Detection heuristics: SAS uses `INPUT(col, date_fmt.)` before comparing → column is VARCHAR; source DDL shows `CHAR`/`VARCHAR`; a `*_DT` column from a Teradata/DB2-migrated fact table → assume VARCHAR `DDMONYYYY` unless context says otherwise.
-- When unsure, wrapping the column in `TO_DATE()` is safe for both native `DATE` and `VARCHAR` columns.
+| Evidence | Rewrite |
+|---|---|
+| Join or compare keys of different types | Cast both sides to one type: `ON a.k::VARCHAR = b.k::VARCHAR` |
+| Aggregated measure stored as text | `SUM(TRY_TO_NUMBER(t.measure_col))`; `COALESCE(..., 0)` only where SAS `SUM` semantics need it |
+| Date range compared against a text date column | Wrap the **column**: `TO_DATE(t.event_dt, '<fmt>') >= TO_DATE($START_DT, '<fmt>')` — comparing the raw strings is alphabetic, not chronological |

@@ -4,6 +4,10 @@ Canonical flow for resolving a NuGet `.NET` driver before any operation that tal
 
 **Use this any time a `.nupkg` driver is required.** Consumer skills (`oracle-connection`, `teradata-connection`, `extract-code-units`) should link here instead of duplicating the flow.
 
+## Scope: code only, never data migration / validation
+
+This `.NET` driver is used **only by SCAI's code pipeline** (`scai connection test`, `scai code extract`). **Data migration and data validation never need it**: the orchestrator and Data Exchange Agent are Python and reach the source through Python packages (for Teradata, `teradatasql` or Teradata ODBC) installed in their own venvs. If the user only wants to migrate or validate data, do not run this flow and do not download a NuGet package; the only dependencies to install or fix are Python ones (see `scai data doctor`).
+
 ## Dialect parameters
 
 Resolve these once for the dialect you are working with, then substitute them into the steps below.

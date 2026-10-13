@@ -27,7 +27,7 @@ This skill is the **orchestrated (registry-backed) entry point** for ETL stabili
 
 The ETL unit must be claimed before stabilization begins, so it is registered in `MIGRATION_REGISTRY.claims`, shows the current user as owner, and appears in `my_objects_summary` alongside SQL objects. Resolve `<etl_id>` first: the executor passes `object_id`; if entered by name ("fix ETL package …"), locate the unit via `migration_status(mode="my_objects_summary")` (already-claimed) or `migration_status(mode="next_objects")` (not yet claimed).
 
-**Resumption check first.** If `{UNIT}/stabilization/tracking/STATE.md` already exists, stabilization is already in progress and the unit was claimed on a prior run — **skip claiming** and go to Step 1.
+**Resumption check first.** If `{UNIT}/stabilization/tracking/STATE.md` already exists, stabilization is already in progress and the unit was claimed on a prior run — **skip claiming** and go to Step 0b.
 
 **Otherwise claim it:**
 
@@ -36,6 +36,16 @@ transition_status(status="begin", where="id = '<etl_id>'")
 ```
 
 `begin` is idempotent (it refreshes the claim if the unit was already claimed via the picker), so it is safe to call whenever no `STATE.md` exists. Surface any error and stop without retry.
+
+## Step 0b: Record skill start
+
+After claim (or on resume), record a `started` TASK_EVENT for this stabilization run:
+
+```
+transition_status(status="started", task="etlStabilization", where="id = '<etl_id>'")
+```
+
+Do this once per dispatch into this skill. Finish with `transition_status` in Step 3.
 
 ## Step 1: Resolve Inputs From the Registry
 

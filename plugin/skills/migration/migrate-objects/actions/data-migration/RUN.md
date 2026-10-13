@@ -1,61 +1,40 @@
 # Migrate data (per-object)
 
-Guide for the `migrateData` task — migrate the batch of tables the machine handed you (`where = id IN (...)`). 
-The shared orchestrator + worker are already up (brought up once via `data_infrastructure(mode="up")`).
-This step is **pure dispatch**, not infrastructure setup.
+Guide for the `migrateData` task — migrate the tables the machine handed you (`where = id IN (...)`).
 
-## 1. Choose the approach (once per batch, if not already set)
+Under `subagent_mode` on SQL Server this is **synchronous** `scai data migrate start --direct`. No orchestrator, no worker, no Monitor, no waiting.
 
-The migration approach was chosen during setup and is persisted for all
-objects. Do not re-ask or change it here. If it is unexpectedly missing, or
-the user asks to change it (for example full → incremental watermark), return
-the request to the main agent, who owns setup.
+## 0. Record task start
 
-## 2. Generate the workflow
+```
+transition_status(status="started", task="migrateData", where=<the batch's object filter>)
+```
 
-Call `migrate_data(mode="setup", where=<the batch's object filter>)`. It writes a workflow
-YAML and returns `edit_hints` plus any `partition_key_findings`. Review the file and apply
-row filters (`whereClauseCriteria`) or a partition column when the hints call for it. Pass
-`force_regenerate=true` only to discard prior edits and regenerate.
+Do this once before `run`. Finish with `transition_status(status="advance", …)` once
+the result is known (§2).
 
-## 3. Dispatch
+## 1. Run it
 
-Call `migrate_data(mode="run", workflow_path=<path from setup>)`. This is **pure
-dispatch** against the already-running infrastructure — there are no infra flags
-to pass. If the response says infrastructure is not up, return the remediation
-to the main agent. Do not call `data_infrastructure` from this subagent; the
-main agent resumes the persisted setup and redispatches the task.
+Call `migrate_data(mode="run", where=<the batch's object filter>)`. Setup is folded in: `run` generates the one-table workflow if needed, pins `extraction=regular` / `sync=none` / `native`, and blocks until the load finishes. Pass `workflow_path` only to reuse an edited YAML.
 
-The response carries a `monitor` block (a `job_id` and a ready-made `watch_command`).
+Do not call `data_infrastructure`. Do not arm Monitor. Do not return `waiting`. The response `status` is the result (`completed` / `failed`).
 
-If you are a general_task subagent, you will be woken up. Do not call the Monitor.
-Do not present the migration summary or offer to tear the shared infrastructure down.
+## 2. Stamp the outcome
 
-If you are not a subagent, the rest applies to you:
+The machine reads live `DATA_MIGRATION.TABLE_PROGRESS` — there is no registry stamp.
 
-## 4. Track it
+- **Completed** → `transition_status(status="advance", task="migrateData", outcome="completed", where=<batch filter>)` so `TASK_EVENTS` get an `advanced` row — do not leave completion to `next_task` alone. The server refuses it unless the job oracle confirms.
+- **Failed** → do not stamp (only a completed advance is oracle-confirmed for `migrateData`). Do not re-run the job and do not change Snowflake with `sql_execute`. A failed load is `error=sql` and the machine owns the next step.
 
-Otherwise, arm the `monitor.watch_command` with the Monitor tool. Its terminal event's
-`detail.completion` is the authoritative result and supplies the final
-verdict, counts, and failures. Use `job_status(job_id)` only for an on-demand
-status or lost-watch recovery; use `details=true` for deeper failure
-diagnostics.
+Then `migration_status(mode="next_task", object_ids=["<id>"])`.
 
-## When it finishes
-
-The machine reads live `DATA_MIGRATION.TABLE_PROGRESS` — do not stamp the registry.
-Present the migration summary (`SKILL.md` Step 6), and offer to tear the shared
-infrastructure down when the wave is done — unless you were dispatched for a
-single object, in which case leave it alone: `data_infrastructure(mode="down")`
-stops the worker every other slot is using, so that offer belongs to whoever
-owns the wave.
-
-If the job **failed**, do not re-run it and do not change Snowflake with `sql_execute`.
-Call `migration_status(mode="next_task")`. A failed load is `error=sql` and the machine owns the next step.
 A judgment you made in the converted file (meanings vs compile) is a `note` after
 the fix, not a live `ALTER` and not a re-dispatch of the same workflow.
 
-## Troubleshooting
+## Interactive (not a walker)
 
-If you are stuck and need additional details, for the full monitoring / reporting /
-teardown walkthrough, load `SKILL.md` (Steps 5–7) in this folder.
+If the response has `status="started"` and a `monitor` block, you are on the
+orchestrated path: infrastructure must already be up via `data_infrastructure(mode="up")`.
+Arm the `monitor.watch_command` (or return `waiting` if you are a walker on a
+sibling blocker). Do not call `data_infrastructure` from this subagent. When its
+terminal event's `detail.completion` arrives, stamp the outcome as in §2.

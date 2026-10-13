@@ -12,7 +12,11 @@ One-time configuration for migrating data from a source database into Snowflake 
 > **Always use the official tooling.** Run data migration through `migrate_data(mode="setup")` / `migrate_data(mode="run")` (backed by `scai data migrate`). **Never** suggest writing ad-hoc scripts to extract, copy, or load data outside the DMVF task pipeline — the orchestrator handles partitioning, retries, incremental sync, and load orchestration.
 
 > **Supported sources**: SQL Server, Azure Synapse, Redshift, Oracle, Teradata, PostgreSQL, BigQuery, DB2
-> **Supported targets**: Native Snowflake tables (default). **Iceberg** targets are **Redshift-only** (partial support) — see [Extraction strategies reference](./references/extraction-strategies-reference.md#iceberg-target-redshift-only--partial-support).
+> **Supported targets**: Native Snowflake tables (default). **Iceberg** targets are available for every
+> supported source, but **only when the source object is fully relational** — if the source is itself an
+> Iceberg (or external / catalog-backed) table, **do not continue**. The only supported Iceberg target is
+> **Iceberg v2 with a Snowflake-managed catalog on an external volume** (no external / AWS-Glue / other
+> catalogs). See [Extraction strategies reference](./references/extraction-strategies-reference.md#iceberg-target-relational-sources-only).
 
 > **Run-only entry:** If you were routed here only to execute `migrateData` (registry task) and the workflow YAML already exists, skip Steps 1–2 and complete **Step 2a** (display the existing `workflow_path` and offer optional updates) before **Step 4**. Complete **Steps 5–6** (background Monitor and error-first migration report), then return the result to the parent. Per-object subagents do not manage shared infrastructure or teardown.
 
@@ -90,7 +94,8 @@ PostgreSQL COPY; Oracle ODP.NET/DBMS_CLOUD; Redshift ODBC/UNLOAD + optional
 Iceberg; Teradata direct/TPT/WRITE_NOS), and each strategy has worker/infra
 prerequisites owned by setup; see
 [Extraction strategies reference](./references/extraction-strategies-reference.md)
-for the per-dialect matrix. `target_table_type=iceberg` is Redshift-only.
+for the per-dialect matrix. `target_table_type=iceberg` is available for any source, but **only when the
+source object is fully relational** — if the source is itself an Iceberg / external table, do not continue.
 
 For **Preliminary** migrations, after YAML generation (Step 2a) add `whereClauseCriteria` per table with a valid WHERE predicate; see `./references/workflow-config-reference.md`.
 
@@ -111,6 +116,18 @@ The user's selection confirms the option's listed prerequisites. For a server/cl
 the fully-qualified Snowflake external stage now unless the workflow already records one; if it is not
 ready, return to the ladder and choose the next method rather than generating a config that cannot run.
 
+> **Prefixes and stage must point at the same storage path — emphasize this when asking.** A
+> server/cloud extraction strategy (`cloud_direct`, `cet_as`, `unload`, `write_nos`, `dbms_cloud`,
+> `export_data`) **writes the data files to one exact cloud location**, and the `extraction.externalStage`
+> is what Snowflake reads them back from. The stage URL (plus any prefix) and the location the strategy
+> unloads to **must be the same bucket/container and the same path**. For an Iceberg target the same
+> alignment applies to `icebergConfig.baseLocationPrefix`. When you ask the user for a stage, a URL, or a
+> prefix, say so explicitly: *"this must match the exact storage location and path where the extraction
+> strategy writes the data."* A mismatch does not error — the orchestrator's `LIST` finds 0 files and
+> marks the partition **complete with 0 rows**, so the run looks successful but loads nothing. A common
+> trap: the worker writes to the **container/bucket root** while the stage points at a subfolder (or vice
+> versa). See [extraction-strategies-reference.md](./references/extraction-strategies-reference.md#after-choosing-a-strategy).
+
 ---
 
 ## Step 2: Generate the Workflow YAML
@@ -129,13 +146,15 @@ migrate_data(
                       "write_nos" | "dbms_cloud" | "cet_as" | "export_data" |
                       "cloud_direct",   # "regular" = legacy "leave the worker as-is"
   external_stage="<DB.SCHEMA.STAGE>",  # server/cloud methods, first application only
-  target_table_type="native" | "iceberg",  # iceberg: Redshift sources only
+  target_table_type="native" | "iceberg",  # iceberg: relational sources only (never an Iceberg source)
 )
 ```
 
 Notes:
 
-- **`target_table_type=iceberg`** — Redshift only. Use `native` for SQL Server, PostgreSQL, Oracle, and Teradata.
+- **`target_table_type=iceberg`** — available for any source dialect, but **only when the source object is
+  a fully relational table**. If the source is itself an Iceberg (or external / catalog-backed) table, **do
+  not continue** — stop and tell the user. Verified at Step 3a.
 - `where` is forwarded to `scai data migrate generate-config --where` as a
   **table-selection filter** (registry syntax). It controls which tables show
   up in the generated `tables:` list. Row-level filtering for the Preliminary
@@ -152,7 +171,7 @@ Notes:
   change it with `extraction_strategy=` rather than by editing the YAML.
 - On first generation, the MCP server also fills missing `source.databaseName` (from
   the scai source connection), `target.databaseName` (from
-  `configure(snowflake_database=...)`), and Oracle `columnNamesToPartitionBy`
+  the bindings `snow:` map, or `snowflake_database` on a project without one), and Oracle `columnNamesToPartitionBy`
   (`ROWID`) when the CLI left them empty.
 
 > **Duplicate data on re-run:** `migration_type=full` or `preliminary`, or `sync_strategy=none`, performs a **full extract and load every run**. Re-running the same workflow against a target that already has rows from a prior run **appends duplicate/extra data**. For a repeatable **full reload** that overwrites the whole table (or partition) each run without needing a monotonic/change-tracking column, use `sync_strategy=full-replace` — it deletes the target partition before loading, so no duplicates. For row-level incremental sync, use `sync_strategy=watermark` or `checksum` (and set `primaryKeyColumns` / `watermarkColumn` / `checksumExpression` as needed — see [workflow-config-reference.md](./references/workflow-config-reference.md#synchronizationstrategy)). **Never** `TRUNCATE` or bulk-`DELETE` the target manually without explicit user confirmation — the table may legitimately contain pre-existing or expected rows. Before any manual cleanup: confirm with the user, compare source vs target row counts, and prefer `full-replace` or incremental sync for future runs.
@@ -194,6 +213,7 @@ Notes:
    | Server/cloud export | `extraction.strategy`, `extraction.externalStage` + worker TOML |
    | Iceberg target | `target.tableType`, `target.icebergConfig`, `migrationStrategy` |
    | Teradata mixed charsets / untranslatable bytes | `onUntranslatable` (`substitute` default, `fail` to stop on Error 6706); applies to ODBC, TPT, and `write_nos` — see `dmvf/docs/data-migration-orchestrator/teradata-charset-extraction.md` |
+   | New inserts on Snowflake after cutover must not collide with migrated identity / auto-increment keys | `continueIdentityColumns: true` (per table or `defaultTableConfiguration`; off by default, native targets only) — see [Identity columns](./references/workflow-config-reference.md#identity-columns-and-continueidentitycolumns) |
 
    For stalled or partially finished runs, see [Task model reference](./references/task-model-reference.md) and [Troubleshooting reference](./references/troubleshooting-reference.md).
 
@@ -217,7 +237,7 @@ Notes:
    - Resolve `computed_column_findings` (SQL Server COMPUTED columns): exclude each listed column from the table's migration — drop it from the column list / `columnNameMappings` so its stored expression value is not migrated. The target column is redefined or recomputed post-migration.
    - **Preliminary type:** add `whereClauseCriteria: "<row predicate>"` per table or `defaultTableConfiguration` when missing.
    - Required **extraction strategy** fields (`extraction.strategy`, `externalStage`, worker TOML cross-refs for `unload` / `write_nos` / `dbms_cloud` / `tpt`).
-   - **Redshift Iceberg** (`target_table_type=iceberg`): required fields from [iceberg-setup-reference.md](./references/iceberg-setup-reference.md).
+   - **Iceberg target** (`target_table_type=iceberg`): required fields from [iceberg-setup-reference.md](./references/iceberg-setup-reference.md). Only for a fully relational source (Step 3a).
    - Tell the user what you changed and why before confirming.
 8. Get **explicit confirmation** to run with the final workflow, then continue to Step 3.
 
@@ -239,6 +259,86 @@ The `scai data doctor` gate runs during `data_infrastructure(mode="up")` (the pr
 CREATE DATABASE IF NOT EXISTS <target_db>;
 CREATE SCHEMA IF NOT EXISTS <target_db>.<target_schema>;
 ```
+
+---
+
+## Step 3a: Verify source and target for Iceberg (Iceberg targets only)
+
+**Run this only when the workflow targets Iceberg** (`target_table_type=iceberg`, i.e. any
+`tables[]` / `defaultTableConfiguration.target.tableType: iceberg`). Skip it for native targets.
+
+### 3a.1 — Source must be fully relational (hard gate)
+
+This migration builds a **new Snowflake-managed Iceberg table from relational data**. It is **not** a
+path for data that is already Iceberg. **The source object must be a plain relational table.**
+
+For each source table in the workflow, confirm it is a regular relational table on the source — **not an
+Iceberg, external, or catalog-backed table**. Use the source catalog via `query_source` (dialect
+examples):
+
+- **SQL Server / Synapse:** `sys.tables` is relational; reject `sys.external_tables`.
+- **Redshift:** reject `SVV_EXTERNAL_TABLES` / Spectrum / Glue-Iceberg tables; a `pg_class` / `SVV_TABLE_INFO` base table is relational.
+- **Oracle / PostgreSQL / Teradata / DB2 / BigQuery:** reject external / Iceberg / foreign tables; accept ordinary heap/base tables.
+
+**If any source object is Iceberg (or external / catalog-backed), do not continue.** Stop and tell the
+user which tables are disqualified and why; do not fall back to `native` silently and do not run the
+workflow. Iceberg-source adoption paths (`catalog_link` / `convert_to_managed`) are **out of scope** —
+this gate exists specifically to block them.
+
+### 3a.2 — Target must not already be a regular table
+
+`scai code deploy` creates target tables as **regular (native) tables** from the converted DDL. An
+Iceberg migration must own the target: the orchestrator **creates the Iceberg table itself** and
+**refuses to replace an existing table** (`IcebergTargetExistsError`). So a target that deploy already
+materialized as a regular table blocks the run — it must be dropped first so the orchestrator can
+recreate it as Iceberg.
+
+**Run the dedicated check — do not skip it, and do not hand-roll it with `SHOW TABLES`:**
+
+```
+check_iceberg_targets(workflow_path="<path from setup>")
+```
+
+It reads the workflow's Iceberg targets, probes Snowflake, and classifies each one. The response has an
+overall `status` (`ok` | `action_required`), per-table `state`, the `needs_drop` / `blocked` lists, and
+ready-to-run `drop_statements`.
+
+- **`state: "ready"`** — the target is missing (the orchestrator creates it) or already Iceberg. Nothing
+  to do.
+- **`state: "needs_drop"`** — a **regular table is standing in the Iceberg target's place** (from
+  `scai code deploy`) **and it is a registered code-unit table**, so the orchestrator can rebuild it from
+  the converted DDL once it is dropped. Handle via step 2.
+- **`state: "blocked"`** — a regular table is in the way but is **not** in the code-unit registry, so
+  there is no converted DDL to recreate it. **Never drop these.** Surface them and ask the user to point
+  the workflow at a fresh target or resolve them by hand.
+
+`status: "ok"` (no `needs_drop`, no `blocked`) → go straight to **Step 4**.
+
+2. **Ask the user before dropping** the `needs_drop` tables — list them and get explicit confirmation.
+   Dropping discards whatever that table currently holds:
+
+   > Deployment created these as **regular** tables, but this migration targets **Iceberg**. The
+   > orchestrator can't convert them in place — it needs to create the Iceberg tables itself. May I
+   > **drop** them so they get recreated as Iceberg during the run?
+   >
+   > - `<db>.<schema>.<t1>`
+   > - `<db>.<schema>.<t2>`
+   >
+   > 1. **Yes, drop and recreate as Iceberg** 2. **No** (I'll handle these tables myself)
+
+3. **On confirmation**, run the `drop_statements` from the check response (one `DROP TABLE IF EXISTS`
+   per table), then let the run recreate them. (If a stale Iceberg table must also go,
+   `DROP ICEBERG TABLE IF EXISTS <fqn>;` first.) Re-running `check_iceberg_targets` should now report
+   `status: "ok"`.
+
+4. **If the user declines**, do not run blind — the Iceberg create would fail with
+   `IcebergTargetExistsError`. Surface that and let the user resolve the target (rename it in the
+   workflow, point at a fresh target, or drop it later), then return here.
+
+> This is the common, named failure. If the run still fails on an Iceberg target for a different reason
+> (missing `CREATE ICEBERG TABLE` grant, external volume not authorized, `baseLocationPrefix` outside the
+> volume), fix that prerequisite from [iceberg-setup-reference.md](./references/iceberg-setup-reference.md)
+> rather than re-dropping the table.
 
 ---
 
@@ -380,7 +480,7 @@ whether `details.progress.output.isFinished == true` **and** any of:
 
 ---
 
-If the job **failed**, do not re-run it and do not change Snowflake with `sql_execute`. Call `migration_status(mode="next_task")`. A failed load is `error=sql`; the machine sends you to `applyRules` → `fixCode`. Edit the converted `snowflake/` file, **deploy**, then the fix loop retries `migrateData`.
+If the job **failed**, do not re-run it and do not change Snowflake with `sql_execute`. Call `migration_status(mode="next_task", object_ids=["<id>"])`. A failed load is `error=sql`; the machine sends you to `applyRules` → `fixCode`. Edit the converted `snowflake/` file, **deploy**, then the fix loop retries `migrateData`.
 
 A live `ALTER` / `DROP` / `CREATE` that is not in `snowflake/` is not a `note` — the next `deploy` overwrites it. `note` is for a judgment you already made in the file (you chose among meanings and can name the inverse). See the walker definition: meanings vs compile. Do not `note` as a substitute for the fix, and do not re-dispatch the same failed workflow.
 
@@ -544,7 +644,10 @@ Shared infrastructure checklist is owned by `../../../data-infrastructure/SKILL.
 - [ ] User confirmed the final workflow YAML before run
 - [ ] Partition-key findings resolved (or accepted) at Step 2a
 - [ ] Target database and schema exist
-- [ ] Iceberg prerequisites validated — if Redshift + `target_table_type=iceberg`
+- [ ] External stage / unload path / Iceberg `baseLocationPrefix` confirmed to point at the same storage location (Step 1.C emphasis)
+- [ ] Iceberg source confirmed fully relational — stopped if the source is Iceberg/external (Step 3a.1)
+- [ ] Iceberg targets checked for colliding regular tables and dropped on user confirmation (Step 3a.2)
+- [ ] Iceberg prerequisites validated — if `target_table_type=iceberg`
 - [ ] migrate_data(mode="run") started
 - [ ] Monitor armed with the run response's watch command (Step 5)
 - [ ] Waited until the job reported a `terminal` event

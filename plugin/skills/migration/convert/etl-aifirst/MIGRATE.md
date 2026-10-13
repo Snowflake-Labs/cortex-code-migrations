@@ -37,24 +37,26 @@ The driver ships inside this plugin — no external install or environment varia
 
 Read that action's `SKILL.md` before invoking it if you have not already (`../../migrate-objects/actions/etl-aifirst/SKILL.md`). Confirm the script exists; if it does not, the plugin checkout is broken — stop and tell the user the AI-First action is missing from this install, rather than trying to work around it.
 
-## Step 2: Pick the platform identity
+## Step 2: Read the registered unit's platform and source path
 
-Ask the user which platform the document is from, and map their answer to a checked-in identity when one exists:
+The caller reached this guide from `../SKILL.md` Step 4.5 with a `query_registry` row per AI-First ETL unit — each row has `id`, `extensions.sourcePlatform`, and `files.source.path`. Do not read a manifest or ask the user for the path again.
 
-| Platform | Identity |
-|----------|----------|
-| Azure Data Factory | `adf` |
-| Alteryx (`.yxmd`) | `alteryx` |
-| DataStage (`.dsx`) | `datastage` |
-| Pentaho / Kettle (`.ktr` / `.kjb`) | `pentaho` |
+Map `extensions.sourcePlatform` to a checked-in driver identity when one exists:
 
-If the user names something not in that table, use their own name as the identity anyway and pass it through — do not refuse. Stage 0 authors a provisional platform table on a platform it has not seen before, validates it structurally before trusting it, and preserves it under `<output-root>.gates/stage0/`. That costs an authoring round, not a refusal, so there is no dead end here the way there is for a platform the *native* engine cannot take.
+| Registered platform | Driver identity |
+|---|---|
+| `adf` | `adf` |
+| `alteryx` | `alteryx` |
+| `datastage` | `datastage` |
+| `pentaho` | `pentaho` |
+
+If the registered platform is anything else (Talend, Informatica Cloud / IICS, a free-form name a user typed), pass it through verbatim as the driver identity — do not refuse and do not relabel. Stage 0 authors a provisional platform table on a platform it has not seen before, validates it structurally before trusting it, and preserves it under `<output-root>.gates/stage0/`. That costs an authoring round, not a refusal, so there is no dead end here the way there is for a platform the *native* engine cannot take.
 
 Never pass `ssis` or `informatica` here to compare paths on production input — those stay on the native `--etl-replatform-sources-path` flag from Step 4. The checked-in tables for those two exist for controlled side-by-side testing only.
 
-## Step 3: Run the driver, once per document
+## Step 3: Run the driver, once per registered unit
 
-The driver takes **one source document per invocation**, not a directory. List the platform's documents under `<AIFIRST_ETL_PATH>`, tell the user how many you found, and migrate each one independently.
+The driver takes **one source document per invocation**, not a directory. Migrate each registered AI-First ETL unit independently, using its own `files.source.path` and `extensions.sourcePlatform` from the Step 2 `query_registry` response.
 
 Stage each run outside the project and move the result in afterwards:
 

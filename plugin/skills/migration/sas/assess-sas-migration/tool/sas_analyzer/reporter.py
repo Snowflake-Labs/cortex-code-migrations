@@ -82,6 +82,7 @@ class AssessmentReporter:
         files = []
         for script, score, classification in zip(scripts, scores, classifications):
             deps = file_analyses.get(script.filename, {'creates': [], 'reads': [], 'external_sources': []})
+            off = script.line_offset
             files.append({
                 'filename': script.filename,
                 'lines': script.total_lines,
@@ -93,6 +94,9 @@ class AssessmentReporter:
                 'primary_tier': classification['primary_tier'],
                 'confidence': classification['confidence'],
                 'tier_distribution': classification['tier_distribution'],
+                # [start_line, end_line, tier, block_type] per block: source of `-- SAS:` anchors
+                'block_ranges': [[b['start_line'] + off, b['end_line'] + off, b['tier'], b['block_type']]
+                                 for b in classification['block_classifications']],
                 'is_boilerplate': score['is_boilerplate'],
                 'dependencies': {
                     'creates': deps['creates'],

@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Optional, Set
 
 from sas_analyzer import SASParser, ComplexityScorer, TierClassifier, DependencyTracker, AssessmentReporter
-from sas_analyzer.source_io import read_sas_source
+from sas_analyzer.source_io import egp_header_lines, read_sas_source
 from sas_analyzer import egp_extractor
 import tables as tables_json
 
@@ -169,6 +169,7 @@ def main():
 
         script = parser.parse(content, filename=sas_file.name)
         script.line_endings_normalised = normalised
+        script.line_offset = egp_header_lines(sas_file)
         score = scorer.score_script(script)
         classification = classifier.classify_file(script)
         deps = dep_tracker.analyze_file(script)
@@ -202,7 +203,8 @@ def main():
         print(f"  Written: {json_path}")
 
         tables_path = output_dir / 'tables.json'
-        tables_json.seed(tables_path, graph['external_inputs'], dep_tracker.build_output_tables(file_analyses))
+        tables_json.seed(tables_path, graph['external_inputs'] + graph['macro_inputs'],
+                         dep_tracker.build_output_tables(file_analyses))
         print(f"  Written: {tables_path}")
 
     if args.format in ('md', 'all'):

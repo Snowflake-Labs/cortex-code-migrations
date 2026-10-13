@@ -38,7 +38,7 @@ Each orchestration batch agent writes a structured artifact at `{UNIT}/stabiliza
 
 ## Learning Artifact Format
 
-Each batch agent writes a per-batch learning file at `{UNIT}/stabilization/phases/phase_{N}/learnings_batch_{B}.md`. These are merged into `{UNIT}/stabilization/tracking/fix_log.md` at phase end by the orchestrator (single-writer).
+Each batch agent writes a per-batch learning file at `{UNIT}/stabilization/phases/phase-{N}/learnings_batch_{B}.md`. These are merged into `{UNIT}/stabilization/tracking/fix-log.md` at phase end by the orchestrator (single-writer).
 
 ```markdown
 # Learnings — Batch {B}, Phase {N}

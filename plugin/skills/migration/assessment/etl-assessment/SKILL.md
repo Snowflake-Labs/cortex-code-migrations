@@ -18,8 +18,9 @@ When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, t
 | Field | Required | Notes |
 |---|---|---|
 | `project_dir` | yes | absolute path to the SCAI project root |
-| `output_dir` | yes | typically `<project_dir>/assessment/ssis` |
+| `output_dir` | yes | where `ai_ssis_summary.html` is written; the CLI writes the assessment JSON to `<project_dir>/artifacts/assessment/etl/` regardless |
 | `etl_replatform_sources_path` | no | absolute path to the SSIS `.dtsx` source directory; falls back to auto-detection per [Step 1](#step-1-locate-input-files-auto-detected) |
+| `etl_assessment_skill_dir` | yes | absolute directory containing this SKILL.md. It lives under the installed plugin root at `skills/migration/assessment/etl-assessment`. Pass it to `uv run --project`. Never pass `project_dir`. |
 | `review_mode` | yes | `generate-only`, `auto-review-all`, or `skip` |
 
 **On entry:** call the `configure` MCP tool with `project_dir` from the context block. Snowflake credentials are not required — `scai assessment etl generate` reads converted CSVs and SSIS `.dtsx` sources.
@@ -53,16 +54,14 @@ On `skip`: `"status": "skipped"`, `"output_json": null`. On failure: `"status": 
 ## Rules
 
 1. **Use ONLY Provided Scripts**
-   - ONLY use the provided `scai assessment etl` commands (generation) and Python reader commands (analysis tracking)
+   - ONLY use the provided `scai assessment etl` commands, for generation and for analysis tracking (`pending`, `scan-package`, `update`, `stats`)
    - DO NOT create custom scripts to read or manipulate the JSON file
    - DO NOT use grep, jq, or other tools to parse the JSON directly
    - All JSON interactions MUST go through the provided CLI
 
-2. **Quality Over Speed**
-   - Each package deserves thorough, individual analysis
-   - Write specific, detailed analysis for each package
-   - DO NOT create batch analysis regardless of package volume
-   - DO NOT skip analysis steps to save time
+2. **One package, one analysis**
+   - Analyze each package from its own `scan-package` output, whatever the volume; never batch or reuse
+     analysis text across packages, because the report presents each package's analysis on its own.
 
 3. **Follow ONLY Provided Analysis Methods**
    - Use ONLY the workflow in [references/analyze_ssis_package.md](references/analyze_ssis_package.md)
@@ -101,7 +100,7 @@ Resolve `<conversion_reports_dir>` as the first directory that contains both `ET
 | `ETL.Elements.csv` | Latest `<conversion_reports_dir>/ETL.Elements.*.csv` |
 | `ETL.Issues.csv` | Latest `<conversion_reports_dir>/ETL.Issues.*.csv` |
 | SSIS source dir | `<project_dir>/source/_etl/` |
-| Output dir | `<project_dir>/assessment/ssis/` (create if missing) |
+| Output dir | `<project_dir>/artifacts/assessment/etl/` (chosen and created by `scai assessment etl generate`) |
 
 **Validation (silent — only surface a problem to the user if validation fails):**
 - Confirm both `ETL.*` CSVs exist in `<conversion_reports_dir>`. If they don't, ETL was not converted — return to the parent and ask the parent to re-run register (`code add`) then `convert`. Do not ask the user to upload paths.
@@ -124,9 +123,11 @@ This writes two timestamped files to `<project>/artifacts/assessment/etl/`:
 **Immediately after generation**, render the DAG HTMLs from the newest `dag_model_*.json`:
 
 ``` bash
-dag_model=$(ls -t <project>/artifacts/assessment/etl/dag_model_*.json 2>/dev/null | head -1)
+dag_model=$(ls -t <project_dir>/artifacts/assessment/etl/dag_model_*.json 2>/dev/null | head -1)
 if [[ -n "$dag_model" ]]; then
-  uv run --project ai ai/plugin/skills/migration/assessment/etl-assessment/scripts/dag_renderer/render_dags.py "$dag_model"
+  uv run --project "<etl_assessment_skill_dir>" \
+    python "<etl_assessment_skill_dir>/scripts/dag_renderer/render_dags.py" \
+    "$dag_model"
 else
   echo "No dag_model.json found; skipping DAG render (expected if no control-flow or data-flow components)"
 fi
@@ -155,7 +156,7 @@ scai assessment etl summary
 
 2. Read the guide: [references/ai_summary_guide.md](references/ai_summary_guide.md)
 
-3. Generate summary file: `ai_ssis_summary.html`
+3. Generate summary file: `<output_dir>/ai_ssis_summary.html`
 
 4. Register the summary in the JSON:
 ```bash
@@ -171,5 +172,5 @@ scai assessment etl ai-summary <HTML_PATH>
 **Completion:**
 Report to user:
 - Total packages analyzed
-- JSON file location: `<output_path>/etl_assessment_analysis.json`
+- JSON file location: the newest `<project_dir>/artifacts/assessment/etl/etl_assessment_analysis_<timestamp>.json`
 - Go to main workflow in parent skill

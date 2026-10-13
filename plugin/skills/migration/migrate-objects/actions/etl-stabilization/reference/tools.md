@@ -48,7 +48,7 @@ uv run --project <SKILL_DIR> python <SKILL_DIR>/platforms/<platform>/strip_dead_
 
 ### `track_status.py` — Session Status Tracker
 
-Manages `artifacts/tracking/session_status.json` — the single source of truth for element and phase tracking. **All writes to session_status.json MUST go through this script** (never edit the JSON directly).
+Manages `{UNIT}/stabilization/tracking/session_status.json` — the single source of truth for element and phase tracking. **All writes to session_status.json MUST go through this script** (never edit the JSON directly).
 
 > **Orchestrator-only writes:** Only the orchestrator calls `track_status.py`. Sub-skill agents (test-gen, fixer, dbt-fixer, dbt-test-gen) report results in their artifacts; the orchestrator reads those artifacts and updates session_status.json sequentially after agents complete.
 
@@ -75,6 +75,7 @@ Manages `artifacts/tracking/session_status.json` — the single source of truth 
 | `init-dbt` | `track_status.py init-dbt <session.json> <project_name> <dbt_project_path>` — Initialize dbt project tracking |
 | `update-dbt` | `track_status.py update-dbt <session.json> <project_name> --status <status> [--reason <reason>]` — Update dbt project status |
 | `update-dbt-node` | `track_status.py update-dbt-node <session.json> <project_name> <node_name> --status <status> [--reason <reason>]` — Update individual dbt node status |
+| `close-unit` | `track_status.py close-unit <session.json>` — Close a unit whose elements are all completion-eligible, without an agent |
 
 #### Valid Statuses
 
@@ -86,7 +87,7 @@ Manages `artifacts/tracking/session_status.json` — the single source of truth 
 
 ### `generate_report.py` — HTML Report Generator
 
-Generates a self-contained HTML report from all ETL fixer artifacts. Aggregates `scan.json`, `session_status.json`, `ROADMAP.md`, `orchestration-context.md`, `dbt-context.md`, `fix_log.md`, and `STATE.md` into a single browsable HTML file.
+Generates a self-contained HTML report from all ETL fixer artifacts. Aggregates `scan.json`, `session_status.json`, `ROADMAP.md`, `orchestration-context.md`, `dbt-context.md`, `fix-log.md`, and `STATE.md` into a single browsable HTML file.
 
 ```bash
 uv run --project <SKILL_DIR> python <SKILL_DIR>/scripts/generate_report.py <unit_folder> [--template <path>]
@@ -95,6 +96,27 @@ uv run --project <SKILL_DIR> python <SKILL_DIR>/scripts/generate_report.py <unit
 - **Input**: Unit folder path; optional `--template` for custom HTML template (defaults to `reference/templates/report-template.html`)
 - **Output**: `<unit_folder>/stabilization/report.html`
 - **Used in**: Final Validation phase (phase-execution.md step c)
+
+### `sync_guard.py` — Shared Sync-Back Guard
+
+Guards every shared mapping-procedure / dbt-project sync-back. Compares four
+copies of the same shared file before authorizing a write to canonical: this
+unit's pre-fix `--backup`, this unit's staged fix (`--current`), `--canonical`,
+and any `--sibling <path>` (another staged unit's current copy of the same
+file; repeatable). Use `--apply` so the guard performs the copy itself,
+atomically, only after every check in the same process has passed — never
+`cp` the staged file onto canonical as a separate step; a copy that is not
+gated inside the guard's own exit code can run even when the guard failed.
+
+```bash
+uv run --project <SKILL_DIR> python <SKILL_DIR>/scripts/sync_guard.py \
+  --canonical <path> --backup <path> --current <path> \
+  --fix-log <fix-log.md> --element <name> --staged-root <Output/ETL> [--sibling <path> ...] --apply
+```
+
+- **Exit 0 ("ok to sync")**: no canonical file yet and no sibling copy differs from `--current`; canonical matches the backup and no sibling differs from `--current`; canonical already holds exactly `--current`'s bytes (idempotent retry); or a drift was found but `fix-log.md` records `<!-- sync-winner: element=<name> winner=this-unit reason=<why> -->` for `<name>`
+- **Exit 1 ("do not sync")**: canonical drifted from the backup, or a sibling drifted from `--current`, with no matching `winner=this-unit` record — this includes the case where `fix-log.md` records `winner=other-unit`, which is a logged decision that never authorizes overwriting canonical with this unit's version
+- Canonical is never modified on exit 1, with or without `--apply`
 
 ---
 

@@ -400,16 +400,14 @@ BEGIN
 END;
 ```
 
-### Session variables are NOT allowed in a VALUES() clause
+### A static `$VAR` must exist when its block or procedure is compiled
 
-`$VAR` works in `SELECT`, `WHERE`, and `SET` contexts but NOT inside `INSERT ... VALUES(...)`. Use `INSERT ... SELECT` instead.
-
-```sql
--- WRONG:
-INSERT INTO t (c1, c2) VALUES ('lit', $RSTRDT);
--- CORRECT:
-INSERT INTO t (c1, c2) SELECT 'lit', TO_DATE($RSTRDT, 'YYYY-MM-DD');
-```
+`$VAR` is resolved at compile time: `CREATE PROCEDURE` (and an anonymous block) fails with
+*"Session variable '$VAR' does not exist"* if the variable is not set in the session at that
+moment, wherever it appears (`SELECT`, `WHERE`, `VALUES`). So set parameters **before** creating
+the procedures that read them (`sf_exec.py` orders this automatically), or read them with
+`GETVARIABLE('VAR')`, which resolves at run time. (`$VAR` inside `VALUES(...)` is otherwise
+accepted; verified 2026-10.)
 
 ### Reserved-word column names must be double-quoted
 

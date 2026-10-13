@@ -218,7 +218,7 @@ After all dbt projects in the current phase are processed:
    Per-project details:
      - <project_name>: X/Y nodes passing (Z fixed by AI)
 
-   Fix log: <UNIT>/stabilization/tracking/fix_log.md
+   Fix log: <UNIT>/stabilization/tracking/fix-log.md
    Session: <UNIT>/stabilization/tracking/session_status.json
    ```
 
@@ -244,7 +244,7 @@ After all dbt projects in the current phase are processed:
 - Test report: for baseline failures and source-to-dbt mapping before fixing
 - Source definition file: when resolving EWI markers
 - EWI guides: from `PLATFORM_DIR/ewi/` when encountering markers
-- Fix log: `PACKAGE/stabilization/tracking/fix_log.md` for prior patterns
+- Fix log: `PACKAGE/stabilization/tracking/fix-log.md` for prior patterns
 
 ### Output
 
@@ -252,7 +252,7 @@ After all dbt projects in the current phase are processed:
 - Fixed macro files in `DBT_PROJECT_PATH/macros/` (if bootstrap fixes were needed)
 - Fixed `dbt_project.yml` (if placeholder values were replaced)
 - Fixed `sources.yml` (if source definitions were corrected)
-- Per-project learning file: `PACKAGE/stabilization/phases/phase_N/dbt_learnings_<project_name>.md` (orchestrator merges into `fix_log.md` at phase end)
+- Per-project learning file: `PACKAGE/stabilization/phases/phase_N/dbt_learnings_<project_name>.md` (orchestrator merges into `fix-log.md` at phase end)
 
 ### needs-user Enforcement
 

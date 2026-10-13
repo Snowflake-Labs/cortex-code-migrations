@@ -36,7 +36,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from html import escape
 
-from path_resolver import report_path, stabilization_root
+from path_resolver import report_path, session_status_path, stabilization_root
+
+
+class MissingLedgerError(RuntimeError):
+    """Raised when session_status.json is absent -- there is no safe default to render."""
 
 
 def _load_json(path: Path) -> dict | None:
@@ -214,7 +218,13 @@ def generate_report(unit_path: Path, template_path: Path) -> Path:
     tracking_directory = stab_root / "tracking"
 
     scan = _load_json(planning_directory / "scan.json") or {}
-    session = _load_json(tracking_directory / "progress.json") or {}
+    session_file = session_status_path(unit_path)
+    session = _load_json(session_file)
+    if session is None:
+        raise MissingLedgerError(
+            f"{session_file} not found. If this unit has a legacy 'progress.json', rename it "
+            f"to 'session_status.json' -- generate_report.py no longer reads the old name."
+        )
     roadmap_md = _load_text(planning_directory / "ROADMAP.md") or ""
     pkg_orch_context_md = _load_text(planning_directory / "orchestration-context.md") or ""
     pkg_dbt_context_md = _load_text(planning_directory / "dbt-context.md") or ""
@@ -434,12 +444,12 @@ def generate_report(unit_path: Path, template_path: Path) -> Path:
     file_ref_rows = ""
     artifact_files = [
         ("artifacts/planning/scan.json", "Unit scan output"),
-        ("artifacts/tracking/session_status.json", "Element-level tracking"),
+        ("tracking/session_status.json", "Element-level tracking"),
         ("artifacts/planning/ROADMAP.md", "Phase plan"),
         ("artifacts/planning/orchestration-context.md", "Orchestration structural understanding"),
         ("artifacts/planning/dbt-context.md", "dbt project analysis"),
         ("artifacts/tracking/STATE.md", "Resumption bookmark"),
-        ("artifacts/tracking/fix_log.md", "Append-only fix record"),
+        ("tracking/fix-log.md", "Append-only fix record"),
     ]
     for fname, desc in artifact_files:
         fpath = stab_root / fname
@@ -508,7 +518,11 @@ def main() -> None:
         print(f"Error: Template not found: {template_path}", file=sys.stderr)
         sys.exit(1)
 
-    generate_report(unit_folder, template_path)
+    try:
+        generate_report(unit_folder, template_path)
+    except MissingLedgerError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

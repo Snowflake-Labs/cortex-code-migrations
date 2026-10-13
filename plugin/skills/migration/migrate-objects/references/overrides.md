@@ -11,16 +11,14 @@ When test results show differences that are **not** actual bugs, document the re
 | `DATA_DRIFT` | Source data changed since baseline | Excluded | **Extensive** |
 | `CODE_DRIFT` | Source code changed intentionally | Pass | **Extensive** |
 
-## CRITICAL: Override is a LAST RESORT
+## Override only with evidence
 
-Before marking ANY failing test as an override, you MUST:
+An override hides a failing test from the gate, so before marking one:
 
 1. **Verify the source data** — Query underlying tables to confirm what data exists
 2. **Explain the exact difference** — Document specifically which rows/columns differ and why
 3. **Rule out code issues** — Confirm Snowflake procedure logic matches source intent
 4. **Check for normalization issues** — If it's formatting (timestamps, numbers), flag for framework improvement
-
-**DO NOT add overrides based on hunches.** Every override must be backed by evidence.
 
 ## MANUAL_PASS
 

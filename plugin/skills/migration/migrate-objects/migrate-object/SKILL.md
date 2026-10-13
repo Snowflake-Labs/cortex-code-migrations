@@ -16,7 +16,7 @@ Each object goes through a pipeline managed by the state machine:
 1. **Claim** — `claimObject` reserves the object for this user.
 2. **Checkout** — `checkoutBranch` creates or switches to a git branch.
 3. **Convert** — `convert` runs SnowConvert to produce initial Snowflake SQL.
-4. **Sandbox** — under `subagent_mode`, tables/views/functions populate the shared source catalog (`setupSandbox`); procedures get a private binding (`deploySandbox`) before tests. See [../sandbox/SKILL.md](../sandbox/SKILL.md). Interactive sessions skip these tasks.
+4. **Sandbox** — under `subagent_mode`, tables/views/functions populate the shared source catalog (`deployCommonSandbox`); procedures get a private binding (`createIsolatedSandbox`) before tests. See [../sandbox/SKILL.md](../sandbox/SKILL.md). Interactive sessions skip these tasks.
 5. **Test prep** — procedures/functions **with a source side**: `createTests` + `captureBaseline` generate test YAML and capture source-side baselines. Procedures/functions **with no source** (UDF helpers) skip this and go straight to deploy. BTEQ scripts: `seedScript` (binding values + import fixtures resolved from the shell script that runs it via `scai test seed --bindings-from`, hand-filled otherwise — see [../baseline-capture/seed-script/SKILL.md](../baseline-capture/seed-script/SKILL.md)) then `captureBaseline`.
 6. **Deploy** — `deploy` pushes the SQL to the common Snowflake catalogs. See [DEPLOY.md](DEPLOY.md).
 7. **Validate** — depending on object type:
@@ -36,8 +36,8 @@ Each object goes through a pipeline managed by the state machine:
 
 | Task | Guide | Purpose |
 |------|-------|---------|
-| `setupSandbox` | [../sandbox/setup/SKILL.md](../sandbox/setup/SKILL.md) | Shared source catalog for tables, views, functions |
-| `deploySandbox` | [../sandbox/deploy/SKILL.md](../sandbox/deploy/SKILL.md) | Private `AIMSBX_*` binding for a procedure |
+| `deployCommonSandbox` | [../sandbox/DEPLOY_COMMON.md](../sandbox/DEPLOY_COMMON.md) | Shared source catalog for tables, views, functions |
+| `createIsolatedSandbox` | [../sandbox/CREATE_ISOLATED.md](../sandbox/CREATE_ISOLATED.md) | Private `AIMSBX_*` binding for a procedure |
 | `deploy` | [DEPLOY.md](DEPLOY.md) | Common-catalog deploy: pre-deploy checks, error table, file-update rules |
 | `runTests` | [RUN_TESTS.md](RUN_TESTS.md) | Interpreting results, dependency failure detection |
 | `fixCode` | [DIAGNOSE_FIX.md](DIAGNOSE_FIX.md) | Root cause analysis, minimal fix strategy |

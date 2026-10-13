@@ -69,7 +69,7 @@
 | Procedure(s) | {procedure_name(s)} |
 | Scope | {orchestration / dbt / dataflow-proc} |
 | Depends on | {Phase M / none} |
-| Pattern source | {Phase M fix_log (lightweight only) / —} |
+| Pattern source | {Phase M fix-log.md (lightweight only) / —} |
 | dbt projects | {project_name_1, project_name_2 (dbt phases only)} |
 | dbt health | {per-project summary from scan_results: config_valid, ewi_count, ewi_codes, macro_count (dbt phases only)} |
 
@@ -78,7 +78,7 @@
 <!-- Orchestrator checks these before marking phase complete -->
 - [ ] All elements have terminal status (test-passed, fixed, no-fix-needed, skipped, needs-user, auto-fixed-needs-review, failed)
 - [ ] Post-apply tag integrity check passes (for orchestration phases)
-- [ ] Learnings merged into artifacts/tracking/fix_log.md
+- [ ] Learnings merged into {UNIT}/stabilization/tracking/fix-log.md
 - [ ] session_status.json updated for all elements in this phase
 <!-- For dbt phases, add these criteria: -->
 - [ ] dbt-test-gen agents produced test artifacts for every project (seeds/, tests/, test_report.md)
@@ -95,14 +95,14 @@
      Batch cap: ~10 small-medium items per batch, ~5 large items per batch; max 5 parallel batches.
      Grouped elements (shared tables) stay in same batch.
      NAMING: Batch IDs use B{P}.{M} format (e.g., B1.1, B1.2, B2.1) where P=phase, M=batch number.
-     Schemas: ETL_FIX_P{N}_B{M} (schema naming does not use the dot format). -->
+     Schemas: ETL_FIX_{UNIT}_P{N}_B{M} (schema naming does not use the dot format). -->
 
 | Batch | Schema | Element | Strategy | EWI Codes | Archetype? |
 |-------|--------|---------|----------|-----------|------------|
 <!-- Example rows:
-| B1.1 | ETL_FIX_P1_B1 | SCR Calculate Duration | isolated | SSC-EWI-SSIS0004 | archetype |
-| B1.1 | ETL_FIX_P1_B1 | SCR Write Log File | isolated | SSC-EWI-SSIS0004 | clone:G-SCR-DURATION |
-| B1.2 | ETL_FIX_P1_B2 | SQL Log Error Message | isolated | SSC-FDM-0007, SSC-EWI-SSIS0046 | — |
+| B1.1 | ETL_FIX_{UNIT}_P1_B1 | SCR Calculate Duration | isolated | SSC-EWI-SSIS0004 | archetype |
+| B1.1 | ETL_FIX_{UNIT}_P1_B1 | SCR Write Log File | isolated | SSC-EWI-SSIS0004 | clone:G-SCR-DURATION |
+| B1.2 | ETL_FIX_{UNIT}_P1_B2 | SQL Log Error Message | isolated | SSC-FDM-0007, SSC-EWI-SSIS0046 | — |
 -->
 
 ### Execution Steps
@@ -126,7 +126,7 @@
 Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
   start-phase {SESSION_JSON} {P}
 Create schemas in {DATABASE}: {schema_list}.
-Deploy artifacts/phases/phase_{P}/_infrastructure.sql to each schema
+Deploy {UNIT}/stabilization/phases/phase-{P}/_infrastructure.sql to each schema
 (replace {{SCHEMA}} placeholder with actual schema name).
 
 - [ ] **Step {P}.2: Test-Gen Wave**
@@ -179,7 +179,7 @@ Wait until ALL fix agents from Step {P}.3 are complete.
 Spawn SINGLE apply-fixes agent:
   - Name: apply-fixes
     Instruction: Read {SKILL_DIR}/reference/agent-prompts/apply-fixes.md
-    Context: all batch_{B}.md files from artifacts/phases/phase_{P}/
+    Context: all batch_{B}.md files from {UNIT}/stabilization/phases/phase-{P}/
 Wait for completion.
 Post-apply validation (orchestrator performs directly, no re-running tests):
   - Count !!!RESOLVE EWI!!! markers in orch SQL (should have decreased)
@@ -188,9 +188,9 @@ Post-apply validation (orchestrator performs directly, no re-running tests):
 If issues found: log warning, continue (TDD already verified fixes).
 
 - [ ] **Step {P}.5: Phase Completion**
-Merge learnings: read all learnings_batch_*.md from artifacts/phases/phase_{P}/.
-  Append NEW patterns only to artifacts/tracking/fix_log.md (skip duplicates).
-  Rebuild the EWI code index at the top of fix_log.md per reference/templates/fix-log-format.md.
+Merge learnings: read all learnings_batch_*.md from {UNIT}/stabilization/phases/phase-{P}/.
+  Append NEW patterns only to {UNIT}/stabilization/tracking/fix-log.md (skip duplicates).
+  Rebuild the EWI code index at the top of fix-log.md per reference/templates/fix-log-format.md.
 Validation gate (MANDATORY — do NOT proceed to complete-phase until this passes):
   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
     validate-phase {SESSION_JSON} {P} --list-test-files
@@ -227,18 +227,18 @@ Mark this step [x] and continue with Step {NEXT_P}.1.
 Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
   start-phase {SESSION_JSON} {P}
 Create schemas in {DATABASE}: {schema_list}.
-Deploy artifacts/phases/phase_{P}/_infrastructure.sql to each schema
+Deploy {UNIT}/stabilization/phases/phase-{P}/_infrastructure.sql to each schema
 (replace {{SCHEMA}} placeholder with actual schema name).
 
 - [ ] **Step {P}.2: Fix Wave (Apply Known Patterns)**
 Resume guard: if batch_{B}.md already exists for ALL batches
   (from a prior partial run), skip agent spawning and proceed to tracking update below.
 Use `team_create` tool: team_name="etl-fix-{package_name}-p{P}".
-Spawn fix agents — these apply PROVEN patterns from Phase {SOURCE_PHASE} fix_log:
+Spawn fix agents — these apply PROVEN patterns from Phase {SOURCE_PHASE} fix-log.md:
 {for each batch:}
   - {agent_name}: elements {element_list}, schema {schema}
     Instruction: Read {SKILL_DIR}/orchestration-fixer/SKILL.md
-    Additional context: pattern_source = Phase {SOURCE_PHASE} fix_log
+    Additional context: pattern_source = Phase {SOURCE_PHASE} fix-log.md
 {end for}
 NO test-gen agents — patterns are already proven from the archetype phase.
 Wait + validate: batch_{B}.md AND learnings_batch_{B}.md for every batch.
@@ -255,7 +255,7 @@ Wait until ALL fix agents from Step {P}.2 are complete.
 Spawn SINGLE apply-fixes agent:
   - Name: apply-fixes
     Instruction: Read {SKILL_DIR}/reference/agent-prompts/apply-fixes.md
-    Context: all batch_{B}.md files from artifacts/phases/phase_{P}/
+    Context: all batch_{B}.md files from {UNIT}/stabilization/phases/phase-{P}/
 Wait for completion.
 Post-apply validation (orchestrator performs directly, no re-running tests):
   - Count !!!RESOLVE EWI!!! markers in orch SQL (should have decreased)
@@ -264,9 +264,9 @@ Post-apply validation (orchestrator performs directly, no re-running tests):
 If issues found: log warning, continue (TDD already verified fixes).
 
 - [ ] **Step {P}.4: Phase Completion**
-Merge learnings: read all learnings_batch_*.md from artifacts/phases/phase_{P}/.
-  Append NEW patterns only to artifacts/tracking/fix_log.md (skip duplicates).
-  Rebuild the EWI code index at the top of fix_log.md per reference/templates/fix-log-format.md.
+Merge learnings: read all learnings_batch_*.md from {UNIT}/stabilization/phases/phase-{P}/.
+  Append NEW patterns only to {UNIT}/stabilization/tracking/fix-log.md (skip duplicates).
+  Rebuild the EWI code index at the top of fix-log.md per reference/templates/fix-log-format.md.
 Validation gate (MANDATORY — do NOT proceed to complete-phase until this passes):
   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
     validate-phase {SESSION_JSON} {P} --list-test-files
@@ -317,7 +317,7 @@ Assign dbt phase (SEQUENTIAL — one call per project):
 - [ ] **Step {P}.2: dbt-Test-Gen Wave**
 Resume guard: if test_report.md already exists for ALL projects
   (from a prior partial run), skip agent spawning and proceed to tracking update below.
-Spawn dbt-test-gen agents (MANDATORY — UNCONDITIONAL — do NOT skip):
+Spawn one dbt-test-gen agent per project (the fixer depends on its baseline):
 {for each dbt_project:}
   - dbt-test-gen-{project_name}:
     Instruction: Read {SKILL_DIR}/dbt-test-gen/SKILL.md
@@ -326,7 +326,7 @@ Spawn dbt-test-gen agents (MANDATORY — UNCONDITIONAL — do NOT skip):
 {end for}
 Spawn even if: placeholder config, broken macros, missing sources, heavy EWI.
 Test generation IS the assessment — agent documents blockers in test_report.md.
-Early exit WITHOUT test artifacts is a protocol violation.
+Every agent returns test artifacts, even when execution fails.
 Do NOT do this work yourself. Do NOT edit dbt files directly.
 Wait per SKILL.md Agent Wait Protocol. End the turn only if spawn tool results returned live agent ids (`run_in_background=true`). If this turn spawned nothing, do not wait.
   NEVER use `bash sleep`, `bash_output`, or `cortex agent output` CLI.
@@ -359,8 +359,8 @@ Update tracking (SEQUENTIAL):
   uv run ... track_status.py update-dbt per project
 
 - [ ] **Step {P}.4: Phase Completion**
-Merge learnings: read dbt_learnings_*.md, append to fix_log.md.
-  Rebuild the EWI code index at the top of fix_log.md per reference/templates/fix-log-format.md.
+Merge learnings: read dbt_learnings_*.md, append to fix-log.md.
+  Rebuild the EWI code index at the top of fix-log.md per reference/templates/fix-log-format.md.
 Validation gate (MANDATORY — do NOT proceed to complete-phase until this passes):
   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
     validate-phase {SESSION_JSON} {P} --list-test-files
@@ -402,7 +402,7 @@ Use `team_create` tool: team_name="etl-fix-{package_name}-p{P}".
 - [ ] **Step {P}.2: Proc-Test-Gen Wave**
 Resume guard: if test_report.md already exists for ALL mapping procs
   (from a prior partial run), skip agent spawning and proceed to tracking update below.
-Spawn proc-test-gen agents (MANDATORY — UNCONDITIONAL — do NOT skip):
+Spawn one proc-test-gen agent per mapping proc (the fixer depends on its baseline):
 {for each mapping_proc:}
   - proc-test-gen-{proc_name}:
     Instruction: Read {SKILL_DIR}/proc-test-gen/SKILL.md
@@ -440,7 +440,7 @@ Update tracking (SEQUENTIAL):
   uv run ... track_status.py update {SESSION_JSON} {PROC} --status {status_from_artifact}
 
 - [ ] **Step {P}.4: Phase Completion**
-Merge learnings: read all proc fix records, append NEW patterns to fix_log.md.
+Merge learnings: read all proc fix records, append NEW patterns to fix-log.md.
 Validation gate (MANDATORY — do NOT proceed to complete-phase until this passes):
   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
     validate-phase {SESSION_JSON} {P} --list-test-files
@@ -481,7 +481,7 @@ Mark this step [x] and continue with Step {NEXT_P}.1.
 
 - [ ] All elements across all phases have terminal status
 - [ ] No remaining `!!!RESOLVE EWI!!!` markers (except expected skip/needs-user elements)
-- [ ] fix_log.md consistent across phases
+- [ ] fix-log.md consistent across phases
 - [ ] session_status.json matches artifact state
 - [ ] Summary report generated
 
@@ -505,12 +505,12 @@ Read session_status.json — verify ALL elements across ALL phases have terminal
     needs-user, auto-fixed-needs-review, failed.
   ZERO elements may have status pending or orch-tested.
 Count remaining !!!RESOLVE EWI!!! markers in orchestration SQL.
-Read fix_log.md — verify no contradicting patterns across phases.
+Read fix-log.md — verify no contradicting patterns across phases.
 Verify each phase directory has: baseline + batch + learnings artifacts for all batches.
 
 - [ ] **Step {P}.2: Generate Report**
 Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/generate_report.py {PACKAGE_FOLDER}
-Output: artifacts/report.html
+Output: {UNIT}/stabilization/report.html
 This step is MANDATORY — every migration must produce an HTML report.
 
 - [ ] **Step {P}.3: Migration Complete**

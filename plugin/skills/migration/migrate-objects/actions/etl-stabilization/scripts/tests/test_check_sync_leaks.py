@@ -72,6 +72,91 @@ class TestCheckSyncLeaks(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("no leaks found in 2 files", result.stdout)
 
+    def test_public_schema_not_flagged(self) -> None:
+        """PUBLIC is SnowConvert's own default output schema -- flagging it as a leak
+        would fail every converted file that qualifies a UDF with it (SNOW-4221302)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "session_status.json"
+            session = base_session()
+            session["test_environment"] = {"database": "TEST_DB", "schema": "PUBLIC"}
+            write_json(status_path, session)
+            model = Path(tmp) / "model.sql"
+            model.write_text("SELECT PUBLIC.TO_NUMBER_UDF(x) FROM t;\n", encoding="utf-8")
+
+            result = run_script("check_sync_leaks.py", str(status_path), str(model))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_unit_prefixed_schema_without_phase_number_detected(self) -> None:
+        """The known-test-schema pattern must not be restricted to the orchestration
+        flavor's `ETL_FIX_P<N>_...` shape -- a unit-prefixed schema with no phase
+        number is just as much a leak (SNOW-4221302)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "session_status.json"
+            write_json(status_path, base_session())
+            model = Path(tmp) / "model.sql"
+            model.write_text("CREATE TABLE ETL_FIX_WF_OP_AR_ACCOMPRICE.TARGET (id INT);\n", encoding="utf-8")
+
+            result = run_script("check_sync_leaks.py", str(status_path), str(model))
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("ETL_FIX_WF_OP_AR_ACCOMPRICE", result.stdout)
+
+    def test_original_file_suppresses_preexisting_qualifier(self) -> None:
+        """A qualifier already present anywhere in the original file is
+        pre-existing, not a leak this sync introduced (SNOW-4221302)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "session_status.json"
+            session = base_session()
+            session["test_environment"] = {"database": "TEST_DB", "schema": "TEST_SCHEMA"}
+            write_json(status_path, session)
+
+            original = Path(tmp) / "model.original.sql"
+            original.write_text("SELECT * FROM TEST_DB.SOME_LEGACY_VIEW;\n", encoding="utf-8")
+            synced = Path(tmp) / "model.sql"
+            synced.write_text("SELECT * FROM TEST_DB.SOME_LEGACY_VIEW;\n", encoding="utf-8")
+
+            result = run_script(
+                "check_sync_leaks.py", str(status_path), "--original", str(original), str(synced)
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_inserted_line_does_not_make_a_preexisting_qualifier_a_leak(self) -> None:
+        """A qualifier already present anywhere in the original file is
+        pre-existing, not a leak this sync introduced (SNOW-4221302)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "session_status.json"
+            session = base_session()
+            session["test_environment"] = {"database": "TEST_DB", "schema": "TEST_SCHEMA"}
+            write_json(status_path, session)
+
+            original = Path(tmp) / "model.original.sql"
+            original.write_text("SELECT * FROM TEST_DB.SOME_LEGACY_VIEW;\n", encoding="utf-8")
+            synced = Path(tmp) / "model.sql"
+            synced.write_text("-- added\nSELECT * FROM TEST_DB.SOME_LEGACY_VIEW;\n", encoding="utf-8")
+
+            result = run_script(
+                "check_sync_leaks.py", str(status_path), "--original", str(original), str(synced)
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_original_file_does_not_suppress_newly_introduced_qualifier(self) -> None:
+        """Without a matching line in the original, the same qualifier is still a leak."""
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "session_status.json"
+            session = base_session()
+            session["test_environment"] = {"database": "TEST_DB", "schema": "TEST_SCHEMA"}
+            write_json(status_path, session)
+
+            original = Path(tmp) / "model.original.sql"
+            original.write_text("SELECT * FROM PROD_DB.SOME_LEGACY_VIEW;\n", encoding="utf-8")
+            synced = Path(tmp) / "model.sql"
+            synced.write_text("SELECT * FROM TEST_DB.SOME_LEGACY_VIEW;\n", encoding="utf-8")
+
+            result = run_script(
+                "check_sync_leaks.py", str(status_path), "--original", str(original), str(synced)
+            )
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("TEST_DB", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

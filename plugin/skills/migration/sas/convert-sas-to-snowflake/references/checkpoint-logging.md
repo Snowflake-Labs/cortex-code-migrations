@@ -37,8 +37,8 @@ Each line is a single complete JSON object (JSON Lines format — no array wrapp
 | Field | Type | Required | Meaning |
 |-------|------|----------|---------|
 | `ts` | string (ISO 8601 UTC) | Yes | When the checkpoint occurred |
-| `step` | string | Yes | Workflow step or phase (e.g. `"1"`, `"3"`, `"6a"`, `"phase_2"`, `"phase_5"`) |
-| `gate` | string or null | Yes | Gate name if this checkpoint corresponds to a gate (e.g. `"phase_3_snowflake_compile"`), else null |
+| `step` | string | Yes | Workflow step or phase (e.g. `"1"`, `"3"`, `"6a"`, `"static_check"`, `"t1"`, `"t2"`, `"t3"`) |
+| `gate` | string or null | Yes | Gate name if this checkpoint corresponds to a gate (e.g. `"t1_compile"`), else null |
 | `status` | string | Yes | `STARTED` \| `PASSED` \| `FAILED` \| `BLOCKED` \| `SKIPPED` \| `INFO` |
 | `artifacts_written` | string[] | No | Files written/updated at this checkpoint (basenames) |
 | `rows_affected` | integer or null | No | Row count when relevant (e.g. synthetic inserts, execution output) |
@@ -95,15 +95,15 @@ def append_checkpoint(output_dir, step, status, gate=None, artifacts=None, rows=
 | Step 5 (conversion) | `INFO` per batch, `PASSED` when all converted |
 | Step 6 (self-check) | `PASSED` |
 | Step 6a (artifact gate) | `PASSED` or `BLOCKED` |
-| Phase 1 (synthetic data) | `STARTED`, then `PASSED`/`BLOCKED` |
-| Phase 2 (LLM trace) | `STARTED`, then `PASSED`/`SKIPPED`/`BLOCKED` |
-| Phase 3 (compilation) | `STARTED`, then `PASSED`/`SKIPPED`/`BLOCKED` |
-| Phase 4 (Tier 2/3 execution) | `STARTED`, then `PASSED`/`SKIPPED`/`BLOCKED` |
-| Phase 5 (E2E orchestration) | `STARTED`, then `PASSED`/`SKIPPED`/`BLOCKED` |
+| Gate 0 (static check) | `PASSED`/`BLOCKED` |
+| T1 (compile) | `STARTED`, then `PASSED`/`SKIPPED`/`BLOCKED` |
+| T2 (unit test) | `STARTED`, `INFO` per batch, then `PASSED`/`SKIPPED`/`BLOCKED` |
+| T3 (end-to-end) | `STARTED`, then `PASSED`/`SKIPPED`/`BLOCKED` |
+| Repair attempt | `INFO` with file, class and change |
 | Step 10 (report) | `PASSED` |
 | Complete | `PASSED` with notes "conversion complete" |
 
-For credit-consuming phases (3, 4, 5), also log an `INFO` line capturing the user's consent decision (e.g. `notes: "Tier-2 gate: user approved"`).
+At Step 1, log one `INFO` line with the validation depth the user chose (e.g. `notes: "validation depth T2"`).
 
 At Step 3, the `PASSED` line should carry an assessment note capturing baseline consumption and
 reconciliation, e.g. `notes: "assessment consumed=true matched=8 mismatched=1 stale=false"` (or
