@@ -21,6 +21,8 @@ import json
 import warnings
 from pathlib import Path
 
+from bindable_token import unwrap_bindable_token
+
 from ..models.code_unit import TopLevelCodeUnit
 from ..models.object_reference import ObjectReference
 from ..na_utils import NA_VALUES, is_na
@@ -60,11 +62,12 @@ def _entry_full_name(entry: dict) -> str:
         if path:
             return path
     block = entry.get("source") or entry.get("target") or {}
-    parts = [
-        _bracket(v)
-        for v in (block.get("database", ""), block.get("schema", ""), block.get("name", ""))
-        if not is_na(v) and not is_na(v.strip("[]"))
-    ]
+    parts = []
+    for raw in (block.get("database", ""), block.get("schema", ""), block.get("name", "")):
+        segment = unwrap_bindable_token((raw or "").strip().strip("[]"))
+        if is_na(segment):
+            continue
+        parts.append(_bracket(segment))
     return ".".join(parts) if parts else "[]"
 
 

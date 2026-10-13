@@ -34,6 +34,7 @@ from typing import Any
 from ..conversion_status import is_etl as _is_etl
 from ..conversion_status import map_conversion_status as _map_conversion_status
 from .registry_loader import (
+    _entry_full_name,
     build_id_to_name_map,
     drop_temp_table_stubs,
     load_registry_entries,
@@ -107,7 +108,8 @@ def _canonical_name(entry: dict) -> str:
     (especially ``isMissing`` ones like ``Dash.U.value``) store it unbracketed,
     which causes downstream deduplication against ``build_id_to_name_map`` to
     fail. Reconstructing from the parts guarantees the bracketed form used
-    everywhere else in the pipeline.
+    everywhere else in the pipeline — including bindable-token unwrap so
+    overlay keys match ``build_id_to_name_map`` / ``_entry_full_name``.
 
     ETL units (``kind == "etl"``) have no ``source.database/schema/name``;
     their natural identifier is ``files.source.path`` (e.g. the ``.dtsx`` /
@@ -118,13 +120,8 @@ def _canonical_name(entry: dict) -> str:
             entry.get("files", {}).get("source", {}).get("path", "") or ""
         ).strip()
         return path or (entry.get("id") or "")
-    source = _source_or_target(entry)
-    parts = [
-        _bracket(v)
-        for v in (source.get("database", ""), source.get("schema", ""), source.get("name", ""))
-        if v and v.strip() and v.strip("[]")
-    ]
-    return ".".join(parts) if parts else ""
+    name = _entry_full_name(entry)
+    return "" if name == "[]" else name
 
 
 def _aggregate_etl_dependencies(entry: dict) -> tuple[list[dict], list[dict]]:
