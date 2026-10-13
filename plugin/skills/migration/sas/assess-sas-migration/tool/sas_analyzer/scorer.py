@@ -3,6 +3,7 @@ from typing import List, Dict
 from .parser import SASScript, SASBlock, BlockType
 from .constants import (
     BOILERPLATE_INDICATORS,
+    TIER3_STAT_PROCS,
     iter_countable_blocks,
 )
 
@@ -36,13 +37,8 @@ class ComplexityScorer:
     TIER3_PATTERNS = {
         'declare hash': 8,
         'call execute': 6,
-        'proc reg ': 6,
-        'proc glm ': 6,
-        'proc logistic ': 6,
-        'proc cluster ': 6,
-        'proc factor ': 6,
-        'proc phreg ': 6,
-        'proc lifetest ': 6,
+        # same canonical list the classifier tiers on, so a Tier-3 file never scores 0 for it
+        **{f'proc {p} ': 6 for p in TIER3_STAT_PROCS},
     }
 
     TIER2_PATTERNS = {

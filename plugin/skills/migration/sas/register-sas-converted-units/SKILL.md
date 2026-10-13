@@ -58,8 +58,8 @@ no AIM claims/waves. See `../INTEGRATION.md`; contract in `../references/cur-sch
    - stamps `codeStatus.conversion.status = "completed"`.
 3. **Report** attached counts and which units are now `procedure`/`function`
    (seedable) vs `table`/`view` (registered but not proc-tested).
-4. **Run the harness (self-consistency):** see `../convert-sas-to-snowflake/workflows/scai-test-selfconsistency.md`.
-   In short: `scai test seed --where "source.platform = 'sas'"` then
+4. **Run the harness (self-consistency):**
+   `scai test seed --where "source.platform = 'sas'"` then
    `scai test validate` against Snowflake. Note: `scai test capture` from a source
    system is **not applicable** to SAS — the baseline is the converted code's own
    stable Snowflake run (or the convert skill's validation expected-outputs).

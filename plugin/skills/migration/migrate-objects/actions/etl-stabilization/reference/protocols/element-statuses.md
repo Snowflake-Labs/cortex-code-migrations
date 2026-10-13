@@ -23,6 +23,12 @@ Terminal statuses: `test-passed`, `fixed`, `no-fix-needed`, `skipped`, `needs-us
 
 Non-terminal statuses: `pending`, `orch-tested`. Elements with these statuses require further processing.
 
+**Final validation is stricter.** `needs-user`, `test-failed`, and `failed` are terminal for ordinary
+phase completion (the element stopped changing), but they are not *resolved* — a question is still
+open, or a fix never landed. A `final-validation`/`validation` phase requires every element in the
+narrower completion-eligible set: `test-passed`, `fixed`, `no-fix-needed`, `skipped`,
+`auto-fixed-needs-review`. `track_status.py complete-phase` enforces this for those scopes.
+
 **Status transitions:**
 ```
 pending → orch-tested         (test-gen: baseline run complete)

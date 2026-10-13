@@ -12,6 +12,12 @@ EMPTY_COPY = (
     "No conversion issues. AIM did not record SSC-EWI issues on in-scope code units."
 )
 SUPPORT_EMAIL = "aim-support@snowflake.com"
+AI_FIX_DISCLAIMER = (
+    "This Recommended Fix was produced by an AI assistant and has not been fully validated. "
+    "Treat it as a starting hypothesis only: it is not an acceptance criterion and not the only "
+    "correct remediation. Research is required for this specific issue to confirm the correct fix "
+    "before implementation."
+)
 SHARE_FORM_URL = (
     "https://docs.google.com/forms/d/e/1FAIpQLSepvYNbuCp-sE-PCeqG2kWFuGNZjNUHGGI5WW6SLlo8B9_W6w/viewform?usp=dialog"
 )
@@ -336,7 +342,7 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
             + ">"
             + "<td colspan=\"7\">"
             + f"<h4>Problem Description</h4><p>{html.escape(_text(row.get('problem_description')))}</p>"
-            + f"<h4>Recommended Fix</h4><p>{html.escape(_text(row.get('recommended_fix')))}</p>"
+            + f"<h4>Recommended Fix</h4><p>{html.escape(customer_recommended_fix(row.get('recommended_fix')))}</p>"
             + _code_sample(
                 detail_id + "-source",
                 source_heading,
@@ -440,6 +446,19 @@ def _zip_href(zip_path: str) -> str | None:
 
 def _text(value: object) -> str:
     return "" if value is None else str(value)
+
+
+def customer_recommended_fix(value: object) -> str:
+    """The researched fix. The AI disclaimer stays in the Jira CSV, not the report."""
+    kept: list[str] = []
+    for line in _text(value).replace(AI_FIX_DISCLAIMER, "").splitlines():
+        plain = line.replace(">", " ").replace("*", "").replace("⚠️", "").strip()
+        if "AI-generated recommendation" in plain and "not a mandatory fix" in plain:
+            continue
+        if line.strip() == ">":
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
 
 
 def _int(value: object) -> int:

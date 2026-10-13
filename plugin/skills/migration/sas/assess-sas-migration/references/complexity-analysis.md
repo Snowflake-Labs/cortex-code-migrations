@@ -19,9 +19,9 @@ level (e.g. "Statistical modeling appears in 4 files") rather than listing every
 
 | Construct | What to grep for | Why it's complex |
 |-----------|------------------|------------------|
-| HASH objects | `declare hash`, `hash(` | No SQL equivalent; in-memory key lookup |
+| HASH objects | `declare hash` **plus** a mutation/iteration method (`.add(`, `.replace(`, `.output(`, `hiter`) | Stateful in-memory table; a lookup-only hash is a JOIN (Tier 1) |
 | Dynamic code gen | `call execute` | Runtime-generated SAS; Tier 2 procedural rewrite (EXECUTE IMMEDIATE) |
-| Statistical PROCs | `proc reg`, `proc glm`, `proc logistic`, `proc cluster`, `proc factor`, `proc phreg`, `proc lifetest`, `proc mixed`, `proc genmod`, `proc nlmixed` | Requires ML/stats libraries, not SQL |
+| Statistical PROCs | canonical list in `../../references/block-tiering-spec.md` (incl. `hp*`) | Requires ML/stats libraries, not SQL |
 | Stateful DO loops | `do until` / `do while` + `symput` or many `call ` | External state mutation across iterations |
 
 ### Tier 2 signals (procedural — Stored Procedure)

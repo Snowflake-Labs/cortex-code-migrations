@@ -136,6 +136,19 @@ out=$(
 printf '%s\n' "$out" | grep -Fq "BIN=$other" || fail "wrapper export missed: $out"
 printf '%s\n' "$out" | grep -Fq "ARGS=hook agent-ledger" || fail "wrapper argv: $out"
 
+# A still-executable cache from a previous /tmp session must not beat SCAI_CLI.
+stale="$test_root/stale-mcp"
+cp "$bin" "$stale"
+chmod +x "$stale"
+mkdir -p "$(dirname "$cache")"
+printf '%s\n' "$stale" >"$cache"
+out=$(
+  env -u MIGRATION_MCP_SERVER_BIN SCAI_CLI="$wrapper" PATH="/usr/bin:/bin" \
+    sh "$hook" stamp-agent-id </dev/null
+)
+printf '%s\n' "$out" | grep -Fq "BIN=$other" || fail "SCAI_CLI lost to stale cache: $out"
+grep -Fxq "$other" "$cache" || fail "live locate did not rewrite cache: $(cat "$cache")"
+
 # No scai yet (first session): silent success, not a Cortex hook failure.
 clear_cache
 out=$(

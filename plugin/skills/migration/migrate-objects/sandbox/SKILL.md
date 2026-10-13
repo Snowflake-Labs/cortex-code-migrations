@@ -1,6 +1,6 @@
 ---
 name: sandbox
-description: Private AIMSBX catalogs for procedure tests (`deploySandbox`), on-demand private catalogs when a view/function needs fixture data reshaped, and shared source-catalog setup for tables, views, and functions (`setupSandbox`). Triggers: deploySandbox, setupSandbox, setup_sandbox, procedure sandbox, AIMSBX, make_testable.
+description: Private AIMSBX catalogs for procedure tests (`createIsolatedSandbox`), on-demand private catalogs when a view/function needs fixture data reshaped, and shared source-catalog deploy for tables, views, functions, and (after tests) procedures (`deployCommonSandbox`). Triggers: createIsolatedSandbox, deployCommonSandbox, setup_sandbox, procedure sandbox, AIMSBX, make_testable.
 parent_skill: migrate-objects
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -12,13 +12,14 @@ child that matches `next_task`.
 
 | `next_task` | Guide |
 |-------------|-------|
-| `setupSandbox` | [setup/SKILL.md](setup/SKILL.md) |
-| `deploySandbox` | [deploy/SKILL.md](deploy/SKILL.md) |
+| `deployCommonSandbox` | [DEPLOY_COMMON.md](DEPLOY_COMMON.md) |
+| `createIsolatedSandbox` | [CREATE_ISOLATED.md](CREATE_ISOLATED.md) |
 
-`deploy` (common catalogs) is a later task, after tests. `finish` drops the
+`deploy` (Snowflake common catalogs) is a later task. Procedures reach
+`deployCommonSandbox` after tests, then `deploy`. `finish` drops the
 `AIMSBX_*` catalogs. Do not `configure(snowflake_database=…)` onto a sandbox
 name — the session is shared across walkers.
 
 Views and functions stay on the shared catalogs unless fixture data blocks
 tests. Then sandbox_specialist calls `deploy(sandbox=true)` for **that**
-object only. The machine does not add `deploySandbox` to their walk.
+object only. The machine does not add `createIsolatedSandbox` to their walk.

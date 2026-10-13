@@ -56,6 +56,8 @@ Say how many objects you claimed out of the `total_available` ready ones — a p
 
 Surface any error and stop without retry.
 
+The begin payload is `{status, action, actual_size}` plus `reclaimed_from_other_sessions` when objects were taken over. It does **not** include `my_objects_summary` — pull claim status with `migration_status(mode="my_objects_summary")` if you need it.
+
 If the response includes `reclaimed_from_other_sessions`, tell the user which objects were re-claimed from a previous session (include the session ID and timestamp) before proceeding with any deployment or migration work.
 
 After a successful claim, call

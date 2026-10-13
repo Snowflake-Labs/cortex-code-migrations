@@ -17,12 +17,16 @@ Call `configure()` to retrieve the current configuration.
 
 Check the configured source dialect first.
 
-- **Snowflake source** → require `snowflake_connection` and
-  `snowflake_database`; no separate `source_connection` or DEW is required.
-  Confirm the connection/database with the user.
+- **Snowflake source** → require `snowflake_connection` and a target;
+  no separate `source_connection` or DEW is required. Confirm the
+  connection/target with the user.
 - **Other sources** → require `snowflake_connection`, `source_connection`, and
-  `snowflake_database`. Confirm all three; collect and configure any missing
-  values.
+  a target. Confirm all three; collect and configure any missing values.
+
+The target is `snowflake_targets` when `configure()` reports it (from
+`database-bindings.yaml`), otherwise `snowflake_database`. Only a project
+with neither needs `configure(snowflake_database=…)`; never re-pass one that
+is already set.
 
 Use the shared infrastructure configured during setup. Do not ask local vs
 SPCS again, choose a pool, or start/repair infrastructure from a per-object

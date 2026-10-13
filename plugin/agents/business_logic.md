@@ -25,7 +25,7 @@ Analyze the source code and produce rows that:
 - Cover each `CASE WHEN` arm.
 - Hit the happy path with typical values.
 - Trigger early-return conditions.
-- Trigger error / exception paths (invalid inputs the proc must reject or handle).
+- Trigger error / exception paths the source handles (a branch that returns a status, a `TRY`/`CATCH` that continues, an `IF` that guards a call). Do not emit an input that raises an unhandled engine error. If an unguarded `RIGHT`, `LEFT`, or `SUBSTRING` length is `LEN(arg) - N` or `LENGTH(arg) - N`, do not emit a non-null string for `arg` shorter than N.
 
 **Do not query the source database.** Generate rows purely from code analysis. For parameter values that depend on data (e.g. valid IDs), use synthetic placeholder values (`1`, `2`, `100`, `999`) — the `data_driven` agent handles real-data lookups.
 

@@ -49,14 +49,11 @@ validationConfiguration:
 
 Restart the worker after edits (`data_infrastructure` / `scai data worker start`).
 
-`scai data worker generate-config` typically writes `[connections.source.<engine>]` as `connection_name = "…"` and hydrates that name from `~/.snowflake/scai/connections/<engine>.toml` at start. Extra dump keys placed **next to** `connection_name` in `.scai/config/dew_configuration.toml` are dropped. Do **one** of:
+`scai data worker generate-config --extraction-strategy <strategy>` writes `[connections.source.<engine>]` as `connection_name` plus that strategy's dump keys. Bucket, role, host, and credential values are `<TOKEN>` placeholders. `worker start` hydrates `connection_name` from `~/.snowflake/scai/connections/<engine>.toml` and copies the allow-listed dump keys (`unload_*`, `export_data_*`, `write_nos_*`, `dbms_cloud_*`, `cet_as_*`) into the rebuilt source section. Keys outside that allow-list are still dropped. Do not put those dump values on the snowct connection profile.
 
-1. **Named connection** — keep `connection_name` and add the dump keys (`unload_*`, `export_data_*`, `write_nos_*`, `dbms_cloud_*`, `cet_as_*`) on that connection in `~/.snowflake/scai/connections/<engine>.toml`.
-2. **Inline** — remove `connection_name` and write the full worker source section in `.scai/config/dew_configuration.toml` (worker key names from [worker-config-reference.md](../../../data-infrastructure/references/worker-config-reference.md), plus the dump keys below).
+`[connections.target.s3]` / `.gcs` / `.blob` sit outside the source section, so hydration does not rebuild them.
 
-`[connections.target.s3]` / `.gcs` / `.blob` are not name-hydrated; those stay in the project worker file.
-
-The snippets below are the dump keys only. Put them on the snowct connection or on an inlined worker source section, not beside `connection_name`.
+The snippets below are the dump keys `generate-config` emits. Path prefixes are `<PREFIX>`: that path inside the bucket or container, and the Snowflake external stage URL has to point at it. Replace the placeholders; leave the keys beside `connection_name`.
 
 ### Redshift `unload`
 
@@ -64,8 +61,8 @@ The snippets below are the dump keys only. Put them on the snowct connection or 
 [connections.source.redshift]
 # … generated host/credentials …
 unload_s3_bucket = "my-migrations-bucket"
+unload_s3_prefix = "<PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
 unload_iam_role_arn = "arn:aws:iam::123456789012:role/RedshiftUnloadRole"
-# unload_s3_prefix = "dv-signatures"
 ```
 
 IAM role must trust Redshift and allow `s3:PutObject` (and abort multipart) on the prefix.
@@ -76,7 +73,7 @@ IAM role must trust Redshift and allow `s3:PutObject` (and abort multipart) on t
 [connections.source.bigquery]
 # … project_id / credentials_file …
 export_data_gcs_bucket = "my-migrations-bucket"
-export_data_gcs_prefix = "dv-signatures"
+export_data_gcs_prefix = "<PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
 export_data_file_format = "parquet"
 export_data_overwrite = true
 ```
@@ -89,7 +86,7 @@ The BigQuery job identity needs create-object on the prefix. Snowflake’s GCS s
 [connections.source.oracle]
 # … generated …
 dbms_cloud_credential_name = "AWS_S3_CRED"
-dbms_cloud_file_uri_prefix = "https://my-migrations-bucket.s3.us-east-1.amazonaws.com/dv-signatures"
+dbms_cloud_file_uri_prefix = "<FILE_URI_PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
 ```
 
 Oracle needs `EXECUTE` on `DBMS_CLOUD` and a credential for that URI. See `dmvf/data-exchange-agent/docs/oracle-dbms-cloud-local-setup.md`.
@@ -101,7 +98,7 @@ Oracle needs `EXECUTE` on `DBMS_CLOUD` and a credential for that URI. See `dmvf/
 # … generated …
 write_nos_location_scheme = "/s3/"          # or /az/ or /gs/
 write_nos_location_host = "my-migrations-bucket.s3.amazonaws.com"
-# write_nos_location_container = "dv-signatures"
+write_nos_location_container = "<PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
 write_nos_function_mapping = "MY_NOS_MAPPING"   # preferred over inline keys
 ```
 
@@ -111,7 +108,7 @@ write_nos_function_mapping = "MY_NOS_MAPPING"   # preferred over inline keys
 [connections.source.sqlserver]   # or [connections.source.azure_synapse]
 cet_as_external_data_source = "MyBlobDataSource"
 cet_as_file_format = "PARQUET_FF"
-# cet_as_path_prefix = "dv-signatures"
+cet_as_path_prefix = "<PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
 ```
 
 CETAS is rejected on Azure SQL Database. Fall back to `cloud_direct`.
@@ -123,12 +120,12 @@ Configure **one** landing cloud. If several sections are present, the worker pre
 ```toml
 [connections.target.s3]
 bucket_name = "my-migrations-bucket"
-# prefix = "dv-signatures"
+prefix = "<PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
 # profile_name = "my-profile"
 
 # [connections.target.gcs]
 # bucket_name = "my-gcs-bucket"
-# prefix = "dv-signatures"
+# prefix = "<PREFIX>"
 
 # [connections.target.blob]
 # container_name = "my-container"

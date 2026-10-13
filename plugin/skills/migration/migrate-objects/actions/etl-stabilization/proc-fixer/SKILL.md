@@ -76,7 +76,7 @@ from proc-test-gen and are treated as fixed inputs the fix must satisfy — neve
 ### Output Location
 
 - The **repaired converted `.sql`** — edited in place via block-replace (boundary markers preserved).
-- `<UNIT>/stabilization/tracking/fix_log.md` (Main Mode) — one record per fix attempt, successes and failures.
+- `<UNIT>/stabilization/tracking/fix-log.md` (Main Mode) — one record per fix attempt, successes and failures.
   Task Mode writes fix records to its learnings artifact instead; the orchestrator merges them.
 
 ## Tooling (headless, no IDE / no `snowflake_sql_execute`)
@@ -195,7 +195,7 @@ For each defective block, in dependency order:
 
 ### Step 5: Report
 
-Append a fix record to `<UNIT>/stabilization/tracking/fix_log.md` (Main Mode) or the learnings artifact
+Append a fix record to `<UNIT>/stabilization/tracking/fix-log.md` (Main Mode) or the learnings artifact
 (Task Mode):
 
 ```markdown

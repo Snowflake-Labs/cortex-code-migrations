@@ -86,7 +86,7 @@ Password will be prompted securely.
 **When to use:**
 - All Oracle connections (only method available)
 
-**Full inline example with all options:**
+**Inline example with optional settings:**
 ```bash
 scai connection add-oracle \
   --source-connection my-oracle \
@@ -95,7 +95,6 @@ scai connection add-oracle \
   --port 1521 \
   --service-name ORCL \
   --user myuser \
-  --password mypassword \
   --connection-timeout 60
 ```
 
@@ -145,7 +144,7 @@ The worker connects with ODP.NET using the same credentials as `scai connection 
 - `SELECT` on tables (and views) being migrated or validated
 - Read data dictionary views needed for schema/metadata extraction (typical: `SELECT_CATALOG_ROLE` or explicit grants on `ALL_*` / `DBA_*` views as required by your security model)
 
-Network: the worker host must reach the Oracle listener (`host`:`port`). For SPCS workers, configure `EXTERNAL_ACCESS_INTEGRATIONS` for the database host and the NuGet driver download endpoint (see [`../../data-infrastructure/worker-spcs/SKILL.md`](../../data-infrastructure/worker-spcs/SKILL.md)).
+Network: the worker host must reach the Oracle listener (`host`:`port`). For SPCS workers, configure `EXTERNAL_ACCESS_INTEGRATIONS` for the database host and the NuGet driver download endpoint (see [`../../../data-infrastructure/worker-spcs/SKILL.md`](../../../data-infrastructure/worker-spcs/SKILL.md)).
 
 Worker TOML `[connections.source.oracle].database` must be the **service name**, matching `source.databaseName` in migration/validation workflow YAML.
 

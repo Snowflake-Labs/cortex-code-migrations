@@ -1,6 +1,6 @@
 # SQL Server Query Logging
 
-Capture real stored procedure and function invocations from SQL Server using Extended Events. The captured query logs can be exported as CSV and fed into the [baseline-capture](../baseline-capture/SKILL.md) tool to generate test configs.
+Capture real stored procedure and function invocations from SQL Server using Extended Events. The captured query logs can be exported as CSV and fed to `scai test seed --execution-log` (see [baseline-capture/SWARM.md](../baseline-capture/SWARM.md)) to generate test configs.
 
 ## Enable Query Logging
 

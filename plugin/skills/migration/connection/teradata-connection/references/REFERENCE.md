@@ -112,7 +112,7 @@ scai connection add-teradata \
 - Organization uses LDAP-backed authentication for Teradata
 - Credentials are managed by Active Directory or similar LDAP provider
 
-**Full inline example with all options:**
+**Inline example with optional settings:**
 ```bash
 scai connection add-teradata \
   --source-connection my-teradata \
@@ -121,9 +121,10 @@ scai connection add-teradata \
   --port 1025 \
   --database MY_DB \
   --user dbc \
-  --password mypassword \
   --connection-timeout 60
 ```
+
+The CLI prompts for the password securely. Never include it in the command line.
 
 ## Connection String Format
 
@@ -175,7 +176,7 @@ The Data Exchange Agent worker connects with **`teradatasql`** (preferred) or Te
 - `SELECT` on tables (and views) being migrated or validated
 - Read catalog/metadata needed for schema extraction (typical: `DBC` dictionary access or explicit grants as required by your security model)
 
-Network: the worker host must reach the Teradata listener (`host`:`port`, default 1025). For SPCS workers, configure `EXTERNAL_ACCESS_INTEGRATIONS` for the database host and the NuGet driver download endpoint (see [`../../data-infrastructure/worker-spcs/SKILL.md`](../../data-infrastructure/worker-spcs/SKILL.md)).
+Network: the worker host must reach the Teradata listener (`host`:`port`, default 1025). For SPCS workers, configure `EXTERNAL_ACCESS_INTEGRATIONS` for the database host and the NuGet driver download endpoint (see [`../../../data-infrastructure/worker-spcs/SKILL.md`](../../../data-infrastructure/worker-spcs/SKILL.md)).
 
 Worker TOML `[connections.source.teradata].database` must be the **database name**, matching `source.databaseName` in migration/validation workflow YAML.
 

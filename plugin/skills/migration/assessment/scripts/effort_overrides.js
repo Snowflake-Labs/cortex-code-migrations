@@ -139,10 +139,11 @@
   }
 
   /**
-   * Hours for a banded row: the sum over bands of objects times rate.
+   * Hours for a banded row that has no repetition groups: the sum over bands of
+   * objects times rate. Testing rows and v1 artifacts price this way.
    *
-   * The same arithmetic the .NET calculator ran, which is why the two agree
-   * without this module having to know anything about how the rates were chosen.
+   * A Code Conversion row that published groups uses priceRepetition instead, so
+   * a rate edit keeps the same discount the .NET calculator applied.
    */
   function priceBands(counts, rates) {
     return round4(
@@ -150,6 +151,26 @@
         return total + numberOr(counts[band], 0) * numberOr(rates[band], 0);
       }, 0),
     );
+  }
+
+  /**
+   * Hours for a Code Conversion row after a rate edit. Uses the groups and the
+   * discount the artifact already published, so an override cannot fall back to
+   * a linear count × rate and drop the repetition discount.
+   */
+  function priceRepetition(row, rates) {
+    var repetition = row.repetition;
+    var first = numberOr(repetition.first_full_price_count, 1);
+    var discount = numberOr(repetition.discount_factor, 1);
+    var total = (repetition.groups || []).reduce(function (sum, group) {
+      var rate = numberOr(rates[group.band], 0);
+      var count = numberOr(group.count, 0);
+      var hours = group.full_price
+        ? count * rate
+        : rate * (Math.min(count, first) + discount * Math.max(0, count - first));
+      return sum + hours;
+    }, 0);
+    return round4(total);
   }
 
   /** Which bands of a row a user may edit: the ones its objects can land in. */
@@ -229,7 +250,7 @@
         return Object.assign({}, row, {
           custom_band_rates: customRates,
           custom_estimated_hours: overridden
-            ? priceBands(row.band_counts, customRates)
+            ? (row.repetition ? priceRepetition(row, customRates) : priceBands(row.band_counts, customRates))
             : row.estimated_hours,
           custom_flat_hours: null,
           is_overridden: overridden,

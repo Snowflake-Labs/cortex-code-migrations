@@ -39,7 +39,7 @@ import traceback
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote as url_quote
 
 _scripts_dir = str(Path(__file__).resolve().parent)
@@ -969,29 +969,77 @@ def _temporal_table_key(name: str) -> str:
     return name.replace('[', '').replace(']', '').lower()
 
 
-def _count_temporal_tables(overview_stats: Dict, missing_objects_data: Dict) -> int:
-    """SQL Server #/## temp tables: workload objects plus missing references.
+def _count_temporal_tables(overview_stats: Dict) -> int:
+    """SQL Server #/## temp tables among the workload's objects.
 
-    A missing temp table the waves JSON already lists as an object (the
-    registry-synthesized mode emits ``isMissing`` entries in ``objects[]``) is
-    counted once, the way the All Objects table lists it once.
+    The Overview shows them as a subset of TABLEs, so a temp table known only
+    as a missing reference is left out: it is not in Total Objects either.
+    A missing temp table the waves JSON lists in ``objects[]`` (the
+    registry-synthesized ``isMissing`` entries) is an object, so it counts.
     """
     overview_stats = overview_stats or {}
     names = overview_stats.get('temporal_table_names')
     if names is None:
-        # Stats built without names: nothing to dedupe against.
-        keys = set()
-        count = overview_stats.get('temporal_tables_count', 0)
-    else:
-        keys = {_temporal_table_key(n) for n in names}
-        count = len(keys)
-    for item in (missing_objects_data or {}).get('missing_objects', []):
-        ref_name = item.get('referenced', '') if isinstance(item, dict) else str(item)
-        key = _temporal_table_key(ref_name)
-        if key.rsplit('.', 1)[-1].startswith('#') and key not in keys:
-            keys.add(key)
-            count += 1
-    return count
+        return overview_stats.get('temporal_tables_count', 0)
+    return len({_temporal_table_key(n) for n in names})
+
+
+_WORKLOAD_INVENTORY_LABELS = {
+    "PARAMETER_REF": "PARAMETER REFERENCES",
+}
+_PARAMETER_REFERENCES_TOOLTIP = (
+    "Object names in scripts and mappings that still contain a parameter, "
+    "so the referenced object could not be identified."
+)
+
+
+def _render_workload_inventory_cards(
+    overview_stats: Dict, total_objects: int, temporal_tables_count: int
+) -> str:
+    """The Workload Inventory cards: Total Objects, then one card per type.
+
+    Temporal and external tables are subsets of TABLEs, already in Total
+    Objects, so they are lines inside the TABLEs card rather than cards of
+    their own; the per-type cards then add up to Total Objects. Most labels
+    are the category plus a trailing "s"; PARAMETER_REF uses a display name
+    and a tooltip, and its category key is unchanged.
+    """
+    overview_stats = overview_stats or {}
+    objects_by_type = overview_stats.get('objects_by_type', {}) or {}
+    external_tables_count = overview_stats.get('external_tables_count', 0) or 0
+    table_subsets = []
+    if external_tables_count > 0 and 'EXTERNAL TABLE' not in objects_by_type:
+        table_subsets.append((external_tables_count, 'external'))
+    if temporal_tables_count > 0:
+        table_subsets.append((temporal_tables_count, 'temporal'))
+
+    cards = [f'''
+                <div class="effort-card">
+                    <div class="effort-card-num">{overview_stats.get('total_objects', total_objects)}</div>
+                    <div class="effort-card-lbl">Total Objects</div>
+                    <div class="effort-card-lbl">In {overview_stats.get('total_waves', 'N/A')} Waves</div>
+                </div>
+                ''']
+    for obj_type, count in objects_by_type.items():
+        subset_html = ''
+        if obj_type.upper() == 'TABLE':
+            subset_html = ''.join(
+                f'''
+                    <div class="effort-card-sub">{n} of {count} are {kind} tables</div>'''
+                for n, kind in table_subsets
+            )
+        label = _WORKLOAD_INVENTORY_LABELS.get(obj_type, f"{obj_type}s")
+        tooltip = ''
+        if obj_type == "PARAMETER_REF":
+            escaped = html_escape_module.escape(_PARAMETER_REFERENCES_TOOLTIP, quote=True)
+            tooltip = f' data-tooltip="{escaped}"'
+        cards.append(f'''
+                <div class="effort-card"{tooltip}>
+                    <div class="effort-card-num">{count}</div>
+                    <div class="effort-card-lbl">{html_escape_module.escape(str(label))}</div>{subset_html}
+                </div>
+                ''')
+    return ''.join(cards)
 
 
 def load_overview_stats(
@@ -1163,6 +1211,15 @@ def generate_multi_report(
                 default_tab = 'etl'
         except Exception as e:
             print(f"Warning: Could not load SSIS data: {e}", file=sys.stderr)
+
+    # The Overview counts ETL units from the waves JSON (registry); hand the
+    # SSIS ones to the ETL Report so it counts and lists the same packages.
+    ssis_registry_packages = None
+    if has_ssis and waves_json and WAVES_SUPPORT:
+        try:
+            ssis_registry_packages = WavesJsonAdapter(Path(waves_json)).ssis_packages()
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"Warning: Could not read SSIS packages from waves JSON: {exc}", file=sys.stderr)
 
     # Load Informatica data
     informatica_data = None
@@ -1391,6 +1448,7 @@ def generate_multi_report(
         waves_info=waves_info,
         has_ssis=has_ssis,
         ssis_json=ssis_json if has_ssis else None,
+        ssis_registry_packages=ssis_registry_packages,
         has_anti_patterns=has_anti_patterns,
         anti_patterns_json=anti_patterns_json if has_anti_patterns else None,
         data_lineage_json=data_lineage_json,
@@ -1443,41 +1501,6 @@ def generate_multi_report(
     print(f"  open {output_file}")
 
 
-_WORKLOAD_INVENTORY_LABELS = {
-    "PARAMETER_REF": "PARAMETER REFERENCES",
-}
-_PARAMETER_REFERENCES_TOOLTIP = (
-    "Object names in scripts and mappings that still contain a parameter, "
-    "so the referenced object could not be identified."
-)
-
-
-def _workload_inventory_type_cards(objects_by_type, extra_after_table=""):
-    """One Workload Inventory card per object type.
-
-    Most labels are the category plus a trailing "s". PARAMETER_REF uses a
-    display name and a tooltip; the category key itself is unchanged.
-    """
-    cards = []
-    for obj_type, count in objects_by_type.items():
-        label = _WORKLOAD_INVENTORY_LABELS.get(obj_type, f"{obj_type}s")
-        tooltip = ""
-        if obj_type == "PARAMETER_REF":
-            escaped = html_escape_module.escape(_PARAMETER_REFERENCES_TOOLTIP, quote=True)
-            tooltip = f' data-tooltip="{escaped}"'
-        cards.append(
-            f'''
-                <div class="effort-card"{tooltip}>
-                    <div class="effort-card-num">{count}</div>
-                    <div class="effort-card-lbl">{html_escape_module.escape(label)}</div>
-                </div>
-            '''
-        )
-        if str(obj_type).upper() == "TABLE":
-            cards.append(extra_after_table)
-    return "".join(cards)
-
-
 def generate_html_template(
     default_tab: str,
     has_exclusion: bool,
@@ -1522,6 +1545,8 @@ def generate_html_template(
     testing_readiness: Any = None,
     data_migration_readiness: Any = None,
     assessment_name: str = "",
+    ssis_registry_packages: Optional[List[Dict[str, str]]] = None,
+
     initial_active_tab: str = "journey",
     initial_discovery_tab: str = "lineage",
     project_dir: Path = None,
@@ -1700,19 +1725,8 @@ def generate_html_template(
             </div>
         '''
 
-    temporal_tables_count = _count_temporal_tables(overview_stats, missing_objects_data)
+    temporal_tables_count = _count_temporal_tables(overview_stats)
 
-    temporal_tables_card_html = ''
-    if temporal_tables_count > 0:
-        temporal_tables_card_html = f'''
-                <div class="effort-card">
-                    <div class="effort-card-num">{temporal_tables_count}</div>
-                    <div class="effort-card-lbl">Temporal Tables</div>
-                </div>
-        '''
-
-    # External tables (only render if present)
-    external_tables_count = overview_stats.get('external_tables_count', 0) if overview_stats else 0
     source_dialect = (overview_stats.get('source_dialect', '') if overview_stats else '') or ''
     source_dialect_json = json.dumps(source_dialect)
     source_dialect_display = 'SQL Server' if source_dialect == 'Transact' else source_dialect
@@ -1786,16 +1800,6 @@ def generate_html_template(
             )
         )
 
-    external_tables_card_html = ''
-    objects_by_type = overview_stats.get('objects_by_type', {}) if overview_stats else {}
-    if external_tables_count > 0 and 'EXTERNAL TABLE' not in objects_by_type:
-        external_tables_card_html = f'''
-                <div class="effort-card">
-                    <div class="effort-card-num">{external_tables_count}</div>
-                    <div class="effort-card-lbl">External Tables</div>
-                </div>
-        '''
-
     has_effort_tab = bool(effort_assessment)
     effort_section_b_html = (
         render_overview_section_b_html(effort_assessment) if effort_assessment else ""
@@ -1850,11 +1854,6 @@ def generate_html_template(
         else ""
     )
 
-    workload_inventory_type_cards = _workload_inventory_type_cards(
-        overview_stats.get("objects_by_type", {}) if overview_stats else {},
-        external_tables_card_html + temporal_tables_card_html,
-    )
-
     # Overview tab HTML
     overview_html = f"""
         <!-- Overview Tab -->
@@ -1885,13 +1884,7 @@ def generate_html_template(
             </h2>
             
             <div class="effort-cards" style="margin-bottom: 40px;">
-                <div class="effort-card">
-                    <div class="effort-card-num">{overview_stats.get('total_objects', total_objects_excl)}</div>
-                    <div class="effort-card-lbl">Total Objects</div>
-                    <div class="effort-card-lbl">In {overview_stats.get('total_waves', 'N/A')} Waves</div>
-                </div>
-                
-                {workload_inventory_type_cards}
+                {_render_workload_inventory_cards(overview_stats, total_objects_excl, temporal_tables_count)}
             </div>
 
             {effort_section_b_html}
@@ -2123,7 +2116,11 @@ def generate_html_template(
     ssis_css = ""
     if has_ssis and SSIS_SUPPORT and ssis_json:
         # Pass output_file so package pages can be generated in packages/ folder alongside it
-        ssis_content, ssis_js, ssis_css = generate_ssis_html_content(ssis_json, output_html_path=output_file)
+        ssis_content, ssis_js, ssis_css = generate_ssis_html_content(
+            ssis_json,
+            output_html_path=output_file,
+            registry_packages=ssis_registry_packages,
+        )
         ssis_html = ssis_content
     else:
         ssis_html = ""
@@ -2991,6 +2988,7 @@ def generate_html_template(
         #workload-inventory + .effort-cards .effort-card[data-tooltip] {{ cursor: help; }}
         .effort-card-num {{ font-size: 28px; font-weight: 800; color: #1E252F; }}
         .effort-card-lbl {{ font-size: 14px; font-weight: 400; color: #5D6A85; line-height: 1.25rem; margin-top: 4px; }}
+        .effort-card-sub {{ font-size: 12px; font-weight: 400; color: #5D6A85; line-height: 1.1rem; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #D5DAE4; }}
         .effort-table-wrap {{ overflow-x: auto; margin-bottom: 24px; }}
         .effort-table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; border: 1px solid #E2E8F0; }}
         .effort-table th, .effort-table td {{ padding: 0.75rem; text-align: left; border-bottom: 1px solid #E2E8F0; font-size: 0.85rem; color: #1E252F; }}

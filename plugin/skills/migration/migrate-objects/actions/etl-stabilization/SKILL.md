@@ -27,15 +27,23 @@ Fix SnowConvert ETL conversion gaps through phased execution with upfront unit a
 
 ### When the converted-output folder is not isolated
 
-The default contract above assumes one folder per unit. If instead you're handed a flat, whole-repository conversion output where a dbt project is referenced by more than one sibling unit's orchestration file (e.g. Informatica `SHORTCUT` mappings reused across workflows), do not edit the shared project in place:
+The default contract above assumes one folder per unit. If instead you're handed a flat, whole-repository conversion output where a dbt project **or a mapping procedure** is referenced by more than one sibling unit (e.g. Informatica `SHORTCUT` mappings, or a scripting workflow that `CALL`s a procedure another unit also calls), do not edit the shared project or procedure in place:
 
-1. Stage a real copy of the orchestration file and every dbt project it references under `{PACKAGE_FOLDER}/Output/ETL/{unit}/`. Treat the original location read-only until sync-back.
+1. Stage a real copy of the orchestration/workflow SQL **and every dbt project or mapping procedure it references** under `{PACKAGE_FOLDER}/Output/ETL/{unit}/`. A scripting-flavor unit stages every mapping procedure the workflow `CALL`s, not a dbt project. Treat the original location read-only until sync-back.
 2. If a staged dbt project's `packages.yml` has a local `path:` dependency, do **not** edit the path to account for the extra staging depth — that breaks canonical when synced back. Instead, symlink the shared-assets directory into the unit folder at the depth `packages.yml` already expects.
-3. Before syncing any fix back, run the leak gate on every touched file, then diff against the original — test-environment values (schema/database names, credentials) must never reach the canonical copy:
+3. Before syncing any fix back, run the leak gate on every touched file — test-environment values (schema/database names, credentials) must never reach the canonical copy. Pass `--original <path>` before a file to compare it against its pre-fix copy under `stabilization/original/`, so a qualifier that was already there (not introduced by this fix) isn't flagged:
    ```bash
-   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/check_sync_leaks.py {SESSION_JSON} <file1> [<file2> ...]
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/check_sync_leaks.py {SESSION_JSON} --original <original1> <file1> [--original <original2> <file2> ...]
    ```
    Do not copy until this exits 0.
+4. **Shared mapping procedure or dbt project sync-back:** run `sync_guard.py` for *every* shared mapping procedure or dbt project before writing to canonical — never `cp`/copy the staged file onto canonical directly, and never add a separate copy step after the guard call. Pass `--apply` so the guard performs the write itself, atomically, only once every check in the same process has already passed; this is what makes it impossible to accidentally copy after a failure (there is no second command whose execution depends on remembering `&&`):
+   ```bash
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/sync_guard.py \
+     --canonical <canonical_path> --backup <original_backup_path> --current <staged_path> \
+     --fix-log {UNIT}/stabilization/tracking/fix-log.md --element <element_name> \
+     --staged-root <Output/ETL> [--sibling <other_unit_staged_path> ...] --apply
+   ```
+   Pass `--staged-root` as the `Output/ETL` directory on every sync. The guard finds every other unit folder that holds the same relative path and compares it, including when canonical does not exist yet. `--sibling` remains for a copy that lives outside that tree. The guard compares four things — this unit's pre-fix backup, this unit's staged fix (`--current`), canonical, and every `--sibling` copy — and refuses (exit 1, canonical untouched) if either canonical drifted from the backup or a sibling drifted from `--current`, unless `{UNIT}/stabilization/tracking/fix-log.md` already names the element in a `<!-- sync-winner: element=<name> winner=<this-unit|other-unit> reason=<why> -->` record. Only `winner=this-unit` authorizes this unit's write — `winner=other-unit` is a valid, logged decision that this unit's sync must still refuse to act on.
 
 ## Persistent Files
 
@@ -49,7 +57,7 @@ All files stored in `{UNIT}/stabilization/`:
 | `planning/source-excerpts.md` | Source-definition excerpts for traceability (conditional — only if source file is large) |
 | `planning/ROADMAP.md` | Phase plan (agent-authored from template; updated in-place during execution). Never delete content. |
 | `tracking/STATE.md` | Resumption bookmark (GENERATED — use `track_status.py` commands, do not edit directly) |
-| `tracking/progress.json` | Element-level tracking (machine-readable) |
+| `tracking/session_status.json` | Element-level tracking (machine-readable) |
 | `tracking/fix-log.md` | Append-only record of every fix applied. Absent until Phase 1 completes. |
 | `phases/phase-{N}/` | Per-phase artifacts: baselines, batch reports, learnings, infrastructure SQL |
 | `report.html` | Self-contained HTML report aggregating all artifacts. Generated during Final Validation by `generate_report.py`. |
@@ -86,6 +94,12 @@ On every invocation:
 3. **If STATE.md exists** → read it → run **Execution Workflow** for next pending phase. If status is "Ready to execute" (or next-action is Execute Phase N) and Phase N has no cortex task / `start-phase` has not run, that is the post-ROADMAP stall: **start Execution Step 2 in this turn**. Do not wait for a subagent.
 
 ---
+
+## Queue / Continue Mode
+
+When the user names a queue of units, or says "continue" / "next unit" / "run next phase", record the known answers the first time — unit folder, source path, platform, test database — and reuse them. Skip the Step 1, Step 4, and Step 9 stopping points when those answers are already known. Still derive a fresh per-unit schema (`ETL_FIX_{UNIT}`). Still show the ROADMAP, but do not block on approval unless the user asked to review each unit or this unit's plan deviates from the queue. A single named unit, on its first invocation, still stops at all three. Resumption of an in-progress unit is still governed by STATE.md.
+
+When a unit finishes — final validation passes, or close-unit succeeds — update the queue in the same turn, before starting the next unit. If the user did not name a queue file, use `stabilization-queue.md` in the directory that holds the unit folders. Move that unit from remaining to done. A finished unit must not still be listed as remaining.
 
 ## Scripting Flavor Routing
 
@@ -164,11 +178,11 @@ Ask the user for:
 - Original source definition file path (e.g., `.dtsx` for SSIS, `.xml` for Informatica)
 - Source platform (if not obvious from file extension)
 
-**STOPPING POINT**: Use `ask_user_question` to get the user's answer before proceeding.
+**STOPPING POINT**: Use `ask_user_question` to get the user's answer before proceeding — unless this is a Queue / Continue Mode run and the answer is already known.
 
 ### Step 1b: Detect Platform
 
-1. **Auto-detect from file extension**: `.dtsx` → `ssis`, `.yxmd` → `alteryx`, `.xml` → ask user to confirm platform
+1. **Auto-detect from file extension**: `.dtsx` → `ssis`, `.yxmd` → `alteryx`, `.item` → `talend`, `.xml` → ask user to confirm platform
 2. **If ambiguous**, ask the user which platform via `ask_user_question`
 3. **Fallback rule**: if no platform was named by the user or established from an original source file (omitted/ambiguous), or a named platform has no `{SKILL_DIR}/platforms/{PLATFORM_ID}/` directory, set `{PLATFORM_ID}` = `unsupported` instead of proceeding with a missing pack. A remediation brief's `platform` field describes where its findings originated; it is **not** source-platform evidence and must not override this fallback. Never pass that field to `scan_unit.py --platform`. Never carry a null or made-up platform into Step 2 — `scan_unit.py` re-derives and records this same fallback independently.
 4. **Read the platform profile** from `{SKILL_DIR}/platforms/{PLATFORM_ID}/platform-profile.md`
@@ -192,7 +206,7 @@ If scan_unit.py fails, check: (1) unit folder contains a `.sql` orchestration fi
 uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py init {SCAN_JSON}
 ```
 
-Output: `{UNIT}/stabilization/tracking/progress.json` — all elements start `pending`.
+Output: `{UNIT}/stabilization/tracking/session_status.json` — all elements start `pending`.
 
 
 ### Step 3b: Apply Remediation Brief
@@ -207,7 +221,7 @@ uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/apply_brief.py {UNIT_FOL
 
 ### Step 4: Configure Test Environment
 
-Check `session_status.json` for existing `test_environment`. If not found, ask the user via `ask_user_question` with two options:
+Check `session_status.json` for existing `test_environment`. In a Queue / Continue Mode run, reuse a database already chosen for an earlier unit in the queue (still derive this unit's own `ETL_FIX_{UNIT}` schema). Otherwise, if not found, ask the user via `ask_user_question` with two options:
 1. **"Use current connection's database"** — run `SELECT CURRENT_DATABASE()` to get it
 2. The user can type a different database name via "Something else"
 
@@ -216,9 +230,9 @@ The question text:
 Which database should be used for test schemas? You need CREATE SCHEMA, CREATE TABLE, CREATE FUNCTION, and CREATE PROCEDURE privileges. Each phase creates per-batch schemas automatically and drops them when done.
 ```
 
-After getting the database name:
+After getting the database name, set the schema to an isolated unit-prefixed name such as `ETL_FIX_{UNIT}` — never `PUBLIC`, which is SnowConvert's own default qualifier and cannot be used as a leak signal:
 ```bash
-uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py set-test-env {SESSION_JSON} {DATABASE} PUBLIC
+uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py set-test-env {SESSION_JSON} {DATABASE} ETL_FIX_{UNIT}
 ```
 
 ### Step 5: Backup and Strip Dead Code
@@ -240,12 +254,14 @@ uv run --project {SKILL_DIR} python {PLATFORM_DIR}/{STRIP_SCRIPT} {ORCHESTRATION
 
 Use `team_create` tool: team_name="etl-plan-{unit_name}".
 
-**Orchestration context mapper** (always):
+**If `team_create` or the teammate-spawn tool is unavailable:** that is not a protocol violation and it does not block planning. The orchestrator writes `{UNIT}/stabilization/planning/orchestration-context.md` itself from `scan.json`, the orchestration SQL, and the source-workflow links. That document satisfies this step. If dbt projects exist, the orchestrator likewise writes `{UNIT}/stabilization/planning/dbt-context.md` from the scan and the project files.
+
+**Orchestration context mapper** (when teammate tools are available):
 Spawn a teammate with `name="context-mapper"`, `run_in_background=false`, and the prompt template at `{SKILL_DIR}/reference/agent-prompts/context-mapper.md` (substitute `{ORCH_SQL_PATH}`, `{SOURCE_FILE_PATH}`, `{UNIT}`, `{SKILL_DIR}`, `{PLATFORM_DIR}`, `{ORCHESTRATION_GUIDE}` placeholders).
 
 Output: `orchestration-context.md` — element inventory, duplicate groups, behavioral patterns, container hierarchy.
 
-**dbt context mapper** (conditional — dbt flavor only, when dbt_projects exist):
+**dbt context mapper** (conditional — dbt flavor only, when dbt_projects exist and teammate tools are available):
 Spawn a teammate with `name="dbt-context-mapper"`, `run_in_background=false`, and the prompt template at `{SKILL_DIR}/reference/agent-prompts/dbt-context-mapper.md` (substitute `{UNIT}`, `{SOURCE_FILE_PATH}`, `{SKILL_DIR}`, `{TRANSFORMATION_GUIDE}` placeholders).
 
 Output: `dbt-context.md` — project health, model inventory, macro inventory, source mapping, bootstrap blockers.
@@ -253,11 +269,11 @@ Output: `dbt-context.md` — project health, model inventory, macro inventory, s
 **Scripting flavor:** skip the dbt context mapper. Instead, discover the mapping procedures per
 [Scripting Flavor Routing](#scripting-flavor-routing) — for each converted mapping proc, record its source
 mapping and its defective blocks (block-locate / ewi-extract). The orchestration context mapper still runs for
-the workflow task graph.
+the workflow task graph (or the orchestrator-authored fallback above, if teammate tools are unavailable).
 
 **Spawn both agents in a single message** (parallel tool calls) with `run_in_background=false`. Process both tool results in this turn. Verify both output files exist and are non-empty before continuing. Do not end the turn to wait — blocking spawns are not background jobs.
 
-Use `team_delete` tool after verifying outputs.
+Use `team_delete` tool after verifying outputs (skip if `team_create` was unavailable).
 
 ### Step 6b: Classify dbt Project Readiness (if dbt projects exist)
 
@@ -357,7 +373,7 @@ Display the ROADMAP to the user. Highlight:
 - Phase types and procedure alignment
 - Test strategies (grouped vs isolated, and why)
 
-**STOPPING POINT**: Use `ask_user_question` to get the user's approval or revision requests.
+**STOPPING POINT**: Use `ask_user_question` to get the user's approval or revision requests — unless this is a Queue / Continue Mode run with no material deviation from the already-approved pattern, in which case display the ROADMAP but do not block.
 
 ### Step 10: Begin Execution
 
@@ -471,6 +487,16 @@ always has a pending task.
 
 ---
 
+## Closing a Unit Without an Agent
+
+When every element (and dbt node, if any) is already completion-eligible, close the unit directly:
+
+```bash
+uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py close-unit {SESSION_JSON}
+```
+
+The command rejects the unit if any element is pending, in progress, needs-user, test-failed, or failed; if changed SQL has no valid fix-log entry; or if the leak gate fails. On success it regenerates STATE.md and report.html. It does not deploy or CALL procedures.
+
 ## Batch Output Format
 
 See [reference/templates/batch-artifacts.md](reference/templates/batch-artifacts.md).
@@ -517,5 +543,5 @@ See [reference/troubleshooting.md](reference/troubleshooting.md).
 - Fixed dbt model files (per sub-project)
 - Test artifacts in `{UNIT}/stabilization/tests/`
 - `{UNIT}/stabilization/report.html` — self-contained HTML report aggregating all artifacts (generated during Final Validation)
-- `artifacts/tracking/fix_log.md` — append-only record of every fix applied. Each entry carries per-instance anchors (file + stable symbol/tag anchor into the fixed tree and the `stabilization/original/` backup) plus a `Classification` — `engine-defect | conversion-improvement | intentional-decline | context-dependent`. **An `!!!RESOLVE EWI!!!` breaking wrapper (or any correctly emitted supported EWI/FDM) is `intentional-decline`, resolved manually — never log it as `engine-defect`.** See [reference/templates/fix-log-format.md](reference/templates/fix-log-format.md) and [reference/templates/batch-artifacts.md](reference/templates/batch-artifacts.md).
-- `artifacts/phases/phase_{N}/` — per-phase baselines, batch reports, learnings
+- `{UNIT}/stabilization/tracking/fix-log.md` — append-only record of every fix applied. Each entry carries per-instance anchors (file + stable symbol/tag anchor into the fixed tree and the `stabilization/original/` backup) plus a `Classification` — `engine-defect | conversion-improvement | intentional-decline | context-dependent`. **An `!!!RESOLVE EWI!!!` breaking wrapper (or any correctly emitted supported EWI/FDM) is `intentional-decline`, resolved manually — never log it as `engine-defect`.** See [reference/templates/fix-log-format.md](reference/templates/fix-log-format.md) and [reference/templates/batch-artifacts.md](reference/templates/batch-artifacts.md).
+- `{UNIT}/stabilization/phases/phase-{N}/` — per-phase baselines, batch reports, learnings

@@ -12,6 +12,20 @@ Analyze changes to converted SQL files and extract reusable migration rules. Wor
 - **Interactive fix mode** — the user fixed a file; compare before/after to extract a rule
 - **Git history mode** — analyze committed changes retroactively
 
+## Migration state machine (`extractRules`)
+
+When the executor dispatches this skill as the `extractRules` task:
+
+1. At entry:
+   ```
+   transition_status(status="started", task="extractRules", where="id = '<object_id>'")
+   ```
+2. Extract or decide there is nothing new (including "converted SQL unchanged" / duplicate rule).
+3. Always finish with an advance so `TASK_EVENTS` get an `advanced` row (do not rely on oracle detection alone):
+   ```
+   transition_status(status="advance", task="extractRules", outcome="completed", where="id = '<object_id>'")
+   ```
+
 ## Prerequisites
 
 - Rule engine set up ([../SKILL.md](../SKILL.md))

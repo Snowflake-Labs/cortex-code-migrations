@@ -495,7 +495,7 @@ def icon_name(kind: str, label: str, platform: Optional[str] = None) -> str:
     on Label, so Platform has to win or Files/SAP/XML cards get a Database icon.
     """
     kind_lower = (kind or "").strip().lower()
-    if kind_lower in ("etl_pipeline", "etl_system", "etl_package"):
+    if kind_lower in ("etl_pipeline", "etl_system", "etl_package", "etl_script", "etl_workflow"):
         return "DataPipelines"
     if kind_lower in ("report_system", "report_report"):
         return "CloudSaas"

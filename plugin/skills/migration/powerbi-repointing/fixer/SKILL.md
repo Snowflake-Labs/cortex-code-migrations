@@ -49,7 +49,7 @@ All scripts use only standard library and run cross-platform (macOS / Linux / Wi
     [ ] 3d. LLM Translation
     [ ] 3e. Apply Translations (MCP tool)
     [ ] 3f. Reassemble PBIT
-    [ ] 3g. Update Assessment Report (MANDATORY)
+    [ ] 3g. Update Assessment Report
     [ ] 3h. Verify Output
 [ ] Step 4: Present Final Summary
 ```
@@ -110,10 +110,7 @@ Ask for confirmation before proceeding.
 
 ### Step 3: Process Each PBIT File (Sub-Agent Dispatch)
 
-**CRITICAL**:
-- Process PBIT files sequentially, one complete file at a time
-- Complete ALL substeps for one PBIT before starting the next
-- ONLY modify "Unsupported" queries — all others remain exactly as SnowConvert converted them
+Process PBIT files one at a time, finishing every substep for one file before starting the next: all of them share the work directory under `artifacts/pbit/work`. Modify only "Unsupported" queries; every other query stays exactly as SnowConvert converted it.
 
 For each PBIT file in the inventory, dispatch a sub-agent with the full context needed to process it autonomously. This preserves main session context.
 
@@ -122,7 +119,7 @@ For each PBIT file in the inventory, dispatch a sub-agent with the full context 
 For each PBIT file, dispatch a Task with this prompt:
 
 ```
-Read and follow plugin/skills/migration/powerbi-repointing/fixer/SKILL.md.
+Read and follow <absolute path to this fixer SKILL.md>.
 You are running in sub-agent mode — do NOT ask the user any questions.
 
 Context (from parent):
@@ -239,7 +236,9 @@ uv run scripts/reassemble-pbit.py "<ORIGINAL_PBIT_PATH>" "<project_dir>/artifact
 
 Creates `.backup` of the original and replaces it with the updated version.
 
-#### 3g. Update Assessment Report (MANDATORY — NEVER SKIP)
+#### 3g. Update Assessment Report
+
+Run this for every PBIT file: until it runs, the assessment report still lists the translated queries as Unsupported.
 
 ```bash
 uv run scripts/update-assessment-report.py <report_path> "<project_dir>/artifacts/pbit/translated_queries.json" "<OUTPUT_FOLDER>"
@@ -294,7 +293,7 @@ When translating PowerQuery expressions:
 
 ## Critical Safety Rules
 
-1. **Clean workspace**: `cleanup.py` before each PBIT file
+1. **Clean workspace**: `pbit_repointing(mode: "cleanup")` before each PBIT file
 2. **Fresh extraction**: Extract PBIT anew for each file
 3. **Batch processing**: Fix ALL unsupported queries in a PBIT before reassembling
 4. **Single write**: Write DataModelSchema and UnappliedChanges only once per PBIT

@@ -57,7 +57,7 @@ Keep it to one short line, e.g. `Validating dbo.Orders, dbo.Customers · done db
 `validate_data(mode="run")` / `mode="revalidate"` return a `monitor` block immediately — before the workflow even has a name:
 
 ```json
-{"monitor": {"job_id": "j-7f2a", "log": ".scai/monitor/relay.jsonl", "cursor": 4021, "watch_command": "tail -F -n +4022 …"}}
+{"monitor": {"job_id": "j-7f2a", "log": ".scai/monitor/relay.jsonl", "cursor": 4021, "watch_command": "…"}}
 ```
 
 Invoke the **Monitor** tool with `command` set to `monitor.watch_command` verbatim and `persistent: true`. Run it from the project root. Do not rebuild the command by hand — the cursor in it is what keeps you from replaying old records or missing new ones.

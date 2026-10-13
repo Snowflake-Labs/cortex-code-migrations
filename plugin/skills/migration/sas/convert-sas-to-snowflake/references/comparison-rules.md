@@ -85,7 +85,7 @@ Priority order for choosing sort keys:
 |-------|---------------|
 | Column count | Must match exactly |
 | Column names | Case-insensitive match required |
-| Column order | Must match (SAS preserves column order from PDV) |
+| Column order | Not compared -- match columns by name (SAS PDV order is not a contract) |
 | Column types | Compatible types pass (see compatibility table below) |
 
 ### Type Compatibility Matrix
@@ -164,7 +164,10 @@ WHERE NOT (
 
 ## Mismatch Classification
 
-When reporting mismatches, classify the likely root cause:
+Every mismatch gets a repair-loop class (`workflows/validation-pipeline.md`): `OWN_DEFECT`,
+`TEST_DATA_GAP`, `BASELINE_CORRECTED` or `SOURCE_DEFECT_PRESERVED`. Decide by re-reading the SAS
+lines in the block's `-- SAS:` anchor, not by which side "looks right". The patterns below point
+to the usual `OWN_DEFECT` cause:
 
 | Mismatch Pattern | Likely Root Cause |
 |------------------|-------------------|
@@ -178,3 +181,30 @@ When reporting mismatches, classify the likely root cause:
 | All values shifted by N rows | Window function ROWS vs RANGE, or missing ORDER BY |
 | Duplicate rows in actual | Missing DISTINCT or QUALIFY (SAS NODUPKEY equivalent) |
 | Column missing | PDV variable not carried forward (check KEEP/DROP/RENAME) |
+| Rows with a missing join key dropped/unmatched | SAS joins missing to missing; SQL `=` does not -- use `IS NOT DISTINCT FROM` |
+
+## Full-data sampling (T3)
+
+Never pull full outputs into context. Compare whole-table shape, then a deterministic sample of
+keys -- the same keys on both sides, chosen by a hash of the key, not by `LIMIT` or `SAMPLE`.
+
+```sql
+-- 1. Shape: row count + per-column aggregates, both sides in one row each
+SELECT 'sf' AS side, COUNT(*) AS n, COUNT(DISTINCT <key>) AS keys,
+       SUM(<num_col>) AS s1, COUNT(<col>) AS nn1          -- one SUM/COUNT per compared column
+FROM <sf_output>
+UNION ALL
+SELECT 'sas', COUNT(*), COUNT(DISTINCT <key>), SUM(<num_col>), COUNT(<col>) FROM <sas_output>;
+
+-- 2. Key-anchored sample: ~200 keys picked by hash, rows compared column by column
+WITH k AS (
+  SELECT <key> FROM <sas_output> GROUP BY <key> ORDER BY HASH(<key>) LIMIT 200
+)
+SELECT COALESCE(s.<key>, f.<key>) AS key, '<col>' AS col, s.<col> AS sas_val, f.<col> AS sf_val
+FROM (SELECT * FROM <sas_output> WHERE <key> IN (SELECT <key> FROM k)) s
+FULL JOIN (SELECT * FROM <sf_output> WHERE <key> IN (SELECT <key> FROM k)) f
+  ON s.<key> IS NOT DISTINCT FROM f.<key>
+WHERE NOT (s.<col> IS NOT DISTINCT FROM f.<col>)          -- apply the tolerance rules above
+LIMIT 50;
+```
+Report counts of differing keys per column; show at most a few example rows.

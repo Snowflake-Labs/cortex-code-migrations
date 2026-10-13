@@ -24,6 +24,11 @@ from informatica_assessment_analyzer.services.analysis_validator_service import 
 )
 
 
+def _is_workflow_entry(entry: Dict) -> bool:
+    """True for a workflow file. Entries written before `kind` existed stay workflows."""
+    return entry.get("kind", "workflow") == "workflow"
+
+
 class WorkflowTrackingService:
     """Manages the AI analysis state for Informatica workflows."""
 
@@ -32,11 +37,14 @@ class WorkflowTrackingService:
         """Get first workflow with PENDING AI analysis status.
 
         Returns list with one dict {'name': ..., 'path': ...} or empty list.
+        Mapping files are not analyzed. They have no detail page.
         """
         data = WorkflowTrackingService._load(json_file_path)
         workflows = data.get("workflows", [])
 
         for wf in workflows:
+            if not _is_workflow_entry(wf):
+                continue
             ai = wf.get("ai_analysis", {})
             if not ai or ai.get("status", "PENDING") == "PENDING":
                 return [{"name": wf.get("name"), "path": wf.get("path")}]
@@ -99,7 +107,7 @@ class WorkflowTrackingService:
     def get_statistics(json_file_path: str) -> Dict:
         """Get analysis progress statistics."""
         data = WorkflowTrackingService._load(json_file_path)
-        workflows = data.get("workflows", [])
+        workflows = [wf for wf in data.get("workflows", []) if _is_workflow_entry(wf)]
 
         total = len(workflows)
         pending = 0
@@ -137,7 +145,7 @@ class WorkflowTrackingService:
         """Generate a consolidated text summary for LLM consumption."""
         data = WorkflowTrackingService._load(json_file_path)
         summary = data.get("summary", {})
-        workflows = data.get("workflows", [])
+        workflows = [wf for wf in data.get("workflows", []) if _is_workflow_entry(wf)]
 
         lines = []
         lines.append("=== INFORMATICA ASSESSMENT SUMMARY ===")

@@ -7,6 +7,10 @@ license: Proprietary. See License-Skills for complete terms
 
 # Cloud Data Validation Setup
 
+`<metadata_database>` below is `.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
+overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
+project's.
+
 One-time infrastructure setup for validating migrated data between a source database and Snowflake using the **Cloud Data Validation** feature via the **scai CLI**.
 
 > **Supported sources**: SQL Server, Azure Synapse, Redshift, Oracle, Teradata, PostgreSQL, BigQuery, Snowflake
@@ -28,13 +32,13 @@ Load `../../data-infrastructure/SKILL.md` first. It handles shared prerequisites
 After the shared infrastructure step has registered the compute pool, confirm the orchestrator service started:
 
 ```sql
-SELECT SYSTEM$GET_SERVICE_STATUS('SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE');
+SELECT SYSTEM$GET_SERVICE_STATUS('<metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE');
 ```
 
 If it returns `[]` (suspended/not started), resume it manually:
 
 ```sql
-ALTER SERVICE SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE RESUME;
+ALTER SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE RESUME;
 ```
 
 Wait 30-60s and re-check until status shows `READY`.

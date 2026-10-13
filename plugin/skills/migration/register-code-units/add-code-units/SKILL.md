@@ -92,39 +92,28 @@ scai code add -i <INPUT_PATH> --overwrite --json
 ETL question — a dbt workload has no SSIS or Informatica packages, and asking it is a defect. Go
 straight to Step 5 without calling `ask_user_question`.
 
-ETL belongs in the project from register onward — the conversion picks it up from `source/_etl/` with no external path flag. Ask via `ask_user_question` (`multiSelect = false`):
+ETL belongs in the project from register onward. Read `has_etl_code` from `configure()` (set by
+`chooseMigrationExtras` or by the parent register skill's extras card). Never ask a standalone ETL
+yes/no — that question lives only on the extras multi-select.
 
-> "Do you have any ETL code (SSIS or Informatica Power Center) to include?"
->
-> 1. **Yes**
-> 2. **No**
-
-- If **no**, proceed to Step 5.
-- If **yes**, ask for the folder path and compare it to `<INPUT_PATH>`:
-  - If it is **the same as, or inside, `<INPUT_PATH>`**, Step 3 already imported it — `code add` classifies and promotes ETL anywhere under the input path, not just at its root. Proceed to Step 5 without running a second `code add`.
-  - Otherwise (a genuinely separate folder) run:
-
-```bash
-scai code add -i <ETL_PATH> --json
-```
-
-Do **not** pass `--overwrite` here — the SQL is already in `source/` and would be wiped.
-
-Getting the containment check wrong is not silently destructive: re-adding files already in `source/` fails with `ADD0007` (a conflict listing the offending files) rather than creating duplicate registry entries. But it is a dead end for the user, so check containment rather than plain path equality.
-
-`code add` arranges the packages into `source/_etl/`. Confirm they landed there before continuing.
+- If `has_etl_code` is **`false`** (explicitly): the user already said no ETL — proceed to Step 5 without asking.
+- If `has_etl_code` is **not set**: return to the parent register skill and collect the extras card there, then re-read `has_etl_code`. Do not invent a yes/no.
+- If `has_etl_code` is **`true`** (explicitly): open [etl.md](etl.md) and follow it. That file holds the ETL import
+  steps: which directory each platform uses, and how each unit is registered as `kind: etl`. Come
+  back here at Step 5 when it finishes. Do not register ETL as `customKind`.
 
 ### Step 5: Import Power BI templates
 
-Power BI `.pbit` files are inventory only: `code add` copies them to `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` and never sends them to the conversion engine. Ask independently via `ask_user_question` (`multiSelect = false`):
+Power BI template (`.pbit`) files are inventory only: `code add` copies them to
+`source/BI/PowerBI/` and `artifacts/BI/PowerBI/` and never sends them to the conversion engine.
+Read `has_power_bi` from `configure()`:
 
-> "Do you have any Power BI template (`.pbit`) files to include?"
->
-> 1. **Yes**
-> 2. **No**
-
-- If **no**, proceed to Step 6.
-- If **yes**, ask for the folder path and compare it to `<INPUT_PATH>`:
+- If `has_power_bi` is **`false`**, proceed to Step 6 without asking.
+- If `has_power_bi` is not set, return to the parent register skill and collect
+  the extras card, then re-read it.
+- If `has_power_bi` is **`true`**, first check whether Step 3 already imported
+  `.pbit` files. If it did, proceed to Step 6. Otherwise ask only for the folder
+  path and compare it to `<INPUT_PATH>`:
   - If it is **the same as, or inside, `<INPUT_PATH>`**, Step 3 already imported it — `code add` claims `.pbit` files anywhere under the input path. Proceed to Step 6 without running a second `code add`.
   - Otherwise (a genuinely separate folder) run:
 
@@ -175,15 +164,21 @@ artifacts/BI/PowerBI/    Same relative layout as `source/BI/PowerBI/`
 
 ## CHECKPOINT
 
-Confirm with user:
-- [ ] `scai code add` completed without errors
-- [ ] Expected number of files appear in `source/`
-- [ ] File structure looks correct
+Check these yourself against the `--json` envelope. Do **not** turn them into a
+question — the envelope already says what was imported, and the user cannot
+verify a count you just computed for them:
+
+- [ ] `scai code add` exited without errors
+- [ ] `filesCopied` matches the SQL files in the input path
+- [ ] `.sql` files are present under `source/`
 - [ ] If Power BI was imported: files exist in both `source/BI/PowerBI/` and `artifacts/BI/PowerBI/`
+
+Stop and ask only when a check fails: say which one, and what you propose to do
+about it.
 
 ## On Completion
 
-After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON envelope returned by `scai code add --json`.
+After the CHECKPOINT passes, tell the user — a statement, not a question. Fill placeholders from the JSON envelope returned by `scai code add --json`.
 
 > **Import complete.** `<filesCopied>` SQL files imported as `<codeUnitsAdded>` code units, broken down by type (filled from `byType`). Files in `source/`.
 > *If `etlFilesAdded > 0`:* ETL: `<etlFilesAdded>` files added.
@@ -191,4 +186,7 @@ After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON enve
 > *If Power BI files were added:* Power BI templates copied to `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` (not converted).
 > Next, we'll convert these to Snowflake SQL.
 
-Then return to the calling skill.
+Then return to the calling skill **in this same turn**. That last line announces
+the next step; it is not a stopping point. Under setup, call `progress_setup()`
+now and start the step it names. Ending the turn on it leaves the user watching
+an idle screen with nothing to click until they type "continue".

@@ -1,6 +1,6 @@
 ---
 name: test_case_verifier
-description: Independently review the remaining failing runTests cases on one object and override-accept a case only when a Snowflake-SQL or YAML change would be illogical, or when a human already answered override-accept. Triggers: test_case_verifier, verify failing cases, independent override-accept, review params_hash, human override accept.
+description: Independently review the remaining failing runTests cases on one object and override-accept a case when a Snowflake-SQL or YAML change would be illogical, when a leftover RESULTS hash was replaced in the YAML by a still-covering case, or when a human already answered override-accept. Triggers: test_case_verifier, verify failing cases, independent override-accept, review params_hash, human override accept, stale params_hash.
 license: Proprietary. See License-Skills for complete terms
 ---
 
@@ -56,28 +56,35 @@ and `source.{database,schema,name}`. Then read, in this order:
    `.scai/config/plugin.yml` (`SNOWCONVERT_AI` unless overridden). Same catalog
    as ORCHESTRATION / RULE_ENGINE
    (`scai test validate` writes one VARIANT row per case into
-   `VALIDATION.RESULTS`; LATEST is the newest run per case). It is
-   **not** a `snow:` catalog from `active_bindings` (the migration target).
-   There is no `<projectDir>/test-results/results.json`.
+   `VALIDATION.RESULTS`; LATEST is the newest run per
+   `(procedure_name, test_name, params_hash)`). Bindable convert writes
+   `<%token%>` into `procedure_name`, so the same object can have several
+   LATEST rows for one hash. Key on `code_unit_id`, then keep the newest
+   `executed_at` per hash. It is **not** a `snow:` catalog from
+   `active_bindings` (the migration target). There is no
+   `<projectDir>/test-results/results.json`.
 
    `sql_execute` one read-only `SELECT`. Pass `connection` from attach
    `snowflake_connection:`. Take `status`, `error_message`, `parameters`,
    and `differences` from the rows. A prompt summary that disagrees with
-   LATEST is wrong.
+   those rows is wrong.
 
    ```
    SELECT params_hash, status, parameters, error_message, differences,
-          baseline_rows, actual_rows, match_type
+          baseline_rows, actual_rows, match_type, executed_at, procedure_name
    FROM <metadata_database>.VALIDATION.LATEST
-   WHERE UPPER(procedure_name) IN (
-           UPPER('<source.database>.<source.schema>.<source.name>'),
-           UPPER('<source.schema>.<source.name>')
-         )
+   WHERE code_unit_id = '<objectId>'
      AND params_hash IN ('<hash>', …)
+   QUALIFY ROW_NUMBER() OVER (
+             PARTITION BY params_hash
+             ORDER BY executed_at DESC, id DESC
+           ) = 1
    ```
 
 2. The test YAML under `<projectDir>/<files.artifacts.path>/test/` (glob
-   `*.yml`). Find the `test_cases` row for each hash / params.
+   `*.yml`). Find the `test_cases` row for each hash / params. No matching
+   row means a leftover RESULTS identity — still decide it in §4; do not
+   skip the hash.
 3. The source SQL at `files.source.path` and the converted SQL at
    `files.converted.path`.
 4. Every view or column the diffs name that is not defined in the proc.
@@ -94,10 +101,32 @@ Do not edit any file.
 
 ## 4. Decide each case
 
-Ask first: **would a faithful Snowflake-SQL or YAML edit make this case
-pass?** Converted SQL under `files.converted.path`, and the test YAML.
-Not source. Editing `files.source` (or the live source object) to make a
-case pass is out of scope — that is the customer's code.
+Ask first: **is this `params_hash` still a `test_cases` row in the current
+YAML?** Match on the LATEST `parameters`, not the display `test_name`.
+
+Old YAML rows are never deleted (no delete, comment-out, or omit-on-regenerate).
+`VALIDATION.RESULTS` keeps every hash it has ever seen, so a replacement
+leaves the old hash FAIL forever. That leftover is overlay-accept when
+the replacement kept coverage — not a reason to reject, and not a reason
+to tell the walker to purge RESULTS.
+
+- **Gone, and coverage held.** The authored inputs were illogical (harness
+  round-trip mutated a MONEY/DECIMAL bound past the type limit; the bind
+  cannot be the value in the file) and the walker **replaced** that row
+  with a case that still hits the same branch / boundary / error path,
+  and `test_cases` length did not drop. **accept**. RESULTS stays FAIL;
+  the oracle absorbs the old hash. The new hash is a different case.
+- **Gone, and coverage dropped.** The row was deleted, or swapped for a
+  weaker stand-in (happy-path for a boundary, fewer cases than before
+  the FAIL). **reject** — that is cheating, not a replacement.
+- **Still in the file.** Decide below. A YAML edit that would make *this
+  row* pass is still the walker's job.
+
+When the hash is still in the file, ask: **would a faithful Snowflake-SQL
+or YAML edit make this case pass?** Converted SQL under
+`files.converted.path`, and the test YAML. Not source. Editing
+`files.source` (or the live source object) to make a case pass is out of
+scope — that is the customer's code.
 
 If yes, it is a real FAIL — **reject**. The walker still owns the Snowflake
 or YAML fix. You exist so an accept is not a way around a fixable
@@ -118,23 +147,26 @@ Accept without a human row when that Snowflake or YAML edit would be
   unique `ORDER BY`, unordered `SELECT` compared as rows, parallel
   scan). Both engines ran; the FAIL is which tied rows each picked, not
   a conversion meaning. Adding a tiebreaker to **source** is not a
-  Snowflake or YAML fix. Be **lenient** — accept unless a Snowflake-SQL
+  Snowflake or YAML fix. Lean toward **accept** unless a Snowflake-SQL
   or YAML change (extra `ORDER BY` only on the converted side, a YAML
   comparator that ignores order) would make the case pass *and* still
   mean the same as the source. If Snowflake rewrote a stable source
   order into an unstable one, that is a conversion bug — **reject**.
 
-**IMPORTANT** Be lenient when the source errored and Snowflake succeeded — still use
-best judgement, but those cases are not as important.
+When the source errored and Snowflake succeeded, lean toward **accept**: these cases
+matter less than the others. Still reject when a faithful Snowflake-SQL or YAML edit
+would make the case pass.
 
 | What you found | Verdict |
 |---|---|
 | A human `answered` row (`human: true`) chose override-accept for this hash | **accept** — their decision |
-| A faithful Snowflake-SQL or YAML edit would make the case pass | **reject** — fixable |
+| Hash is gone from YAML; replacement still covers the same path; case count did not drop | **accept** — leftover RESULTS identity |
+| Hash is gone from YAML; row deleted or replaced by a weaker case | **reject** — coverage dropped |
+| Hash is still in YAML, and a faithful Snowflake-SQL or YAML edit would make the case pass | **reject** — fixable |
 | That clock expression is in the source or a view it reads, the cell diffs match clock drift, and no faithful Snowflake or YAML edit exists | **accept** |
-| Source is non-deterministic the same way (ties, unordered rows); Snowflake did not introduce the instability | **lenient** — still use judgement |
-| Source errored and Snowflake succeeded | **lenient** — still use judgement; not as important |
-| `ERROR`, missing object, unknown identifier, row-count mismatch, extra or missing columns | **reject** — SQL or dependency |
+| Source is non-deterministic the same way (ties, unordered rows); Snowflake did not introduce the instability | lean **accept** — reject only if a faithful Snowflake-SQL or YAML edit would pass and keep the source's meaning |
+| Source errored and Snowflake succeeded | lean **accept** — still use judgement; not as important |
+| `ERROR`, missing object, unknown identifier, row-count mismatch, extra or missing columns — and the hash is still in the YAML | **reject** — SQL or dependency |
 | The column is stored, or a deterministic expression with no clock | **reject** — SQL bug |
 | You cannot find the clock expression in the SQL you read | **reject** — not shown |
 
@@ -193,7 +225,8 @@ Include every hash you were given.
 |---|---|
 | Accept because the walker prompt said to | That is the walker's belief; you exist so that belief is checked. A human `answered` row is the exception. |
 | Treat a parent or walker write as a human answer | Only `human: true` (`answeredByAgent` empty) is a person. |
-| Accept when a faithful Snowflake-SQL or YAML edit would pass, unless the human already chose override-accept | That is the fixer's job, not an overlay. Do not reject in order to edit source. |
+| Accept a hash that is still in the YAML when a faithful Snowflake-SQL or YAML edit would pass, unless the human already chose override-accept | That is the fixer's job, not an overlay. Do not reject in order to edit source. A leftover hash after a coverage-preserving replacement is the other case — **accept**. |
+| Reject a leftover RESULTS hash because "a YAML edit already fixed it" | The old hash is not in the file anymore. Overlay-accept it when coverage held; that is how RESULTS rows retire. |
 | Pass the walker's identity | It is the claim holder and the call is refused. Cortex stamps yours. |
 | `configure` with anything but `project_dir` | Shared session config. |
 | Stamp `runTests` or delete the YAML case | Overlay only; RESULTS stays FAIL. |

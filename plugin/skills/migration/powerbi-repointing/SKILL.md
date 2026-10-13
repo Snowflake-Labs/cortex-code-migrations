@@ -18,6 +18,9 @@ Do the following in order:
 2. Ask the user (verbatim): *"Please provide the folder path containing your Power BI `.pbit` files. Only `.pbit` (Power BI template) files are supported — `.pbix` is not. If you only have `.pbix`, see https://github.com/Snowflake-Labs/SC.DDLExportScripts/tree/main/Power%20BI to export `.pbit`."*
 3. Store the user's answer internally as `PBIT_PATH`.
 4. Return to the calling skill. When it runs `scai code convert`, append `--powerbi-repointing <PBIT_PATH>` to the command. Do not emit the literal `<PBIT_PATH>` token to the shell.
+5. **Multi-database parameters are opt-in.** After the user provides `PBIT_PATH`, ask (verbatim): *"Do these reports query more than one source database that should become separate Snowflake `SF_DB_*` parameters? Answer yes only if you want `--pbi-multi-db`."*
+   - If the user answers **yes**, also append `--pbi-multi-db` to `scai code convert`.
+   - If the user answers **no**, or does not confirm, do **not** pass `--pbi-multi-db`. Default conversion keeps a single `SF_DB_NAME`.
 
 ## Convert Output for Power BI
 
@@ -33,6 +36,7 @@ When `--powerbi-repointing` is used, `scai code convert` writes:
 | Option | Description |
 |--------|-------------|
 | `-p, --powerbi-repointing <PATH>` | Path to folder of Power BI `.pbit` files to repoint to Snowflake (also rewrites embedded queries to Snowflake-compatible syntax). `.pbix` files are not supported. |
+| `--pbi-multi-db` | Opt-in. Emit one `SF_DB_<SQL_DATABASE>` parameter per distinct source database (including SQL databases found across queries on the same host). Never pass this flag unless the user confirmed multiple source databases. |
 
 ## CHECKPOINT Addendum
 

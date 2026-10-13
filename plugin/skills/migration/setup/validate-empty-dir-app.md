@@ -12,6 +12,6 @@ The project directory is the user's to choose here, and the app denies any attem
 
 Ask the user directly — do not describe or explain what is in the directory:
 
-> "This folder already has files in it, so a migration project can't be initialized here. Open the project menu in the app header and choose **+ New project…** — it picks an empty folder and switches the app to it."
+> "This folder already has files in it, so a migration project can't be initialized here. Open the project menu in the app header and choose **+ New project…** — it picks an empty folder and switches the app to it. If these are files an earlier AIM session left here, picking this same folder there offers to resume that session or clear them."
 
 Then stop. Carry on with the current project until they switch.

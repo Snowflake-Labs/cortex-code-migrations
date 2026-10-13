@@ -21,8 +21,6 @@ In ONE tool-call response, read ALL inputs simultaneously:
 - Read `{ORCH_SQL_PATH}` (the orchestration SQL)
 - Read every `batch_*.md` file
 
-All reads MUST happen in parallel in the same message. Do NOT read files one at a time.
-
 ### Step 2 — Build fix plan (no tool calls — just analyze)
 
 From the artifacts you already read, build a fix list. For each element:
@@ -39,11 +37,11 @@ For each fix in the plan:
 
 See `reference/orchestration-tags.md` for the complete tag specification.
 
-Do NOT re-read the orch SQL — use the content from Step 1.
+Plan the edits from the content you read in Step 1.
 
 ### Step 4 — Write apply report to `{PHASES_DIR}/apply_report.md`
 
-**CRITICAL: Do NOT re-read any file.** You read everything in Step 1. If a file was truncated, use offset/limit to get the remainder in the same step — never circle back.
+Re-read the orch SQL once, after the last Edit, to take the post-replacement tag counts for the Integrity Check.
 
 ## Apply Report Format
 
@@ -94,7 +92,7 @@ Write to `{PHASES_DIR}/apply_report.md`:
 - **After all replacements**, count all tags (`---- Start block`, `---- Start` without block, `---- End block`) and verify counts match pre-replacement values. If they don't match, something went wrong — report it in the Integrity Check section.
 - **Do NOT run tests** — you are a pure applicator
 - **Do NOT make judgment calls** about fix quality — if the batch artifact says `test-passed`, apply it
-- **Do NOT modify `session_status.json`** or `artifacts/tracking/fix_log.md` — the orchestrator handles those
+- **Do NOT modify `session_status.json`** or `{UNIT}/stabilization/tracking/fix-log.md` — the orchestrator handles those
 
 ## Autonomous Behavior
 

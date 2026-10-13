@@ -1,6 +1,13 @@
 # Iceberg Prerequisites — Automated Setup Reference
 
-> **Scope:** Iceberg target migration is **Redshift-only** (partial support). Use this reference when `target_table_type=iceberg` and the source is Redshift. For workflow field definitions, see [workflow-config-reference.md](./workflow-config-reference.md). For orchestrator behavior, see `dmvf/docs/data-migration-orchestrator/iceberg-migration-support.md`.
+> **Scope:** Iceberg target migration is available for any supported source dialect, **but only when the
+> source object is a fully relational table** — if the source is itself an Iceberg / external / catalog-backed
+> table, **do not continue** (see the source gate in [SKILL.md](../SKILL.md) Step 3a.1). The only supported
+> target is **Iceberg v2 with a Snowflake-managed catalog on an external volume** — external / AWS-Glue /
+> other catalogs are out of scope. Use this reference
+> when `target_table_type=iceberg`. The AWS/Glue sections below apply to AWS-backed volumes (e.g. a Redshift
+> source on S3); for an Azure- or GCS-backed external volume, substitute the equivalent cloud setup. For
+> workflow field definitions, see [workflow-config-reference.md](./workflow-config-reference.md). For orchestrator behavior, see `dmvf/docs/data-migration-orchestrator/iceberg-migration-support.md`.
 
 This reference provides step-by-step procedures for the AI agent to execute when setting up Iceberg migration prerequisites. Each section is a self-contained procedure with input collection, execution commands, and verification.
 

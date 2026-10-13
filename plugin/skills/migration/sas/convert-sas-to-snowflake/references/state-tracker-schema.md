@@ -69,8 +69,10 @@ Load on **resume** (when `conversion_state.json` exists and needs interpretation
   "gates": {
     "step_2_5_source_resolution": "PENDING",
     "step_6a_artifacts": "PENDING",
-    "step_7a_test_artifacts": "PENDING",
-    "phase_5_e2e_orchestration": "PENDING",
+    "static_check": "PENDING",
+    "t1_compile": "PENDING",
+    "t2_unit": "PENDING",
+    "t3_e2e": "PENDING",
     "step_10_final_artifacts": "PENDING"
   },
   "trace_progress": {
@@ -132,14 +134,11 @@ At every transition in the table below, the workflow MUST: (1) update `conversio
 | Step 3 → Step 4 | All files have `status: "classified"`, dependencies populated; `assessment` object written (consumed+reconciliation, or `consumed: false`) | `step:"3" status:"PASSED"` |
 | Step 5 → Step 6 | All files have `status: "converted"` | `step:"5" status:"PASSED"` |
 | Step 6 → Step 6a | All files have `self_check_passed: true` | `step:"6" status:"PASSED"` |
-| Step 6a → Step 7 | `gates.step_6a_artifacts: "PASSED"` | `step:"6a" gate:"step_6a_artifacts" status:"PASSED"` |
-| Step 7a → Step 7b | `gates.step_7a_test_artifacts: "PASSED"` | `step:"phase_1" status:"PASSED"` |
-| Step 7b → Step 7c | `trace_progress.files_remaining` is empty (all priority files traced) | `step:"phase_2" status:"PASSED"\|"SKIPPED"` |
-| Step 7 → Step 8 | `current_step: "7"` | — |
-| Step 8 → Step 8 compile | Target schema exists OR `compilation_env` is set (auto-created via Step 8-pre) | `step:"phase_3" status:"STARTED"` |
-| Step 8 → Step 9 | All files have `compilation_status` set (SUCCESS, FAILED, or SKIPPED) | `step:"phase_3" gate:"phase_3_snowflake_compile" status:"PASSED"\|"SKIPPED"` |
-| Step 9 → Phase 5 | Phase 4 gate shows PASSED or SKIPPED | `step:"phase_4" gate:"phase_4_snowflake_execute" status:"PASSED"\|"SKIPPED"` |
-| Phase 5 → Step 10 | `gates.phase_5_e2e_orchestration: "PASSED"` or `"SKIPPED"` | `step:"phase_5" gate:"phase_5_e2e_orchestration" status:"PASSED"\|"SKIPPED"` |
+| Step 6a → validation | `gates.step_6a_artifacts: "PASSED"` | `step:"6a" gate:"step_6a_artifacts" status:"PASSED"` |
+| Gate 0 → T1 | `gates.static_check: "PASSED"` (`sql_check` errors = 0) | `step:"static_check" status:"PASSED"` |
+| T1 → T2 | `gates.t1_compile: "PASSED"` or `"SKIPPED"`; `compilation_results.json` written | `step:"t1" gate:"t1_compile" status:...` |
+| T2 → T3 | `gates.t2_unit: "PASSED"`/`"SKIPPED"`; `snowflake_execution_results.json` written; `trace_progress.files_remaining` empty | `step:"t2" gate:"t2_unit" status:...` |
+| T3 → Step 10 | `gates.t3_e2e: "PASSED"`/`"SKIPPED"`; `e2e_test_results.json` written when run | `step:"t3" gate:"t3_e2e" status:...` |
 | Step 10 → Complete | `gates.step_10_final_artifacts: "PASSED"`, `current_step: "complete"` | `step:"10" status:"PASSED"`, then `step:"complete" status:"PASSED"` |
 
 **If the state file does not satisfy the prerequisite for the next step:**

@@ -165,11 +165,26 @@ SELECT a.*, b.col1, b.col2
 FROM table_a a
 LEFT JOIN table_b b ON a.key_var = b.key_var;
 
--- IF a OR b = FULL OUTER JOIN
-SELECT COALESCE(a.key_var, b.key_var) AS key_var, a.*, b.*
-FROM table_a a
-FULL OUTER JOIN table_b b ON a.key_var = b.key_var;
+-- IF a OR b = FULL OUTER JOIN  (explicit column lists -- a.*, b.* duplicates shared columns)
+SELECT COALESCE(a.key_var, b.key_var) AS key_var,
+       a.only_a_col, b.only_b_col,
+       IFF(b._in_b, b.shared_col, a.shared_col) AS shared_col   -- see precedence rule
+FROM (SELECT t.*, TRUE AS _in_a FROM table_a t) a
+FULL OUTER JOIN (SELECT t.*, TRUE AS _in_b FROM table_b t) b ON a.key_var = b.key_var;
 ```
+
+**MERGE precedence and `IN=` rules (apply to every MERGE conversion):**
+- A non-key column present in several datasets takes the value of the **last-listed dataset that
+  contributes the row** -- even when that value is missing (MERGE overwrites with missing; only
+  `UPDATE` keeps the old value). So `IFF(b._in_b, b.col, a.col)`, not `COALESCE(b.col, a.col)`.
+- Derive `IN=` flags from a constant presence column (`TRUE AS _in_x`), never from `x.key IS NOT
+  NULL`: a key that is missing in the data makes the null test lie.
+- A dataset option `WHERE=` filters that input **before** the merge (inside its subquery), not
+  the joined result.
+- Duplicate BY keys on both sides: SAS pairs rows by position within the BY group, it does not
+  multiply them. Pair with `ROW_NUMBER() OVER (PARTITION BY key ORDER BY <input order>)` on each
+  side and join on `(key, rn)`; flag `MANUAL_REVIEW_REQUIRED` if the input order is not
+  determinable.
 
 ### MERGE with IN= Conditional (SQL with CASE)
 
@@ -189,15 +204,14 @@ RUN;
 CREATE OR REPLACE TABLE result AS
 SELECT 
   COALESCE(a.id, b.id) AS id,
-  a.*,
-  b.*,
+  a.master_col, b.update_col,          -- explicit lists; shared columns per the precedence rule
   CASE 
-    WHEN a.id IS NOT NULL AND b.id IS NULL THEN 'MASTER_ONLY'
-    WHEN a.id IS NULL AND b.id IS NOT NULL THEN 'UPDATE_ONLY'
+    WHEN a._in_a AND b._in_b IS NULL THEN 'MASTER_ONLY'
+    WHEN a._in_a IS NULL AND b._in_b THEN 'UPDATE_ONLY'
     ELSE 'BOTH'
   END AS source
-FROM master a
-FULL OUTER JOIN updates b ON a.id = b.id;
+FROM (SELECT t.*, TRUE AS _in_a FROM master t) a
+FULL OUTER JOIN (SELECT t.*, TRUE AS _in_b FROM updates t) b ON a.id = b.id;
 ```
 
 ### Simple Arrays (Same Operation) - SQL
@@ -338,6 +352,16 @@ END;
 $$;
 ```
 
+### RETAIN State Machine
+
+Trigger: a RETAIN variable is tested in an `IF`, assigned inside a branch, and `OUTPUT` is
+conditional. Every row then depends on all earlier rows in the BY group, so LAG chains,
+nearest-row joins and windows only approximate it. Replay the rows in order instead, with a
+Python UDTF (a SQL cursor loop only when Python is not allowed):
+`TABLE(f(cols) OVER (PARTITION BY <BY vars> ORDER BY <sort keys>, _SRC_ROW))`. The handler holds
+the retained variables as instance state (a new partition = the FIRST. reset), copies the IF/ELSE
+chain in order, and `yield`s exactly where SAS executes OUTPUT.
+
 ### Multiple OUTPUT with Complex Conditions
 
 **SAS:**
@@ -391,7 +415,8 @@ $$;
 | `TODAY()` | `CURRENT_DATE()` |
 | `DATETIME()` | `CURRENT_TIMESTAMP()` |
 | `INTCK('DAY', a, b)` | `DATEDIFF('DAY', a, b)` |
-| `INTNX('MONTH', date, 1)` | `DATEADD('MONTH', 1, date)` |
+| `INTNX('MONTH', date, 1)` (default 'B') | `DATE_TRUNC('month', DATEADD('month', 1, date))` |
+| `INTNX('MONTH', date, 1, 'S')` | `DATEADD('MONTH', 1, date)` |
 | `INTNX('MONTH', date, 1, 'B')` | `DATE_TRUNC('month', DATEADD('month', 1, date))` |
 | `INTNX('MONTH', date, 1, 'E')` | `LAST_DAY(DATEADD('month', 1, date))` |
 | `INTNX('MONTH', date, 0, 'B')` | `DATE_TRUNC('month', date)` |

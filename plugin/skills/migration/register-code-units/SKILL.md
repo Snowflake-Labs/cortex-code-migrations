@@ -11,6 +11,22 @@ license: Proprietary. See License-Skills for complete terms
 Tell the user:
 > **Register Source Code** — We need to get your source database objects into the project so they can be converted. You can extract them directly from your database or import local SQL files.
 
+Open with that and nothing before it. **Do not recap** what setup already
+settled — the user answered those questions and does not need them read back,
+and "extras are already recorded" reads as the opposite of `migration_extras=none`
+(which means there is no ETL, Power BI, or Tableau to include). Read the values
+you need and act; mention one only when it changes what you are about to do.
+
+## Step 0: Extras belong to the setup card
+
+Read `migration_extras` (or `has_etl_code` / `has_power_bi` / `has_tableau`)
+from `configure()`. If extras are **already set**, skip to Step 1.
+
+If they are **not set**, do **not** ask. Do not invent a yes/no for ETL,
+Power BI, or Tableau, and do not ask about conversion settings. Those are
+the setup card. Call `progress_setup()` with no answers and end the turn.
+Continue only after a later `progress_setup` shows this step has moved on.
+
 ## Step 1: Ask How to Register
 
 The setup machine asks this at `chooseCodeSource` and persists the answer, so
@@ -30,6 +46,13 @@ Extracting needs a source connection; importing local files does not. Don't
 offer to set one up here — the machine routes through
 `../setup/configure-source-connection.md` before this task on the extract path,
 and testing and data migration ask for it themselves when they need it.
+
+## Step 3: When the Sub-Skill Returns
+
+Keep going in the same turn. If setup sent you here, call `progress_setup()`
+and start the step it names (normally conversion). Do not end the turn after
+the "Extraction complete" / "Import complete" summary: that step needs no
+answer from the user, so nothing would ever restart it.
 
 ## Sub-Skills
 

@@ -7,6 +7,14 @@ Guide for the `verify` task. The machine routes an object here in two cases:
 
 There is no `scai` command for this step: **verify the object by whatever means the object allows**, then record the verdict.
 
+## Step 0: Record skill start
+
+```
+transition_status(status="started", task="verify", where="id = '<object_id>'")
+```
+
+Do this once at entry. Finish with `transition_status` in Step 3.
+
 ## Step 1: Read the conversion output
 
 Open the object's source and converted files (`files.source.path` and `files.converted.path` on its registry entry). Establish what SnowConvert actually did with it. Common outcomes:
@@ -30,8 +38,8 @@ Report what you checked and what you concluded. Do not claim more than the evide
 
 ## Step 3: Record the verdict
 
-- **Verified** → `transition_status(task="verify", outcome="completed", where="id IN ('<object_id>')")`. This is the object's last task; it moves to done. After a fix-loop retry, the same named-input probe is the completion test.
+- **Verified** → `transition_status(status="advance", task="verify", outcome="completed", where="id IN ('<object_id>')")`. This is the object's last task; it moves to done. After a fix-loop retry, the same named-input probe is the completion test.
 - **Not verifiable / genuinely out of scope** (e.g. the package was fully inlined and the standalone object will never exist in Snowflake) → say so, then mark it out of scope with `update_registry(field="inScope", status="false", objects="<object_id>")` once nothing depends on it.
-- **Converted output is wrong** (including an open invalidation whose named cases still mismatch) → stamp `verify` `failed` `error="sql"`. The machine routes to `applyRules` / `fixCode`; do not load [DIAGNOSE_FIX.md](DIAGNOSE_FIX.md) by hand.
+- **Converted output is wrong** (including an open invalidation whose named cases still mismatch) → `transition_status(status="advance", task="verify", outcome="failed", error="sql", where="id IN ('<object_id>')")`. The machine routes to `applyRules` / `fixCode`; do not load [DIAGNOSE_FIX.md](DIAGNOSE_FIX.md) by hand.
 
 Escalate to the user when you can't tell whether an object matters — a package whose logic went nowhere and whose callers are missing is a migration gap, not a completed object.

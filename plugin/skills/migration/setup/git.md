@@ -32,13 +32,36 @@ git_status:
   current_branch: <branch or empty>
   remote_url: <origin url or empty>
   configured_main_branch: <branch or empty>
+  use_enclosing_repo: <true|false|empty>
+  enclosing_repo: <path or empty>
 ```
 
 Use this to drive the next step. **Do not run any `git` commands yourself**
 to inspect state — `configure(needs_git=true)` is the source of truth. An
 empty `remote_url` is expected and needs no action.
 
+**If `git_status.enclosing_repo` is set and `use_enclosing_repo` is empty**,
+the folder sits inside another git repository and nothing on disk says whether
+that is deliberate. **Stop here — ask once, then re-run. Do not continue to
+Step 2** (do not treat the enclosing work tree as this folder's repository, and
+do not set `git_main_branch` yet):
+
+> "This folder is inside the git repository at `<enclosing_repo>`. Should the
+> migration be committed there, or should this project get its own repository?"
+>
+> 1. **Commit there** (a folder in a repository you manage) —
+>    `configure(git_use_enclosing_repo=true)`
+> 2. **Its own repository** — `configure(git_use_enclosing_repo=false)`
+
+Then re-run `configure(needs_git=true)` and continue. `configure` repeats this
+question in its response until it is answered.
+
 ## Step 2: Confirm git settings
+
+**Only after Step 1 is settled** (`enclosing_repo` empty, or `use_enclosing_repo`
+already `true`/`false`). An unanswered nested folder looks like
+`is_git_repo: true` with an empty `remote_url` — that is the enclosing work tree,
+not permission to configure this project yet.
 
 **If `git_status.is_git_repo` is `true` AND `git_status.remote_url` is present:**
 

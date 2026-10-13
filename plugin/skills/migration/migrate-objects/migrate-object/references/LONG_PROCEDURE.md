@@ -39,7 +39,7 @@ Present the segment map to the user before proceeding.
 | **Loop blocks** | WHILE, FOR, cursor fetch loops | Snowflake Scripting FOR/WHILE syntax |
 | **Error handling** | TRY/CATCH, BEGIN...EXCEPTION, @@ERROR | Snowflake EXCEPTION blocks |
 | **Temp table operations** | CREATE #temp, INSERT INTO #temp, SELECT INTO | Snowflake temporary tables (CREATE TEMPORARY TABLE) |
-| **Dynamic SQL** | EXEC(@sql), EXECUTE IMMEDIATE, sp_executesql | Snowflake EXECUTE IMMEDIATE with bind variables. See [SSC-EWI-0030.md](../../../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md) for conversion reference. |
+| **Dynamic SQL** | EXEC(@sql), EXECUTE IMMEDIATE, sp_executesql | Snowflake EXECUTE IMMEDIATE with bind variables. See [SSC-EWI-0030.md](../../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md) for conversion reference. |
 | **Transaction management** | BEGIN TRAN, COMMIT, ROLLBACK, SAVE TRANSACTION | Snowflake transaction semantics (auto-commit differences) |
 | **Output/result sets** | SELECT for output, OUTPUT clause, PRINT | RETURN TABLE(), RESULTSET, or SYSTEM$LOG |
 | **Conditional branching** | Large IF/ELSE IF chains, CASE blocks | Direct mapping to Snowflake IF/CASE |
@@ -50,7 +50,7 @@ Present the segment map to the user before proceeding.
 Convert each segment independently from the source dialect to Snowflake SQL:
 
 1. **Focus on the segment** but keep the full procedure context in mind (shared variables, control flow)
-2. **Apply platform-specific transformations** — for dynamic SQL segments, follow the guidance in [SSC-EWI-0030.md](../../../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md)
+2. **Apply platform-specific transformations** — for dynamic SQL segments, follow the guidance in [SSC-EWI-0030.md](../../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md)
 3. **Preserve the segment's interface** — inputs it consumes and outputs it produces must remain compatible with adjacent segments
 4. **Document any transformation decisions** that affect other segments
 

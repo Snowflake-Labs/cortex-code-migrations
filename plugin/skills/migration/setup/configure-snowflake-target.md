@@ -1,6 +1,6 @@
 ---
 name: configure-snowflake-target
-description: Set the Snowflake target for object migration — connection name and database — then confirm the whole project configuration before the deploy loop starts. Persists via `configure(snowflake_connection=…, snowflake_database=…)`.
+description: Set the Snowflake target for object migration — connection name, and the database when convert wrote no bindings — then confirm the whole project configuration before the deploy loop starts. Persists via `configure(snowflake_connection=…)`, adding `snowflake_database=…` only when none is set yet or the user changes it.
 license: Proprietary. See License-Skills for complete terms
 ---
 
@@ -44,18 +44,23 @@ Use `oauth_authorization_code` for Entra OIDC — never `externalbrowser`.
 
 ## Step 2: Target database
 
-This is where the migration tracking database and the converted objects
-will live. Call `configure()` and look for `active_bindings:`:
+The converted objects deploy here. `snowflake_database` also names this
+project's records in the metadata database (claims, task attempts, sandbox
+events), so once the migration has started it must not change. Call
+`configure()` and read `snowflake_targets:` (or `snowflake_database:`):
 
-- **Present** — Read that YAML. `snow:` values are the Snowflake catalogs
-  convert already bound. Confirm them in the recap; don't re-ask unless
-  the user wants a different database.
-- **Absent** — convert did not write bindings. Ask, with the naming rule in
-  the question so it is read before a name is typed:
-  > Which Snowflake database should I deploy into? Use letters, digits and
-  > underscores — a hyphen isn't a Snowflake identifier character, so
-  > `SALES-DB` has to be double-quoted and case-sensitive everywhere it is
-  > referenced.
+- **`snowflake_targets:` present** — convert wrote
+  `.scai/bindings/database-bindings.yaml`; each `token → CATALOG` is where
+  that catalog's objects deploy. Deploy, data migration and validation read
+  this file, not `snowflake_database`. Confirm them in the recap; to
+  retarget, edit that yaml. A target that is its own token (`hr → hr`)
+  may be convert's placeholder: confirm that catalog exists, or ask below.
+- **No `snowflake_targets:`** — ask `textInput` (no options). Prefill
+  `defaultValue` from `configure()`'s source database (`source_database`,
+  else the database on `source_connection`): uppercase, `-` and spaces to
+  `_`, drop every other non-letter/digit/`_`. Omit `defaultValue` if unknown.
+  > Which Snowflake database should I deploy into? Letters, digits, and
+  > underscores only — `SALES-DB` must be double-quoted everywhere.
 
 ## Step 3: Confirm everything, then persist
 
@@ -64,8 +69,8 @@ from the `configure()` response:
 
 > Before we start deploying, here's the setup:
 > - **Snowflake connection:** `<snowflake_connection>`
-> - **Target database:** `<snowflake_database>` — from `active_bindings`
->   `snow:` when that yaml exists, otherwise the name the user just gave
+> - **Target database:** `<snowflake_targets>` when the response has them,
+>   otherwise `<snowflake_database>` or the name the user just gave
 > - **Source connection:** `<source_connection>` — or "none (synthetic test
 >   data only)" when unset
 > - **Source dialect:** `<source_language>`
@@ -75,12 +80,20 @@ from the `configure()` response:
 
 Ask via `ask_user_question` (`multiSelect = false`) with **Yes, continue**
 and **Change something**. On "Change something", ask which value and loop
-back to the relevant step. Only once the user confirms, persist both
-values in a single call:
+back to the relevant step. Only once the user confirms, persist in a
+single call:
 
 ```
 configure(snowflake_connection="<name>", snowflake_database="<db>")
 ```
+
+Pass `snowflake_database` **only** when the response had none or the user
+just changed it; otherwise leave it out. If the response says
+`snowflake_database changed: OLD → NEW` and the user did not ask for that,
+restore `OLD` right away as the note says, and tell the user.
+
+`snowflake_database` is a setting, never a probe. Every re-check below is
+`configure(ensure_metadata_schema=true)` with no other arguments.
 
 ## Step 4: Handle a missing or unreachable database
 
@@ -101,22 +114,21 @@ The `configure()` response now carries `schema_status_*` and
   rename the mixed-case database (same remedy as
   `database_name_unresolvable` below). Do **not** recreate.
 - `schema_status_metadata: error("…could not verify…still exists…")` → quote
-  the message; retry `configure(ensure_metadata_schema=true)` once the
-  session is healthy. Do **not** recreate.
+  the message; re-check once the session is healthy. Do **not** recreate.
 - `schema_status_*: error("…")` (any other) → quote the error text to the
   user. Typical causes: PAT profile missing `token` / `token_file_path`, a
   connection name that is not in `~/.snowflake/connections.toml`, incomplete
   key-pair material, or a failed login. Do **not** guess a different
   authenticator or retry Entra SSO to "fix" a PAT error. Load
   `../connection/snowflake-connection/SKILL.md` when the user needs to
-  edit the profile, then `configure(ensure_metadata_schema=true)` after
-  they save.
-- `schema_status_validation: database_missing` → the configured database
+  edit the profile, then re-check after they save.
+- `database_missing` in any `schema_status_*` → the configured database
   does not exist. **Ask before creating it** — the name may be a typo:
   > `<db>` doesn't exist yet. Create it, or did you mean a different name?
 
-  On confirmation run `CREATE DATABASE <snowflake_database>;`, then
-  `configure(ensure_metadata_schema=true)` to refresh.
+  On confirmation call `configure(ensure_target_database=true)`, then re-check.
+- `schema_status_dmv: error("<msg>")` → `scai data migrate-schema` failed in
+  the metadata database. Quote `<msg>`; re-check once the user fixes it.
 
 - `schema_status_validation: database_name_unresolvable("<stored>")` → the
   database exists, but under a name that only a quoted reference reaches.
@@ -128,7 +140,7 @@ The `configure()` response now carries `schema_status_*` and
   > point me at a different database?
 
   On confirmation run `ALTER DATABASE "<stored>" RENAME TO <STORED>;` and
-  re-persist the upper-case name, then `configure(ensure_metadata_schema=true)`.
+  re-persist the upper-case name, then re-check.
   Never create a target database with a quoted name.
 
 ## If the user won't name a database

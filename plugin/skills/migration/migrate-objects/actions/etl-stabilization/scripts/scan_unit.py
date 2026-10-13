@@ -833,6 +833,7 @@ def print_summary(result: dict) -> None:
 PLATFORM_EXTENSIONS: dict[str, str] = {
     ".dtsx": "ssis",
     ".yxmd": "alteryx",
+    ".item": "talend",
 }
 
 AMBIGUOUS_EXTENSIONS: set[str] = {".xml"}

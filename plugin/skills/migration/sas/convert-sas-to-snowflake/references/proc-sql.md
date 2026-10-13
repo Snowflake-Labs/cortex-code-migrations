@@ -90,7 +90,7 @@ SELECT "Column1" FROM "Table1";
 
 | SAS PROC SQL | Snowflake |
 |--------------|-----------|
-| `PROPCASE(str)` | `INITCAP(str)` |
+| `PROPCASE(str)` | `INITCAP(str, ' /-(.\t')` |
 | `LENGTH(str)` | `LENGTH(str)` |
 | `COMPRESS(str, 'ad')` | `REGEXP_REPLACE(str, '[^a-zA-Z0-9]', '')` |
 | `CAT(a, b)` | `CONCAT(a, b)` |
@@ -122,7 +122,7 @@ SELECT "Column1" FROM "Table1";
 | `DATEPART(datetime)` | `DATE(datetime)` or `datetime::DATE` |
 | `TIMEPART(datetime)` | `TIME(datetime)` or `datetime::TIME` |
 | `INTCK('unit', a, b)` | `DATEDIFF(unit, a, b)` |
-| `INTNX('unit', date, n)` | `DATEADD(unit, n, date)` |
+| `INTNX('unit', date, n)` | `DATE_TRUNC(unit, DATEADD(unit, n, date))` (default alignment 'B'; `'S'` → `DATEADD` only; `'week'` starts Sunday — function-mappings.md) |
 | `YEAR(date)` | `YEAR(date)` |
 | `QTR(date)` | `QUARTER(date)` |
 | `MONTH(date)` | `MONTH(date)` |

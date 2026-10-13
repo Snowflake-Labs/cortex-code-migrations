@@ -40,9 +40,13 @@ class WorkflowAnalysis:
     technology: str  # 'InformaticaPowerCenter'
     workflow_tasks: List[Component] = field(default_factory=list)
     mappings: Dict[str, Mapping] = field(default_factory=dict)
+    # Mappings a direct workflow session runs, whose files are kept as their own
+    # entries. Shown on the workflow page, and omitted from this workflow's totals.
+    display_mappings: Dict[str, Mapping] = field(default_factory=dict)
     source_definitions: List[Component] = field(default_factory=list)
     target_definitions: List[Component] = field(default_factory=list)
     has_workflow_declaration: bool = False
+    declares_workflow: bool = False  # a Folder-level Workflow declaration (not just a Session)
     workflow_dag_file: Optional[str] = None
 
     @property
@@ -63,8 +67,30 @@ class WorkflowAnalysis:
         return components
 
     @property
+    def kind(self) -> str:
+        """'workflow' or 'mapping', the way the code unit registry counts this file.
+
+        Arrange splits a PowerCenter export into one file per workflow and one per
+        mapping. A mapping file may still declare a Folder-level Session, so that
+        declaration alone does not make a workflow. A Workflow declaration or a
+        Category=Workflow task (a session instance) does: a workflow file often has
+        only those, and attaching its split mappings must not relabel it. A file
+        that holds no mappings at all stays a workflow.
+        """
+        if self.declares_workflow or self.has_workflow_tasks or not self.mappings:
+            return "workflow"
+        return "mapping"
+
+    @property
+    def has_workflow_tasks(self) -> bool:
+        """True for Category=Workflow tasks; mapping rows with no parsable mapping
+        land in workflow_tasks too, and do not make a file a workflow."""
+        return any(task.category == "Workflow" for task in self.workflow_tasks)
+
+    @property
     def total_components(self) -> int:
-        return len(self.all_components)
+        """Transformations and workflow tasks; source/target definitions are counted apart."""
+        return len(self.execution_components)
 
     @property
     def total_source_definitions(self) -> int:
@@ -266,6 +292,7 @@ class WorkflowAnalysis:
             "name": self.name,
             "path": self.path,
             "technology": self.technology,
+            "kind": self.kind,
             "flags": self.calculate_flags(),
             "metrics": {
                 "total_components": self.total_components,
@@ -273,7 +300,7 @@ class WorkflowAnalysis:
                 "total_target_definitions": self.total_target_definitions,
                 "total_workflow_tasks": self.total_workflow_tasks,
                 "total_mapping_components": self.total_mapping_components,
-                "total_mappings": len(self.mappings),
+                "total_mappings": len(self.mappings) + len(self.display_mappings),
                 "conversion_rates": self.calculate_conversion_rate(),
                 "status_summary": self.status_summary,
                 "subtype_summary": self.subtype_summary,
@@ -300,8 +327,12 @@ class WorkflowAnalysis:
             ],
             "workflow_tasks": [c.to_dict() for c in self.workflow_tasks],
             "mappings": [
-                m.to_dict(workflow_path=self.path)
-                for m in sorted(self.mappings.values(), key=lambda x: x.full_path)
+                m.to_dict(workflow_path=self.path, count_components=count)
+                for m, count in sorted(
+                    [(m, True) for m in self.mappings.values()]
+                    + [(m, False) for m in self.display_mappings.values()],
+                    key=lambda item: item[0].full_path,
+                )
             ],
         }
 

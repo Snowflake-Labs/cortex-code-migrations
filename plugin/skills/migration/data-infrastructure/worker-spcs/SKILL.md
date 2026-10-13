@@ -7,6 +7,10 @@ license: Proprietary. See License-Skills for complete terms
 
 # Worker Setup — SPCS
 
+`<metadata_database>` below is `.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
+overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
+project's.
+
 Deploy the Data Exchange Worker as a Snowpark Container Services (SPCS) service. SPCS automatically provides Snowflake authentication via `@SPCS_CONNECTION` — no Snowflake credentials are needed in the service spec.
 
 > Run worker instances on a compute pool that will stay **active** for the full migration. SPCS automatically restarts instances if they stop.
@@ -115,7 +119,7 @@ Ask the user how many worker instances they want. Recommend 2–3 for most migra
 Show the complete `CREATE SERVICE` statement assembled from the project values and **wait for user confirmation before executing**:
 
 ```sql
-CREATE SERVICE SNOWCONVERT_AI.DATA_MIGRATION.DATA_EXCHANGE_SERVICE
+CREATE SERVICE <metadata_database>.DATA_MIGRATION.DATA_EXCHANGE_SERVICE
   IN COMPUTE POOL <compute_pool>
   FROM SPECIFICATION $$
     spec:
@@ -149,6 +153,11 @@ CREATE SERVICE SNOWCONVERT_AI.DATA_MIGRATION.DATA_EXCHANGE_SERVICE
 
 **Resource sizing:** The `memory: 10G / cpu: 6` values above match the `CPU_X64_M` instance family. Adjust to match your actual compute pool instance family — larger instance families support higher values.
 
+**Pool fit:** with `cpu: 6`, each replica takes a whole `CPU_X64_M` node, so the pool's `MAX_NODES` must be at
+least the replica count plus one for the orchestrator. Keep the pool at `MIN_NODES = 1` and
+`AUTO_SUSPEND_SECS = 60` (see [Sizing a pool that also runs SPCS workers](../compute-pool-setup/SKILL.md#sizing-a-pool-that-also-runs-spcs-workers)).
+Adding replicas beyond what the source can serve raises the bill without speeding up the load.
+
 **Oracle/Teradata:** Add `EXTERNAL_ACCESS_INTEGRATIONS = (<project>_DRIVER_ACCESS)` on the line before `MIN_INSTANCES`.
 
 After the user confirms, instruct them to run the statement in a Snowflake session.
@@ -158,13 +167,13 @@ After the user confirms, instruct them to run the statement in a Snowflake sessi
 Check service status:
 
 ```sql
-SELECT SYSTEM$GET_SERVICE_STATUS('SNOWCONVERT_AI.DATA_MIGRATION.DATA_EXCHANGE_SERVICE');
+SELECT SYSTEM$GET_SERVICE_STATUS('<metadata_database>.DATA_MIGRATION.DATA_EXCHANGE_SERVICE');
 ```
 
 Confirm all instances show `READY`. If any instance is not ready after a few minutes, check logs:
 
 ```sql
-SELECT SYSTEM$GET_SERVICE_LOGS('SNOWCONVERT_AI.DATA_MIGRATION.DATA_EXCHANGE_SERVICE', 0, 'agent', 100);
+SELECT SYSTEM$GET_SERVICE_LOGS('<metadata_database>.DATA_MIGRATION.DATA_EXCHANGE_SERVICE', 0, 'agent', 100);
 ```
 
 **Wait for all instances to reach `READY` status before continuing.**
@@ -175,7 +184,7 @@ Then tell the user:
 >
 > To check worker status at any time:
 > ```sql
-> SELECT SYSTEM$GET_SERVICE_STATUS('SNOWCONVERT_AI.DATA_MIGRATION.DATA_EXCHANGE_SERVICE');
+> SELECT SYSTEM$GET_SERVICE_STATUS('<metadata_database>.DATA_MIGRATION.DATA_EXCHANGE_SERVICE');
 > ```
 
 ## Done

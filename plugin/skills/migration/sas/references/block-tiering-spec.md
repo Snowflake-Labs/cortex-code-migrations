@@ -32,12 +32,20 @@ Start from the parsed SAS constructs, then apply the rules below **in order**:
 
 3. **Exclude boilerplate.** DI Studio / DataFlow scaffolding is generated noise, not migration
    work. Exclude boilerplate blocks (and any blocks nested inside a boilerplate macro) from
-   BOTH the block count AND tiering. Boilerplate is identified by:
-   - **Macro names:** `rcset`, `rcsetds`, `etls_startperformancestats`, `etls_setdebug`,
+   BOTH the block count AND tiering. A macro is boilerplate by **its own declared name** (never a
+   `%macro` nested inside it):
+   - **Always:** `rcset`, `rcsetds`, `etls_startperformancestats`, `etls_setdebug`,
      `etls_recordcount`, `etls_endperformancestats`, `etls_recordtable`,
      `etls_getrecordcount`, `etls_jobstatus`, `etls_logerror`.
-   - **Content indicators:** `etls_`, `%macro rcset`, `perfinit`, `log4sas`, `armsubsys`,
-     `sas data integration studio`.
+   - **Any other `etls_*` macro only when it does no work:** no named `DATA` step (other than
+     `_null_`), no `CREATE TABLE`, and no PROC other than transport/housekeeping (`upload`,
+     `download`, `printto`, `options`). An `etls_condition`-style wrapper that filters or
+     writes data is business logic and is counted.
+   - **`_flw_*` macros** (SAS Studio Flow) follow the same "does no work" test. Also excluded:
+     a `data _null_` that only PUTs `_FLW_` markers, and a `PROC DATASETS` that only deletes
+     datasets a later step re-creates.
+   - **Content indicators** (complexity discount only): `etls_`, `%macro rcset`, `perfinit`,
+     `log4sas`, `armsubsys`, `sas data integration studio`.
 
 The set of blocks surviving rules 1-3 is the **countable block set**. Every count the skills
 report — portfolio total, per-file count, and per-tier distribution — is computed over this
@@ -51,26 +59,32 @@ exact same set, so they always reconcile.
 
 ## 2. Per-block tier rules
 
-Classify each countable block by scanning its (lowercased) content. Evaluate tiers
-top-down; the first match wins. Tier 1 (pure SQL) is the default.
+Classify each countable block by scanning its **statements**: lowercased, with comments and
+string literals removed, matching whole words (`call_center_id` is not a `call`; `'proc reg'`
+inside a string is not a PROC). Evaluate tiers top-down; the first match wins. Tier 1 (pure
+SQL) is the default.
 
 ### Tier 3 — PySpark / SCOS notebook (last resort)
 
 Any ONE of:
 
-- `declare hash` — HASH objects, no SQL equivalent.
-- `do until` / `do while` **with** external state (`symput`, or more than 2 `call ` statements
+- `declare hash` **that is mutated or iterated** (`.add(`, `.replace(`, `.remove(`, `.output(`,
+  `.ref(`, `.sum(`, a `hiter`, `.next(`/`.prev(`). A lookup-only hash (`defineKey`/`defineData`
+  then `find()`) is a keyed JOIN and is not a Tier-3 trigger.
+- `do until` / `do while` **with** external state (`symput`, or more than 2 `call` statements
   other than `call execute`).
-- Statistical modeling PROC — any of:
-  `proc reg`, `proc glm`, `proc logistic`, `proc cluster`, `proc factor`, `proc phreg`,
-  `proc lifetest`, `proc surveyselect`, `proc mixed`, `proc genmod`, `proc nlmixed`.
+- Statistical / modelling PROC. Canonical list (`constants.py TIER3_STAT_PROCS`, a floor, not a
+  closed set): `reg glm logistic cluster fastclus factor phreg lifetest surveyselect mixed genmod
+  nlmixed glimmix princomp discrim candisc arima forecast esm ucm timeseries npar1way ttest nlin
+  probit catmod varclus dmdb dmreg neural arboretum`, plus every `hp*` procedure except the data
+  utilities `hpsort`, `hpsummary`, `hpds2`.
 
 ### Tier 2 — Snowflake stored procedure
 
 Any ONE of (when no Tier-3 trigger matched):
 
 - `call execute` — dynamic dispatch; convert to a procedure using EXECUTE IMMEDIATE or a cursor
-  loop. A block that also has `declare hash` or a statistical PROC is still Tier 3 (checked first).
+  loop. A block that also has a mutated hash or a statistical PROC is still Tier 3 (checked first).
 - `retain` + `first.` + conditional reset (`= 0` or `= .`).
 - `first.` or `last.` **with** more than one `output ` statement.
 - More than one `output ` destination and no plain `output;`.
@@ -102,7 +116,7 @@ elif any countable block is Tier 2: primary_tier = TIER_2_SP
 else:                               primary_tier = TIER_1_SQL
 ```
 
-There are **no proportion thresholds.** One genuine (non-boilerplate) HASH block in a
+There are **no proportion thresholds.** One genuine (non-boilerplate) Tier-3 block in a
 50-block file makes the whole file Tier 3, because conversion will emit a notebook for it.
 The boilerplate exclusion in Section 1 is what prevents a stray scaffolding HASH from
 promoting an entire generated file.
