@@ -14,7 +14,11 @@ Do this once at entry. Finish with `transition_status` after deploy succeeds or 
 ## Call the tool
 
 Use the `deploy` MCP tool with `object_name` = `<object_name>` (or the
-`invocation` from `next_task`).
+`invocation` from `next_task`). When several objects of the group are at
+`deploy`, deploy them in one call with `where="id IN ('<id1>', '<id2>')"`
+instead of one `object_name` per call; scai reports each object separately.
+Unclaimed clean tables go through `deploy(clean_tables=true)` from the picker
+([claim_objects.md](../actions/claim_objects.md#bulk-deploy)), not this guide.
 
 The tool uses the connection and database from `configure` and deploys via `scai code deploy`.
 Do **not** pass `--profile` or `--database-bindings` yourself — the tool injects them.
@@ -74,7 +78,7 @@ Workflow:
 Confirm the deploy oracle (`remoteDeploymentInfo` / `cloudStatus.deployment` as
 appropriate), then stamp so `TASK_EVENTS` get an `advanced` row:
 
-- **Succeeded** → `transition_status(status="advance", task="deploy", outcome="completed", where="id = '<object_id>'")`
+- **Succeeded** → `transition_status(status="advance", task="deploy", outcome="completed", where="id = '<object_id>'")` (or `id IN (...)` for every object that deployed)
 - **Failed** with anything the pre-deploy checks do not cover → `transition_status(status="advance", task="deploy", outcome="failed", error="<sql|infra>", where="id = '<object_id>'")`
 
 If completed advance refuses (`does not confirm completion`), wait for the

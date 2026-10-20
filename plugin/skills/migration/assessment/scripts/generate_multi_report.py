@@ -3212,6 +3212,9 @@ def generate_html_template(
             font-weight: 600; padding: 6px 14px; border-bottom: 1px solid #E2E8F0;
             white-space: nowrap;
         }}
+        /* Comes after the subhead rule so Critical / High / Medium / Low center
+           in their cells. The later left alignment would otherwise win. */
+        .effort-table th.effort-subhead.ctr {{ text-align: center; }}
         .effort-table tr.effort-total td {{ border-top: 2px solid #CBD5E1; }}
         .effort-muted {{ color: #64748B; font-size: 0.85rem; }}
         .nav-preview-badge {{
