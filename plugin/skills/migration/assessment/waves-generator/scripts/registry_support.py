@@ -30,7 +30,10 @@ if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 from bindable_token import unwrap_bindable_token
-from snowconvert_reports.conversion_status import has_actionable_issues
+from snowconvert_reports.conversion_status import (
+    STATUS_REQUIRE_ATTENTION,
+    has_actionable_issues,
+)
 from snowconvert_reports.na_utils import (
     NA_VALUES as _NA_VALUES,
     is_na,
@@ -127,7 +130,7 @@ def _compute_conversion_status(entry: Dict[str, Any]) -> str:
     - conversion.status = "pending" → "Pending Conversion" (not yet converted)
     - conversion.status = "completed":
       - No actionable issues → "Success" (FDM / PRF advisories included)
-      - Has an SSC-EWI or SSC-OOS issue → "Require Attention"
+      - Has an SSC-EWI or SSC-OOS issue → "Requires Attention"
     - conversion.status in ("notsupported", "not_supported", "NotSupported", "failed") → "Not Supported"
     - Fallback: assessment.status or raw conversion.status
     """
@@ -147,7 +150,7 @@ def _compute_conversion_status(entry: Dict[str, Any]) -> str:
     if conversion_raw == "completed":
         if not has_actionable_issues(entry):
             return "Success"
-        return "Require Attention"
+        return STATUS_REQUIRE_ATTENTION
 
     # Fallback: assessment failed (non-missing) → Not Supported
     if assessment_raw == "failed" and not entry.get("isMissing", False):

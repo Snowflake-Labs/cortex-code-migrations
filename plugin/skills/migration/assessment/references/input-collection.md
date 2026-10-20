@@ -121,6 +121,16 @@ Leave `etl_replatform_sources_path` empty unless the user named the ETL source
 directory (SSIS, Informatica, or any other ETL platform); the child auto-detects
 `<project_dir>/source/_etl/`.
 
+### 5.3a SSIS target
+
+When SSIS (`.dtsx`) is in scope, first look for a target the project already recorded: `etl_ssis_target` restored by `configure` (which also derives `scripting` when project.yml's `etl_scripting_platforms` lists `ssis`). If one exists, reuse it, tell the user which target the assessment will frame, and do not ask, so a re-assessment never contradicts an earlier conversion. Otherwise ask exactly once and never default:
+
+> Which conversion target for SSIS?
+> 1. **dbt** — data flows become dbt models orchestrated by Snowflake Tasks
+> 2. **scripting** — data flows become Snowflake Scripting procedures (preview; stabilization and deploy are not part of this flow)
+
+Record `ssis.target` as `dbt` or `scripting`. Pass it to the SSIS child as `ssis_target`. The review-mode rule in 5.3 is unchanged.
+
 ### 5.3b Informatica PowerCenter target
 
 When Informatica is in scope, ask exactly once and never default:

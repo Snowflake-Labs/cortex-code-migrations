@@ -17,7 +17,7 @@ ImportError: dlopen(.../data-migration-orchestrator/lib/pythonX.Y/site-packages/
   symbol not found in flat namespace '_OSSL_get_max_threads'
 ```
 
-(`_DTLS_get_data_mtu` is the same class of error.) It also shows up as `scai data doctor` **DEW doctor** / **Orchestrator doctor** warnings. The MCP run gate now treats this signature as a **blocking** failure instead of a warning, so `migrate_data(mode="run")` returns it in `doctor_failures` with this remediation rather than dying mid-workflow.
+(`_DTLS_get_data_mtu` is the same class of error.) `scai data doctor` reports it as a failing **DEW doctor** / **Orchestrator doctor** row, with the repair below as its suggestion, so `data_infrastructure(mode="up")` refuses with it in `doctor_failures` rather than letting the workflow die mid-run.
 
 **Cause:** The orchestrator/DEA run in bundled Python venvs under `~/.config/Snowflake Inc/SnowConvertDesktop/{data-migration-orchestrator,data-exchange-agent}/`, created by SnowConvert Desktop via `pip install`. `cryptography` is a transitive dependency. When pip installs it as a **source build (sdist)** instead of the self-contained binary wheel, `_rust.abi3.so` is linked to resolve OpenSSL symbols from an **external** OpenSSL at load time. If a different/older OpenSSL resolves first at runtime, the symbol lookup fails. The official `cryptography` wheels (maturin, e.g. `cp311-abi3-macosx_11_0_arm64`) instead **statically bundle** OpenSSL and link only `libSystem`/`libiconv` — those never hit this error. This is environment nondeterminism (Python version, available wheels), **not** an Apple-Silicon limitation: an arm64 machine that resolved the bundled wheel works fine.
 

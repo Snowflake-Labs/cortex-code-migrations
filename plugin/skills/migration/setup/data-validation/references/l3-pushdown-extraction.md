@@ -132,7 +132,7 @@ prefix = "<PREFIX>"  # Snowflake external stage URL must point at this prefix in
 # connection_string = "DefaultEndpointsProtocol=https;AccountName=...;AccountKey=...;EndpointSuffix=core.windows.net"
 ```
 
-Stage `URL` must be the same bucket/container + prefix. Snowflake often shows GCS as `gcs://` while workers use `gs://`; treat them as the same bucket.
+The stage URL is the landing path in [object-store path restrictions](../../../data-infrastructure/references/object-store-path-restrictions.md). Snowflake often shows GCS as `gcs://` while workers use `gs://`; treat them as the same bucket.
 
 ## Snowflake external stage SQL
 
@@ -187,13 +187,14 @@ CREATE STORAGE INTEGRATION IF NOT EXISTS l3_azure_int
   STORAGE_PROVIDER = 'AZURE'
   ENABLED = TRUE
   AZURE_TENANT_ID = '<tenant-id>'
-  STORAGE_ALLOWED_LOCATIONS = ('azure://myaccount.blob.core.windows.net/my-container/dv-signatures/');
+  STORAGE_ALLOWED_LOCATIONS = ('azure://myaccount.blob.core.windows.net/my-container/');
 
 DESC STORAGE INTEGRATION l3_azure_int;
 -- Consent the AZURE_CONSENT_URL; grant Snowflake’s app read on the container.
+-- Stage URL = container + the worker prefix (when set). With no worker prefix, the stage URL is the bare container (as here).
 
 CREATE STAGE IF NOT EXISTS MY_DB.MY_SCHEMA.L3_EXT_STAGE
-  URL = 'azure://myaccount.blob.core.windows.net/my-container/dv-signatures/'
+  URL = 'azure://myaccount.blob.core.windows.net/my-container/'
   STORAGE_INTEGRATION = l3_azure_int
   FILE_FORMAT = (TYPE = PARQUET);
 ```
@@ -202,7 +203,7 @@ Copy `externalStage: MY_DB.MY_SCHEMA.L3_EXT_STAGE` into the validation workflow.
 
 ## Alignment check
 
-Writer destination and stage URL must share the same prefix:
+Writer destination and stage URL must share the same path. S3, GCS, and Azure include the worker `prefix` when set:
 
 | Strategy | Writer path | Stage `URL` |
 |----------|-------------|-------------|
@@ -211,7 +212,8 @@ Writer destination and stage URL must share the same prefix:
 | `dbms_cloud` | `dbms_cloud_file_uri_prefix` | S3 (or matching) URL for that prefix |
 | `write_nos` | WRITE_NOS location host + container | matching cloud URL |
 | `cet_as` | external data source location + `cet_as_path_prefix` | matching Azure URL |
-| `cloud_direct` | `[connections.target.*]` bucket/container + prefix | matching URL |
+| `cloud_direct` (S3, GCS) | `[connections.target.s3|gcs]` bucket + `prefix` | matching URL |
+| `cloud_direct` (Azure) | container (+ optional `prefix`) + orchestrator `task_results/workflows/...` | `azure://<account>.blob.core.windows.net/<container>/<prefix>/` |
 
 Misalignment looks like empty `LIST` / `MissingSignatureExtractError`, not a data mismatch.
 

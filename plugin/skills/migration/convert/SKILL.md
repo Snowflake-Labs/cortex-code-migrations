@@ -17,6 +17,12 @@ Tell the user:
 > 2. Generate reports flagging anything that needs manual review (EWIs, FDMs, performance remarks, out-of-scope items).
 > 3. Save converted code under `snowflake/`; conversion reports are available through AIM Assessment.
 
+That message announces the conversion; it does not end the turn. Go straight on to
+Step 1 in the same turn, and keep going until `scai code convert` has returned its
+envelope or a step below says to ask or to end the turn. Saying the
+conversion is running is not running it: the conversion itself asks the user nothing, so a
+turn that ends here leaves setup stalled.
+
 Convert source code to Snowflake SQL using the deterministic code conversion engine.
 
 Report the result from the `--json` envelope and hand off. Reading the generated
@@ -115,13 +121,14 @@ Classify the **native** ETL platform from the files when extensions are decisive
 > 2. **Informatica Power Center**
 
 - If `source/_etl/` is **missing or empty**, skip the native ETL prompts.
-- If it contains **SSIS** packages only, no conversion-target prompt is needed. Do not route SSIS to AI-First. Load `../dbt-consolidation/SKILL.md`.
+- If it contains **SSIS** (`.dtsx`), do not route it to AI-First. Follow [references/ssis-target.md](references/ssis-target.md) before any dbt question. It asks dbt or Snowflake Scripting, sets `SSIS_SCRIPTING_MODE` for Step 4 when Snowflake Scripting is chosen, and loads `../dbt-consolidation/SKILL.md` for dbt.
 - If it contains **Informatica PowerCenter** XML, ask the remaining ETL questions up front, in one sequence, before running the conversion:
     1. Conversion target, via `ask_user_question` (`multiSelect = false`):
        > "How should Informatica PowerCenter mappings be converted?
-       > 1. **dbt** (default): each mapping becomes a dbt model orchestrated by Snowflake Tasks. Supports ETL stabilization and deploy.
-       > 2. **Snowflake Scripting** (preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Stabilization and deploy are skipped for this preview flavor."
-    2. If the answer is **dbt**, load `../dbt-consolidation/SKILL.md`. For Informatica with no SSIS it asks one question: consolidate dbt projects and models by folder, or generate 1 project per mapping. Do not ask model-chain consolidation as well. Return here when complete.
+       > 1. **dbt**: each mapping becomes a dbt model orchestrated by Snowflake Tasks. Supports ETL stabilization and deploy.
+       > 2. **Snowflake Scripting** (Preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Stabilization and deploy are skipped for this preview flavor."
+       Do not label either option recommended.
+    2. If the answer is **dbt** and SSIS is absent or chose Snowflake Scripting, load `../dbt-consolidation/SKILL.md`. For Informatica with no dbt SSIS it asks one question: consolidate dbt projects and models by folder, or generate 1 project per mapping. Return here when complete. When SSIS also chose dbt, the SSIS bullet above loads `dbt-consolidation` once after both answers.
     3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 4. Do **not** load `dbt-consolidation`.
 
     Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`. When the target is Snowflake Scripting, the `--informatica-to-snowflake-scripting` convert flag in Step 4 additionally records the project-level `etl_target` in `project.yml` that gates the scripting-preview routing.
@@ -205,12 +212,12 @@ Only SQL Server's conversion settings define the bindable-format flags today; on
 |--------|------|
 | `--generate-source-bindable-format --generate-snowflake-bindable-format` | `source_language` is SqlServer (interactive and `subagent_mode`). Skip on explicit opt-out, on any other dialect, and on the `--dbt` path, where scai rejects them. |
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 2 (Informatica target is Snowflake Scripting) |
-| `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set by `../dbt-consolidation/SKILL.md` |
-| `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS, or Informatica dbt) |
+| `--ssis-to-snowflake-scripting` | `SSIS_SCRIPTING_MODE` was set in Step 2 (SSIS target is Snowflake Scripting) |
+| `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt, or Informatica dbt) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 3 |
 | `--tableauRepointing <TABLEAU_PATH>` | `TABLEAU_PATH` was set in Step 3.5 |
 
-The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. Either combines with `--powerbi-repointing` and/or `--tableauRepointing`. If none of the conditions hold, run the base command as-is.
+The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. The SSIS scripting flag and the SSIS dbt-consolidation flags come from the SSIS answer, so a scripting SSIS convert does not also pass a consolidation flag. Either platform's choice combines with `--powerbi-repointing` and/or `--tableauRepointing`, and with the other platform's choice. If none of the conditions hold, run the base command as-is.
 
 Substitute `<PBIT_PATH>` and `<TABLEAU_PATH>` with the actual paths you stored. Do not emit literal placeholder tokens to the shell.
 
@@ -251,6 +258,7 @@ Do not present `.scai/reports/` as a place for users to browse.
 | `-x, --show-ewis` | Show detailed EWI breakdown |
 | `--overwrite-working-directory` | Overwrite output files in `snowflake/` and registry |
 | `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; ETL stabilization and deploy are skipped for these units. |
+| `--ssis-to-snowflake-scripting` | Convert SSIS data flows to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; stabilization and deploy are not part of this flow. |
 
 For dbt consolidation options, see `../dbt-consolidation/SKILL.md`.
 For Power BI options, see `../powerbi-repointing/SKILL.md`. For Tableau options, see `../tableau-repointing/SKILL.md`.
@@ -374,6 +382,8 @@ are for that.
 
 *If `SCRIPTING_MODE` was set*, also tell the user:
 > Informatica mappings were converted to Snowflake Scripting stored procedures (preview). **ETL Stabilization is not supported for Snowflake Scripting conversions (dbt only)**, and deploy is not part of this preview flow - both are skipped for these ETL units. The generated procedures and Task graph are under `snowflake/_etl/` for review.
+
+*If `SSIS_SCRIPTING_MODE` was set*, follow "After a Snowflake Scripting conversion" in [references/ssis-target.md](references/ssis-target.md).
 
 *If Step 4.5 ran*, its own CHECKPOINT already reported the AI-First exit-code verdict in full — do not repeat or soften it here.
 

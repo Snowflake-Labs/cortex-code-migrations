@@ -159,6 +159,7 @@ def handshake(executable: str, version: str) -> Tuple[str, str]:
         )
 
     deadline = time.monotonic() + _TIMEOUT_SECONDS
+    stderr_closed = False
     try:
         while True:
             remaining = deadline - time.monotonic()
@@ -176,7 +177,13 @@ def handshake(executable: str, version: str) -> Tuple[str, str]:
             if kind == "stderr" and line:
                 stderr_lines.append(line)
                 continue
+            if kind == "stderr-eof":
+                stderr_closed = True
+                continue
             if kind == "stdout-eof":
+                # The stderr reader can lag the stdout one; its lines are the diagnostic.
+                if not stderr_closed:
+                    stderr_lines.extend(drain_stderr(output))
                 returncode = process.poll()
                 if returncode is None:
                     try:

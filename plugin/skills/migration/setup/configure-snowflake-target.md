@@ -18,24 +18,24 @@ Call `configure(needs_snowflake_connections=true)` and read both
 or `$SNOWFLAKE_CONNECTION`) and `existing_snowflake_connections:` (every
 connection in the user's TOML). Safe to repeat — it only reads.
 
-Ask via `ask_user_question` (`multiSelect = false`), never by asking the
-user to type a name:
+Ask via `ask_user_question` (`multiSelect = false`), never for a typed
+name:
 
 - Options are the names from `existing_snowflake_connections:`, the
   resolved or active one first and labelled **currently selected**.
-- Leave the `(default)` suffix on whichever name carries it: that marks the
-  TOML default, which may be a different connection. Two names may end up
-  labelled, one per meaning.
-- Add **Create a new connection** as the last option — always, even when
-  the list is long.
+- With nothing resolved, list a `last_used_snowflake_connection:` from that
+  list first as `<name> (recommended)`, description "Last used": it is
+  only a recommendation, so save nothing until the user picks.
+- Move the TOML default's `(default)` suffix into its description,
+  "Default": the app badges that label as recommended.
+- Always add **Create a new connection** last, even to a long list.
 
 `existing_snowflake_connections: none` means there is nothing to offer:
 say so and go straight to creating one — including when
-`snowflake_connection` already resolves, because a name that is in no TOML
-names nothing scai can connect with. `(unavailable: …)` is the opposite
-case: scai did not answer, so propose the resolved or active connection by
-name and let the user correct it; do not tell them they have no
-connections.
+`snowflake_connection` already resolves: a name in no TOML is nothing
+scai can connect with. `(unavailable: …)` is the opposite
+case: scai did not answer, so propose the resolved or active connection
+and let the user correct it; never say they have no connections.
 
 On **Create a new connection**, or when the current one fails SSO against
 Microsoft Entra ID / Azure AD / OIDC, load
@@ -71,8 +71,8 @@ from the `configure()` response:
 > - **Snowflake connection:** `<snowflake_connection>`
 > - **Target database:** `<snowflake_targets>` when the response has them,
 >   otherwise `<snowflake_database>` or the name the user just gave
-> - **Source connection:** `<source_connection>` — or "none (synthetic test
->   data only)" when unset
+> - **Source connection:** `<source_connection>` — or "not set yet —
+>   required by the sandbox profile step" when unset
 > - **Source dialect:** `<source_language>`
 > - **Git branch:** `<git_main_branch>`
 >
@@ -145,9 +145,8 @@ The `configure()` response now carries `schema_status_*` and
 
 ## If the user won't name a database
 
-Don't block and don't error. Conversion and assessment are already
-complete and committed; the target can be named later. Tell the user the
-deploy loop needs a current database and stop here:
+Don't block or error: conversion and assessment are committed and the
+target can be named later. Tell the user deploy needs a database, and stop:
 
 > No problem — assessment is done and committed. I'll need a target
 > database before deploying anything, so say the word when you've picked

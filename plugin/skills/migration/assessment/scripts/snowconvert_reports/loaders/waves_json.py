@@ -194,6 +194,7 @@ class WavesJsonAdapter:
                     "file_name": obj.get("fileName", ""),
                     "technology": obj.get("technology", ""),
                     "conversion_status": obj.get("conversionStatus", ""),
+                    "issues": obj.get("issues") or [],
                     "subtype": obj.get("subtype", ""),
                     "partition_type": obj.get("partitionType", ""),
                 }

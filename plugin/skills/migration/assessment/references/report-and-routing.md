@@ -78,6 +78,8 @@ scai assessment report \
   [--informatica-json "<path>" when Informatica succeeded]
 ```
 
+The command also writes a PDF of every tab beside the HTML (`multi_report.pdf`, or the `-o` stem with a `.pdf` extension). It needs Google Chrome, Microsoft Edge, or Chromium on the machine.
+
 Always pass `--project-dir`; its registry is required to enrich UUID-based
 waves with names, categories, paths, statuses, and dependencies. The command
 auto-discovers:

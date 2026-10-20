@@ -128,9 +128,9 @@ available for **every supported source dialect**, with one hard rule.
 > Iceberg table from relational data**; it is not a path for re-pointing or adopting data that is already
 > Iceberg.
 >
-> **Only supported flavor: Iceberg v2 with a Snowflake-managed catalog on an external volume.** External /
-> AWS-Glue / other catalogs are out of scope. If that is not what the user wants, migrate to **native**
-> tables instead.
+> **Supported flavor: a Snowflake-managed Iceberg table (spec v2 or v3) on an external volume** with
+> `storageMode: compatible` and load mode `ADD_FILES_COPY` or `FULL_INGEST`. External / AWS-Glue / other
+> catalogs are out of scope. If that is not what the user wants, migrate to **native** tables instead.
 
 Supported path:
 
@@ -228,20 +228,13 @@ container and the same path**:
 
 | Strategy | Where the data is written | What must match it |
 |----------|---------------------------|--------------------|
-| `cloud_direct` | Worker's `[connections.target.{blob,s3,gcs}]` + the worker's path prefix | `extraction.externalStage` URL |
+| `cloud_direct` (S3, GCS) | Worker's `[connections.target.s3|gcs]` `bucket_name` + `prefix` | `extraction.externalStage` URL |
+| `cloud_direct` (Azure) | Container (+ optional `prefix`) plus the orchestrator's `task_results/workflows/...` path | stage URL at the container + `prefix`, so `@stage/task_results/...` is where the files are |
 | `cet_as` | SQL Server / Synapse `EXTERNAL DATA SOURCE` location + `cet_as_path_prefix` | `extraction.externalStage` URL |
 | `unload` | Redshift `unload_s3_bucket` (+ prefix) | `extraction.externalStage` URL |
 | `write_nos` | Teradata authorization object's cloud location | `extraction.externalStage` URL |
 | `dbms_cloud` | Oracle `dbms_cloud_file_uri_prefix` | `extraction.externalStage` URL |
 | `export_data` | BigQuery `exportDataGcsBucket` / `exportDataGcsPrefix` | `extraction.externalStage` URL |
 
-For an **Iceberg** target, `icebergConfig.baseLocationPrefix` (the managed table's `BASE_LOCATION`) is a
-separate path and is subject to the same discipline — it must resolve under the external volume the
-table uses.
-
-**Why this is load-bearing:** a mismatch does **not** raise an error. The orchestrator's `LIST @stage`
-finds no files, and the partition is marked **complete with 0 rows** — the run reports success while
-loading nothing. The usual cause is a **root-vs-subpath** split: the worker writes to the container /
-bucket **root** (prefix = container name only) but the stage URL points at a subfolder, or the reverse.
-When you ask the user for a stage URL or a prefix, state plainly that it must be the **exact** storage
-location and path the strategy unloads to.
+The stage URL in that table is also the unload path that must sit on the Snowflake external volume.
+Confirm it before run: [object-store path restrictions](../../../../data-infrastructure/references/object-store-path-restrictions.md).

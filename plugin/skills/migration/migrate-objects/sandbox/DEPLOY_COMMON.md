@@ -46,10 +46,16 @@ cleared (children first) and reloaded (parents first), so a delete never
 runs while a child in that set still references it. The parents those
 tables reference are loaded only when empty and never cleared, because
 tables outside the set may still reference their rows. A sibling fact that
-only shares a parent stays out. For an extracted project without isolated
-database bindings, the connected catalog is the customer's live source: the tool
-skips DDL and fixture loading, records the object ready, and preserves its rows;
-`mode=load_only` is refused there. Snowflake is
+only shares a parent stays out. For an extracted project where any `source:`
+binding still maps a catalog to itself (convert's default), or a selected
+object's catalog has none, the connected catalog is the customer's live source:
+the tool skips DDL and fixture loading, records the object ready, and preserves
+its rows; `mode=load_only` is refused there. A SQL Server testbed project gets an
+empty `AIMSBX_TB_*` source catalog per self-mapped entry at configure, so it loads
+there once every entry is rebound; elsewhere, or if a create failed, it stays
+preserved. The loader also refuses, before any
+delete, a table that holds rows testbed did not write: surface that refusal
+verbatim and stop, never retry with `--allow-existing-data`. Snowflake is
 untouched — that is the later `deploy` task. CREATE is skipped when the object
 already exists.
 

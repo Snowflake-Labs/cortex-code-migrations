@@ -17,7 +17,7 @@ The first command is not the result. It collects issues and leaves `problem_desc
 scai assessment conversion-issues
 ```
 
-This reads the code unit registry and converted files. It writes:
+This reads the code unit registry and converted files. It writes every distinct pair. Do not limit the run to a subset. It writes:
 
 - `<project_dir>/artifacts/assessment/conversion-issues.json`
 - `<project_dir>/artifacts/assessment/conversion-issues/conversion_issues.csv`
@@ -35,7 +35,7 @@ For each distinct pair, write a Problem Description and a Recommended Fix that n
 2. The source dialect documentation
 3. Snowflake SQL documentation
 
-The fix must name a concrete replacement. Do not leave `<!-- ewi-skill:agent-must-fill -->`. Do not add an AI disclaimer or the heading "AI-generated recommendation — not a mandatory fix". The CSV adds the disclaimer for Jira. The report and dashboard show only the fix.
+The fix must name a concrete replacement. Do not leave `<!-- ewi-skill:agent-must-fill -->`. Do not add an AI disclaimer or the heading "AI-generated recommendation — not a mandatory fix". The CSV places that warning in a Jira `{warning}` panel above the fix. The report and dashboard show only the fix, under a heading that says it is AI-generated and must be validated.
 
 Write `<project_dir>/artifacts/assessment/conversion-issues/updates.json`:
 

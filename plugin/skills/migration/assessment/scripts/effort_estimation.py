@@ -64,9 +64,10 @@ _BAND_LABELS = {"critical": "Critical", "high": "High", "medium": "Medium", "low
 class CalculatorRow:
     """One calculator line item, mirroring the .NET record it is rehydrated from.
 
-    A row is priced one of two ways, readable from its fields. A *banded* row
-    prices counted objects and carries ``band_counts`` plus ``band_rates``; a
-    *flat* row is one budget for the whole line and carries ``flat_hours``.
+    ``pricing`` says which fields are live. A *banded* row prices counted objects
+    and carries ``band_counts`` plus ``band_rates``. A *flat* row is one budget
+    for the whole line. A *flat_total* row shows the object count and charges
+    ``flat_hours`` once. A *per_object* row charges ``unit_hours`` times the count.
     """
 
     # Stable config key, unique per row: how an override addresses a row without
@@ -90,6 +91,10 @@ class CalculatorRow:
     manual_rewrite_hours: Optional[float]
     automation_pct: Optional[float]
     comments: str = ""
+    # Absent on artifacts written before these shapes existed. Missing means banded
+    # when band counts are present and flat otherwise; the shared JS module decides.
+    pricing: str = "banded"
+    unit_hours: Optional[float] = None
     # Present on a Code Conversion row. Absent on v1 artifacts and on every other row.
     repetition: Optional[Dict[str, Any]] = None
 
@@ -201,7 +206,13 @@ EFFORT_MIXIN_JS = r"""
       // Grouping and its subtotals come from the shared module, not from this
       // template, so the report and the dashboard cannot disagree about one.
       effortSections() {
-        return shared.groupSections(this.effortApplied, baseline.summary, this.effortRollup);
+        return shared.groupSections(this.effortApplied, baseline.summary, this.effortRollup)
+          .filter(function (section) {
+            return section.key === "fixed_budget"
+              || section.rows.length
+              || section.zeroTypes.length
+              || section.extraRows.length;
+          });
       },
       // Component, object type, quantity, one per band, hours, comments. Derived so
       // a new band cannot leave a spanning cell one column short.
@@ -610,11 +621,11 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                             </button>
                         </th>
                     </tr>
-                    <tr v-if="effortSectionOpen(section) &amp;&amp; section.shape === 'flat'">
+                    <tr v-if="effortSectionOpen(section) &amp;&amp; section.shape !== 'banded'">
                         <th class="effort-subhead">Migration Component</th>
                         <th class="effort-subhead">Line Item</th>
-                        <th class="effort-subhead num">Basis</th>
-                        <th class="effort-subhead num" :colspan="effortBands.length">Budget (hours)</th>
+                        <th class="effort-subhead num">{{ section.shape === 'flat' ? 'Basis' : 'Objects' }}</th>
+                        <th class="effort-subhead num" :colspan="effortBands.length">{{ section.shape === 'per_object' ? 'Hours per object' : (section.shape === 'flat_total' ? 'Base effort (h)' : 'Budget (hours)') }}</th>
                         <th class="effort-subhead num">Est. Hours</th>
                         <th class="effort-subhead">Comments</th>
                     </tr>
@@ -633,13 +644,13 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                                        :class="{'effort-input-error': effortCellError(row, null)}"
                                        :value="effortInputValue(row, null)"
                                        :disabled="!row.is_editable"
-                                       :aria-label="'Budget hours for ' + row.component + ' ' + row.object_type"
-                                       :title="row.is_unestimated ? 'Snowflake publishes no figure for this line — enter your own budget' : 'Enter your own budget for this line'"
+                                       :aria-label="row.pricing === 'per_object' ? ('Hours per object for ' + row.object_type) : ('Budget hours for ' + row.component + ' ' + row.object_type)"
+                                       :title="row.pricing === 'per_object' ? 'Hours to handle one object. The row total is this rate times the object count.' : (row.pricing === 'flat_total' ? 'One budget for every object of this type. The count does not multiply it.' : (row.is_unestimated ? 'Snowflake publishes no figure for this line — enter your own budget' : 'Enter your own budget for this line'))"
                                        @input="effortOnInput(row, null, $event.target.value)"
                                        @blur="effortOnBlur(row, null)">
                                 <span v-if="effortCellError(row, null)" class="effort-error">{{ effortCellError(row, null) }}</span>
                                 <span v-else-if="row.is_unestimated" class="effort-sf-note">Snowflake: not estimated</span>
-                                <span v-else-if="row.is_overridden" class="effort-sf-note">Snowflake: {{ effortCompact(row.flat_hours) }}</span>
+                                <span v-else-if="row.is_overridden" class="effort-sf-note">Snowflake: {{ effortCompact(row.pricing === 'per_object' ? row.unit_hours : row.flat_hours) }}</span>
                             </td>
                             <td class="num" style="font-weight:600;" :rowspan="row.band_counts ? 2 : 1">
                                 {{ effortHoursOrNa(row.custom_estimated_hours) }}

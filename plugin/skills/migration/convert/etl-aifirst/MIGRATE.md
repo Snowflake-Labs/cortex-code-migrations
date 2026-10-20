@@ -77,11 +77,109 @@ To measure whether the generated SQL actually runs, export `AIFIRST_SNOWFLAKE_CO
 `<PACKAGE>` is the unit directory name the driver created under `$STAGE/Output/ETL/`.
 
 ```bash
-mkdir -p snowflake/_etl "reports/AiFirstIssues/<PACKAGE>"
-cp -R "$STAGE/Output/ETL/<PACKAGE>" "snowflake/_etl/<PACKAGE>"
-cp -R "$STAGE/Reports/AiFirstIssues/." "reports/AiFirstIssues/<PACKAGE>/"
+# REPORT-COPY-BEGIN -- exercised byte-for-byte by the convert fixture tests.
+copy_tree_exactly() {
+  local source_dir="$1"
+  local destination_dir="$2"
+  local source_file relative_file destination_file
+
+  if [ ! -d "$source_dir" ]; then
+    echo "AI-First copy failed: missing required path: $source_dir" >&2
+    return 1
+  fi
+  mkdir -p "$destination_dir" || return 1
+  if ! cp -R "$source_dir/." "$destination_dir/"; then
+    echo "AI-First copy failed: could not copy required path: $source_dir" >&2
+    return 1
+  fi
+  while IFS= read -r -d '' source_file; do
+    relative_file=${source_file#"$source_dir"/}
+    destination_file="$destination_dir/$relative_file"
+    if [ ! -f "$destination_file" ]; then
+      echo "AI-First copy failed: missing copied path: $destination_file" >&2
+      return 1
+    fi
+    if ! cmp -s "$source_file" "$destination_file"; then
+      echo "AI-First copy failed: incomplete copied path: $destination_file" >&2
+      return 1
+    fi
+  done < <(find "$source_dir" -type f -print0)
+}
+
+require_report() {
+  if [ ! -f "$1" ]; then
+    echo "AI-First copy failed: missing required path: $1" >&2
+    return 1
+  fi
+}
+
+# Step 4.5 runs once per registered AI-First unit, and each run's assessment CSV
+# covers only that unit -- native SnowConvert emits one combined project-wide CSV
+# instead. Append rather than overwrite so an earlier unit's rows survive a later
+# unit's run; write the header only for the first unit that creates the file.
+merge_report_csv() {
+  local source_file="$1"
+  local destination_file="$2"
+  if [ ! -f "$destination_file" ]; then
+    cp "$source_file" "$destination_file" || return 1
+    cmp -s "$source_file" "$destination_file" || return 1
+    return 0
+  fi
+  local before_count added_count after_count
+  before_count=$(grep -c '' "$destination_file")
+  added_count=$(($(grep -c '' "$source_file") - 1))
+  tail -n +2 "$source_file" >>"$destination_file" || return 1
+  after_count=$(grep -c '' "$destination_file")
+  [ "$after_count" -eq "$((before_count + added_count))" ]
+}
+
+# ProducerReports.cs emits this complete root assessment CSV set. Stage 5 then
+# updates ETL.Issues in place, so copy only after the driver has returned.
+required_csvs=(
+  "ObjectReferences.NA.csv"
+  "ETL.Elements.NA.csv"
+  "ETL.Issues.NA.csv"
+)
+for report_name in "${required_csvs[@]}"; do
+  require_report "$STAGE/Reports/$report_name" || exit 1
+done
+require_report "$STAGE/Reports/AiFirstIssues/issues.json" || exit 1
+require_report "$STAGE/Reports/AiFirstIssues/types-cited.json" || exit 1
+require_report "$STAGE/Reports/AiFirstRemediation/remediation-brief.json" || exit 1
+
+copy_tree_exactly "$STAGE/Output/ETL/<PACKAGE>" "snowflake/_etl/<PACKAGE>" || exit 1
+mkdir -p reports/SnowConvert || exit 1
+for report_name in "${required_csvs[@]}"; do
+  if ! merge_report_csv "$STAGE/Reports/$report_name" "reports/SnowConvert/$report_name"; then
+    echo "AI-First copy failed: incomplete copied path: reports/SnowConvert/$report_name" >&2
+    exit 1
+  fi
+done
+
+# Keep every report subtree recursively and package-scoped. This retains the
+# required issue/remediation contract and optional non-gating lineage output,
+# without flattening nested files or allowing units to overwrite one another.
+for source_dir in "$STAGE"/Reports/*/; do
+  [ -d "$source_dir" ] || continue
+  report_group=${source_dir%/}
+  report_group=${report_group##*/}
+  copy_tree_exactly "${source_dir%/}" "reports/$report_group/<PACKAGE>" || exit 1
+done
+
 rm -rf "$STAGE"
+# REPORT-COPY-END
 ```
+
+This keeps the native report layout: the three producer assessment CSVs land in
+`reports/SnowConvert/`, merged across every unit run rather than overwritten -- each
+unit's producer emits a CSV scoped to just that unit, so a later unit's rows are
+appended (header written once) instead of replacing the file. AI-First report trees
+remain recursively intact under `reports/<report-group>/<PACKAGE>/`, one directory per
+unit, so units never overwrite one another there either. The copy checks every
+required source before moving anything, byte-compares or row-counts every copied
+file, and removes `$STAGE` only after the complete contract has been verified. A
+missing or changed artifact names its path and stops the conversion step instead of
+reporting completion.
 
 This is the same location the native ETL path uses — `snowflake/_etl/<package_name>/<package_name>.sql` with the dbt project beside it — so the orchestration SQL lands where the rest of the migration flow already looks for it.
 

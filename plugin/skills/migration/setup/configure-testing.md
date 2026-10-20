@@ -115,7 +115,10 @@ step based on the testing path:
 - **testbed** (and legacy **synthetic**) → `generateTestbed`, then data
   infrastructure. The next step bootstraps non-table coupling state; each
   dependency-ready table walker later mines, validates/enriches, generates,
-  and loads that table's CSV. Tell the user that's coming.
+  and loads that table's CSV. Tell the user that's coming. On SQL Server
+  the rows load into an empty `AIMSBX_TB_*` catalog `configure` creates
+  and binds as `source:`; elsewhere, or if that create failed, an
+  extracted source is preserved and gets no rows.
 - **source-data** → data infrastructure. Autonomous skips the opt-in question
   and always continues to source-connection + sandbox bring-up. Manual is
   asked whether they need data migration/validation infrastructure.

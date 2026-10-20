@@ -38,6 +38,7 @@ Situational commands (error recovery, dbt):
     python track_status.py assign-dbt-phase <session_status.json> --phase <N> --project <name>
     python track_status.py close-unit <session_status.json>
     python track_status.py update-dbt-node <session_status.json> <project_name> <node_name> --status <status> [--reason <reason>]
+    python track_status.py check-complete <session_status.json>
 """
 from __future__ import annotations
 
@@ -71,7 +72,13 @@ TERMINAL_STATUSES = {
     "return-to-convert", "residual",
 }
 
-COMPLETION_ELIGIBLE_STATUSES = TERMINAL_STATUSES - {"needs-user", "test-failed", "failed", "residual", "return-to-convert"}
+# "fixed" is deliberately excluded: it means a fix was applied but never
+# (re-)validated by tests (fixed -> test-passed|test-failed is the expected next
+# transition -- see reference/protocols/element-statuses.md). Treating it as
+# completion-eligible would let close-unit/check-complete/generate_report.py claim a
+# correctness result nobody actually checked. residual and return-to-convert are
+# terminal but not in the completion-eligible list in element-statuses.md.
+COMPLETION_ELIGIBLE_STATUSES = TERMINAL_STATUSES - {"needs-user", "test-failed", "failed", "fixed", "residual", "return-to-convert"}
 
 VALID_SKIP_REASONS = {"disabled-in-source", "container-only", "file-io-noop", "dbt-dependency", "external-dependency"}
 
@@ -1010,6 +1017,20 @@ def _normalize_phase_status(phase_status: str) -> str:
 # assertions passed. See SNOW-4221307 and NOTES.md.
 STATE_PROGRESS_STATUSES = {"test-passed", "no-fix-needed", "skipped"}
 
+
+def _progress_percent(session: dict) -> int:
+    """The STATE.md progress-bar percentage, recomputed live from `elements`.
+
+    Shared by `_generate_state_md` and `check-complete` so the two can never disagree
+    on what "100%" means.
+    """
+    total_elements = len(session.get("elements", []))
+    if total_elements == 0:
+        return 0
+    completed_count = sum(1 for el in session["elements"] if el["status"] in STATE_PROGRESS_STATUSES)
+    return int(completed_count / total_elements * 100)
+
+
 def _generate_state_md(session: dict, current_phase: int, phase_status: str, next_action: str) -> str:
     roadmap = session.get("roadmap", {})
     phases = roadmap.get("phases", [])
@@ -1021,8 +1042,7 @@ def _generate_state_md(session: dict, current_phase: int, phase_status: str, nex
             break
 
     total_elements = len(session["elements"])
-    completed_count = sum(1 for el in session["elements"] if el["status"] in STATE_PROGRESS_STATUSES)
-    pct = int(completed_count / total_elements * 100) if total_elements > 0 else 0
+    pct = _progress_percent(session)
     filled = pct // 10
     bar = "\u2588" * filled + "\u2591" * (10 - filled)
 
@@ -1332,31 +1352,40 @@ def cmd_validate_phase(status_path: Path, phase_num: int, list_test_files: bool 
 
     if list_test_files:
         pkg_path = session.get("migration_object_path", "")
-        test_directory = (tests_dir(pkg_path) / "orchestration") if pkg_path else None
-        seen: set[str] = set()
         found: list[str] = []
-        for el in phase_els:
-            strategy = el.get("test_strategy") or ""
-            if strategy.startswith("grouped:"):
-                group_name = strategy.split(":", 1)[1]
-                short_name = f"grouped_{group_name}"
-            else:
-                short_name = el["name"].rsplit(".", 1)[-1]
-            fname = f"{short_name}.sql"
-            if fname in seen:
-                continue
-            seen.add(fname)
-            if test_directory:
-                matches = sorted(test_directory.rglob(fname))
-                if not matches:
-                    found.append(f"{fname}: (not found)")
-                elif len(matches) == 1:
-                    found.append(str(matches[0]))
+        if scope == "dataflow-proc":
+            # Mapping procedures are tested under tests/proc/{PROC}/, not tests/orchestration/.
+            proc_root = tests_dir(pkg_path) / "proc" if pkg_path else None
+            for el in phase_els:
+                report_file = (proc_root / el["name"] / "test_report.md") if proc_root else None
+                if report_file is None:
+                    continue
+                found.append(str(report_file) if report_file.is_file() else f"{el['name']}: (not found)")
+        else:
+            test_directory = (tests_dir(pkg_path) / "orchestration") if pkg_path else None
+            seen: set[str] = set()
+            for el in phase_els:
+                strategy = el.get("test_strategy") or ""
+                if strategy.startswith("grouped:"):
+                    group_name = strategy.split(":", 1)[1]
+                    short_name = f"grouped_{group_name}"
                 else:
-                    found.append(
-                        f"{fname}: {len(matches)} candidates — "
-                        f"{', '.join(str(m) for m in matches)} (verify)"
-                    )
+                    short_name = el["name"].rsplit(".", 1)[-1]
+                fname = f"{short_name}.sql"
+                if fname in seen:
+                    continue
+                seen.add(fname)
+                if test_directory:
+                    matches = sorted(test_directory.rglob(fname))
+                    if not matches:
+                        found.append(f"{fname}: (not found)")
+                    elif len(matches) == 1:
+                        found.append(str(matches[0]))
+                    else:
+                        found.append(
+                            f"{fname}: {len(matches)} candidates — "
+                            f"{', '.join(str(m) for m in matches)} (verify)"
+                        )
         print(f"\nTest files ({len(found)}):")
         for f in found:
             print(f"  {f}")
@@ -1570,7 +1599,8 @@ def cmd_update_dbt_node(status_path: Path, project_name: str, node_name: str, st
 # main
 # ---------------------------------------------------------------------------
 
-DBT_NODE_COMPLETION_ELIGIBLE_STATUSES = VALID_DBT_NODE_STATUSES - {"pending", "failed", "test-failed"}
+# See the COMPLETION_ELIGIBLE_STATUSES comment above -- "fixed" is pre-test here too.
+DBT_NODE_COMPLETION_ELIGIBLE_STATUSES = VALID_DBT_NODE_STATUSES - {"pending", "failed", "test-failed", "fixed"}
 
 
 def cmd_close_unit(status_path: Path) -> None:
@@ -1613,6 +1643,15 @@ def cmd_close_unit(status_path: Path) -> None:
             )
             sys.exit(1)
 
+        pct = _progress_percent(session)
+        if pct != 100:
+            print(
+                f"Error: cannot close unit -- progress is {pct}%, not 100%. "
+                f"auto-fixed-needs-review, return-to-convert, and residual do not count",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
         errors = _fix_log_errors(session, pkg_path) + _leak_gate_errors_all_phases(session, pkg_path)
         if errors:
             for err in errors:
@@ -1637,6 +1676,68 @@ def cmd_close_unit(status_path: Path) -> None:
     print(f"Unit closed. STATE.md: {state_path}")
     if report:
         print(f"Report: {report}")
+
+
+# ---------------------------------------------------------------------------
+# check-complete
+# ---------------------------------------------------------------------------
+
+def cmd_check_complete(status_path: Path) -> None:
+    """Read-only completion check for a parent/headless caller.
+
+    A one-shot orchestrator's turn ending is not evidence of anything -- it may have
+    stalled, been killed, or legitimately paused mid-phase. This is the explicit,
+    machine-checkable alternative: it never writes STATE.md, report.html, or
+    session_status.json, and only exits 0 when all four completion conditions hold:
+    report.html exists, every element and dbt node is completion-eligible, STATE.md's
+    own Status line says complete, and progress is 100%.
+    """
+    session = load_json(status_path)
+    pkg_path = session.get("migration_object_path", "")
+    errors: list[str] = []
+
+    non_eligible = [
+        el["name"] for el in session["elements"]
+        if el["status"] not in COMPLETION_ELIGIBLE_STATUSES
+    ]
+    if non_eligible:
+        errors.append(f"Elements not completion-eligible: {', '.join(non_eligible)}")
+
+    non_eligible_nodes = [
+        node["name"] for node in session.get("dbt_nodes", [])
+        if node.get("status") not in DBT_NODE_COMPLETION_ELIGIBLE_STATUSES
+    ]
+    if non_eligible_nodes:
+        errors.append(f"dbt nodes not completion-eligible: {', '.join(non_eligible_nodes)}")
+
+    if pkg_path:
+        report = report_path(pkg_path)
+        if not report.is_file():
+            errors.append(f"Missing report: {report} not found")
+    else:
+        errors.append("migration_object_path not set in session; cannot locate report.html")
+
+    state_file = status_path.parent / "STATE.md"
+    if not state_file.is_file():
+        errors.append(f"Missing STATE.md: {state_file} not found")
+    elif not re.search(
+        r"^Status:\s*complete\s*$",
+        state_file.read_text(encoding="utf-8", errors="replace"),
+        flags=re.MULTILINE,
+    ):
+        errors.append(f"{state_file} does not report an exact 'Status: complete' line")
+
+    pct = _progress_percent(session)
+    if pct != 100:
+        errors.append(f"Progress is {pct}%, not 100%")
+
+    if errors:
+        for err in errors:
+            print(f"Error: {err}", file=sys.stderr)
+        print("Unit is NOT complete.", file=sys.stderr)
+        sys.exit(1)
+
+    print("Unit is complete.")
 
 
 # ---------------------------------------------------------------------------
@@ -2059,6 +2160,16 @@ def main() -> None:
             print(f"Error: '{status_path}' not found", file=sys.stderr)
             sys.exit(1)
         cmd_close_unit(status_path)
+
+    elif command == "check-complete":
+        if len(sys.argv) < 3:
+            print("Usage: python track_status.py check-complete <session_status.json>", file=sys.stderr)
+            sys.exit(1)
+        status_path = Path(sys.argv[2])
+        if not status_path.is_file():
+            print(f"Error: '{status_path}' not found", file=sys.stderr)
+            sys.exit(1)
+        cmd_check_complete(status_path)
 
     else:
         print(f"Error: unknown command '{command}'", file=sys.stderr)

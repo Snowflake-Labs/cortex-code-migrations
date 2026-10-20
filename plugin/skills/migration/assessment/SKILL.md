@@ -259,6 +259,8 @@ scai assessment report \
   [--informatica-json "<path>" when informatica-assessment is ok]
 ```
 
+The command also writes a sibling PDF of every tab beside the HTML. It needs Chrome, Edge, or Chromium. If the PDF cannot be rendered, the HTML is still written and the command fails.
+
 Always pass `--project-dir` and successful SSIS/Informatica outputs explicitly.
 Other standard artifacts are auto-discovered. Do not write custom HTML. Record
 a report failure and continue so the user still receives analysis results.

@@ -38,8 +38,9 @@ If `progress_setup` already returned a connection picker as `next_prompt`
 (`write_to` is `source_connection`), ask that prompt as given — it already
 says we will extract all objects from the picked connection's database.
 Submit the chosen name with `progress_setup(answers={"source_connection": "<name>"})`.
-If they pick **Something else**, do not write `source_connection`; create a
-connection with the per-dialect sub-skill below.
+If they pick **Create a new connection**, do not write `source_connection`;
+create a connection with the per-dialect sub-skill below, then call
+`configure(source_connection=<name>)` with the new name.
 
 Otherwise, call `configure(needs_source_connection=true)` to list existing
 connections for the configured dialect. Safe to repeat — it only reads.

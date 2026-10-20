@@ -54,7 +54,7 @@ The actual validation is started later by the `validate-objects` skill via:
 
 **Do not run `scai data validate create-workflow` directly** — use `validate_data` for dispatch and `data_infrastructure` for the orchestrator/worker lifecycle. **Do not write ad-hoc comparison scripts** — use the validation workflow YAML and `validate_data` instead.
 
-When editing validation workflows, load [Workflow Config Reference](./references/workflow-config-reference.md) for camelCase field names (`sourceWhereClause`, `targetWhereClause`, `indexColumnList`, …) and accepted snake_case/legacy aliases. See common edit scenarios there (including excluding drift-prone timestamp columns from row compare **before** `validate_data(mode="run")`). For L3 extract transport (`extraction.strategy` / `externalStage`), load [L3 pushdown extract](./references/l3-pushdown-extraction.md). For task-level debugging, see [Task model reference](../../validate-objects/actions/references/task-model-reference.md).
+When editing validation workflows, load [Workflow Config Reference](./references/workflow-config-reference.md) for camelCase field names (`sourceWhereClause`, `targetWhereClause`, `indexColumnList`, …) and accepted snake_case/legacy aliases. See common edit scenarios there (including excluding drift-prone timestamp columns from row compare, and column-scoped `validationCustomMetrics` to skip L2 aggregations on a PK **without** dropping L1/L3 — apply **before** `validate_data(mode="run")`). For L3 extract transport (`extraction.strategy` / `externalStage`), load [L3 pushdown extract](./references/l3-pushdown-extraction.md). For task-level debugging, see [Task model reference](../../validate-objects/actions/references/task-model-reference.md).
 
 ---
 

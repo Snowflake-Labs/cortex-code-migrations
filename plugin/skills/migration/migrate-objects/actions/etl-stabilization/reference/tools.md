@@ -76,12 +76,13 @@ Manages `{UNIT}/stabilization/tracking/session_status.json` — the single sourc
 | `update-dbt` | `track_status.py update-dbt <session.json> <project_name> --status <status> [--reason <reason>]` — Update dbt project status |
 | `update-dbt-node` | `track_status.py update-dbt-node <session.json> <project_name> <node_name> --status <status> [--reason <reason>]` — Update individual dbt node status |
 | `close-unit` | `track_status.py close-unit <session.json>` — Close a unit whose elements are all completion-eligible, without an agent |
+| `check-complete` | `track_status.py check-complete <session.json>` — Read-only: exits 0 only if report.html exists, every element/dbt node is completion-eligible, STATE.md says complete, and progress is 100%. Never writes anything. The machine-checkable signal for a parent/headless caller — do not infer completion from an agent turn ending. |
 
 #### Valid Statuses
 
 - **Orchestration elements**: See [protocols/element-statuses.md](protocols/element-statuses.md)
 - **dbt projects**: `pending`, `dbt-tested`, `dbt-fixed`, `dbt-failed`
-- **dbt nodes**: `pending`, `test-passed`, `test-failed`, `fixed`, `failed`, `skipped`
+- **dbt nodes**: `pending`, `passing`, `fixed`, `failed`, `skipped`, `test-passed`, `test-failed`, `unverified`
 
 ---
 
@@ -95,7 +96,8 @@ uv run --project <SKILL_DIR> python <SKILL_DIR>/scripts/generate_report.py <unit
 
 - **Input**: Unit folder path; optional `--template` for custom HTML template (defaults to `reference/templates/report-template.html`)
 - **Output**: `<unit_folder>/stabilization/report.html`
-- **Used in**: Final Validation phase (phase-execution.md step c)
+- **Used in**: Final Validation phase (phase-execution.md step c); also called internally by `close-unit`
+- **Refuses while incomplete**: reads `tracking/session_status.json` and exits non-zero without writing (or overwriting) `report.html` if any element or dbt node is `pending`, `in_progress`, `fixed` (applied but not yet re-tested), `needs-user`, `failed`, or `test-failed`. This gate lives in `generate_report.py` itself, not just in `close-unit`'s caller-side check, so a direct invocation cannot bypass it.
 
 ### `sync_guard.py` — Shared Sync-Back Guard
 
@@ -133,7 +135,7 @@ These provide **user-facing progress tracking**. They are the ONLY way to show t
 | `cortex ctx task add "<name>"` | Create a progress task (visible to user) |
 | `cortex ctx task start <id>` | Mark task as started |
 | `cortex ctx step add -t <id> "<text>" ["<text>" ...]` | Add one or more steps to a task (pass every step in ONE call) |
-| `cortex ctx step done <id> [<id> ...]` | Mark one or more steps complete (group them; flush before agent waves, turn ends and phase transitions) |
+| `cortex ctx step done -t <task_id> <id> [<id> ...]` | Mark one or more steps complete (group them; flush before agent waves, turn ends and phase transitions) |
 | `cortex ctx show tasks` | List active tasks and steps |
 
 **Do NOT use** `cortex ctx remember` or `cortex ctx forget` — these persist across sessions and pollute future sessions in the same project.

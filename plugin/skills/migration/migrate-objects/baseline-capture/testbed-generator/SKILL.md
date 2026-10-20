@@ -17,6 +17,16 @@ Sequences `scai testbed` phases. The data lives in the CLI's opaque state. It
 replaces production *data*, not source *access* — a source connection is still
 required downstream to capture the baseline.
 
+On SQL Server, `configure` creates an empty `AIMSBX_TB_*` source catalog and
+binds it in `.scai/bindings/database-bindings.yaml` in place of each self-mapped
+`source:` entry, and the generated rows load there. Other dialects, and a catalog
+`configure` could not create, keep the self-mapped entry: an extracted project
+then preserves its live source and loads nothing. `scai testbed load` itself refuses,
+before any delete, a source table holding rows testbed did not write (it records
+the tables it loaded under `.scai/testbed/loaded_tables.json`). Surface that refusal
+to the user; do not rerun with `--allow-existing-data`, which is only for a
+database the user confirms is a disposable copy.
+
 If you are generating one table's CSV for a single `objectId`, follow
 [INCREMENTAL.md](INCREMENTAL.md).
 

@@ -49,13 +49,15 @@ def _entry_full_name(entry: dict) -> str:
     N/A-valued parts (database, schema, name) are omitted so that
     ``[N/A].[dbo].[MyTable]`` becomes ``[dbo].[MyTable]``.
 
-    ETL units (``kind == "etl"``) have no ``source.database/schema/name``;
-    their natural identifier is ``files.source.path`` (e.g. the ``.dtsx`` /
-    ``.xml`` definition file). Returning the path here lets dependency-edge
-    UUID resolution (``build_id_to_name_map``) round-trip ETL units the
-    same way SQL units round-trip via ``[db].[schema].[name]``.
+    ETL units (``kind == "etl"``) and script units (``kind == "script"``,
+    e.g. BTEQ) have no ``source.database/schema``; their natural identifier
+    is ``files.source.path`` (the ``.dtsx`` / ``.xml`` / ``.btq`` file).
+    Returning the path here lets dependency-edge UUID resolution
+    (``build_id_to_name_map``) round-trip them the same way SQL units
+    round-trip via ``[db].[schema].[name]``, and keeps same-named files in
+    different folders distinct.
     """
-    if entry.get("kind") == "etl":
+    if entry.get("kind") in ("etl", "script"):
         path = (
             entry.get("files", {}).get("source", {}).get("path", "") or ""
         ).strip()

@@ -22,8 +22,9 @@ When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, t
 | `etl_replatform_sources_path` | no | absolute path to the SSIS `.dtsx` source directory; falls back to auto-detection per [Step 1](#step-1-locate-input-files-auto-detected) |
 | `etl_assessment_skill_dir` | yes | absolute directory containing this SKILL.md. It lives under the installed plugin root at `skills/migration/assessment/etl-assessment`. Pass it to `uv run --project`. Never pass `project_dir`. |
 | `review_mode` | yes | `generate-only`, `auto-review-all`, or `skip` |
+| `ssis_target` | yes when SSIS is in scope | `dbt` or `scripting`. Persist it and use it for Step 3 and Step 4. |
 
-**On entry:** call the `configure` MCP tool with `project_dir` from the context block. Snowflake credentials are not required — `scai assessment etl generate` reads converted CSVs and SSIS `.dtsx` sources.
+**On entry:** call the `configure` MCP tool with `project_dir` and, when `ssis_target` is present, `etl_ssis_target=<ssis_target>`. Snowflake credentials are not required — `scai assessment etl generate` reads converted CSVs and SSIS `.dtsx` sources.
 
 **Branching by `review_mode`:**
 
@@ -78,6 +79,15 @@ On `skip`: `"status": "skipped"`, `"output_json": null`. On failure: `"status": 
 ---
 
 ## Workflow
+
+### Conversion Target Context
+
+The parent assessment skill collects `ssis.target` ("dbt" or "scripting") and passes it as `ssis_target`. Persist it to `.scai/config/plugin.yml` as `etl_ssis_target`. It determines how this skill frames its analysis:
+
+- **dbt**: Data flows convert to dbt models. References to dbt project structure and Snowflake Tasks calling dbt are appropriate.
+- **scripting**: Data flows convert to Snowflake stored procedures (Snowflake Scripting). Zero dbt references allowed — use stored procedure calls, inline SQL, and `CALL` statements instead. Stabilization and deploy are not part of this preview.
+
+Use `ssis_target` to select the analysis framing in Step 3 and the AI summary guide in Step 4. When it is absent, keep the dbt framing.
 
 Copy this checklist and track your progress:
 

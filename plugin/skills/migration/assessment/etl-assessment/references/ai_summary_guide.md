@@ -2,6 +2,18 @@
 
 Use this guide to **draft** an AI summary that gives a high-level, decision-ready overview of the SSIS workload before readers dive into individual packages. The audience is data engineers and solution architects preparing a migration to Snowflake.
 
+The parent assessment passes `ssis_target` (`dbt` or `scripting`), persisted as `etl_ssis_target`. **Adapt every target reference to that mode:**
+
+- **dbt mode:** Use "dbt models", "dbt project", "Snowflake Tasks calling dbt".
+- **scripting mode:** Use "stored procedures", "CALL statements", "Snowflake Scripting", "Snowflake Tasks with inline SQL". **Zero dbt references allowed.**
+
+The HTML templates below name the migration approach with two placeholders. Replace each with the wording for the active mode; never copy a placeholder or the other mode's wording into the output.
+
+| Placeholder | dbt mode | scripting mode |
+|---|---|---|
+| `[TRANSFORM_APPROACH]` | dbt models + Snowflake MERGE | Stored procedures + Tasks with CALL |
+| `[MIXED_APPROACH]` | Snowpipe/Tasks + dbt layers | Snowpipe/Tasks + stored procedures |
+
 ### Summary Command (single source of truth)
 Use this command to extract all signals in one place. It returns a well‑formatted text summary with:
 1) AI analysis text per package
@@ -57,8 +69,18 @@ Focus on the most impactful signals from the summary command output:
 - **Most Complex Package:** Name, component count, key complexity factors (lookups, nested event handlers, etc.)
 
 **6) Recommended Migration Approach**
+
+Adapt recommendations based on `ssis_target`:
+
+**dbt mode:**
 - **Data Transformation packages:** Map to dbt models + Snowflake MERGE
 - **Mixed packages:** Decompose into Snowpipe/Tasks (ingestion) + dbt (transformation) layers
+
+**scripting mode:**
+- **Data Transformation packages:** Map to stored procedures + Snowflake Tasks with CALL
+- **Mixed packages:** Decompose into Snowpipe/Tasks (ingestion) + stored procedures (transformation)
+
+**Both modes:**
 - **Ingestion packages:** Replace with External stages, COPY INTO, Snowpipe
 - **Configuration & Control:** Re-architect using Snowflake Tasks, stored procedures, notification integrations
 
@@ -121,13 +143,13 @@ Use this structure with visual sections so it can be embedded into the HTML repo
           <td style="padding: 10px 14px;"><span style="display: inline-block; width: 10px; height: 10px; background: #F59E0B; border-radius: 3px; margin-right: 8px;"></span>Data Transformation</td>
           <td style="text-align: center; padding: 10px 14px; font-weight: 600;">[COUNT]</td>
           <td style="text-align: center; padding: 10px 14px;">[%]</td>
-          <td style="padding: 10px 14px; color: #475569;">dbt models + Snowflake MERGE</td>
+          <td style="padding: 10px 14px; color: #475569;">[TRANSFORM_APPROACH]</td>
         </tr>
         <tr style="border-bottom: 1px solid #e2e8f0; background: #fafafa;">
           <td style="padding: 10px 14px;"><span style="display: inline-block; width: 10px; height: 10px; background: #8B5CF6; border-radius: 3px; margin-right: 8px;"></span>Mixed: Ingestion + Transformation</td>
           <td style="text-align: center; padding: 10px 14px; font-weight: 600;">[COUNT]</td>
           <td style="text-align: center; padding: 10px 14px;">[%]</td>
-          <td style="padding: 10px 14px; color: #475569;">Snowpipe/Tasks + dbt layers</td>
+          <td style="padding: 10px 14px; color: #475569;">[MIXED_APPROACH]</td>
         </tr>
         <tr style="border-bottom: 1px solid #e2e8f0;">
           <td style="padding: 10px 14px;"><span style="display: inline-block; width: 10px; height: 10px; background: #29B5E8; border-radius: 3px; margin-right: 8px;"></span>Ingestion</td>
@@ -228,13 +250,13 @@ Use this structure with visual sections so it can be embedded into the HTML repo
         <tr style="border-bottom: 1px solid #e2e8f0;">
           <td style="padding: 10px 14px; font-weight: 500;">Data Transformation</td>
           <td style="text-align: center; padding: 10px 14px; font-weight: 600;">[COUNT]</td>
-          <td style="padding: 10px 14px; color: #475569;"><strong>dbt models</strong></td>
+          <td style="padding: 10px 14px; color: #475569;"><strong>[TRANSFORM_APPROACH]</strong></td>
           <td style="padding: 10px 14px; color: #475569;">[Key considerations for this classification]</td>
         </tr>
         <tr style="border-bottom: 1px solid #e2e8f0; background: #fafafa;">
           <td style="padding: 10px 14px; font-weight: 500;">Mixed: Ingestion + Transform</td>
           <td style="text-align: center; padding: 10px 14px; font-weight: 600;">[COUNT]</td>
-          <td style="padding: 10px 14px; color: #475569;"><strong>Snowpipe/Tasks + dbt</strong></td>
+          <td style="padding: 10px 14px; color: #475569;"><strong>[MIXED_APPROACH]</strong></td>
           <td style="padding: 10px 14px; color: #475569;">[Key considerations]</td>
         </tr>
         <tr style="border-bottom: 1px solid #e2e8f0;">

@@ -50,9 +50,12 @@ only when the source object is fully relational; if the source is itself an Iceb
 external / catalog-backed) table, do not continue. Other dialects skip the table-type question and go
 straight to their extraction ladder.
 
-Make the Iceberg support boundary explicit when presenting the choice: the only supported Iceberg target
-is **Iceberg v2 with a Snowflake-managed catalog on an external volume** — external / AWS-Glue / other
-catalogs are not supported. If that is not what the user wants, they should pick **native** tables.
+Make the Iceberg support boundary explicit when presenting the choice: the supported Iceberg target is a
+**Snowflake-managed Iceberg table (spec v2 or v3) on an external volume** with `storageMode: compatible`
+— external / AWS-Glue / other catalogs are not supported. If that is not what the user wants, they should
+pick **native** tables. When the user picks Iceberg the wizard then asks the **spec** (v2 default, or v3)
+and, after the extraction strategy, the **load mode** (`ADD_FILES_COPY` default, or `FULL_INGEST`); both
+persist to `plugin.yml` (`data_migration_iceberg_spec` / `data_migration_load_mode`).
 
 ### Extraction prerequisite contract
 

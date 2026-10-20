@@ -96,6 +96,7 @@ The probe must test the **same** connection the real run in Step 2 will use, so 
 |---|---|
 | `sql_server_connectivity` | Can reach the source SQL Server instance (SSIS) |
 | `teradata_connectivity` | Can reach the source Teradata system (Informatica) |
+| `teradata_hash_md5` | The Teradata source can call the `HASH_MD5` UDF that row validation (L3) needs; passes without probing when `row_validation: false` and no seeded table entry sets `comparison_level: L3` (Informatica, Teradata source) |
 | `snowflake_connectivity` | Can reach the Snowflake account |
 | `ssisdb_catalog_access` | Can query `SSISDB.catalog.packages` (SSIS only) |
 | `pmcmd_accessibility` | The `informatica:` section exists and its `pmcmd` binary is present and executable (Informatica only) |
@@ -129,7 +130,7 @@ demanding them would fail a run that would otherwise work. The source connection
 where it exists because the table comparison reads the source tables through it. With
 `side: target` the source is still native and keeps its native checks, tooling included.
 
-If any check fails: **STOPPING POINT** — surface the failing check name and the error from the output, and help the user fix the live-system issue (start the server, refresh credentials, grant catalog access). Do not proceed to Step 2 with a failing probe. These are mostly runtime reachability checks, not config gates — a failure usually means the environment is down, not that the plugin is misconfigured. The exceptions are `informatica_service_domain`, `pmcmd_credentials`, and `pmcmd_accessibility` when it reports a missing section: those *are* configuration gaps, so the fix is an edit to `test_config.yaml`, a registered connection, or an exported variable — not a restart.
+If any check fails: **STOPPING POINT** — surface the failing check name and the error from the output, and help the user fix the live-system issue (start the server, refresh credentials, grant catalog access). Do not proceed to Step 2 with a failing probe. These are mostly runtime reachability checks, not config gates — a failure usually means the environment is down, not that the plugin is misconfigured. The exceptions are `informatica_service_domain`, `pmcmd_credentials`, and `pmcmd_accessibility` when it reports a missing section: those *are* configuration gaps, so the fix is an edit to `test_config.yaml`, a registered connection, or an exported variable — not a restart. `teradata_hash_md5` is a source-side install: its message names the UDF, where to create it and the grant; relay it to the user (the UDF DDL comes from Snowflake migration support), or set `validation_configuration.row_validation: false` (and drop any table entry's `comparison_level: L3`, which overrides it) to run without L3.
 
 ## Step 2: Run Live Comparison
 

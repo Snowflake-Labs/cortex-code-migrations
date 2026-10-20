@@ -17,7 +17,7 @@ When the orchestrator begins a phase, read the ROADMAP phase metadata to determi
 
 ## Full TDD Phase
 
-**Progress tracking:** Cortex task creation is enforced by the Execution Workflow (SKILL.md § Step 2) and by each phase's Phase Transition step. The ROADMAP template defines the step list per phase type. Mark steps done in grouped calls (`cortex ctx step done <id> <id> ...`), flushed before each agent wave, before ending a turn, and at the Phase Transition — not one call per step (see SKILL.md § Step 3). Mark the task done after step k (Phase Transition). Final-validation phases end at step j instead.
+**Progress tracking:** Cortex task creation is enforced by the Execution Workflow (SKILL.md § Step 2) and by each phase's Phase Transition step. The ROADMAP template defines the step list per phase type. Mark steps done in grouped calls (`cortex ctx step done -t <task_id> <id> <id> ...`), flushed before each agent wave, before ending a turn, and at the Phase Transition — not one call per step (see SKILL.md § Step 3). Mark the task done after step k (Phase Transition). Final-validation phases end at step j instead.
 
 ### Preamble: Re-verify state from disk
 
@@ -126,7 +126,7 @@ Orchestrator performs directly (no agent):
 Create `checkpoints/phase_{N}/` with copies of orch SQL and session_status.json for recovery.
 
 ### k. Phase Transition
-Read the ROADMAP's next phase section (`## Phase {NEXT_N}`). Create the cortex task for the next phase directly: `cortex ctx task add "Phase {NEXT_N}: {NEXT_PHASE_NAME}"`, `cortex ctx task start <task_id>`, then add every ROADMAP step in ONE `cortex ctx step add -t <task_id> "step 1" "step 2" ...` call (it accepts multiple step texts). Verify with `cortex ctx show tasks` that the task exists. Mark Step {NEXT_N}.0 as `[x]` in the ROADMAP. Mark this cortex step done (which completes the current phase's cortex task). Continue with Step {NEXT_N}.1.
+Read the ROADMAP's next phase section (`## Phase {NEXT_N}`). Create the cortex task for the next phase directly: `cortex ctx task add "Phase {NEXT_N}: {NEXT_PHASE_NAME} ({unit_name})"`, `cortex ctx task start <task_id>`, then add every ROADMAP step in ONE `cortex ctx step add -t <task_id> "step 1" "step 2" ...` call (it accepts multiple step texts). Write `Cortex task: <task_id>` into STATE.md. Verify with `cortex ctx show tasks` that this id is listed. Do not confirm the task by title. Mark Step {NEXT_N}.0 as `[x]` in the ROADMAP. Mark this cortex step done (which completes the current phase's cortex task). Continue with Step {NEXT_N}.1.
 
 Final-validation phases do NOT have this step — they end at step j.
 
@@ -136,7 +136,7 @@ Final-validation phases do NOT have this step — they end at step j.
 
 A lightweight phase applies known fix patterns from a prior phase. Test generation is SKIPPED — the patterns are already proven.
 
-**Progress tracking:** Cortex task creation is enforced by the Execution Workflow (SKILL.md § Step 2) and by each phase's Phase Transition step. The ROADMAP template defines the step list per phase type. Mark steps done in grouped calls (`cortex ctx step done <id> <id> ...`), flushed before each agent wave, before ending a turn, and at the Phase Transition — not one call per step (see SKILL.md § Step 3). Mark the task done after step k (Phase Transition).
+**Progress tracking:** Cortex task creation is enforced by the Execution Workflow (SKILL.md § Step 2) and by each phase's Phase Transition step. The ROADMAP template defines the step list per phase type. Mark steps done in grouped calls (`cortex ctx step done -t <task_id> <id> <id> ...`), flushed before each agent wave, before ending a turn, and at the Phase Transition — not one call per step (see SKILL.md § Step 3). Mark the task done after step k (Phase Transition).
 
 ### Preamble: Re-verify state from disk
 
@@ -171,7 +171,7 @@ Steps c through k follow the same protocol as Full TDD (wait for fix, apply fixe
 
 ## dbt Phase
 
-**Progress tracking:** Cortex task creation is enforced by the Execution Workflow (SKILL.md § Step 2) and by each phase's Phase Transition step. The ROADMAP template defines the step list per phase type. Mark steps done in grouped calls (`cortex ctx step done <id> <id> ...`), flushed before each agent wave, before ending a turn, and at the Phase Transition — not one call per step (see SKILL.md § Step 3). Mark the task done after step h (Phase Transition).
+**Progress tracking:** Cortex task creation is enforced by the Execution Workflow (SKILL.md § Step 2) and by each phase's Phase Transition step. The ROADMAP template defines the step list per phase type. Mark steps done in grouped calls (`cortex ctx step done -t <task_id> <id> <id> ...`), flushed before each agent wave, before ending a turn, and at the Phase Transition — not one call per step (see SKILL.md § Step 3). Mark the task done after step h (Phase Transition).
 
 ### Preamble: Re-verify state from disk
 
@@ -295,7 +295,7 @@ Read per-project learning files at `{UNIT}/stabilization/phases/phase-{N}/dbt_le
 > **Concurrency rule:** ALL `track_status.py` calls are orchestrator-only, run sequentially.
 
 ### h. Phase Transition
-Read the ROADMAP's next phase section (`## Phase {NEXT_N}`). Create the cortex task for the next phase directly: `cortex ctx task add "Phase {NEXT_N}: {NEXT_PHASE_NAME}"`, `cortex ctx task start <task_id>`, then add every ROADMAP step in ONE `cortex ctx step add -t <task_id> "step 1" "step 2" ...` call (it accepts multiple step texts). Verify with `cortex ctx show tasks` that the task exists. Mark Step {NEXT_N}.0 as `[x]` in the ROADMAP. Mark this cortex step done (which completes the current phase's cortex task). Continue with Step {NEXT_N}.1.
+Read the ROADMAP's next phase section (`## Phase {NEXT_N}`). Create the cortex task for the next phase directly: `cortex ctx task add "Phase {NEXT_N}: {NEXT_PHASE_NAME} ({unit_name})"`, `cortex ctx task start <task_id>`, then add every ROADMAP step in ONE `cortex ctx step add -t <task_id> "step 1" "step 2" ...` call (it accepts multiple step texts). Write `Cortex task: <task_id>` into STATE.md. Verify with `cortex ctx show tasks` that this id is listed. Do not confirm the task by title. Mark Step {NEXT_N}.0 as `[x]` in the ROADMAP. Mark this cortex step done (which completes the current phase's cortex task). Continue with Step {NEXT_N}.1.
 
 Final-validation phases do NOT have this step — they end at step g.
 
@@ -303,7 +303,7 @@ Final-validation phases do NOT have this step — they end at step g.
 
 ## Final Validation Phase
 
-**Progress tracking:** Cortex task creation is enforced by the Execution Workflow (SKILL.md § Step 2). The ROADMAP template defines the step list. Mark steps done in grouped calls (`cortex ctx step done <id> <id> ...`), flushed before each agent wave, before ending a turn, and at the Phase Transition — not one call per step (see SKILL.md § Step 3). Mark the task done after step 5.
+**Progress tracking:** Cortex task creation is enforced by the Execution Workflow (SKILL.md § Step 2). The ROADMAP template defines the step list. Mark steps done in grouped calls (`cortex ctx step done -t <task_id> <id> <id> ...`), flushed before each agent wave, before ending a turn, and at the Phase Transition — not one call per step (see SKILL.md § Step 3). Mark the task done after step 5.
 
 ### Preamble: Re-verify state from disk
 
@@ -317,7 +317,7 @@ No schema creation. No infrastructure deployment. No test execution. No agent sp
 
 ### Validation Checks
 
-1. **Element status check:** Read `{UNIT}/stabilization/tracking/session_status.json` — verify ALL elements across all phases are in a completion-eligible status (test-passed, fixed, no-fix-needed, skipped, auto-fixed-needs-review). Zero elements with `pending`, `orch-tested`, `needs-user`, `test-failed`, or `failed`. For dbt projects: every project must have a terminal status.
+1. **Element status check:** Read `{UNIT}/stabilization/tracking/session_status.json` — verify ALL elements across all phases are in a completion-eligible status (test-passed, no-fix-needed, skipped, auto-fixed-needs-review). Zero elements with `pending`, `orch-tested`, `fixed` (applied but not yet re-validated), `needs-user`, `test-failed`, or `failed`. For dbt projects: every project must have a terminal status.
 2. **EWI marker check:** Count remaining `!!!RESOLVE EWI!!!` markers in orch SQL — compare against expected count (skipped + needs-user elements)
 3. **Fix log consistency:** Read `{UNIT}/stabilization/tracking/fix-log.md` — verify no contradicting patterns across phases
 4. **Artifact completeness:** Verify each phase has: baseline + batch + learnings artifacts for all tasks
@@ -331,8 +331,18 @@ Output: `{UNIT}/stabilization/report.html`
 
 The report aggregates data from `scan.json`, `session_status.json`, `ROADMAP.md`, `orchestration-context.md`, `dbt-context.md`, `fix-log.md`, and `STATE.md` into a single HTML file with executive summary, phase-by-phase status, per-element details, dbt project status, fix log, and full artifact contents.
 
+`generate_report.py` independently enforces the same completion-eligible bar as check 1
+(it refuses and leaves any existing `report.html` untouched if it disagrees with your
+reading of `session_status.json`). If it refuses here, check 1 was wrong or stale —
+re-read `session_status.json` and resolve the actual blockers; do not retry the report
+in a loop or hand-edit the status file to force it through.
+
 ### Completion
-Mark final validation as `[x] Complete` in ROADMAP. Update `{UNIT}/stabilization/tracking/STATE.md`: `status: complete`.
+Mark final validation as `[x] Complete` in ROADMAP. Update `{UNIT}/stabilization/tracking/STATE.md`: `status: complete`. Then run
+`track_status.py check-complete {SESSION_JSON}` and confirm it exits 0 before telling the
+user the unit is done — it is the same four-condition bar a headless caller checks, so
+confirming it here catches a drift between this phase's bookkeeping and reality before
+anyone outside this run has to find it.
 
 ---
 

@@ -92,7 +92,7 @@ Tell the user verbatim: "Data infrastructure already configured — bringing the
 | `data_worker_placement: local` | omit `start_worker` |
 | `data_worker_placement: none` (SPCS worker, Iceberg / externally-managed, or a Snowflake source) | pass `start_worker=false` |
 
-For example, a local orchestrator with an SPCS worker resumes with `data_infrastructure(mode="up", compute_pool="", start_worker=false)`; an SPCS orchestrator with a local worker with a bare `data_infrastructure(mode="up")`. If the placement is not recorded, ask Step 0 instead of guessing. `up` generates and applies the selected worker configuration, runs the [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastructure-no-workflow-yaml) gate (iterate until it stops reporting `doctor_failures`), and only then starts/resumes the orchestrator and (unless this project runs no local worker) the worker; relay its `cost_reminder`. **Also state the placement it resolved** — the response carries the placement it just recorded: `orchestrator_placement` (`local` = on this machine, no compute pool; `spcs` = SPCS compute pool) and `worker_placement` (`local` = a worker on this machine; `none` = no local worker: an SPCS worker, Iceberg / externally-managed, or a Snowflake source). Check it matches what `plugin.yml` recorded before the call; if it does not, the arguments were wrong, so re-run `up` with the right ones rather than relaying the change. If `orchestrator_placement` is `local` and they meant SPCS, they can switch by re-running with `compute_pool="<POOL>"`. Return to the caller without re-prompting. Only run a bare Level 1 Data Doctor instead when you specifically need a config-drift check *without* bringing infrastructure up.
+For example, a local orchestrator with an SPCS worker resumes with `data_infrastructure(mode="up", compute_pool="", start_worker=false)`; an SPCS orchestrator with a local worker with a bare `data_infrastructure(mode="up")`. If the placement is not recorded, ask Step 0 instead of guessing. `up` generates and applies the selected worker configuration, runs the [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastructure-no-workflow-yaml) gate (iterate until it stops reporting `doctor_failures`), and only then starts/resumes the orchestrator and (unless this project runs no local worker) the worker; relay its `cost_reminder`. Doctor still creates the local orchestrator Python venv and pip-installs the orchestrator when that service runs on SPCS; the orchestrator checks run from that venv ([Level 2](./references/data-doctor-reference.md#level-2-infrastructure-gate-automatic-during-up)). **Also state the placement it resolved** — the response carries the placement it just recorded: `orchestrator_placement` (`local` = on this machine, no compute pool; `spcs` = SPCS compute pool) and `worker_placement` (`local` = a worker on this machine; `none` = no local worker: an SPCS worker, Iceberg / externally-managed, or a Snowflake source). Check it matches what `plugin.yml` recorded before the call; if it does not, the arguments were wrong, so re-run `up` with the right ones rather than relaying the change. If `orchestrator_placement` is `local` and they meant SPCS, they can switch by re-running with `compute_pool="<POOL>"`. Return to the caller without re-prompting. Only run a bare Level 1 Data Doctor instead when you specifically need a config-drift check *without* bringing infrastructure up.
 
 Otherwise, proceed through the steps below.
 
@@ -114,6 +114,8 @@ placement choices **before** any compute pool, role, or warehouse details.
 (0.c), the role (Question 1), or the warehouse (Question 2) depends on another
 answer, so ask every one of them still unanswered in **one**
 `ask_user_question` call — up to four questions, recommended option first.
+Call `configure(needs_snowflake_defaults=true)` before building the card, so
+the role and warehouse questions (1 and 2) lead with names from this account.
 Only the SPCS compute pool (Question 0) waits, because it exists only once
 the orchestrator answer is SPCS. Then act on the answers in the order below.
 
@@ -197,7 +199,7 @@ Handle the `existing_compute_pools:` value:
 | **Use an existing pool** | Confirm its `state` (from the list) is **ACTIVE** or **IDLE**. If `SUSPENDED`, run `ALTER COMPUTE POOL <POOL> RESUME;` and re-check; if `STARTING`, wait a moment and re-check. Then save it and continue to Question 1. |
 | **Create a new one** | Route to → `./compute-pool-setup/SKILL.md` — guide the user through creating and configuring a compute pool. After that skill completes, return here and run the steps below. |
 
-**Budget guardrail, before the first `up`:** a resolved pool means the orchestrator or a worker runs on SPCS (SPCS + SPCS, or either hybrid split), so the guardrail runs now. First settle the migration warehouse: ask **Question 2** now and make sure `~/.snowflake/config.toml` names it under the active connection; when you reach Question 2 later, confirm that answer instead of asking again. Then load [`./budget-guardrail/SKILL.md`](./budget-guardrail/SKILL.md) for that warehouse and this pool. It proposes a budget that stops the warehouse and this pool at a spend threshold and runs nothing without the user's yes; on a decline, tell them no spend cap is in place and continue. Fully local (Question 0 skipped) skips it.
+**Budget guardrail, before the first `up`:** a resolved pool means the orchestrator or a worker runs on SPCS (SPCS + SPCS, or either hybrid split), so the guardrail runs now. First settle the migration warehouse: ask **Question 2** now and make sure it's the active connection's default warehouse (Question 2's check); when you reach Question 2 later, confirm that answer instead of asking again. Then load [`./budget-guardrail/SKILL.md`](./budget-guardrail/SKILL.md) for that warehouse and this pool. It proposes a budget that stops the warehouse and this pool at a spend threshold and runs nothing without the user's yes; on a decline, tell them no spend cap is in place and continue. Fully local (Question 0 skipped) skips it.
 
 **Bring the shared infrastructure up on this pool:**
 
@@ -217,9 +219,11 @@ data_infrastructure(mode="up", compute_pool="<COMPUTE_POOL>")
 
 ### Question 1: Snowflake role and privileges
 
-Ask the user:
+Call `configure()`. A `snowflake_role:` line means this project already has one: confirm it instead of asking. Otherwise ask via `ask_user_question` (`multiSelect = false`):
 
 > What Snowflake role will you use for the migration? The Orchestrator needs a role with USAGE on the `<metadata_database>` database and its `DATA_MIGRATION` and `DATA_VALIDATION` schemas.
+
+When `configure()` reports `last_used_snowflake_role:`, offer that role first as `<ROLE> (recommended)`, description "Last used"; it is only a recommendation. Otherwise offer the `connection_snowflake_role:` value first, description "Your connection's role": `configure(needs_snowflake_defaults=true)` reports the role the Snowflake connection itself starts with. If it reads `(unavailable: …)`, ask without a recommendation. Offer only roles you have seen on this account, never guesses such as `ACCOUNTADMIN` or `SYSADMIN`: prefer a role that owns `<metadata_database>`, because any other role has to grant itself privileges on it, one statement per object. Don't read `~/.snowflake/config.toml` for these names; it holds credentials. The auto-appended **Something else** takes any other name. Save the answer with `configure(snowflake_role="<ROLE>")`, so this project's sessions use it and the next new project is offered it.
 
 | Situation | Action |
 |-----------|--------|
@@ -246,16 +250,18 @@ GRANT ALL PRIVILEGES ON ALL STAGES IN SCHEMA <metadata_database>.DATA_MIGRATION 
 
 ### Question 2: Snowflake warehouse
 
-Ask the user:
+A `snowflake_warehouse:` line in `configure()` means this project already has one: confirm it instead of asking. Otherwise ask via `ask_user_question` (`multiSelect = false`):
 
 > Which Snowflake warehouse should be used for data migration and validation? The Orchestrator uses this warehouse to execute `COPY INTO` statements and run validation queries. Your Snowflake connection must have a warehouse configured — without one, data migration will fail silently.
 
+When `configure()` reports `last_used_snowflake_warehouse:`, offer that warehouse first as `<WAREHOUSE> (recommended)`, description "Last used"; it is only a recommendation. Otherwise offer the `connection_snowflake_warehouse:` value first, description "Your connection's warehouse". If it's `none`, the connection has no default warehouse: offer warehouses from `SHOW WAREHOUSES`, not a guess such as `COMPUTE_WH`. The auto-appended **Something else** takes any other name. Save the answer with `configure(snowflake_warehouse="<WAREHOUSE>")`.
+
 | Situation | Action |
 |-----------|--------|
-| **User provides a warehouse name** | Verify the warehouse exists and the role from Question 1 has USAGE on it. Confirm that `~/.snowflake/config.toml` has `warehouse = "<WAREHOUSE>"` under the active connection. If not, help the user add it. Continue to Question 3. |
+| **User provides a warehouse name** | Verify the warehouse exists and the role from Question 1 has USAGE on it. Check that it's the connection's default, the `connection_snowflake_warehouse:` value. If not, help the user add `warehouse = "<WAREHOUSE>"` under the active connection in `~/.snowflake/config.toml` (they edit it; don't read the file). Continue to Question 3. |
 | **User is unsure** | Run `SHOW WAREHOUSES;` to list available warehouses and help them pick one. For large migrations, recommend a dedicated warehouse to avoid contention with other workloads. |
 
-**SPCS or hybrid:** the warehouse was settled in Question 0, before the budget guardrail ran. If the user now picks a different warehouse, or `config.toml` names another one, the guardrail still caps the old one: load [`./budget-guardrail/SKILL.md`](./budget-guardrail/SKILL.md) again before the next `up`, and it moves the cap to the new warehouse after the user's yes.
+**SPCS or hybrid:** the warehouse was settled in Question 0, before the budget guardrail ran. If the user now picks a different warehouse, or the connection's default warehouse is another one, the guardrail still caps the old one: load [`./budget-guardrail/SKILL.md`](./budget-guardrail/SKILL.md) again before the next `up`, and it moves the cap to the new warehouse after the user's yes.
 
 ### Question 3: Worker setup
 
@@ -312,6 +318,7 @@ These are **optional** — not part of default setup. Load [Advanced operations 
 | **Incremental validation** | Re-validate only changed partitions, ongoing DV | `synchronization` + watermark/checksum in DV YAML; baseline run required first |
 | **Re-validation** | Retry failed validation partitions | `validate_data(mode="revalidate", workflow_name=…)` after parent workflow finishes |
 | **Custom L3 normalization** | Formatting drift, case/spatial/period compare | `validationCustomNormalizationRules` in DV YAML — not DM `columnTypeMappings` |
+| **Custom L2 metrics / skip PK aggs** | Skip `avg` (or all aggs) on a VARCHAR PK; override L2 per column | `validationCustomMetrics.source` with `column: {fqn}.{col}` and omitted `metricQuery` — see advanced ref |
 | **Checksum blind spots** | Incremental sync missed a column change | Some types excluded/rounded from checksum — see advanced ref |
 | **Non-hybrid metadata (trial)** | Trial account, HYBRID TABLE unsupported, slow pulls with many workers | Standard/`TRANSIENT` fallback — limit workers; see metadata storage mode ref |
 
@@ -325,5 +332,6 @@ Do not suggest ad-hoc throttling via polling env vars. Rate limits are metadata 
 - [Advanced operations reference](./references/advanced-operations-reference.md) — rate limiting, preflight, incremental DV, revalidate
 - [Data Doctor reference](./references/data-doctor-reference.md)
 - [Worker Config Reference](./references/worker-config-reference.md)
+- [Object-store path restrictions](./references/object-store-path-restrictions.md) — unload stage URL must sit on the Snowflake external volume
 - [Affinity Reference](./references/affinity-reference.md) — routing workers to workflows (multi-worker / multi-source)
 - [Teardown (cost-saving suspend)](./teardown/SKILL.md)

@@ -541,9 +541,48 @@ case ":$INHERITED_PATH:" in
     ;;
 esac
 
+# GitHub archive of REF (a branch, or a v* tag). git clone of PLUGIN_REPO
+# returns "RPC failed; HTTP 403 curl 22" on some proxies; the archive GET
+# still works. Copies plugin/ into the Cortex plugin dir. A download with no
+# plugin/VERSION does not replace the installed plugin.
+install_plugin_from_archive() {
+  local ref="$1"
+  local dest="$CORTEX_HOME/plugins/$PLUGIN_NAME"
+  local tmp url src_dir version_file
+  case "$ref" in
+    v[0-9]*) url="https://github.com/$PLUGIN_REPO/archive/refs/tags/${ref}.zip" ;;
+    *) url="https://github.com/$PLUGIN_REPO/archive/refs/heads/${ref}.zip" ;;
+  esac
+  tmp="$(mktemp -d)"
+  if ! curl -fsSL --max-time 60 "$url" > "$tmp/plugin.zip"; then
+    log "WARNING: could not download $url"
+    rm -rf "$tmp"
+    return 1
+  fi
+  if ! command -v unzip >/dev/null 2>&1 || ! unzip -q "$tmp/plugin.zip" -d "$tmp/extract"; then
+    log "WARNING: could not unzip $url"
+    rm -rf "$tmp"
+    return 1
+  fi
+  src_dir=""
+  for version_file in "$tmp/extract"/*/plugin/VERSION; do
+    if [ -f "$version_file" ]; then src_dir="$(dirname "$version_file")"; break; fi
+  done
+  if [ -z "$src_dir" ]; then
+    log "WARNING: plugin archive has no plugin/VERSION"
+    rm -rf "$tmp"
+    return 1
+  fi
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  cp -R "$src_dir"/. "$dest"/
+  rm -rf "$tmp"
+}
+
 # snowflake-migration plugin: `cortex plugin install <URL> --force` from the
 # branch of the resolved channel (see SCAI_CHANNEL above), or from the tag of a
-# pinned version. Skipped with a .no-auto-update file
+# pinned version. If that git clone fails, download the GitHub archive instead.
+# Skipped with a .no-auto-update file
 # in the plugin root (the source tree and dev checkouts have one), without a
 # Cortex Code CLI, or when the plugin is not in the Cortex registry from the
 # public repo (loaded with --plugin-dir, or from a fork). Last, since the install may replace this plugin directory.
@@ -618,6 +657,12 @@ else
       log "Updated the $PLUGIN_NAME plugin to v$published. It takes effect in the next session or after /plugin reload."
     else
       log "WARNING: cortex plugin install $install_url --force failed"
+      log "Downloading the $PLUGIN_NAME plugin archive (git clone is blocked on some networks)..."
+      if install_plugin_from_archive "$install_ref"; then
+        log "Updated the $PLUGIN_NAME plugin to v$published from the GitHub archive. It takes effect in the next session or after /plugin reload."
+      else
+        log "WARNING: GitHub archive fallback failed for $install_ref"
+      fi
     fi
   fi
 fi

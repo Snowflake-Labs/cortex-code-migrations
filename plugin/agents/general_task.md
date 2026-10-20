@@ -218,7 +218,7 @@ crowds out one that genuinely needs a human.
 ```
 transition_status(status="escalate", task="<the task you were on>",
                   asks=["<choice>", "<choice>"],
-                  cause="sql|infra",
+                  cause="sql|infra|data",
                   reason="<what actually stopped you>",
                   where="id = '<objectId>'")
 ```

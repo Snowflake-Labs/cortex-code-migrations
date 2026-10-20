@@ -162,6 +162,36 @@ Workflow fields: [DV workflow config reference](../../setup/data-validation/refe
 
 ---
 
+## Custom L2 metrics / skip aggregations on a column (Data Validation)
+
+**When the customer asks:** skip `avg` (or all aggregations) on a VARCHAR/text primary key; L2 length-based metrics on IDs are noise; keep schema + row validation on that key; override a metric for one column only.
+
+**What it is:** `validationCustomMetrics` entries that target a **source-qualified column** (`{table.fullyQualifiedName}.{columnName}`) instead of a datatype. Omitting `metricQuery` **removes** that named metric for that column in L2 only. L1 and L3 still use the column (including as `indexColumnList`).
+
+**Key rules:**
+
+1. Requires `metricsValidation: true` — otherwise there is nothing to override.
+2. Put column-scoped entries under **`validationCustomMetrics.source` only** (mapped to the target column automatically).
+3. Do **not** exclude a PK/index column via `columnSelectionList` + `useColumnSelectionAsExcludeList` — that is rejected and would break L3.
+4. Prefer column-scoped removals over turning off L2 for the whole workflow when other columns should still get metrics.
+
+Example — remove length-`avg` on a VARCHAR PK:
+
+```yaml
+validationConfiguration:
+  metricsValidation: true
+validationCustomMetrics:
+  source:
+    - column: public.orders.order_id
+      metrics:
+        - name: avg
+  target: []
+```
+
+Full field reference: [Custom L2 metrics](../../setup/data-validation/references/workflow-config-reference.md#custom-l2-metrics-validationcustommetrics).
+
+---
+
 ## Checksum / incremental sync — types that may not trigger re-sync
 
 **When the customer asks:** "I changed column X but incremental migration/validation did not re-run the partition"; checksum stayed the same; only `text`/`ntext`/`datetime`/`float`/spatial columns changed.

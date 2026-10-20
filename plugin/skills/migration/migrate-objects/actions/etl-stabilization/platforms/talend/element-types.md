@@ -47,7 +47,7 @@ than approximated. Recommended remediation target by category (from
 | Pre/post hooks | `tPrejob` / `tPostjob` | dbt `on-run-start` / `on-run-end` hooks — ONLY if they execute SQL; file/email side effects are out of scope |
 
 This is remediation guidance, not automatic conversion: none of the components above gets a
-generated model. The table names where the *capability* moves, not a code path SnowConvert AI or
+generated model. The table names where the *capability* moves, not a code path SnowConvert or
 the AI-First producer will emit for it.
 
 ## Reading a converted element
