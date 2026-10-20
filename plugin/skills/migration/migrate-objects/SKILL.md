@@ -99,7 +99,7 @@ Then ask the user to pick a next action. **Only list actions you are actually of
 1. One numbered item per task group, labelled `<group.user_label> for the <group.count> <group.object_type>(s)` — e.g. `Deploy for the 5 tables`, `Generate test cases from source database for the 1 function`. Use `group.user_label` verbatim.
 2. One numbered item per `blocked_groups` entry, labelled `Resolve blocked <object_type>s waiting on "<blocked_group.user_label>" (see deps)` — only if `blocked_groups` is non-empty.
 3. `finishObjects` — only if `done_count > 0`.
-4. `claimObjects` — only if `done_count == 0` (when `done_count > 0`, omit this entirely; the user must merge first). The exception: if the user *explicitly overrides* on a later turn ("I know, claim anyway", "skip the merge for now"), proceed to claim and flag the unmerged done objects in your reply.
+4. `claimObjects` — only if `done_count == 0` (its picker also offers *Bulk-deploy N clean tables* when `next_objects` reports `clean_tables_at_deploy`) (when `done_count > 0`, omit this entirely; the user must merge first). The exception: if the user *explicitly overrides* on a later turn ("I know, claim anyway", "skip the merge for now"), proceed to claim and flag the unmerged done objects in your reply.
 5. The errored bucket — only if `errored_count > 0`.
 
 **Wait for the user's response — do not proceed to 2c until they choose.**

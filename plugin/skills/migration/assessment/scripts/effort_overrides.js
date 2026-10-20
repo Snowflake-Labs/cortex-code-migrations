@@ -337,10 +337,9 @@
    * Rolls applied rows up into the figures the report and dashboard display.
    *
    * Each custom figure is its rows' custom hours plus a residual: whatever the
-   * C# summary counts that no calculator row carries, which today is the synonym
-   * conversion budget. Deriving the residual from the summary rather than
-   * enumerating its sources means an empty override set reproduces every
-   * Snowflake figure exactly, with no compatibility branch.
+   * C# summary counts that no calculator row carries. Deriving the residual from
+   * the summary rather than enumerating its sources means an empty override set
+   * reproduces every Snowflake figure exactly, with no compatibility branch.
    *
    * The override maps are only read to report keys that no longer match a row;
    * the arithmetic uses the applied rows alone.
@@ -418,7 +417,10 @@
 
   /* The calculator's sections, in display order. Fixed rather than derived from
    * artifact row order: a rate table reordering its rows must not reshuffle the
-   * page. The third section is a catch-all, so no row can go unrendered. */
+   * page. The last section is a catch-all, so no row can go unrendered.
+   *
+   * Code conversion is one section. Flat budgets lead it, then any per-object
+   * rates, then the complexity bands, so each header sits on the rows it names. */
   function isFlatTotal(row) {
     return row && row.pricing === "flat_total";
   }
@@ -427,38 +429,44 @@
     return row && row.pricing === "per_object";
   }
 
+  const GROUP_SHAPES = ["flat_total", "per_object", "banded", "flat"];
+
+  function shapeOf(row) {
+    if (isFlatTotal(row)) {
+      return "flat_total";
+    }
+    if (isPerObject(row)) {
+      return "per_object";
+    }
+    if (isBandedRow(row)) {
+      return "banded";
+    }
+    return "flat";
+  }
+
+  function groupRows(rows) {
+    const buckets = {};
+    rows.forEach(function (row) {
+      const shape = shapeOf(row);
+      if (!buckets[shape]) {
+        buckets[shape] = [];
+      }
+      buckets[shape].push(row);
+    });
+    return GROUP_SHAPES.filter(function (shape) {
+      return buckets[shape] && buckets[shape].length > 0;
+    }).map(function (shape) {
+      return { shape: shape, rows: buckets[shape] };
+    });
+  }
+
   const SECTION_DEFS = [
     {
-      key: "conversion_flat",
-      title: "Code conversion — flat effort",
-      blurb: "one budget for every object of this type",
-      shape: "flat_total",
-      match: function (row) {
-        return isConversion(row) && isFlatTotal(row);
-      },
-    },
-    {
       key: CONVERSION,
-      title: "Code conversion",
-      blurb: "grouped by complexity, with repetition clustering",
-      shape: "banded",
+      title: "Code conversion and testing",
+      blurb: "flat budgets, then hours per object by complexity",
+      shape: "mixed",
       match: isConversion,
-    },
-    {
-      key: "testing_per_object",
-      title: "Unit testing — per object",
-      blurb: "one rate times the object count, no severity split",
-      shape: "per_object",
-      match: function (row) {
-        return isTesting(row) && isPerObject(row);
-      },
-    },
-    {
-      key: TESTING,
-      title: "Unit testing",
-      blurb: "testing what was converted",
-      shape: "banded",
-      match: isTesting,
     },
     {
       key: FIXED_BUDGET,
@@ -486,14 +494,13 @@
   }
 
   /**
-   * Flat budgets the summary counts that no calculator row carries, today the
-   * synonym conversion budget. Rendered read-only so a section's visible lines
-   * add up to its subtotal.
+   * Flat budgets the summary counts that no calculator row carries. Rendered
+   * read-only so a section's visible lines add up to its subtotal.
    *
    * Matched by label against each row's "Component - ObjectType". The numeric
-   * test is what keeps the null data-migration entries out: their labels do not
-   * match their rows' labels either, so label mismatch alone would render them a
-   * second time beside the real rows.
+   * test is what keeps the null data-migration and phase entries out: their
+   * labels do not match their rows' labels either, so label mismatch alone
+   * would render them a second time beside the real rows.
    */
   function orphanBudgetItems(rows, summary) {
     const items = (summary || {}).fixed_budget_items;
@@ -521,10 +528,10 @@
    * these subtotals are arithmetic over numbers the user typed, and two
    * implementations could disagree about one.
    *
-   * The final section's subtotal is a residual -- the total less the two banded
-   * sections -- not a sum of its own rows. That makes the three subtotals add up
-   * to the grand total by construction, absorbing both the flat budgets no row
-   * carries and any row whose bucket this module does not recognize.
+   * The final section's subtotal is a residual -- the total less conversion and
+   * testing -- not a sum of its own rows. That makes the section subtotals add
+   * up to the grand total by construction, absorbing both the flat budgets no
+   * row carries and any row whose bucket this module does not recognize.
    */
   function groupSections(appliedRows, summary, rollup) {
     const rows = appliedRows || [];
@@ -542,6 +549,13 @@
       const visible = mine.filter(function (row) {
         return !isEmptyCountedRow(row);
       });
+      const groups = groupRows(visible);
+      const ordered = [];
+      groups.forEach(function (group) {
+        group.rows.forEach(function (row) {
+          ordered.push(row);
+        });
+      });
       const zeroTypes = mine
         .filter(isEmptyCountedRow)
         .map(function (row) {
@@ -553,7 +567,8 @@
         title: def.title,
         blurb: def.blurb,
         shape: def.shape,
-        rows: visible,
+        groups: groups,
+        rows: ordered,
         extraRows: def.shape === "flat" ? orphanBudgetItems(rows, summary) : [],
         zeroTypes: zeroTypes,
         subtotal: {
@@ -567,8 +582,8 @@
       };
     });
 
-    // The catch-all section is priced by difference so that whatever the other
-    // two do not claim -- including buckets added to the artifact after this code
+    // The catch-all section is priced by difference so that whatever conversion
+    // does not claim -- including buckets added to the artifact after this code
     // was written -- still reaches the reader inside a subtotal that matches.
     const last = sections[sections.length - 1];
     ["custom", "sf"].forEach(function (side) {
