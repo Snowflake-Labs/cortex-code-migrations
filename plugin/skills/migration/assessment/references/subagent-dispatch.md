@@ -141,9 +141,10 @@ skills/migration/assessment/etl-assessment). The install root differs between
 a checkout and a packaged plugin, and the sub-agent runs from project_dir,
 where no relative ai project exists.
 Context: project_dir, output_dir=<project_dir>/artifacts/assessment/etl,
-etl_replatform_sources_path, review_mode=generate-only|auto-review-all,
+etl_replatform_sources_path, ssis_target=dbt|scripting,
+review_mode=generate-only|auto-review-all,
 etl_assessment_skill_dir=<absolute directory containing etl-assessment/SKILL.md>.
-Call configure(project_dir). Locate newest ETL.Elements.*.csv and
+Call configure(project_dir, etl_ssis_target=<ssis_target>). Locate newest ETL.Elements.*.csv and
 ETL.Issues.*.csv; auto-detect replatform sources when context is empty. From
 the project root run scai assessment etl generate. Render DAG HTML from the
 newest dag_model_*.json with:

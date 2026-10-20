@@ -90,8 +90,8 @@ The setup response contains:
    - **Small/medium files** — show the full YAML in chat.
    - **Large files** — show the path, `validationConfiguration`, sync block, `tables:` count, and table names; offer to show the full file or specific tables on request.
    - Note whether setup **reused** an existing file (`regenerated: false`).
-3. **Summarize:** table count, validation mode/sync, effective validation toggles (`schema_validation`, `metrics_validation`, `row_validation`, `continue_on_failure`), which levels will run (e.g. schema + row; metrics off unless enabled), and partition findings.
-   - If setup did not return `partition_key_findings`, run `scai data doctor -c <snowflake_connection> --source-connection <source_connection> --config <workflow_path> --analyze-partition-keys --json` and read the `Partition key` checks. This is the same probe migration setup already runs.
+3. **Summarize:** table count, validation mode/sync, effective validation toggles (`schema_validation`, `metrics_validation`, `row_validation`, `continue_on_failure`), which levels will run (e.g. schema + row; metrics off unless enabled), `partition_key_findings`, and `doctor_findings`.
+   - Setup runs `scai data doctor --config <workflow_path> --analyze-partition-keys`, the same probe migration setup runs. `doctor_findings.failures` are problems in this workflow or the infrastructure it needs: show them and resolve them with the user before run. `doctor_findings.warnings` are advisory. `doctor_note` means the doctor could not run, so there are no findings to read.
 4. Ask verbatim:
 
 > Here is the validation workflow at `<workflow_path>`.
@@ -107,11 +107,12 @@ The setup response contains:
    | User goal | Workflow fields |
    |-----------|-----------------|
    | Limit compared rows | `sourceWhereClause` + `targetWhereClause` (both required; set matching predicates on each side) |
-   | Skip L2 on wide tables | `excludeMetrics` or disable `metricsValidation` |
+   | Skip L2 on wide tables | Disable `metricsValidation`, split it with `maxColumnsPerMetricsBatch`, or drop the `avg` / `sum` / `stddev` aggregates with `excludeMetrics: true` |
+   | Skip L2 metrics on one column (VARCHAR/text PK, useless `avg`, etc.) while keeping L1/L3 on that key | Top-level `validationCustomMetrics.source`: `column: {table.fullyQualifiedName}.{columnName}` + metric `name` entries with **no** `metricQuery` (removes those metrics). See [workflow-config-reference — Custom L2 metrics](../../setup/data-validation/references/workflow-config-reference.md#custom-l2-metrics-validationcustommetrics). Never exclude an index/PK via `columnSelectionList` for this |
    | Whitelist known diffs | `acceptedTransformations` |
    | Rename / remap columns | `columnMappings`, `indexColumnList`, `targetIndexColumnList` |
    | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber`, and a leading `columnNamesToPartitionBy` the source can prune on |
-   | Partition column the source cannot prune | `columnNamesToPartitionBy` — put the column from the `Partition prune` finding first |
+   | Partition column the source cannot prune | `columnNamesToPartitionBy` — put the column from the `Partition prune` finding first; for low cardinality, append remaining physical-key columns or the PK (see [Composite partition keys](../../migrate-objects/actions/data-migration/references/workflow-config-reference.md#composite-partition-keys)) |
    | Reduce source locking | `queryModifiers` |
    | Incremental watermark | `synchronization.watermarkColumn` (+ `columnNamesToPartitionBy`) |
    | L3 extract via object storage | `validationConfiguration.extraction.strategy` + `extraction.externalStage` (see [L3 pushdown](../../setup/data-validation/l3-pushdown/SKILL.md)) |
@@ -211,11 +212,11 @@ job_status(job_id="<JOB_ID>", details=true)   # + full progress and failure repo
 ### 4.A — Background monitoring
 
 1. **Phase A — Monitor:** Start the **Monitor** tool (`persistent: true`) with `monitor.watch_command` from the run response, verbatim, from the project root. No wait for a workflow name, and no hand-built command — the cursor baked into it is what prevents replays and gaps.
-2. **Phase B — Monitor fire:** Branch on the event's `phase`. `failure` / `stalled` / `relay_error` are warnings — surface them and keep watching. On `terminal`, read `detail.completion` (`verdict`, `terminal`, `failed`, `summary`, `report_row_counts`, optional `failures` / `stale_reports`) → Step 4.B if failed → **Step 5**. Do not call `job_status` merely to confirm the terminal event.
+2. **Phase B — Monitor fire:** Branch on the event's `phase`. `failure` / `relay_error` are warnings — surface them and keep watching. `stalled` triggers the infrastructure diagnosis in the health section below, then keep watching. On `terminal`, read `detail.completion` (`verdict`, `terminal`, `failed`, `summary`, `report_row_counts`, optional `failures` / `stale_reports`) → Step 4.B if failed → **Step 5**. Do not call `job_status` merely to confirm the terminal event.
 
-**No progress loop.** Do not start `/loop` or a cron to poll for progress. The relay emits a `stalled` event once a job has gone **30 minutes** without changing, so a quiet job reports itself. A healthy run is silent by design — progress lands in the log, and `job_status(job_id, details=true)` names the tables in flight whenever the user asks (see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths)).
+**No progress loop.** Do not start `/loop` or a cron to poll for progress. The relay emits a `stalled` event once a job has gone **30 minutes** without changing, or **2 minutes** with its `WORKFLOW` row still `pending` — no orchestrator has claimed it (`detail.stall_reason: "unclaimed"`), so a quiet job reports itself. A healthy run is silent by design — progress lands in the log, and `job_status(job_id, details=true)` names the tables in flight whenever the user asks (see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths)).
 
-The watch fires only on terminal, first failure, a 30-minute stall, or relay error — not on ordinary progress. It exits by itself on its job's terminal record.
+The watch fires only on terminal, first failure, a stall (2 minutes unclaimed or 30 minutes unchanged), or relay error — not on ordinary progress. It exits by itself on its job's terminal record.
 
 Tell the user once (plain language) that you'll report back when validation finishes or hits trouble. Do not require them to understand Monitor tool chrome.
 
@@ -229,9 +230,21 @@ the warning, and keep the Monitor armed.
 
 | Signal | Severity |
 |--------|----------|
-| `stalled` event | **Warning** |
-| Repeated unresolved `stalled` event | **Critical** |
+| `stalled` event | Per the diagnosis below (**Warning** or **Critical**) |
+| A second `stalled` event with the same `detail.stall_reason` | **Critical** |
 | `failure` event or failed table state | **Warning** (immediate) |
+
+**On a `stalled` event, diagnose before you keep watching.** Call `data_infrastructure(mode="status")` once, alongside the `job_status` read, and act on the first match:
+
+| `detail.stall_reason` | Status shows | Meaning | Do |
+|---|---|---|---|
+| any | `spcs_orchestrator.state` / `spcs_worker.state` is `suspended` or `not_running`, or `local_orchestrator` / `local_worker` is `false` for a recorded `local` placement (`spcs_worker` is read only when the project runs one) | The service that must run the workflow is down | **Critical.** Tell the user which one; offer `data_infrastructure(mode="up")` (orchestrator) or `scai data worker start` (SPCS worker). The workflow resumes once it is claimed |
+| `unclaimed` | `spcs_orchestrator.state` is `starting` | The orchestrator is still coming up (a cold compute pool can take minutes) | **Warning.** Say so and keep watching; a second `unclaimed` stall is **Critical** |
+| `unclaimed` | every recorded service running | The workflow row is still `pending`: no orchestrator has claimed it yet | Any `spcs_orchestrator.deployed_affinity` is **Critical**: the orchestrator must carry none, or it only claims workflows with that label (see [Affinity reference](../../data-infrastructure/references/affinity-reference.md#when-affinity-is-the-cause-of-a-stall)). Otherwise the orchestrator initializes claimed workflows one at a time, so if another of this project's data jobs was launched shortly before and has not started a table yet, say this one is likely queued behind it (**Warning**). With neither, say the orchestrator is up but not claiming; it is **Critical** on the second `unclaimed` stall |
+| `no_change` | every recorded service running | Work is claimed but stopped moving | **Warning.** If no table has started, compare the workflow YAML's top-level `affinity` with the worker's — `spcs_worker.deployed_affinity`, or `[application].affinity` in `.scai/config/dew_configuration.toml` for a local worker (status does not report it); a mismatch is **Critical**. Otherwise read the stall `summary` for a workflow status, then [Troubleshooting Reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md) |
+| any | `state: "unavailable"` | Status could not be read | **Warning.** Say so; keep watching |
+
+A `stalled` event is a diagnosis trigger, not a progress report: never answer it with "still running" alone.
 
 **What to tell the user** (short; do not block waiting unless they ask to stop):
 
@@ -405,6 +418,8 @@ Use [Validation levels reference](./references/validation-levels-reference.md) f
 | Step 4.B pending-tables anomaly | **No** — investigate first; do not offer re-validation |
 | **Execution** failures only (infra, worker, orchestrator, connectivity) | **No** — fix via `../../data-infrastructure/SKILL.md` first |
 
+A table whose validation finished with mismatches reads `validateData` as `failed` with `error: "data"`, and the walk stops there (errored, not the SQL fix loop). Usually the data or mapping is what differs, not the converted SQL; schema (L1) differences can still need a DDL fix (option 2). Do not run `sqlFixLoop`, and do not `reset` the task to re-dispatch the same workflow. Resolve it through this menu.
+
 Re-validation retries **failed partitions only** from the finished parent workflow — it is **not** a full re-run of every table. Chain resolution is automatic: pass the workflow name from the run that just finished (`details.progress.output.workflowName`).
 
 By default, schema-failed tables **reuse** the parent's partition metadata and re-run only their failing data partitions (schema is **not** re-checked, so a table whose only failure was schema is skipped). If the failures were schema/target-definition issues you have since fixed and want re-checked, add **`recheck_schema=true`** — it re-runs the full pipeline for schema-failed tables. Leave it off for data-mismatch retries.
@@ -417,7 +432,8 @@ Ask verbatim when eligible:
 > 2. **Apply fixes first** — edit workflow YAML / fix source data / re-migrate, then retry
 > 3. **Re-run full validation** — `validate_data(mode="setup", where=...)` then `mode="run"` (new workflow, all tables in scope)
 > 4. **Investigate further** — TASK_QUEUE, worker/orchestrator health (`../../data-infrastructure/SKILL.md`)
-> 5. **Stop** — proceed to Step 6 (teardown)
+> 5. **Accept the differences** — record that these tables are done as they are
+> 6. **Stop** — proceed to Step 6 (teardown)
 
 **If the user picks option 1:**
 
@@ -427,13 +443,15 @@ validate_data(mode="revalidate", workflow_name="<details.progress.output.workflo
 
 Add `recheck_schema=true` when the fixes were to schema / target definitions and you want schema re-checked (otherwise schema-failed tables re-run only their failing data partitions and are not schema-checked).
 
-Then repeat **Steps 4–5** (background Monitor, then present a new error-first report). Skip Step 6 teardown until the user picks **Stop** or all tables pass. Relay the `cost_reminder` from the revalidate response when infrastructure starts.
+Then repeat **Steps 4–5** (background Monitor, then present a new error-first report). Skip Step 6 teardown until the user picks **Accept** or **Stop**, or all tables pass. Relay the `cost_reminder` from the revalidate response when infrastructure starts.
 
 **If the user picks option 2:** guide fixes from `### Suggested fixes`, then offer this menu again when ready.
 
 **If the user picks option 3:** return to Step 1 (setup) with a `where` filter scoped to failed tables when possible.
 
-**If the user picks option 4 or 5:** continue to Step 6 when wave data work is done for this pass.
+**If the user picks option 5:** record the decision in two calls, scoped with `where` to the accepted tables. First `transition_status(status='escalate', task='validateData', cause='data', asks=[…], where=…)`, with asks naming the tables and mismatched levels. Then `transition_status(status='answer', task='validateData', resolution='mark_done', reason="<the user's words>", where=…)`, and follow the `next` it returns. Until the answer is recorded, the tables stay parked as needing a human decision.
+
+**If the user picks option 4 or 6:** continue to Step 6 when wave data work is done for this pass.
 
 When all tables passed on the first run, skip 5.G and continue to Step 6.
 

@@ -232,6 +232,11 @@ yes/no — extras already collected that on the setup/register card.
   This arranges the packages into `source/_etl/`, where `convert` finds them without an
   external path flag.
 
+  If this or the Power BI `scai code add` below times out, runs in the background or
+  fails, handle it as
+  [add-code-units Step 3](../add-code-units/SKILL.md#if-the-import-times-out-or-runs-in-the-background)
+  says before you go on.
+
 - **Another ETL platform:** these files never go through `scai code add` —
   the native `EtlFileClassifier` under `source/_etl/` only understands SSIS and
   Informatica PowerCenter. Instead:
@@ -299,6 +304,8 @@ scai code add -i <POWER_BI_PATH> --json
 ```
 
 This copies templates to `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` only. Do not imply a database extract of Power BI.
+A timeout, background launch or failure here is handled as
+[add-code-units Step 3](../add-code-units/SKILL.md#if-the-import-times-out-or-runs-in-the-background) says.
 
 Then return to the calling skill **in this same turn**. Under setup that means
 calling `progress_setup()` now and starting the step it names. Ending the turn

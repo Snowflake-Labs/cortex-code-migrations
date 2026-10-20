@@ -17,19 +17,47 @@ Prerequisites depend on the **source dialect** and the **extraction strategy** c
 
 ### SQL Server — `regular` (ODBC)
 
-The Data Exchange Worker connects to SQL Server via the Microsoft ODBC Driver. Before starting the worker, verify it is installed:
+The Data Exchange Worker connects to SQL Server via the Microsoft ODBC Driver. Before starting the worker, verify it is installed.
+
+**On Linux**, run, with the absolute directory of this `SKILL.md` and the migration project directory:
+
+```bash
+python3 "<worker_local_setup_skill_dir>/scripts/install_odbc_user.py" --check --project-dir "<project_dir>"
+```
+
+Do not use `odbcinst -q -d` for this on Linux: once a user-level install (route 1 below) exists, its `odbcinst` wrapper lists the driver for every project, whether or not the worker would find it. The check validates the user-level install for this project when there is one, and otherwise asks the system's own `odbcinst`. It needs Python 3.8 or newer; on RHEL 8 see route 1 for what to use in place of `python3`. With no Python 3.8+ at all there can be no user-level install, so check the system with `odbcinst -q -d 2>/dev/null | grep -i "ODBC Driver"` instead.
+
+- `OK:` (exit 0): the driver is present and the worker will find it — continue to Step 1.
+- A `FAILED:` line saying the `.env` does not point the worker at the install: run route 1's install for this project (no new licence question if the user already accepted it).
+- A `FAILED:` line saying a variable is already set in the environment: the real environment beats `.env`, so the user must set it as the line says where it is defined, then restart the app.
+- Any other `FAILED:` line: the driver is missing or broken; continue below.
+
+**On macOS**, run:
 
 ```bash
 odbcinst -q -d 2>/dev/null | grep -i "ODBC Driver"
 ```
 
-**If the command returns a driver name** (e.g. `[ODBC Driver 18 for SQL Server]`), the driver is present — continue to Step 1.
+If it returns a driver name (e.g. `[ODBC Driver 18 for SQL Server]`), the driver is present — continue to Step 1.
 
-**If the command returns nothing**, the driver is missing. **Do not start the local worker.** Do **not** attempt installation yourself (`sudo` / interactive).
+**Otherwise** the driver is missing. **Do not start the local worker.** Never run `sudo` or an interactive installer yourself.
 
 **Do not abandon orchestrator placement.** Missing ODBC is a worker-host problem. If the parent skill has not brought the shared orchestrator up yet, **return to** [`../SKILL.md`](../SKILL.md): keep the **SPCS** recommendation, confirm the compute pool, and call `data_infrastructure(mode="up", compute_pool="<POOL>", start_worker=false)`. Then tell the user to install ODBC and resume the worker later.
 
-Tell the user:
+**On Linux**, ask the user whether they have `sudo` on this machine, then offer these routes, the user-level install first when they have no `sudo`:
+
+1. **Install it for this user, without root** (Debian, Ubuntu, RHEL and its rebuilds). Tell the user the driver is Microsoft's, licensed under <https://aka.ms/odbc18eula>, and ask whether they accept it. Only after they say yes, run, with the absolute directory of this `SKILL.md` and the migration project directory:
+   ```bash
+   python3 "<worker_local_setup_skill_dir>/scripts/install_odbc_user.py" --accept-eula --project-dir "<project_dir>"
+   ```
+   It needs Python 3.8 or newer. On RHEL 8 and its rebuilds `python3` is 3.6 or absent: use `python3.11`, `python3.12` or `python3.9` if one is installed, or `uv run --no-project --python 3.12 python` in place of `python3` if `uv` is on `PATH`; with neither, offer route 2 or 3. The same goes for the `--check` pre-flight above.
+   It downloads unixODBC and `msodbcsql18` as the user, unpacks them under `~/.local/share/scai/odbc`, and writes `ODBCSYSINI` and `LD_LIBRARY_PATH` to `<project_dir>/.env`, which `scai` loads and the worker inherits. It also writes `odbcinst`/`isql` wrappers to `~/.local/bin`. It ends `OK: the driver loads.` (exit 0) on success: pass every `WARNING:` line on to the user. A warning that `LD_LIBRARY_PATH` is already set means the user must change it where it is defined and restart the app, because the real environment beats `.env`. Then continue to Step 1. On `FAILED:` (exit 1), tell the user the reason and offer route 2 or 3.
+2. **Install it with `sudo`, run by the user:** Microsoft's [Linux install steps](https://learn.microsoft.com/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server) for their distribution (`msodbcsql18` and `unixodbc`).
+3. **Run the worker on SPCS** instead of this machine: [`../worker-spcs/SKILL.md`](../worker-spcs/SKILL.md).
+
+After a user-level install, if `scai data worker start` still fails its doctor with "unixODBC manager not installed", the installed worker predates the doctor check that reads pyodbc and is looking for `odbcinst` on `PATH`. Ask the user to add `~/.local/bin` to `PATH` (logging out and back in does it on Ubuntu and Debian once the directory exists) and restart the app.
+
+**On macOS**, tell the user:
 
 > The Data Exchange Worker requires the Microsoft ODBC Driver for SQL Server to connect to your source database. Please install it and then resume.
 >
@@ -149,7 +177,7 @@ Tell the user:
 The CLI prints worker status on startup. Confirm the output shows the worker has connected to the orchestrator and is polling for tasks.
 
 If the worker fails to start, check:
-- **SQL Server only:** ODBC driver installed (`odbcinst -q -d | grep -i "ODBC Driver"`) — if missing, follow the pre-flight instructions in the Prerequisites section above
+- **SQL Server only:** ODBC driver installed (`odbcinst -q -d | grep -i "ODBC Driver"`, or `install_odbc_user.py --check` after a user-level install) — if missing, follow the pre-flight instructions in the Prerequisites section above
 - Source database credentials in the TOML config
 - Network connectivity to the source database from the host
 - Snowflake connection details in `~/.snowflake/config.toml` (or `%USERPROFILE%\.snowflake\config.toml` on Windows)

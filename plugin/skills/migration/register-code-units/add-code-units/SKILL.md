@@ -86,6 +86,54 @@ This will:
 scai code add -i <INPUT_PATH> --overwrite --json
 ```
 
+#### If the import times out or runs in the background
+
+This section covers every `scai code add` the register and conversion skills run: the SQL
+add here, ETL, dbt, Power BI and `code-conversion-only`.
+
+A large source can keep `scai code add` running longer than one `bash` call allows. When
+the call times out, or returns `Command running in background with ID: <id>` or
+`Process moved to background with ID: <id>`, the import has not finished and you have no
+envelope yet. A timeout is neither a failure nor a success.
+
+- **With an id, wait for the real end, in this turn.** Call
+  `bash_output(bash_id=<id>, wait=true)`, and call it again while it reports running, until
+  it shows `<status>completed</status>`. Then take its `<exit_code>` and the `--json`
+  envelope in its `<stdout>`; those are the import's result. Do not end the turn to say it
+  is still importing: this app does not show the turn cortex starts when the job ends, so
+  the user would be left with an idle screen. A short line before each wait is fine. Until
+  you have the result, say only that it is still running,
+  never that it finished or that nothing is wrong.
+- **With no id, the run you started has ended or is ending; do not start another.** First
+  check whether scai is still running with `pgrep -fl '[s]cai code add'` on macOS/Linux, or
+  `Get-CimInstance Win32_Process -Filter "Name LIKE 'scai%' AND CommandLine LIKE '%code add%'"`
+  on Windows. Output lists a running import;
+  exit code 1 with no output means no import is running, not that the check failed.
+  Keep the brackets in `[s]cai`: without them `pgrep -f` matches the shell running the
+  check and reports an import that has stopped. Run the check as its own command,
+  never chained with the import, whose text the shell's command line would hold. Repeat it until nothing is running, then treat that run as finished: read any
+  envelope left in the timed-out output, else run `scai logs --last 5` and read the newest
+  `scai_error<YYYYMMDD>.log` as below. A logged error is a failure to report.
+  Start another `scai code add` only when the logs show the first one never ran or was cut
+  off before it wrote anything, say so to the user first, and launch it with
+  `run_in_background=true` so you have an id to wait on as above. Two imports writing
+  `source/` at once corrupt it, and one rerun after a crash only repeats the crash.
+
+**If the import failed** — a non-zero `<exit_code>`, an envelope with `"success": false`,
+or a job that ended with no envelope at all — find out why before you say anything else:
+
+1. An envelope with `"success": false` names the cause in `error.code`, `error.message`
+   and `error.suggestion`. Use those.
+2. With no envelope, run `scai logs --last 5`. It prints the log directory (honouring
+   `SCAI_LOGS_DIR`) and the newest log files on every OS. Read the end of the newest
+   `scai_error<YYYYMMDD>.log` there for the error code and its message.
+3. Tell the user, with the code and message you found (e.g. `CVT0008` or `CRG1001`):
+   > **The import failed.** `<code>`: `<message>`. `<what you propose next>`.
+
+   Rerunning the same command gives the same failure, so propose a change (the suggestion,
+   a fix to the files it names) rather than a retry. Do not continue to the next step, and
+   do not treat the import as done.
+
 ### Step 4: Import ETL
 
 **Skip this entire step for a dbt project.** If Step 1 found `dbt_project.yml`, do **not** ask the
@@ -121,7 +169,9 @@ Read `has_power_bi` from `configure()`:
 scai code add -i <POWER_BI_PATH> --json
 ```
 
-Do **not** pass `--overwrite` here — existing SQL/ETL in `source/` would be wiped.
+Do **not** pass `--overwrite` here — existing SQL/ETL in `source/` would be wiped. If it
+times out, runs in the background or fails, handle it as
+[Step 3](#if-the-import-times-out-or-runs-in-the-background) says.
 
 Confirm files landed in both `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` before continuing.
 
@@ -168,7 +218,8 @@ Check these yourself against the `--json` envelope. Do **not** turn them into a
 question — the envelope already says what was imported, and the user cannot
 verify a count you just computed for them:
 
-- [ ] `scai code add` exited without errors
+- [ ] Every `scai code add` finished with exit code 0 and an envelope with `"success": true`
+      — a timeout or a background launch is neither; wait for the job as Step 3 says
 - [ ] `filesCopied` matches the SQL files in the input path
 - [ ] `.sql` files are present under `source/`
 - [ ] If Power BI was imported: files exist in both `source/BI/PowerBI/` and `artifacts/BI/PowerBI/`
@@ -179,6 +230,8 @@ about it.
 ## On Completion
 
 After the CHECKPOINT passes, tell the user — a statement, not a question. Fill placeholders from the JSON envelope returned by `scai code add --json`.
+Never report the import as complete, or as fine, without that envelope in hand: on a failure,
+report it as Step 3 says instead.
 
 > **Import complete.** `<filesCopied>` SQL files imported as `<codeUnitsAdded>` code units, broken down by type (filled from `byType`). Files in `source/`.
 > *If `etlFilesAdded > 0`:* ETL: `<etlFilesAdded>` files added.

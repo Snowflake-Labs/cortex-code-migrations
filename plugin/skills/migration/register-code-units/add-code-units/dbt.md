@@ -33,6 +33,10 @@ Run exactly this command, then jump to Step 5 of `add-code-units/SKILL.md`:
 scai code add -i <DBT_PROJECT_ROOT> --code-already-split --json
 ```
 
+If it times out, runs in the background or fails, handle it as
+[Step 3 of the skill](SKILL.md#if-the-import-times-out-or-runs-in-the-background) says
+before you go on to Step 5. Never start the Power BI `scai code add` while this one runs.
+
 `--code-already-split` is **required and unconditional** here, not something to discover
 by trial. Because the splitting step is skipped, the source files carry no
 `/* <sc-...> */` boundary tags; for Redshift, Teradata, Postgres, and SQL Server the

@@ -250,23 +250,54 @@ _EMPTY_STATE_EXTRA_LINE = {
     "unreadable": "An existing data lineage artifact was found, but it could not be read.",
 }
 
+_DL_EMPTY_SCOPE = (
+    "Data Lineage maps ETL pipelines and reporting files such as Power BI (.pbit or .pbix). "
+    "Procedure, view, and table relationships are on Object Lineage."
+)
+_DL_EMPTY_MISSING = (
+    f"Data lineage assessment data is not available. Run <code>{_esc(_CLI_COMMAND)}</code> to generate it."
+)
+_DL_EMPTY_NO_PIPELINE_TITLE = "No ETL pipelines or reporting files to map"
+_DL_EMPTY_NO_PIPELINE = (
+    "This assessment has no ETL pipelines or reporting files such as Power BI, so the map is "
+    "empty. Procedure, view, and table relationships are on Object Lineage."
+)
+_DL_OPEN_OBJECT_LINEAGE = "Open Object Lineage"
+# Marker the multi-report uses to default the Lineage toggle to Object Lineage
+# and to skip v-pre around authored empty copy (safe: no artifact strings).
+_DL_EMPTY_MARKER = "data-lineage-empty"
 
-def _render_empty_state(reason: Optional[str] = None) -> str:
-    """`reason` is None for a missing file, or one of `_EMPTY_STATE_EXTRA_LINE`'s
-    keys for a file that exists but couldn't be turned into a rendered tab.
-    The base remediation paragraph (naming the CLI regeneration command) is
-    always shown; a malformed/unreadable file additionally gets one
-    grammatical, accurate extra line -- never a claim of "invalid JSON" for
-    an input that was actually valid JSON with the wrong shape or content.
+
+def _render_empty_state(reason: Optional[str] = None, *, kind: str = "missing") -> str:
+    """Render the Data Lineage empty panel.
+
+    `kind="missing"` covers a missing or unreadable artifact and still names the
+    CLI regeneration command. `kind="no_pipelines"` covers a valid artifact whose
+    canvas has no ETL or reporting cards — a SQL-only estate, not a load failure.
+    Both point the reader at Object Lineage for procedure, view, and table edges.
     """
-    body = f"<p>Data lineage assessment data is not available. Run <code>{_esc(_CLI_COMMAND)}</code> to generate it.</p>"
-    extra = _EMPTY_STATE_EXTRA_LINE.get(reason)
-    if extra:
-        body += f"<p>{extra}</p>"
-    return '<div id="data-lineage-report">' + _render_page_header() + '<div class="empty-state"><h3>No Data Available</h3>' + body + "</div></div>"
+    if kind == "no_pipelines":
+        title = _DL_EMPTY_NO_PIPELINE_TITLE
+        body = f"<p>{_esc(_DL_EMPTY_NO_PIPELINE)}</p>"
+    else:
+        title = "No Data Available"
+        body = f"<p>{_esc(_DL_EMPTY_SCOPE)}</p><p>{_DL_EMPTY_MISSING}</p>"
+        extra = _EMPTY_STATE_EXTRA_LINE.get(reason)
+        if extra:
+            body += f"<p>{_esc(extra)}</p>"
+    body += (
+        f'<p><button type="button" class="prompt-copy" '
+        f'@click="lineageView = \'object\'">{_esc(_DL_OPEN_OBJECT_LINEAGE)}</button></p>'
+    )
+    return (
+        f'<div id="data-lineage-report" class="{_DL_EMPTY_MARKER}">'
+        + _render_page_header()
+        + f'<div class="empty-state"><h3>{_esc(title)}</h3>'
+        + body
+        + "</div></div>"
+    )
 
 
-_DL_H1 = '<h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 8px;">Data Lineage</h1>'
 _DL_BLURB = "Follow how data moves from sources through pipelines to targets and reports."
 # The introduction carries the ask for reporting-layer files because an empty
 # Reports lane cannot make it: a reader whose project supplied no report files
@@ -282,6 +313,7 @@ _DL_INTRO_PARAGRAPHS = (
     "or .pbix are included in the code supplied for assessment, every report that queries these "
     "systems is drawn in the Reports lane. Without them the map stops at the systems the "
     "pipelines write, and who consumes the data stays unknown.",
+    "Procedure, view, and table relationships are on Object Lineage.",
 )
 _DL_INTRO = "".join(
     '<p style="color: #64748B; font-size: 1rem; line-height: 1.6; '
@@ -350,7 +382,9 @@ _SUPPRESSED_MISSING_INPUT_KIND = "LandingWithoutReportingLayer"
 
 
 def _render_page_header() -> str:
-    return f'<div class="dl-page-header">{_DL_H1}{_DL_INTRO}</div>'
+    # Discovery already names the Lineage view; the Data Lineage panel opens on
+    # the intro rather than repeating a page subheader.
+    return f'<div class="dl-page-header">{_DL_INTRO}</div>'
 
 
 def _info_icon(text: str, extra_class: str = "") -> str:
@@ -393,6 +427,12 @@ def _render_content(data: Dict[str, Any]) -> Tuple[str, str]:
     missing_inputs = data.get("MissingInputs", []) or []
     narrative = data.get("Narrative")
     findings = data.get("Findings", []) or []
+
+    # A valid artifact with no canvas cards is a SQL-only (or otherwise
+    # non-ETL) estate: show the no-pipeline empty state instead of three blank
+    # lanes that look like the assessment found nothing at all.
+    if not nodes:
+        return _render_empty_state(kind="no_pipelines"), _EMPTY_GRAPH_JSON
 
     layout = layout_lineage(nodes, canvas_width=_DEFAULT_CANVAS_WIDTH)
 

@@ -22,6 +22,14 @@ Call `deploy` with the `invocation` from `next_task` — it already has
 
 After AIMSBX DML the tools did not see (`sql_execute`), pass `restore_from="sandbox"` on `deploy` or `run_tests`.
 
+`reload_tables` resets only tables with a testbed CSV on disk, through the
+source half. When a closure table has none, or the procedure has no source
+twin, it refuses and names those tables: nothing is loaded and no snapshot
+is latched. Copy each named table from the common catalog into the pair on
+both sides, then `mode=redeploy_object`, `restore_from="sandbox"`. If the
+load itself skips a closure table or fails a table load, `reload_tables`
+returns an error saying so and latches nothing; the pair stays ready.
+
 Omit `mode` on a live `ready` leftover pair still deploys tables (CSV
 reload), peer functions/views/procs, and this object on source — no DROP
 or CLONE. Snowflake CREATE of this id is `mode=redeploy_object` (after a

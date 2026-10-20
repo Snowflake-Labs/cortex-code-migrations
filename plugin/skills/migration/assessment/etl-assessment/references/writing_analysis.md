@@ -6,16 +6,34 @@ This guide defines how to write comprehensive, actionable AI analysis for SSIS p
 
 ## Context: Snowflake AIM for Data Warehouses Migration
 
-Snowflake AIM for Data Warehouses processes SSIS packages and converts them to Snowflake-native components:
+Snowflake AIM for Data Warehouses processes SSIS packages and converts them to Snowflake-native components. The conversion target depends on `ssis_target` (set by the parent skill and persisted as `etl_ssis_target`):
+
+### dbt mode (`ssis_target: dbt`)
 
 | SSIS Component | Snowflake Target | Technology |
 |----------------|------------------|------------|
 | **Control Flow** | [Snowflake Tasks](https://docs.snowflake.com/en/user-guide/tasks-intro) | Snowflake Scripting |
 | **Data Flow** | dbt Projects | dbt models running on Snowflake |
 
+### scripting mode (`ssis_target: scripting`)
+
+| SSIS Component | Snowflake Target | Technology |
+|----------------|------------------|------------|
+| **Control Flow** | [Snowflake Tasks](https://docs.snowflake.com/en/user-guide/tasks-intro) | Snowflake Scripting |
+| **Data Flow** | Snowflake Stored Procedures | Snowflake Scripting (inline SQL) |
+| **Task graph** | Snowflake Tasks with CALL statements | Orchestration layer |
+
+Zero dbt references in scripting mode.
+
 ### Critical Understanding
 
-**SnowConvert will process all packages**, but the analysis must identify external connectivity requirements. dbt projects on Snowflake cannot directly connect to external sources - data must already exist in Snowflake. This means:
+**SnowConvert will process all packages**, but the analysis must identify external connectivity requirements.
+
+**dbt mode:** dbt projects on Snowflake cannot directly connect to external sources - data must already exist in Snowflake.
+
+**scripting mode:** Stored procedures operate on data already in Snowflake — external sources still require ingestion solutions.
+
+In both modes:
 
 - **Ingestion packages** require attention to identify external connector solutions
 - **Packages with transformations on internal sources** have straightforward conversion paths
@@ -79,7 +97,7 @@ This classification applies when you observe in the package analysis (SQL logic,
 
 **SnowConvert Outcome:**
 - Control Flow → Snowflake Tasks
-- Data Flow → dbt models
+- Data Flow → dbt models (dbt mode) / stored procedures (scripting mode)
 - **Excellent conversion candidate**
 
 ---
@@ -104,9 +122,9 @@ This classification applies when you observe in the package analysis (SQL logic,
 
 **SnowConvert Outcome:**
 - Control Flow → Snowflake Tasks
-- Data Flow → dbt projects
+- Data Flow → dbt projects (dbt mode) / stored procedures (scripting mode)
 - **Requires external connector solution** - identify source type and recommend appropriate approach
-- Pure ingestion packages (minimal transformation) may be better served by dedicated connector solutions rather than converted dbt models
+- Pure ingestion packages (minimal transformation) may be better served by dedicated connector solutions rather than converted dbt models (dbt mode) or converted stored procedures (scripting mode)
 
 ---
 
@@ -162,7 +180,7 @@ This classification applies when you observe in the package analysis (SQL logic,
 
 **SnowConvert Outcome:**
 - **Partial candidate** - transformation portions can convert, ingestion cannot
-- Recommend architectural separation: ingestion via Fivetran/Airflow, transformation via dbt
+- Recommend architectural separation: ingestion via Fivetran/Airflow, transformation via dbt (dbt mode) or stored procedures (scripting mode)
 - Analysis should clearly identify which components are convertible vs. which need alternatives
 
 ---
@@ -218,7 +236,7 @@ Report these counts to assess conversion complexity:
 | Component | Count | Conversion Notes |
 |-----------|-------|------------------|
 | Execute SQL Tasks | X | Low complexity - direct SQL to Snowflake Scripting |
-| Data Flow Tasks | X | Converts to dbt models (if not ingestion) |
+| Data Flow Tasks | X | Converts to dbt models (dbt mode) or stored procedures (scripting mode), if not ingestion |
 | Script Tasks | X | **Effort depends on script logic** - analyze the code to determine complexity (easy, medium, or complex) |
 | For Each Loop Containers | X | Snowflake procedural logic |
 | Sequence Containers | X | Organizational - minimal impact |

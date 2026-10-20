@@ -7,6 +7,39 @@ license: Proprietary. See License-Skills for complete terms
 
 # Midway Entry
 
+## Before Anything Else: Check Saved Setup
+
+Midway entry imports pre-converted code into a new, empty project. A project
+whose setup has already taken another path is past that fork. Here, a request
+for midway entry (for example the "Continue an existing migration" tile in a new
+conversation) means "pick this project back up", not "import into it".
+
+Before the On Entry message, read `.scai/config/plugin.yml` in the project
+directory. Check these in order. The first match decides.
+
+1. **`entry_mode: midway`**: setup routed here, or a midway import was started
+   earlier. Carry on to On Entry. Setup may already have saved
+   `code_source: local`, because it asks about code source before entry mode.
+2. **`code_source: extract`**: setup chose to extract code from the source
+   database, so there is no converted code to import. The setup machine settles
+   its entry-mode question the same way.
+3. **`entry_mode: fresh`**: setup chose to register and convert the project's
+   own code.
+4. Anything else, including no `plugin.yml`: nothing settles the fork yet.
+   Carry on to On Entry.
+
+In cases 2 and 3, do not announce or start midway entry. Tell the user in one
+or two sentences what setup already chose, and name the value: "This project's
+setup is extracting code from `<source_connection>`, so there is no
+pre-converted code to bring in here. Picking setup back up where it left off."
+Then return to the parent setup skill (`./SKILL.md`), call `progress_setup()`,
+and act on the next task it returns.
+
+If the user then says they do have pre-converted Snowflake SQL to import, explain
+that midway entry needs a new, empty project directory, and offer to start one.
+Never run `scai code sync` into this project, and never change `code_source` or
+`entry_mode` without asking.
+
 ## On Entry
 
 Tell the user:
@@ -26,6 +59,7 @@ Use midway entry when **all** of the following are true:
 - You already have source SQL files on disk.
 - You already have converted Snowflake SQL files on disk.
 - Your source dialect is **SQL Server** or **Redshift**. Other dialects are not supported by this path.
+- The project's setup has not already chosen another path (see Check Saved Setup above).
 
 If any of these is not true, use the normal setup flow (`./SKILL.md`) instead.
 

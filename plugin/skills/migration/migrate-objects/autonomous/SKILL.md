@@ -175,7 +175,7 @@ If the object is not already parked:
 ```
 transition_status(status="escalate", task="<the task it keeps returning on>",
                   asks=["<choice>", "<choice>"],
-                  cause="<sql|infra, from the agent's failed.error — omit it otherwise>",
+                  cause="<sql|infra|data, from the agent's failed.error — omit it otherwise>",
                   reason="<what stopped you>", where="id = '<id>'")
 ```
 

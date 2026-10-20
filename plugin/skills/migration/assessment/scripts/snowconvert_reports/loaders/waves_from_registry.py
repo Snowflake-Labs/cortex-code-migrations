@@ -33,6 +33,7 @@ from typing import Any
 
 from ..conversion_status import is_etl as _is_etl
 from ..conversion_status import map_conversion_status as _map_conversion_status
+from ..conversion_status import summarize_issues as _summarize_issues
 from .registry_loader import (
     _entry_full_name,
     build_id_to_name_map,
@@ -111,11 +112,12 @@ def _canonical_name(entry: dict) -> str:
     everywhere else in the pipeline — including bindable-token unwrap so
     overlay keys match ``build_id_to_name_map`` / ``_entry_full_name``.
 
-    ETL units (``kind == "etl"``) have no ``source.database/schema/name``;
-    their natural identifier is ``files.source.path`` (e.g. the ``.dtsx`` /
-    ``.xml`` definition file).
+    ETL units (``kind == "etl"``) and script units (``kind == "script"``,
+    e.g. BTEQ) have no ``source.database/schema``; their natural identifier
+    is ``files.source.path`` (the ``.dtsx`` / ``.xml`` / ``.btq`` file), so
+    same-named files in different folders stay distinct.
     """
-    if _is_etl(entry):
+    if _is_etl(entry) or entry.get("kind") == "script":
         path = (
             entry.get("files", {}).get("source", {}).get("path", "") or ""
         ).strip()
@@ -264,6 +266,7 @@ def _build_object(
         "technology": "",
         "fileName": file_name,
         "conversionStatus": _map_conversion_status(entry),
+        "issues": _summarize_issues(entry),
         "partitionNumber": MOCK_PARTITION_NUMBER,
         "partitionType": MOCK_PARTITION_TYPE,
         "isRoot": len(required_by) == 0,

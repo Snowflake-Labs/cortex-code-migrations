@@ -21,7 +21,7 @@ object is not already parked, park it before reporting:
 ```
 transition_status(status="escalate", task="<the task it keeps returning on>",
                   asks=["<choice>", "<choice>"],
-                  cause="<sql|infra, from the agent's failed.error — omit it otherwise>",
+                  cause="<sql|infra|data, from the agent's failed.error — omit it otherwise>",
                   reason="<what stopped you>", where="id = '<id>'")
 ```
 
@@ -96,7 +96,7 @@ or clearing evidence, park it:
 ```
 transition_status(status="escalate", task="<the task it keeps returning on>",
                   asks=["<the choice you cannot make for the user>"],
-                  cause="<sql|infra, from the agent's failed.error — omit otherwise>",
+                  cause="<sql|infra|data, from the agent's failed.error — omit otherwise>",
                   reason="<what the two dispatches tried>", where="id = '<id>'")
 ```
 

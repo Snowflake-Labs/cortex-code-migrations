@@ -14,7 +14,8 @@ the first folder that holds `ETL.Elements.*.csv`, checking every folder above th
 The brief is not in `reports_dir`. It is at:
 
 ```
-{ai_first_reports}/AiFirstRemediation/remediation-brief.json
+{ai_first_reports}/AiFirstRemediation/<unit_name>/remediation-brief.json   (package-scoped, multi-unit conversion)
+{ai_first_reports}/AiFirstRemediation/remediation-brief.json               (unscoped, single-unit conversion)
 ```
 
 | `reports_dir` | `{ai_first_reports}` |
@@ -23,8 +24,13 @@ The brief is not in `reports_dir`. It is at:
 | any other folder named `SnowConvert` | the folder that holds `reports_dir` |
 | a folder named `Reports` | `reports_dir` itself |
 
-If this path does not exist:
-- **AI-First unit** (has `{ai_first_reports}/AiFirstIssues/issues.json`): fail loudly. Do not
+Check the `<unit_name>`-scoped path first (`<unit_name>` = the unit folder's own name) and fall
+back to the unscoped path only when the scoped one is absent — `remediation_brief_path()` in
+`scan_unit.py` resolves this same precedence.
+
+If neither path exists:
+- **AI-First unit** (has `{ai_first_reports}/AiFirstIssues/<unit_name>/issues.json` or the
+  unscoped `{ai_first_reports}/AiFirstIssues/issues.json`): fail loudly. Do not
   proceed as if this were a known platform, and do not invent an intent repair with no brief to
   point at (`findings/61` SS13.2 row 3). The scanner (`scan_unit.py`) already enforces this at
   scan time; this profile must not silently retry past that failure.

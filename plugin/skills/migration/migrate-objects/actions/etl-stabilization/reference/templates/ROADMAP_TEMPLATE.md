@@ -118,7 +118,7 @@
      ═══════════════════════════════════════════════════════════ -->
 
 - [ ] **Step {P}.0: Initialize Phase Tracking** *(gate — see Execution Workflow § Step 2)*
-  Cortex task "Phase {P}: {PHASE_NAME}" must exist before proceeding.
+  The Cortex task recorded in STATE.md (`Cortex task: <task_id>`) must exist before proceeding. Do not select by title.
   Steps to register: {P}.1 (Setup), {P}.2 (Test-Gen Wave), {P}.3 (Fix Wave), {P}.4 (Apply-Fixes), {P}.5 (Phase Completion), {P}.6 (Phase Transition).
   If no task exists, the Execution Workflow creates it automatically.
 
@@ -206,11 +206,11 @@ Shutdown team: use `send_message` with `type: "shutdown_request"` to each agent 
 - [ ] **Step {P}.6: Phase Transition**
 Read this ROADMAP's § Phase {NEXT_P} — extract phase name and step count.
 Create cortex task for Phase {NEXT_P}:
-  `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME}"`
+  `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME} ({unit_name})"`
   `cortex ctx task start <task_id>`
   Add ALL ROADMAP steps ({NEXT_P}.1 through {NEXT_P}.{LAST}) in ONE call:
   `cortex ctx step add -t <task_id> "{NEXT_P}.1 ..." "{NEXT_P}.2 ..." ...` (it accepts multiple step texts).
-Verify: `cortex ctx show tasks` — confirm "Phase {NEXT_P}:" task exists.
+Verify: `cortex ctx show tasks` lists the task id recorded in STATE.md as `Cortex task: <task_id>`. Do not confirm by title.
 Mark Step {NEXT_P}.0 as [x] in ROADMAP.
 Mark this step [x] and continue with Step {NEXT_P}.1.
 
@@ -219,7 +219,7 @@ Mark this step [x] and continue with Step {NEXT_P}.1.
      ═══════════════════════════════════════════════════════════ -->
 
 - [ ] **Step {P}.0: Initialize Phase Tracking** *(gate — see Execution Workflow § Step 2)*
-  Cortex task "Phase {P}: {PHASE_NAME}" must exist before proceeding.
+  The Cortex task recorded in STATE.md (`Cortex task: <task_id>`) must exist before proceeding. Do not select by title.
   Steps to register: {P}.1 (Setup), {P}.2 (Fix Wave), {P}.3 (Apply-Fixes), {P}.4 (Phase Completion), {P}.5 (Phase Transition).
   If no task exists, the Execution Workflow creates it automatically.
 
@@ -282,11 +282,11 @@ Shutdown team: use `send_message` with `type: "shutdown_request"` to each agent 
 - [ ] **Step {P}.5: Phase Transition**
 Read this ROADMAP's § Phase {NEXT_P} — extract phase name and step count.
 Create cortex task for Phase {NEXT_P}:
-  `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME}"`
+  `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME} ({unit_name})"`
   `cortex ctx task start <task_id>`
   Add ALL ROADMAP steps ({NEXT_P}.1 through {NEXT_P}.{LAST}) in ONE call:
   `cortex ctx step add -t <task_id> "{NEXT_P}.1 ..." "{NEXT_P}.2 ..." ...` (it accepts multiple step texts).
-Verify: `cortex ctx show tasks` — confirm "Phase {NEXT_P}:" task exists.
+Verify: `cortex ctx show tasks` lists the task id recorded in STATE.md as `Cortex task: <task_id>`. Do not confirm by title.
 Mark Step {NEXT_P}.0 as [x] in ROADMAP.
 Mark this step [x] and continue with Step {NEXT_P}.1.
 
@@ -295,7 +295,7 @@ Mark this step [x] and continue with Step {NEXT_P}.1.
      ═══════════════════════════════════════════════════════════ -->
 
 - [ ] **Step {P}.0: Initialize Phase Tracking** *(gate — see Execution Workflow § Step 2)*
-  Cortex task "Phase {P}: {PHASE_NAME}" must exist before proceeding.
+  The Cortex task recorded in STATE.md (`Cortex task: <task_id>`) must exist before proceeding. Do not select by title.
   Steps to register: {P}.1 (Setup), {P}.2 (dbt-Test-Gen Wave), {P}.3 (dbt-Fix Wave), {P}.4 (Phase Completion), {P}.5 (Phase Transition).
   If no task exists, the Execution Workflow creates it automatically.
 
@@ -375,11 +375,11 @@ Shutdown team: use `send_message` with `type: "shutdown_request"` to each agent 
 - [ ] **Step {P}.5: Phase Transition**
 Read this ROADMAP's § Phase {NEXT_P} — extract phase name and step count.
 Create cortex task for Phase {NEXT_P}:
-  `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME}"`
+  `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME} ({unit_name})"`
   `cortex ctx task start <task_id>`
   Add ALL ROADMAP steps ({NEXT_P}.1 through {NEXT_P}.{LAST}) in ONE call:
   `cortex ctx step add -t <task_id> "{NEXT_P}.1 ..." "{NEXT_P}.2 ..." ...` (it accepts multiple step texts).
-Verify: `cortex ctx show tasks` — confirm "Phase {NEXT_P}:" task exists.
+Verify: `cortex ctx show tasks` lists the task id recorded in STATE.md as `Cortex task: <task_id>`. Do not confirm by title.
 Mark Step {NEXT_P}.0 as [x] in ROADMAP.
 Mark this step [x] and continue with Step {NEXT_P}.1.
 
@@ -389,7 +389,7 @@ Mark this step [x] and continue with Step {NEXT_P}.1.
      ═══════════════════════════════════════════════════════════ -->
 
 - [ ] **Step {P}.0: Initialize Phase Tracking** *(gate — see Execution Workflow § Step 2)*
-  Cortex task "Phase {P}: {PHASE_NAME}" must exist before proceeding.
+  The Cortex task recorded in STATE.md (`Cortex task: <task_id>`) must exist before proceeding. Do not select by title.
   Steps to register: {P}.1 (Setup), {P}.2 (Proc-Test-Gen Wave), {P}.3 (Proc-Fix Wave), {P}.4 (Phase Completion), {P}.5 (Phase Transition).
   If no task exists, the Execution Workflow creates it automatically.
 
@@ -455,10 +455,10 @@ Shutdown team: use `send_message` with `type: "shutdown_request"` to each agent 
 - [ ] **Step {P}.5: Phase Transition**
 Read this ROADMAP's § Phase {NEXT_P} — extract phase name and step count.
 Create cortex task for Phase {NEXT_P}:
-  `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME}"`
+  `cortex ctx task add "Phase {NEXT_P}: {NEXT_PHASE_NAME} ({unit_name})"`
   `cortex ctx task start <task_id>`
   Add one `cortex ctx step add` per ROADMAP step ({NEXT_P}.1 through {NEXT_P}.{LAST}).
-Verify: `cortex ctx show tasks` — confirm "Phase {NEXT_P}:" task exists.
+Verify: `cortex ctx show tasks` lists the task id recorded in STATE.md as `Cortex task: <task_id>`. Do not confirm by title.
 Mark Step {NEXT_P}.0 as [x] in ROADMAP.
 Mark this step [x] and continue with Step {NEXT_P}.1.
 
@@ -493,17 +493,17 @@ Mark this step [x] and continue with Step {NEXT_P}.1.
      All steps use - [ ] checkboxes. Mark [x] when completed. -->
 
 - [ ] **Step {P}.0: Initialize Phase Tracking** *(gate — see Execution Workflow § Step 2)*
-  Cortex task "Phase {P}: Final Validation" must exist before proceeding.
+  The Cortex task recorded in STATE.md (`Cortex task: <task_id>`) must exist before proceeding. Do not select by title.
   Steps to register: {P}.1 (Validation Checks), {P}.2 (Generate Report), {P}.3 (Migration Complete).
   If no task exists, the Execution Workflow creates it automatically.
 
 - [ ] **Step {P}.1: Validation Checks**
 Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
   start-phase {SESSION_JSON} {P}
-Read session_status.json — verify ALL elements across ALL phases have terminal status.
-  Terminal statuses: test-passed, fixed, no-fix-needed, skipped,
-    needs-user, auto-fixed-needs-review, failed.
-  ZERO elements may have status pending or orch-tested.
+Read session_status.json — verify ALL elements across ALL phases are completion-eligible.
+  Completion-eligible statuses: test-passed, no-fix-needed, skipped, auto-fixed-needs-review.
+  ZERO elements may have status pending, orch-tested, fixed (applied but not
+    yet re-tested), needs-user, test-failed, or failed.
 Count remaining !!!RESOLVE EWI!!! markers in orchestration SQL.
 Read fix-log.md — verify no contradicting patterns across phases.
 Verify each phase directory has: baseline + batch + learnings artifacts for all batches.
@@ -519,4 +519,7 @@ Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
 Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
   update-state {SESSION_JSON} --current-phase {P} --phase-status complete --next-action "Migration complete — review report"
 Mark Phase {P} as [x] Complete in this ROADMAP.
+Run: uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py \
+  check-complete {SESSION_JSON}
+  Confirm it exits 0 before presenting the summary below as a completion claim.
 Present final summary to user: element counts by status, phases completed, report path.

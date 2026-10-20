@@ -23,6 +23,10 @@ The platform of an ETL code unit is recorded on its registry entry as `source.pl
 
 This skill is the **orchestrated (registry-backed) entry point** for ETL stabilization. It claims the unit and records the result on the registry, then delegates the actual fixing to `etl-stabilization`.
 
+## Do not stabilize SSIS Snowflake Scripting output
+
+SSIS converted to Snowflake Scripting is a conversion preview: it ends after conversion and is never stabilized or deployed. Before claiming the unit, check whether it is SSIS (`source.platform = ssis`) and either `configure` reports `etl_ssis_target = scripting` or `.scai/config/project.yml` lists `ssis` under `etl_scripting_platforms`. If so, stop here. Do not claim the unit, run `etl-stabilization`, or call `deploy`. Tell the user the conversion is a preview and that the generated procedures and Task graph under `snowflake/_etl/` are for review only. The `deploy` tool refuses these units regardless.
+
 ## Step 0: Claim Ownership
 
 The ETL unit must be claimed before stabilization begins, so it is registered in `MIGRATION_REGISTRY.claims`, shows the current user as owner, and appears in `my_objects_summary` alongside SQL objects. Resolve `<etl_id>` first: the executor passes `object_id`; if entered by name ("fix ETL package …"), locate the unit via `migration_status(mode="my_objects_summary")` (already-claimed) or `migration_status(mode="next_objects")` (not yet claimed).

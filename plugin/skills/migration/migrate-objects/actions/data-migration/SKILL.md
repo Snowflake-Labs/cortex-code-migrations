@@ -14,9 +14,10 @@ One-time configuration for migrating data from a source database into Snowflake 
 > **Supported sources**: SQL Server, Azure Synapse, Redshift, Oracle, Teradata, PostgreSQL, BigQuery, DB2
 > **Supported targets**: Native Snowflake tables (default). **Iceberg** targets are available for every
 > supported source, but **only when the source object is fully relational** — if the source is itself an
-> Iceberg (or external / catalog-backed) table, **do not continue**. The only supported Iceberg target is
-> **Iceberg v2 with a Snowflake-managed catalog on an external volume** (no external / AWS-Glue / other
-> catalogs). See [Extraction strategies reference](./references/extraction-strategies-reference.md#iceberg-target-relational-sources-only).
+> Iceberg (or external / catalog-backed) table, **do not continue**. The supported Iceberg target is a
+> **Snowflake-managed Iceberg table (spec v2 or v3) on an external volume** with `storageMode: compatible`
+> (no external / AWS-Glue / other catalogs); the load mode is `ADD_FILES_COPY` or `FULL_INGEST`. See
+> [Extraction strategies reference](./references/extraction-strategies-reference.md#iceberg-target-relational-sources-only).
 
 > **Run-only entry:** If you were routed here only to execute `migrateData` (registry task) and the workflow YAML already exists, skip Steps 1–2 and complete **Step 2a** (display the existing `workflow_path` and offer optional updates) before **Step 4**. Complete **Steps 5–6** (background Monitor and error-first migration report), then return the result to the parent. Per-object subagents do not manage shared infrastructure or teardown.
 
@@ -116,17 +117,10 @@ The user's selection confirms the option's listed prerequisites. For a server/cl
 the fully-qualified Snowflake external stage now unless the workflow already records one; if it is not
 ready, return to the ladder and choose the next method rather than generating a config that cannot run.
 
-> **Prefixes and stage must point at the same storage path — emphasize this when asking.** A
-> server/cloud extraction strategy (`cloud_direct`, `cet_as`, `unload`, `write_nos`, `dbms_cloud`,
-> `export_data`) **writes the data files to one exact cloud location**, and the `extraction.externalStage`
-> is what Snowflake reads them back from. The stage URL (plus any prefix) and the location the strategy
-> unloads to **must be the same bucket/container and the same path**. For an Iceberg target the same
-> alignment applies to `icebergConfig.baseLocationPrefix`. When you ask the user for a stage, a URL, or a
-> prefix, say so explicitly: *"this must match the exact storage location and path where the extraction
-> strategy writes the data."* A mismatch does not error — the orchestrator's `LIST` finds 0 files and
-> marks the partition **complete with 0 rows**, so the run looks successful but loads nothing. A common
-> trap: the worker writes to the **container/bucket root** while the stage points at a subfolder (or vice
-> versa). See [extraction-strategies-reference.md](./references/extraction-strategies-reference.md#after-choosing-a-strategy).
+> **Before run, confirm the unload stage is on the external volume.** `DESC STAGE` URL is where the
+> parquets land. `DESC EXTERNAL VOLUME` `STORAGE_BASE_URL` must be that same location, or a parent of it.
+> Otherwise the load lists nothing and the partition completes with 0 rows. Steps: [object-store path restrictions](../../../data-infrastructure/references/object-store-path-restrictions.md).
+> Per-strategy writer paths: [extraction-strategies-reference.md](./references/extraction-strategies-reference.md#external-stage-unload-path-and-iceberg-prefix-must-match).
 
 ---
 
@@ -170,9 +164,10 @@ Notes:
   is setup-owned: re-running re-applies the persisted method over a hand-edit, so
   change it with `extraction_strategy=` rather than by editing the YAML.
 - On first generation, the MCP server also fills missing `source.databaseName` (from
-  the scai source connection), `target.databaseName` (from
-  the bindings `snow:` map, or `snowflake_database` on a project without one), and Oracle `columnNamesToPartitionBy`
-  (`ROWID`) when the CLI left them empty.
+  the scai source connection) and `target.databaseName` (from
+  the bindings `snow:` map, or `snowflake_database` on a project without one). An omitted
+  or empty `columnNamesToPartitionBy` is left as-is for the orchestrator to infer at
+  preprocessing (or to extract as a single slice when the table is small).
 
 > **Duplicate data on re-run:** `migration_type=full` or `preliminary`, or `sync_strategy=none`, performs a **full extract and load every run**. Re-running the same workflow against a target that already has rows from a prior run **appends duplicate/extra data**. For a repeatable **full reload** that overwrites the whole table (or partition) each run without needing a monotonic/change-tracking column, use `sync_strategy=full-replace` — it deletes the target partition before loading, so no duplicates. For row-level incremental sync, use `sync_strategy=watermark` or `checksum` (and set `primaryKeyColumns` / `watermarkColumn` / `checksumExpression` as needed — see [workflow-config-reference.md](./references/workflow-config-reference.md#synchronizationstrategy)). **Never** `TRUNCATE` or bulk-`DELETE` the target manually without explicit user confirmation — the table may legitimately contain pre-existing or expected rows. Before any manual cleanup: confirm with the user, compare source vs target row counts, and prefer `full-replace` or incremental sync for future runs.
 
@@ -183,7 +178,8 @@ Notes:
    - **Small/medium files** — show the full YAML in chat.
    - **Large files** — show the path, `tables:` count, `defaultTableConfiguration`, and table names; offer to show the full file or specific tables on request.
    - Note whether setup **reused** an existing file (`workflow_reused`) or regenerated it.
-3. **Summarize:** table count, `migration_type`, sync strategy, extraction strategy, `target_table_type`, and any `partition_key_findings` and `computed_column_findings` from setup.
+3. **Summarize:** table count, `migration_type`, sync strategy, extraction strategy, `target_table_type`, and any `partition_key_findings`, `doctor_findings`, and `computed_column_findings` from setup.
+   - `doctor_findings.failures` are what `scai data doctor` found wrong in this workflow or the infrastructure it needs (workflow schema, extraction stage, worker config, connectivity): show them and resolve them with the user before run. `doctor_findings.warnings` are advisory. `doctor_note` means the doctor could not run.
    - **Incremental with no `sync_strategy`:** setup does not pick one. Recommend a strategy **per table** (a `synchronization` block on each `tables[]` entry, with `defaultTableConfiguration.synchronization` only as the shared fallback), using the registry / generated YAML columns and `partition_key_findings`:
      1. **`watermark`** when the table has a monotonic timestamp column (`watermarkColumn`). Add `trackModifications` / `trackDeletions` only when a PK is available (`primaryKeyColumns`) and the target is already populated.
      2. **`checksum` with a custom `checksumExpression`** when a cheap change signal beats the full hash — Oracle `MAX(ORA_ROWSCN)`, a SQL Server `rowversion` column.
@@ -219,29 +215,29 @@ Notes:
 
 6. **If the user chooses "Proceed":** skip discretionary edits unless agent-only blockers remain (step 7). A `partition_key_findings` row whose label starts with `Partition prune:` is not an agent-only edit: show the physical column and the leading `columnNamesToPartitionBy` entry, and wait for the user to confirm before changing the YAML or calling `migrate_data(mode="run")`. Adding workers does not fix a leading column the source cannot prune.
 7. **Agent-only blockers** — apply without re-prompting unless you need a value from the user:
-   - Resolve `partition_key_findings` other than a `Partition prune:` row (confirm that in step 6; do not rewrite it silently) and required `columnNamesToPartitionBy` per `edit_hints` (empty `[]` finishes the workflow without moving data; SQL Server / Redshift need an explicit PK or partition column; Oracle defaults to `ROWID`; PostgreSQL: monotonic integer PK or timestamp — avoid `ctid`).
+   - Resolve `partition_key_findings` other than a `Partition prune:` row (confirm that in step 6; do not rewrite it silently) and `columnNamesToPartitionBy` per `edit_hints`. An omitted or empty key is allowed: the orchestrator extracts the table as a single unit, or infers a partition key at preprocessing when the table is large enough. Prefer an explicit key for large tables (SQL Server / Redshift: PK or prune column; Oracle: physical partition key, then IOT PK, then PK — leave empty to let DMVF infer, including `ROWID` only for one-time full extracts with sync `none`; PostgreSQL: monotonic integer PK or timestamp — avoid `ctid`). For low-cardinality prune columns, prefer a composite key — see [Composite partition keys](./references/workflow-config-reference.md#composite-partition-keys).
 
      **Show the table's columns first.** A partition column can only be judged against
      the alternatives, and the user sees your edit as a one-line diff — so in the message
      **before** you write `columnNamesToPartitionBy`, give per affected table the column
-     you picked, why it beats the others (primary key, non-nullable, cardinality / NULL
+     (or composite) you picked, why it beats the others (primary key, non-nullable, cardinality / NULL
      ratio from the finding's `detail`), and the columns it was picked from. Read those
      from the table's DDL under `snowflake/`, or with `query_source` against the source
      catalog.
      - **Narrow tables** — list every column with its type.
      - **Wide tables, or several tables at once** — do not paste every column. Give the
        column count and the **partition candidates** only (unique / non-nullable keys,
-       date and numeric columns), and offer the full list per table on request.
+       date and numeric columns, physical prune columns), and offer the full list per table on request.
 
      A bare `suggestion` string leaves the user nothing to approve or reject on.
    - Resolve `computed_column_findings` (SQL Server COMPUTED columns): exclude each listed column from the table's migration — drop it from the column list / `columnNameMappings` so its stored expression value is not migrated. The target column is redefined or recomputed post-migration.
    - **Preliminary type:** add `whereClauseCriteria: "<row predicate>"` per table or `defaultTableConfiguration` when missing.
    - Required **extraction strategy** fields (`extraction.strategy`, `externalStage`, worker TOML cross-refs for `unload` / `write_nos` / `dbms_cloud` / `tpt`).
-   - **Iceberg target** (`target_table_type=iceberg`): required fields from [iceberg-setup-reference.md](./references/iceberg-setup-reference.md). Only for a fully relational source (Step 3a).
+   - **Iceberg target** (`target_table_type=iceberg`): setup already wrote `tableType: iceberg` and `icebergConfig` with `catalog: SNOWFLAKE` and the persisted spec and load mode (`storageMode: compatible` for v2). Whatever the user has not chosen stays a placeholder: `<ICEBERG_SPEC>` (`v2` / `v3`), `<STORAGE_MODE>` (`compatible`, or `native` with v3 only), `<LOAD_MODE>` (`ADD_FILES_COPY` / `FULL_INGEST`), `<EXTERNAL_VOLUME>` and `<BASE_LOCATION_PREFIX>` (drop it for `SNOWFLAKE_MANAGED`; see [iceberg-setup-reference.md](./references/iceberg-setup-reference.md)). Ask the user for each one left, and fill it in; the setup hints list them. `migrate_data(mode="run")` refuses the workflow until none is left, and a setup re-run keeps hand-filled values. Only for a fully relational source (Step 3a).
    - Tell the user what you changed and why before confirming.
 8. Get **explicit confirmation** to run with the final workflow, then continue to Step 3.
 
-> `columnNamesToPartitionBy` is **required** by the CLI validator for all configs.
+> `columnNamesToPartitionBy` is **optional**. When omitted or empty, the orchestrator extracts the table as a single unit, or infers a partition key at preprocessing when the table is large enough to partition.
 
 > **Affinity matching** — If the orchestrator logs show "Found 0 pending workflows," the service likely has a baked-in affinity that doesn't match. See [Troubleshooting Reference](./references/troubleshooting-reference.md) for diagnosis and fix.
 
@@ -287,11 +283,12 @@ this gate exists specifically to block them.
 
 ### 3a.2 — Target must not already be a regular table
 
-`scai code deploy` creates target tables as **regular (native) tables** from the converted DDL. An
-Iceberg migration must own the target: the orchestrator **creates the Iceberg table itself** and
-**refuses to replace an existing table** (`IcebergTargetExistsError`). So a target that deploy already
-materialized as a regular table blocks the run — it must be dropped first so the orchestrator can
-recreate it as Iceberg.
+Interactive Iceberg tables are **not** deployed first: `table` units skip `scai code deploy`, and the
+orchestrator **creates the Iceberg table itself** during this migration. It **owns the target** and
+**refuses to replace an existing table** (`IcebergTargetExistsError`), failing closed. Subagent mode
+still deploys the table (sandbox migration is native). So the only thing that blocks an interactive
+Iceberg run is a pre-existing regular (non-Iceberg) table already sitting at the target FQN —
+typically a stale leftover from an earlier native deploy, or a table someone created by hand.
 
 **Run the dedicated check — do not skip it, and do not hand-roll it with `SHOW TABLES`:**
 
@@ -300,45 +297,34 @@ check_iceberg_targets(workflow_path="<path from setup>")
 ```
 
 It reads the workflow's Iceberg targets, probes Snowflake, and classifies each one. The response has an
-overall `status` (`ok` | `action_required`), per-table `state`, the `needs_drop` / `blocked` lists, and
-ready-to-run `drop_statements`.
+overall `status` (`ok` | `action_required`), per-table `state`, and the `blocked` list.
 
 - **`state: "ready"`** — the target is missing (the orchestrator creates it) or already Iceberg. Nothing
   to do.
-- **`state: "needs_drop"`** — a **regular table is standing in the Iceberg target's place** (from
-  `scai code deploy`) **and it is a registered code-unit table**, so the orchestrator can rebuild it from
-  the converted DDL once it is dropped. Handle via step 2.
-- **`state: "blocked"`** — a regular table is in the way but is **not** in the code-unit registry, so
-  there is no converted DDL to recreate it. **Never drop these.** Surface them and ask the user to point
-  the workflow at a fresh target or resolve them by hand.
+- **`state: "blocked"`** — a regular table already occupies the target FQN. The orchestrator will **not**
+  drop it or convert it in place, so the run would fail closed. **Never auto-drop it.**
 
-`status: "ok"` (no `needs_drop`, no `blocked`) → go straight to **Step 4**.
+`status: "ok"` (no `blocked`) → go straight to **Step 4**.
 
-2. **Ask the user before dropping** the `needs_drop` tables — list them and get explicit confirmation.
-   Dropping discards whatever that table currently holds:
+If anything is `blocked`, **surface it and let the user decide** — list the tables and explain the run
+can't proceed until the target is clear:
 
-   > Deployment created these as **regular** tables, but this migration targets **Iceberg**. The
-   > orchestrator can't convert them in place — it needs to create the Iceberg tables itself. May I
-   > **drop** them so they get recreated as Iceberg during the run?
-   >
-   > - `<db>.<schema>.<t1>`
-   > - `<db>.<schema>.<t2>`
-   >
-   > 1. **Yes, drop and recreate as Iceberg** 2. **No** (I'll handle these tables myself)
+> These target FQNs already hold **regular (non-Iceberg)** tables, so the orchestrator can't create the
+> Iceberg tables there (it won't replace an existing table):
+>
+> - `<db>.<schema>.<t1>`
+> - `<db>.<schema>.<t2>`
+>
+> How would you like to resolve them? (drop/rename a stale table from an earlier native deploy, or point
+> the workflow at a fresh target)
 
-3. **On confirmation**, run the `drop_statements` from the check response (one `DROP TABLE IF EXISTS`
-   per table), then let the run recreate them. (If a stale Iceberg table must also go,
-   `DROP ICEBERG TABLE IF EXISTS <fqn>;` first.) Re-running `check_iceberg_targets` should now report
-   `status: "ok"`.
+Only run a `DROP` if the **user explicitly confirms** a specific table is safe to discard — then
+`DROP TABLE IF EXISTS <fqn>;` (or `DROP ICEBERG TABLE IF EXISTS <fqn>;` for a stale Iceberg table).
+Re-run `check_iceberg_targets` to confirm `status: "ok"` before continuing.
 
-4. **If the user declines**, do not run blind — the Iceberg create would fail with
-   `IcebergTargetExistsError`. Surface that and let the user resolve the target (rename it in the
-   workflow, point at a fresh target, or drop it later), then return here.
-
-> This is the common, named failure. If the run still fails on an Iceberg target for a different reason
-> (missing `CREATE ICEBERG TABLE` grant, external volume not authorized, `baseLocationPrefix` outside the
-> volume), fix that prerequisite from [iceberg-setup-reference.md](./references/iceberg-setup-reference.md)
-> rather than re-dropping the table.
+> If the run fails on an Iceberg target for a different reason (missing `CREATE ICEBERG TABLE` grant,
+> external volume not authorized, `baseLocationPrefix` outside the volume), fix that prerequisite from
+> [iceberg-setup-reference.md](./references/iceberg-setup-reference.md) rather than touching the table.
 
 ---
 
@@ -416,11 +402,11 @@ job_status(job_id="<JOB_ID>", details=true)   # + full progress and failure repo
 ### 5.A — Background monitoring
 
 1. **Phase A — Monitor:** Start the **Monitor** tool (`persistent: true`) with `monitor.watch_command` from the run response, verbatim, from the project root. No wait for a workflow name, and no hand-built command — the cursor baked into it is what prevents replays and gaps.
-2. **Phase B — Monitor fire:** Branch on the event's `phase`. `failure` / `stalled` / `relay_error` are warnings — surface them and keep watching. On `terminal`, read `detail.completion` (`verdict`, `terminal`, `failed`, `summary`, `report_row_counts`, optional `failures` / `stale_reports`) → Step 5.C if failed → **Step 6**. Do not call `job_status` merely to confirm the terminal event.
+2. **Phase B — Monitor fire:** Branch on the event's `phase`. `failure` / `relay_error` are warnings — surface them and keep watching. `stalled` triggers the infrastructure diagnosis in the health section below, then keep watching. On `terminal`, read `detail.completion` (`verdict`, `terminal`, `failed`, `summary`, `report_row_counts`, optional `failures` / `stale_reports`) → Step 5.C if failed → **Step 6**. Do not call `job_status` merely to confirm the terminal event.
 
-**No progress loop.** Do not start `/loop` or a cron to poll for progress. The relay emits a `stalled` event once a job has gone **30 minutes** without changing, so a quiet job reports itself. A healthy run is silent by design — progress lands in the log, and `job_status` reads it whenever the user asks.
+**No progress loop.** Do not start `/loop` or a cron to poll for progress. The relay emits a `stalled` event once a job has gone **30 minutes** without changing, or **2 minutes** with its `WORKFLOW` row still `pending` — no orchestrator has claimed it (`detail.stall_reason: "unclaimed"`), so a quiet job reports itself. A healthy run is silent by design — progress lands in the log, and `job_status` reads it whenever the user asks.
 
-The watch fires only on terminal, first failure, a 30-minute stall, or relay error — not on ordinary progress, which changes on nearly every poll. It exits by itself on its job's terminal record.
+The watch fires only on terminal, first failure, a stall (2 minutes unclaimed or 30 minutes unchanged), or relay error — not on ordinary progress, which changes on nearly every poll. It exits by itself on its job's terminal record.
 
 Tell the user once that you'll report back when the job finishes or hits trouble.
 
@@ -434,10 +420,22 @@ the warning, and keep the Monitor armed.
 
 | Signal | Severity |
 |--------|----------|
-| `stalled` event | **Warning** |
-| Repeated unresolved `stalled` event | **Critical** |
+| `stalled` event | Per the diagnosis below (**Warning** or **Critical**) |
+| A second `stalled` event with the same `detail.stall_reason` | **Critical** |
 | `failure` event, or `failed: true` on any event | **Warning** (immediate) |
 | Any `tablePartitions[]` with failed partitions or incomplete preprocessing | **Warning** |
+
+**On a `stalled` event, diagnose before you keep watching.** Call `data_infrastructure(mode="status")` once, alongside the `job_status` read, and act on the first match:
+
+| `detail.stall_reason` | Status shows | Meaning | Do |
+|---|---|---|---|
+| any | `spcs_orchestrator.state` / `spcs_worker.state` is `suspended` or `not_running`, or `local_orchestrator` / `local_worker` is `false` for a recorded `local` placement (`spcs_worker` is read only when the project runs one) | The service that must run the workflow is down | **Critical.** Tell the user which one; offer `data_infrastructure(mode="up")` (orchestrator) or `scai data worker start` (SPCS worker). The workflow resumes once it is claimed |
+| `unclaimed` | `spcs_orchestrator.state` is `starting` | The orchestrator is still coming up (a cold compute pool can take minutes) | **Warning.** Say so and keep watching; a second `unclaimed` stall is **Critical** |
+| `unclaimed` | every recorded service running | The workflow row is still `pending`: no orchestrator has claimed it yet | Any `spcs_orchestrator.deployed_affinity` is **Critical**: the orchestrator must carry none, or it only claims workflows with that label (see [Affinity reference](../../../data-infrastructure/references/affinity-reference.md#when-affinity-is-the-cause-of-a-stall)). Otherwise the orchestrator initializes claimed workflows one at a time, so if another of this project's data jobs was launched shortly before and has not started a table yet, say this one is likely queued behind it (**Warning**). With neither, say the orchestrator is up but not claiming; it is **Critical** on the second `unclaimed` stall |
+| `no_change` | every recorded service running | Work is claimed but stopped moving | **Warning.** If no table has started, compare the workflow YAML's top-level `affinity` with the worker's — `spcs_worker.deployed_affinity`, or `[application].affinity` in `.scai/config/dew_configuration.toml` for a local worker (status does not report it); a mismatch is **Critical**. Otherwise read the stall `summary` for a workflow status, then [Troubleshooting Reference](./references/troubleshooting-reference.md) |
+| any | `state: "unavailable"` | Status could not be read | **Warning.** Say so; keep watching |
+
+A `stalled` event is a diagnosis trigger, not a progress report: never answer it with "still running" alone.
 
 When **`reports`** is present, also scan `details.reports.files.errors` — any rows mean at least one task/partition has failed even if aggregate counters look healthy.
 
@@ -644,7 +642,7 @@ Shared infrastructure checklist is owned by `../../../data-infrastructure/SKILL.
 - [ ] User confirmed the final workflow YAML before run
 - [ ] Partition-key findings resolved (or accepted) at Step 2a
 - [ ] Target database and schema exist
-- [ ] External stage / unload path / Iceberg `baseLocationPrefix` confirmed to point at the same storage location (Step 1.C emphasis)
+- [ ] Unload stage URL confirmed on the external volume `STORAGE_BASE_URL` ([object-store path restrictions](../../../data-infrastructure/references/object-store-path-restrictions.md))
 - [ ] Iceberg source confirmed fully relational — stopped if the source is Iceberg/external (Step 3a.1)
 - [ ] Iceberg targets checked for colliding regular tables and dropped on user confirmation (Step 3a.2)
 - [ ] Iceberg prerequisites validated — if `target_table_type=iceberg`

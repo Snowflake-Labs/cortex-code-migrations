@@ -219,17 +219,23 @@ extraction:
 
 Worker streams Parquet to object storage (no local disk PUT). Used for PostgreSQL/Db2 L3 pushdown and as a fallback when the source cannot natively UNLOAD/EXPORT to the user's bucket.
 
-`scai data worker generate-config --extraction-strategy cloud_direct --object-store s3|gcs|azure` writes this section outside `[connections.source.*]`, so hydration does not rebuild it. `bucket_name` is `<BUCKET_NAME>` and `prefix` is `<PREFIX>`.
+`scai data worker generate-config --extraction-strategy cloud_direct --object-store s3|gcs|azure` writes this section outside `[connections.source.*]`, so hydration does not rebuild it. S3 and GCS get `bucket_name` and `prefix`. Azure gets `container_name`, an optional `prefix`, and credential fields. Path rules: [object-store path restrictions](./object-store-path-restrictions.md).
 
 ```toml
 [connections.target.s3]
 bucket_name = "<BUCKET_NAME>"
 prefix = "<PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
 
-# or [connections.target.gcs] / [connections.target.blob]
+# [connections.target.gcs] uses the same bucket_name and prefix keys.
+
+[connections.target.blob]
+container_name = "<CONTAINER_NAME>"
+prefix = "<PREFIX>"  # optional; stage URL must point at container + this prefix
+account_name = "<ACCOUNT_NAME>"
+use_default_credential = true  # or account_key / sas_token with account_name, or connection_string
 ```
 
-Workflow YAML: `extraction.strategy: cloud_direct` plus `externalStage` covering the same prefix. Full L3 decision tree: [l3-pushdown-extraction.md](../../setup/data-validation/references/l3-pushdown-extraction.md).
+Workflow YAML: `extraction.strategy: cloud_direct` plus `externalStage` on that same path. Full L3 decision tree: [l3-pushdown-extraction.md](../../setup/data-validation/references/l3-pushdown-extraction.md).
 
 ## Advanced: Secrets management
 

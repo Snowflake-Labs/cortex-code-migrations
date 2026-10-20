@@ -2,8 +2,9 @@
 
 > **Scope:** Iceberg target migration is available for any supported source dialect, **but only when the
 > source object is a fully relational table** — if the source is itself an Iceberg / external / catalog-backed
-> table, **do not continue** (see the source gate in [SKILL.md](../SKILL.md) Step 3a.1). The only supported
-> target is **Iceberg v2 with a Snowflake-managed catalog on an external volume** — external / AWS-Glue /
+> table, **do not continue** (see the source gate in [SKILL.md](../SKILL.md) Step 3a.1). The supported
+> target is a **Snowflake-managed Iceberg table (spec v2 or v3) on an external volume** with
+> `storageMode: compatible` and load mode `ADD_FILES_COPY` or `FULL_INGEST` — external / AWS-Glue /
 > other catalogs are out of scope. Use this reference
 > when `target_table_type=iceberg`. The AWS/Glue sections below apply to AWS-backed volumes (e.g. a Redshift
 > source on S3); for an Azure- or GCS-backed external volume, substitute the equivalent cloud setup. For
@@ -352,6 +353,8 @@ CREATE STAGE IF NOT EXISTS <TARGET_DB>.<TARGET_SCHEMA>.<STAGE_NAME>
   URL = '<S3_BUCKET_URL>'
   STORAGE_INTEGRATION = <STORAGE_INTEGRATION_NAME>;
 ```
+
+`<S3_BUCKET_URL>` is the volume `STORAGE_BASE_URL` from Step B.1. Confirm they still match before run: [object-store path restrictions](../../../../data-infrastructure/references/object-store-path-restrictions.md).
 
 ### Step D.5: Verify files are accessible
 

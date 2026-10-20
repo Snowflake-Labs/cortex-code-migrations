@@ -125,3 +125,12 @@ def session_status_path(code_unit_dir: str | Path) -> Path:
 def fix_log_path(code_unit_dir: str | Path) -> Path:
     """Return path to fix log markdown."""
     return tracking_dir(code_unit_dir) / "fix-log.md"
+
+
+def friction_notes_path(code_unit_dir: str | Path) -> Path:
+    """Return path to friction notes markdown.
+
+    Written when an agent skips a documented skill step. Optional: final validation
+    does not require this file to exist.
+    """
+    return tracking_dir(code_unit_dir) / "friction-notes.md"

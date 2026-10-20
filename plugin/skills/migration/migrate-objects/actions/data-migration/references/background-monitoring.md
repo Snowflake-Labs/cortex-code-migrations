@@ -13,7 +13,7 @@ Passive completion and trouble reporting for long-running `migrate_data(mode="ru
 
 The relay polls once per job no matter how many agents are watching, so a second agent attaches rather than starting its own watcher.
 
-**There is no progress loop.** The relay reports a `stalled` event when a job has gone **30 minutes** without changing, so you learn about a quiet job by being told, not by waking on a timer to check. During a healthy run there is nothing to report and nothing wakes you — progress still lands in the log, and `job_status` reads it on demand when the user asks.
+**There is no progress loop.** The relay reports a `stalled` event when a job has gone **30 minutes** without changing — and sooner, at **2 minutes**, when its `WORKFLOW` row is still `pending` (no orchestrator has claimed it yet) — so you learn about a quiet job by being told, not by waking on a timer to check. During a healthy run there is nothing to report and nothing wakes you — progress still lands in the log, and `job_status` reads it on demand when the user asks.
 
 ---
 
@@ -56,7 +56,7 @@ Tell the user once, in plain language, that migration started and that you will 
 **Then stop.** Arming Monitor ends your turn: no `sleep`, no status call, no
 Bash of any kind until the event fires. The wait is the relay's job.
 
-**The watch only fires on events worth acting on** — terminal, first failure, a 30-minute stall, or relay error. It deliberately does *not* fire on ordinary progress, which changes on nearly every poll. Progress is still in the log, and `job_status` reports it on demand.
+**The watch only fires on events worth acting on** — terminal, first failure, a stall (2 minutes unclaimed, or 30 minutes with no change), or relay error. It deliberately does *not* fire on ordinary progress, which changes on nearly every poll. Progress is still in the log, and `job_status` reports it on demand.
 
 ### Phase B — On Monitor fire
 
@@ -66,7 +66,8 @@ Read the event line's `phase` to decide what happened:
 |---------|---------|--------|
 | `terminal` | Job finished (check `failed`) | Phase C |
 | `failure` | First partition failure, job still running | Warn the user; keep watching |
-| `stalled` | 30 minutes with no change | Warn the user; keep watching. If `summary` names a workflow status (e.g. `(workflow status Unknown)`), the workflow may be paused or cancelled — see below |
+| `stalled`, `detail.stall_reason: "unclaimed"` | 2 minutes with the `WORKFLOW` row still `pending` — no orchestrator has claimed it | Run the stall diagnosis in [Step 5.B](../SKILL.md#5b--health-monitoring-while-waiting): a stopped or still-starting orchestrator, one carrying an affinity, or one busy initializing another workflow. Report what it finds; keep watching. A 30-minute `stalled` still follows, keeping `unclaimed` while the row stays `pending` |
+| `stalled`, `detail.stall_reason: "no_change"` | 30 minutes with no change | Warn the user, run the stall diagnosis in [Step 5.B](../SKILL.md#5b--health-monitoring-while-waiting), keep watching. If `summary` names a workflow status (e.g. `(workflow status Unknown)`), the workflow may be paused or cancelled — see below |
 | `relay_error` | The relay's own status query failed | Note it; the relay retries |
 
 A paused or cancelled workflow produces no terminal record. Neither state is a member of
@@ -105,7 +106,7 @@ So do not wait until you suspect it. **Whenever you call `job_status` for a live
 
 ## Health thresholds
 
-On the **background path the relay computes stalls for you** — a `stalled` event means the underlying counters have not moved for 30 minutes. Warn the user and keep watching; a stall does not end monitoring.
+On the **background path the relay computes stalls for you** — a `stalled` event means no orchestrator claimed the workflow within 2 minutes (`unclaimed`) or its counters have not moved for 30 minutes (`no_change`). Diagnose it with `data_infrastructure(mode="status")` ([Step 5.B](../SKILL.md#5b--health-monitoring-while-waiting)) and keep watching; a stall does not end monitoring.
 
 For the **fallback path**, derive health yourself from consecutive `job_status(job_id, details=true)` responses.
 

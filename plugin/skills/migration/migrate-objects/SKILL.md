@@ -160,6 +160,12 @@ out-of-band and wants the resolver to re-evaluate — for example,
 they corrected a column type in Snowflake and want `validateData` to
 re-run.
 
+**Not for a data mismatch.** An errored `validateData` with `error: "data"`
+is a finished validation that found differences, so re-running the same workflow
+reproduces it. Use the re-validation menu in
+[validate_tables.md Step 5.G](../validate-objects/actions/validate_tables.md#5g--offer-re-validation-when-data-mismatches-remain)
+instead.
+
 ### After `migrateData` (data migration run)
 
 When the current task is **`migrateData`** and you call `migrate_data(mode="run")` (from FSM instructions or this skill), you **must** complete poll and report before marking work done:
@@ -173,6 +179,21 @@ When the current task is **`validateData`** and you call `validate_data(mode="ru
 
 1. Load [../validate-objects/actions/validate_tables.md](../validate-objects/actions/validate_tables.md) **Steps 4–6** if you have not already (background Monitor or poll fallback with `job_status`, present the error-first validation report, offer re-validation when eligible, then teardown).
 2. Do not return to the object loop or claim the next task until the user has seen the summary.
+
+### After the Iceberg data phase — deploy dependent objects?
+
+In an **interactive Iceberg project** (`data_migration_target_table_type: iceberg`), `table` units are created by the orchestrator during `migrateData`, not by `deploy` — so a table finishes the whole data phase (migrate, and validate if the user chose to) without ever running `deploy`. Subagent mode still deploys tables: sandbox setup forces a native target and SQL Server loads with `scai --direct`. Once those tables exist in Snowflake, any object that depends on them (views, procedures, functions, and any other dependent type) becomes deployable.
+
+When the wave's Iceberg tables have finished the data phase (migrated, and validated if requested), **before returning to the object loop, ask the user** whether to deploy those dependent objects now:
+
+> Your Iceberg tables are migrated and in place. The objects that depend on them — views, procedures, functions, and any other dependent type — are ready to deploy. Deploy them now?
+>
+> 1. **Yes, deploy the dependent objects**  2. **No, I'll do it later**
+
+- **Yes** → return to the object loop (`migration_status(mode="my_objects_summary")`) and work the now-unblocked groups in dependency order as usual.
+- **No** → leave those units pending; they stay visible in `migration_status` and are resumable later. Do not deploy them.
+
+Skip this prompt for native projects — there the dependent objects already follow `deploy` in the normal loop. In `subagent_mode` / autonomous runs, auto-accept (deploy the dependents) rather than prompting.
 
 ## Step 3: Report
 

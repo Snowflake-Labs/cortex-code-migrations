@@ -41,6 +41,8 @@ If the user describes a **specific request** → **Skill Match**.
 ## Prescribed Path
 
 <prescribed-path>
+**Missing Snowflake connection:** when the status JSON has `snowflake_connection_missing`, the project's Snowflake connection (`name`) is not defined on this machine, so nothing that touches Snowflake can run. Do not route on. Ask the user which of `available` to use instead, or whether to create a new one (load `./connection/snowflake-connection/SKILL.md`), then call `configure(snowflake_connection=<their choice>)` and run `migration_status` again.
+
 Use `routing` from the status JSON to delegate to the next step:
 
 | Condition | Sub-skill |
@@ -101,7 +103,7 @@ Match the user's request to the most relevant skill and load it.
   - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
   - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
   - **tableau-repointing** — collect `.twb`/`.tds` folder path and `--tableauRepointing` flag for Tableau repointing. Triggers: tableau, tableau migration, tableau repointing, migrate tableau, repoint tableau → `./tableau-repointing/SKILL.md`
-  - **dbt-consolidation** — before convert, ask Informatica dbt once whether to consolidate projects and models by folder or generate 1 project per mapping; for SSIS, confirm opt-in `--consolidate-dbt-model-chains` and the recommended-default `--consolidate-dbt-projects` → `./dbt-consolidation/SKILL.md`
+  - **dbt-consolidation** — before SSIS or Informatica dbt conversion, ask one question about consolidating projects and models by package/folder or retaining the per-Data-Flow/per-mapping layout; use only `--consolidate-dbt-projects` → `./dbt-consolidation/SKILL.md`
 - **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
 
 ### Migration & validation

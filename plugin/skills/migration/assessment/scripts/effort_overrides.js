@@ -75,6 +75,9 @@
    * something is typed into it.
    */
   function isEditableRow(row) {
+    if (row && (row.pricing === "flat_total" || row.pricing === "per_object")) {
+      return numberOr(row.quantity, 0) > 0;
+    }
     if (isBandedRow(row)) {
       return numberOr(row.band_counts.total, 0) > 0;
     }
@@ -118,6 +121,9 @@
    */
   function snowflakeRateFor(row, band) {
     if (!band) {
+      if (row && row.pricing === "per_object") {
+        return isNumber(row.unit_hours) ? row.unit_hours : null;
+      }
       return row && isNumber(row.flat_hours) ? row.flat_hours : null;
     }
     return row && row.band_rates ? numberOr(row.band_rates[band], 0) : 0;
@@ -261,6 +267,25 @@
         });
       }
 
+      if (row.pricing === "per_object") {
+        const quantity = numberOr(row.quantity, 0);
+        const base = isNumber(row.unit_hours) ? row.unit_hours : 0;
+        const rateCandidate = flatOverrides[row.key];
+        const storedRate = editable && isNumber(rateCandidate) ? round4(rateCandidate) : null;
+        const rate = storedRate !== null ? storedRate : base;
+        const rateOverridden = storedRate !== null && storedRate !== base;
+        return Object.assign({}, row, {
+          custom_band_rates: null,
+          custom_estimated_hours: rateOverridden ? round4(quantity * rate) : row.estimated_hours,
+          custom_flat_hours: rate,
+          is_overridden: rateOverridden,
+          overridden_bands: [],
+          is_editable: editable,
+          is_unestimated: false,
+          editable_bands: [],
+        });
+      }
+
       const candidate = flatOverrides[row.key];
       const stored = editable && isNumber(candidate) ? round4(candidate) : null;
       // Null flat_hours is Snowflake declining to price the line, so any budget
@@ -394,13 +419,39 @@
   /* The calculator's sections, in display order. Fixed rather than derived from
    * artifact row order: a rate table reordering its rows must not reshuffle the
    * page. The third section is a catch-all, so no row can go unrendered. */
+  function isFlatTotal(row) {
+    return row && row.pricing === "flat_total";
+  }
+
+  function isPerObject(row) {
+    return row && row.pricing === "per_object";
+  }
+
   const SECTION_DEFS = [
+    {
+      key: "conversion_flat",
+      title: "Code conversion — flat effort",
+      blurb: "one budget for every object of this type",
+      shape: "flat_total",
+      match: function (row) {
+        return isConversion(row) && isFlatTotal(row);
+      },
+    },
     {
       key: CONVERSION,
       title: "Code conversion",
-      blurb: "objects × hours per object",
+      blurb: "grouped by complexity, with repetition clustering",
       shape: "banded",
       match: isConversion,
+    },
+    {
+      key: "testing_per_object",
+      title: "Unit testing — per object",
+      blurb: "one rate times the object count, no severity split",
+      shape: "per_object",
+      match: function (row) {
+        return isTesting(row) && isPerObject(row);
+      },
     },
     {
       key: TESTING,
@@ -424,8 +475,14 @@
    * charges nothing for another reason -- the "included elsewhere" marker -- still
    * has objects, so it stays visible.
    */
-  function isEmptyBandedRow(row) {
-    return isBandedRow(row) && numberOr(row.band_counts.total, 0) === 0;
+  function isEmptyCountedRow(row) {
+    if (isBandedRow(row)) {
+      return numberOr(row.band_counts.total, 0) === 0;
+    }
+    if (row && (row.pricing === "flat_total" || row.pricing === "per_object")) {
+      return numberOr(row.quantity, 0) === 0;
+    }
+    return false;
   }
 
   /**
@@ -483,10 +540,10 @@
       });
 
       const visible = mine.filter(function (row) {
-        return !isEmptyBandedRow(row);
+        return !isEmptyCountedRow(row);
       });
       const zeroTypes = mine
-        .filter(isEmptyBandedRow)
+        .filter(isEmptyCountedRow)
         .map(function (row) {
           return row.object_type;
         });
@@ -500,8 +557,12 @@
         extraRows: def.shape === "flat" ? orphanBudgetItems(rows, summary) : [],
         zeroTypes: zeroTypes,
         subtotal: {
-          custom: numberOr(totals.custom[def.key], 0),
-          sf: numberOr(totals.sf[def.key], 0),
+          custom: round4(mine.reduce(function (total, row) {
+            return total + numberOr(row.custom_estimated_hours, 0);
+          }, 0)),
+          sf: round4(mine.reduce(function (total, row) {
+            return total + numberOr(row.estimated_hours, 0);
+          }, 0)),
         },
       };
     });

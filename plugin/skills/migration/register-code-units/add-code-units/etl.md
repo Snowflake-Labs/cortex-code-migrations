@@ -47,7 +47,8 @@ card, so never ask a standalone ETL yes/no. Ask which platform via `ask_user_que
     ```
 
     Do **not** pass `--overwrite` here — the SQL is already in `source/` and would be
-    wiped.
+    wiped. If it times out, runs in the background or fails, handle it as
+    [Step 3 of the skill](SKILL.md#if-the-import-times-out-or-runs-in-the-background) says.
 
   Getting the containment check wrong is not silently destructive: re-adding files
   already in `source/` fails with `ADD0007` (a conflict listing the offending files)

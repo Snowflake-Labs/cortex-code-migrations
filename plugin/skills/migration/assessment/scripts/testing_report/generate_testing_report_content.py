@@ -119,7 +119,7 @@ def _strip(readiness: TestingReadiness) -> str:
     )
     tiles = [
         _tile("ready", buckets.ready, "Ready to test", "converted, no issues"),
-        _tile("fix", buckets.needs_fix, "Fix conversion first", "EWI or FDM present"),
+        _tile("fix", buckets.needs_fix, "Fix conversion first", "EWI or OOS present"),
         _tile("blocked", buckets.blocked, "Not testable yet", "pending or not supported"),
     ]
     if readiness.code_units and readiness.etl_units:

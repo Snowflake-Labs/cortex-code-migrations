@@ -84,7 +84,7 @@ SQL templates: [l3-pushdown-extraction.md](../references/l3-pushdown-extraction.
 
 Do not paste fake account IDs, ARNs, or service-account emails. Leave placeholders and have the user fill them, or run `DESC` and use the real values.
 
-The source-side writer (Redshift IAM role, BigQuery SA, Oracle `DBMS_CLOUD` credential, Teradata WRITE_NOS auth, CETAS credential, or worker AWS/GCP/Azure identity for `cloud_direct`) needs **write** on the same prefix. Snowflake only needs **read**.
+The source-side writer (Redshift IAM role, BigQuery SA, Oracle `DBMS_CLOUD` credential, Teradata WRITE_NOS auth, CETAS credential, or worker AWS/GCP/Azure identity for `cloud_direct`) needs **write** on the same path Snowflake reads. Snowflake only needs **read**. Which path that is: [object-store path restrictions](../../../data-infrastructure/references/object-store-path-restrictions.md).
 
 ## Step 4 — Patch configs (hard gate before `validate_data(mode="run")`)
 

@@ -12,9 +12,8 @@ database bindings (`.scai/bindings/database-bindings.yaml`).
 
 `configureExtractionSource` may already have set a source connection for
 extraction, and `configure()` may already report a Snowflake connection. This
-step is authoritative for the sandbox: it pre-fills those values and the user
-confirms them once, in the Step 6 recap, instead of answering them again one by
-one.
+step pre-fills those values; the user confirms them once, in the Step 6
+recap.
 
 ## Step 1: Explain what this step configures
 
@@ -37,6 +36,11 @@ Tell the user:
 > connections with the rest of the profile and save it. You can change them
 > later from Settings.
 
+A source connection is **required**, even when the user only wants synthetic
+test data: deploy, migrate and validate read from it, and the profile can't be
+saved without one. Say so if
+the user asks to go on without a source.
+
 ## Step 2: Choose the sandbox profile name
 
 Pick a profile name (default `sandbox`). Ask via `ask_user_question`
@@ -45,9 +49,8 @@ Pick a profile name (default `sandbox`). Ask via `ask_user_question`
 card.
 
 If `.scai/config/profiles.local.yaml` already has this name, say so and ask
-whether to refresh it later in this flow (replace) or pick a different name.
-Do **not** write the profile yet — connections and bindings come first; Step 6
-persists.
+whether to replace it later in this flow or pick another name.
+Don't write the profile yet; Step 6 persists it.
 
 ## Step 3: Resolve source and target connections
 
@@ -74,12 +77,15 @@ user which ones the sandbox will use, then go on to Step 4:
 (`multiSelect = false`), in the Step 2 name card:
 
 1. **Source connection** — existing source connections for this dialect.
-   Always include **Create a new connection** last.
-2. **Target Snowflake connection** — existing Snowflake connections. Always
-   include **Create a new connection** last.
+   Always include **Create a new connection** last. **Never** offer "no
+   source connection", "synthetic only", or "skip".
+2. **Target Snowflake connection** — existing Snowflake connections. List
+   a `last_used_snowflake_connection:` among them first as
+   `<name> (recommended)`, description "Last used" (it is
+   only a recommendation). Always include **Create a new connection** last.
 
-If they pick **Create a new connection**, load the matching skill, then return
-and re-ask that question so the answer is final:
+On **Create a new connection**, load the matching skill, then re-ask that
+question:
 
 - **Source** — route by dialect (same map as `configure-source-connection.md`):
   `sqlserver` → `../connection/sql-server-connection/SKILL.md`;
@@ -94,15 +100,18 @@ and re-ask that question so the answer is final:
 
 Re-read `configure()` after any create. Carry the final pair to Step 6.
 
+If the user can't provide a source connection now, stop: tell them setup is
+paused until a non-production source connection is available, then resumes.
+
 ## Step 4: Select database scope and bindings
 
 Discover every database on the chosen source connection (dialect catalog query
 via `query_source`, or distinct source DBs from registered code units). Suggest
-a Snowflake target per source DB (same name, or reuse
-`.scai/bindings/database-bindings.yaml` on rerun).
+a Snowflake target per source DB: its `configure()` `snowflake_targets:` entry
+(convert's stubs already mapped), else `snowflake_database:`, else the source
+DB's name.
 
-AskUserQuestion has checkboxes/radios and freeform text — collect scope and
-mappings in **two** cards:
+Collect scope and mappings in **two** cards:
 
 ### 4a. Which source databases are in scope?
 
@@ -120,21 +129,30 @@ Profile `database_bindings` must point at
 `.scai/bindings/database-bindings.yaml`. On rerun: keep unchanged, replace
 changed, remove deselected.
 
-## Step 5: Validate target DB existence and create missing DBs
+## Step 5: Check which target DBs exist
 
-For each mapping target: verify on the Snowflake connection; create if missing
-(idempotent). On failure, stop with remediation.
+For each target, run `SHOW DATABASES LIKE '<TARGET>'` on the Snowflake
+connection. It exists only if a returned `name` equals it exactly (upper-cased
+if unquoted): `LIKE` ignores case and `_` is a wildcard. Create nothing yet;
+carry the missing ones to the Step 6 recap. If the check fails, stop with
+remediation.
 
 ## Step 6: Confirm, persist, and complete
 
 Show a recap (name, description, source connection, Snowflake connection,
-bindings file, mappings) and ask **Yes, save profile** / **Change something**.
+bindings file, mappings, and which target databases will be created) and ask
+**Yes, save profile** / **Change something**.
 This recap is where the user confirms connections Step 3 pre-filled. On
 **Change something**, ask what to change; for a connection, ask the Step 3
 question for that connection (the current one first, labelled **current**,
-**Create a new connection** last), then show the recap again. Only after Yes:
+**Create a new connection** last), then show the recap again. Re-run Step 5
+after changing the Snowflake connection or a mapping. Only after Yes:
 
-1. Write `.scai/bindings/database-bindings.yaml`. Convert already generates this
+1. Create each missing target database from Step 5
+   (`CREATE DATABASE IF NOT EXISTS <TARGET>`). On failure, stop with
+   remediation.
+
+2. Write `.scai/bindings/database-bindings.yaml`. Convert already generates this
    with fixed schema:
 
    ```yaml
@@ -148,7 +166,7 @@ question for that connection (the current one first, labelled **current**,
    update `snow:` for selected mappings; drop deselected. Never replace with a
    source→target-only scratch list.
 
-2. Create the profile:
+3. Create the profile:
 
 ```bash
 scai profile create <name> \
@@ -159,12 +177,11 @@ scai profile create <name> \
   --description "Sandbox profile for migrating <project-name> — source and Snowflake connections used by AIM for deploy, migrate, validate, and test."
 ```
 
-On confirmed refresh of an existing name: `scai profile remove <name>` then
-create again.
+To replace an existing name: `scai profile remove <name>`, then create.
 
-3. `scai profile set-default <name>`
+4. `scai profile set-default <name>`
 
-4. Persist profile **and** connections — the machine completes only when all
+5. Persist profile **and** connections — the machine completes only when all
    three are set. Use the first confirmed target as `snowflake_database`:
 
 ```
@@ -179,10 +196,4 @@ configure(
 
 Return to the parent setup skill. The resolver advances to `chooseTestingPath`.
 
-## Skip this run only
-
-```bash
-progress_setup(mode="setup", skip="configureSandboxProfile")
-```
-
-This task is locked — there is no permanent opt-out via `configure(tasks=…)`.
+This task is locked: no skipping, no `configure(tasks=…)` opt-out.
