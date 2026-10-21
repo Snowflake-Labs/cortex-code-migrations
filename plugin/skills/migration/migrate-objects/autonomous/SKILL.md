@@ -98,7 +98,7 @@ Always `general_task`. **One live child per object** — two conversations race 
 
 Never pass `fork_conversation_history`. Do not send again for a board `blocked` row.
 
-**First send** — no conversation UUID. One `task` call per object, `description` set, no `resume`:
+**First send** — no conversation UUID. One `task` call per object, `description` set, no `resume`. **Pass the entry's `walker_prompt` from `next_objects` verbatim as the prompt** (`objects` and `leftover_claims` both carry it); append only a `reason:` line from a `reopened` return. It already holds `guidance:` from `answered`. The task hook denies any other first send, so do not write or extend the prompt yourself. Its shape, for reference:
 
 ```
 Migrate this object end-to-end, following your agent definition.
@@ -111,13 +111,13 @@ guidance:            <verbatim from `answered` — omit if none>
 reason:              <from a `reopened` return — omit if none>
 ```
 
-Without `snowflakeConnection` the child omits `-c` and hits Cortex's default — the inference account, which has no deploy grants.
+Without `snowflakeConnection` the child omits `-c` and hits Cortex's default — the inference account, which has no deploy grants. On `walker_prompt_warning`, append `guidance:` yourself for any object listed under `answered`.
 
-Start with that imperative line — bare `key: value` pairs read as context, not a request. `task` returns `agentId` (UUID). Store it as this object's conversation id. A later `task(resume=…)` returns a **different** UUID (wait handle for that send) — do not overwrite the stored conversation id with it.
+`task` returns `agentId` (UUID). Store it as this object's conversation id. A later `task(resume=…)` returns a **different** UUID (wait handle for that send) — do not overwrite the stored conversation id with it.
 
 Do not put `agentId` in the prompt. Do not tell the child to load `snowflake-migration:migration`. Do not add retry limits, return schemas, or "don't escalate" — the agent definition is the contract.
 
-**Later send** — you have the conversation UUID. Prompt is **only the new line**. Do not repeat `objectId` / `projectDir` / `pluginDir` / `snowflakeConnection` / the migrate line.
+**Later send** — you have the conversation UUID. Prompt is **only the new line**; the hook denies anything else. Do not repeat `objectId` / `projectDir` / `pluginDir` / `snowflakeConnection` / the migrate line.
 
 ```
 relay_wake: <the wake line, verbatim>

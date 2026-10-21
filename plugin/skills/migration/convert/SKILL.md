@@ -175,7 +175,7 @@ If it **is** Oracle or SqlServer, read `has_tableau` from `configure()`:
 
 Read `tailor_conversion_settings` from `configure()` (set upfront by the `chooseConversionSettings` setup prompt):
 
-- If `tailor_conversion_settings` is **`false`** (explicitly) **and** both `has_power_bi` and `has_tableau` are already set: `<SETTINGS_FLAGS>` stays empty; proceed to Step 4. Do not ask.
+- If `tailor_conversion_settings` is **`false`** (explicitly) **and** both `has_power_bi` and `has_tableau` are already set: `<SETTINGS_FLAGS>` stays empty; proceed to Step 4. Do not ask, unless the user has asked in this conversation for custom settings or a specific conversion flag: then follow [Changing Conversion Settings Later](#changing-conversion-settings-later) before Step 4.
 - If `tailor_conversion_settings` is **`true`** (explicitly) **and** both extras flags are already set: skip the settings question and load `./recommend-settings/SKILL.md` immediately. Store the returned flag string as `<SETTINGS_FLAGS>` for Step 4. If the user declines all suggestions, the catalog can't be loaded, or `source/` is empty (Tableau-only), leave `<SETTINGS_FLAGS>` empty. Return here when complete.
 - If **any** of `has_power_bi`, `has_tableau`, or `tailor_conversion_settings` is **not set**, do **not** ask. Do not compose an `ask_user_question` for extras or conversion settings, and do not split them into yes/no questions. Call `progress_setup()` with no answers and end the turn. The setup card is the only place those questions are asked. On the next turn, re-read the flags and continue this step.
 
@@ -267,6 +267,35 @@ For Power BI options, see `../powerbi-repointing/SKILL.md`. For Tableau options,
 ```bash
 scai code convert --show-ewis --overwrite-working-directory --json
 ```
+
+## Changing Conversion Settings Later
+
+"Go with defaults" is not final. When the user asks, at any point, to tailor
+conversion settings, change or add a conversion flag, or asks how to do so on
+this project ("I picked defaults but need flag X", "can I change the conversion
+settings?"), offer it here, even when `tailor_conversion_settings` is `false`
+and the setup step shows as done. Never tell them to start a new project or
+re-import their source for this: the settings apply to the project they have.
+
+1. Call `configure(tailor_conversion_settings=true)` so the choice is saved and
+   a later convert in this or another session tailors too.
+2. Check whether conversion has run: `snowflake/` already holds converted code.
+3. **Conversion has not run yet** (still registering, or about to convert):
+   tell the user the new settings will be applied when conversion runs, and
+   that the import already in progress carries on. If you are in Step 3.6 now,
+   load `./recommend-settings/SKILL.md` there; otherwise do nothing else now:
+   Step 3.6 reads `true` and loads it before the convert runs. If the user named
+   a flag, pass it to recommend-settings so it is proposed.
+4. **Conversion has already run:** load `./recommend-settings/SKILL.md` now to
+   collect `<SETTINGS_FLAGS>`. Applying them means converting again with
+   `--overwrite-working-directory`, which replaces the converted code under
+   `snowflake/` and its Code Unit Registry files, so any hand edits to converted
+   code are lost. Say so plainly and ask the user to confirm before running.
+   On yes, rerun Step 4's command with the flags Steps 2–3.5 append (re-read
+   from `configure()` as on the first run), plus `<SETTINGS_FLAGS>` and
+   `--overwrite-working-directory`, then Step 5. If
+   an assessment already ran, tell the user its results reflect the earlier
+   conversion until it is run again. On no, change nothing.
 
 ## Understanding EWIs
 

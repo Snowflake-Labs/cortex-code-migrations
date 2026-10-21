@@ -15,6 +15,15 @@ first sends for the turn together, one prompt each, and always pass
 `description` with a short object label. Do not pass `resume` or
 `fork_conversation_history`.
 
+The prompt is the entry's `walker_prompt` from `next_objects`, passed
+verbatim. Every entry in `objects` and `leftover_claims` carries one, with
+the object's `guidance:` from `answered` already in it. Append only a
+`reason:` line from a `reopened` return. The PreToolUse `task` hook denies a
+first send that is not this template, so never write or extend it yourself.
+If the response has `walker_prompt_warning`, the guidance read failed: append
+`guidance:` yourself for any object listed under `answered`. The shape, for
+reference:
+
 ```
 Migrate this object end-to-end, following your agent definition.
 
@@ -58,7 +67,8 @@ shapes, or instructions not to escalate conflict with that contract.
 
 Use a later send when the existing conversation still has the walk and returned
 `waiting`, `partial`, or `stuck`. Call `task` with the stored `resume` id,
-`description`, and a prompt containing only the new line. Do not repeat the
+`description`, and a prompt containing only the new line; the hook denies
+anything else. Do not repeat the
 object/project/plugin/connection values or the migrate-this-object line. Do not
 pass `fork_conversation_history`.
 

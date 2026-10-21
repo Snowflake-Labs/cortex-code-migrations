@@ -17,6 +17,10 @@ For a Snowflake source, use this instead:
 > strategy. Snowflake-source projects skip code conversion, assessment,
 > deployment, data migration, testing setup, and the Data Exchange Worker.
 
+## Install check
+
+Before `progress_setup()` or any other tool in this flow, run `scai doctor`. Exit 0: continue. Any other exit: stop, show the output, and do not advance the state machine. If the `doctor` command is missing, this scai predates the check — continue; SessionStart already gated the install. Skip the command when this session already ran it and it exited 0.
+
 ## Flow
 
 Setup is driven by the **`setup` state machine** — the resolver picks

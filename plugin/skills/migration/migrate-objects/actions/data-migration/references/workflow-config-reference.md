@@ -413,13 +413,21 @@ See also: `dmvf/docs/data-migration-orchestrator/features/QueryModifiersAntiLock
 `columnNamesToPartitionBy` is an **ordered list**. The orchestrator sorts and splits on the tuple (lexicographic NTILE), so order matters.
 
 - When the leading prune column (sort key, clustered index, partition key, clustering key, …) has too few distinct values for balanced slices, **keep it first** and append the remaining columns of that physical key in catalog order (for example the rest of a Redshift compound sort key, or further Oracle partition-key columns).
-- If cardinality is still too low, append a high-cardinality column such as the primary key: `[sale_date, id]`.
+- If cardinality is still too low, append a high-cardinality column such as the primary key: `[sale_date, id]`. On Teradata, prefer `[<RANGE_N column>, <PI column>]` when a daily/monthly partitioning column collapses NTILE buckets. On PostgreSQL, prefer `[<partition column>, <pk column>]` when a daily/monthly partition key collapses NTILE buckets.
 - Present the candidates to the user before writing the key.
 - The Doctor measures cardinality on the **leading** column only, so a low-cardinality warning on that column is expected for a composite key and does not mean the composite is wrong.
 
 ### Oracle
 
 Prefer, in order: the table's physical partition key (`ALL_PART_KEY_COLUMNS`, via `query_source` or a `Partition prune:` finding), then an index-organized table (IOT) primary key, then a heap primary key or unique constraint. Leave the field empty to let the orchestrator infer (including `ROWID` only for a one-time full extract with sync `none` on a heap table with no better key). On a low-cardinality partition key, use a composite of the partition key and the PK.
+
+### Teradata
+
+Prefer, in order: the level-1 `RANGE_N(<bare column> BETWEEN ...)` column from `DBC.PartitioningConstraintsV` (via a `Partition prune:` finding or inference), then the primary index (`DBC.IndicesV` types `P` / `Q`). The PI hashes rows onto AMPs — a range filter on the PI does **not** prune; only row partitioning does. Leave the field empty to let the orchestrator infer. Skip expression `RANGE_N` (for example `EXTRACT(...)`) and `CASE_N` as prune columns. On a low-cardinality partitioning date, use a composite `[partitioning column, PI column]`. Verify pruning with `EXPLAIN` on a generated partition predicate — look for `n partitions of`, not an all-AMP scan.
+
+### PostgreSQL
+
+Prefer, in order: the declared partition key (`pg_partitioned_table.partattrs`, bare columns only — skip expression keys), then a valid non-partial minmax/minmax-multi BRIN column whose `pg_stats` shows `abs(correlation) >= 0.9`, `null_frac = 0`, and fresh stats (`n_mod_since_analyze` within 20% of live rows), then the leading column of the `indisclustered` index, then the primary key / unique index. Leave the field empty to let the orchestrator infer. Avoid `ctid`. When BRIN is skipped for missing or weak stats, running `ANALYZE <table>` on the source can re-enable it on the next inference. Verify with `query_source` against `pg_partitioned_table`, `pg_index` / `pg_am`, and `pg_stats`. On a low-cardinality partition date, use a composite `[partition column, pk column]`.
 
 ## ColumnTypeMapping
 
