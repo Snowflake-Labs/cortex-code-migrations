@@ -220,6 +220,80 @@ def handshake(executable: str, version: str) -> Tuple[str, str]:
         stop_process(process)
 
 
+def _version_core(text: str) -> Optional[Tuple[int, ...]]:
+    match = re.search(r"(\d+(?:\.\d+)*)", text)
+    if not match:
+        return None
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def _older_than(current: str, minimum: str) -> bool:
+    left = _version_core(current)
+    right = _version_core(minimum)
+    if left is None or right is None:
+        return False
+    width = max(len(left), len(right))
+    left = left + (0,) * (width - len(left))
+    right = right + (0,) * (width - len(right))
+    return left < right
+
+
+def assessment_venv(home: Optional[Path] = None, environ: Optional[dict] = None) -> Path:
+    """Directory CSnakes mounts: ``GetScaiConfigDirectory()/python/venv``.
+
+    ``~/.scai`` is the legacy home and is not where the current venv lives.
+    """
+    env = os.environ if environ is None else environ
+    home = home or Path.home()
+    snowflake_home = env.get("SNOWFLAKE_HOME")
+    if snowflake_home and Path(snowflake_home).is_dir():
+        snowflake: Path = Path(snowflake_home)
+    else:
+        dot = home / ".snowflake"
+        if dot.is_dir():
+            snowflake = dot
+        elif os.name == "nt":
+            local = env.get("LOCALAPPDATA")
+            snowflake = Path(local) / "snowflake" if local else dot
+        elif sys.platform == "darwin":
+            snowflake = home / "Library" / "Application Support" / "snowflake"
+        else:
+            xdg = env.get("XDG_CONFIG_HOME")
+            base = Path(xdg) if xdg else home / ".config"
+            snowflake = base / "snowflake"
+    return snowflake / "scai" / "python" / "venv"
+
+
+def install_gate(version: str, *, venv: Path, min_file: Path) -> Optional[Tuple[str, str]]:
+    """Install checks that run after a verified MCP handshake.
+
+    A missing assessment venv is not a failure: the first report creates it.
+    A venv without pip is the ASM0028 failure from locked-down machines.
+    ``min-scai-version`` in the plugin root is the oldest scai this plugin may drive.
+    """
+    if venv.is_dir():
+        if os.name == "nt":
+            has_pip = (venv / "Scripts" / "pip.exe").is_file()
+        else:
+            has_pip = (venv / "bin" / "pip").is_file() or (venv / "bin" / "pip3").is_file()
+        if not has_pip:
+            return (
+                "INCOMPATIBLE",
+                f"assessment venv at {venv} has no pip; scai assessment report "
+                "fails with ASM0028. Delete that folder or repair pip.",
+            )
+
+    if min_file.is_file() and version != "unknown version":
+        minimum = min_file.read_text(encoding="utf-8").strip()
+        if minimum and _older_than(version, minimum):
+            return (
+                "INCOMPATIBLE",
+                f"scai {version} is older than plugin minimum {minimum}. "
+                "Update scai before AIM runs.",
+            )
+    return None
+
+
 def main() -> int:
     executable = shutil.which("scai")
     if not executable:
@@ -247,6 +321,16 @@ def main() -> int:
     # INCOMPATIBLE must block SessionStart: the same PATH entry would otherwise
     # become the plugin MCP server. VERIFIED/UNVERIFIED stay non-blocking.
     if kind == "INCOMPATIBLE":
+        return 1
+    # Same install rules as `scai doctor`. Kept in this hook so SessionStart
+    # can fail closed on a scai that does not have that command yet.
+    install = install_gate(
+        version,
+        venv=assessment_venv(),
+        min_file=_PLUGIN_ROOT / "min-scai-version",
+    )
+    if install is not None:
+        report(*install)
         return 1
     return 0
 

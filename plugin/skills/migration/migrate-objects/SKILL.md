@@ -13,6 +13,10 @@ Check `project_type` and `source_language` from the `configure()` response.
 
 If `project_type` is `code_conversion_only` and `source_language` is not Snowflake (any letter case), load [BASIC_SUPPORT.md](BASIC_SUPPORT.md) and stop here; the steps below do not apply to that project type.
 
+## Install check
+
+Before `progress_setup()` or any other tool in this flow, run `scai doctor`. Exit 0: continue. Any other exit: stop, show the output, and do not advance the state machine. If the `doctor` command is missing, this scai predates the check — continue; SessionStart already gated the install. Skip the command when this session already ran it and it exited 0.
+
 ## On Entry
 
 Tell the user:

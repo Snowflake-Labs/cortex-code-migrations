@@ -4,6 +4,10 @@
 
 The built-in MCP server runs a state machine that guides you through user flows and will ask you to "tell the user x" or "ask the user y". This is expected — follow its lead. It is the official MCP server of Snowflake migrations.
 
+## Install check
+
+Before the first tool call of this flow, run `scai doctor`. Exit 0: continue. Any other exit: stop, show the output, and do not call `configure`, `progress_setup`, or `migration_status`. If the `doctor` command is missing, this scai predates the check — continue; SessionStart already gated the install.
+
 ## Step 1: Detect current state
 
 Call `migration_status`. It returns JSON with `project_exists`, `directory_empty`, `by_type`, `stage_totals`, `routing`, and `highest_stage_reached`.
@@ -65,6 +69,7 @@ These answer common questions about project state without loading a sub-skill:
 - **"What is the current state?"** — Call `migration_status(mode="summary")` and give the prose summary described in Step 1.
 - **"What should I work on next?"** — Call `migration_status(mode="my_objects_summary")` to get per-`(task, object_type)` counts plus `errored_count` and `done_count`. Present the list and **ask the user what they want to work on — do not pick for them**. When the user picks a group, drill down with `migration_status(mode="my_objects_details", group=<id>)`.
 - **"Show me objects that match rule X"** — Load `migrate-objects/rule-engine/propagate/SKILL.md`.
+- **"Can I change conversion settings?"** / **"I picked defaults but need a conversion flag"** — Load `convert/SKILL.md` → "Changing Conversion Settings Later". The same project keeps working: no new project or re-import.
 - **"How do I extend / customize the migration plugin?"** / **"How do I override task X?"** — Load `extensibility/TASKS.md` for the full reference: overridable task ids, per-task contracts, and the project-local + `$AIM_SKILL_EXT_DIR` paths. Optionally call `migration_status(mode='extensions')` to show which overrides are active.
 
 ---

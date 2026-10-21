@@ -163,7 +163,7 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `configureSandboxProfile`
 - **Inputs:** Chosen source and Snowflake connections; confirmed source→Snowflake database bindings written to `.scai/bindings/database-bindings.yaml`.
-- **Done when:** Session config has `sandbox_profile`, `source_connection`, and `snowflake_connection` set — call `configure(sandbox_profile=..., source_connection=..., snowflake_connection=..., snowflake_database=..., ensure_target_database=true)` after `scai profile create --sandbox`.
+- **Done when:** Session config has `source_connection`, `snowflake_connection`, and a `sandbox_profile` that resolves to a `sandbox: true` profile in `.scai/config/profiles.local.yaml` — a finished project without one comes back to this step. Call `configure(sandbox_profile=..., source_connection=..., snowflake_connection=..., snowflake_database=..., ensure_target_database=true)` after `scai profile create --sandbox`.
 
 #### `configureTesting`
 - **Inputs:** Source and Snowflake connections from `configureSandboxProfile` (or `configureSnowflakeTarget` on the Snowflake-source path); the testing path choice from `chooseTestingPath`; optionally a query-log CSV.

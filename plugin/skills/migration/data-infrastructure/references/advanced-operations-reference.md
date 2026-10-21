@@ -139,7 +139,7 @@ CLI equivalent: `scai data validate revalidate <WORKFLOW_NAME>` (add `--recheck-
 
 | Field | Purpose |
 |-------|---------|
-| `validationCustomNormalizationRules` | **Preferred** — per `column`, `columnPattern`, or `dataType`; `sourceExpression` / `targetExpression` with `{{ col_name }}` placeholder |
+| `validationCustomNormalizationRules` | **Preferred** — per `column`, `columnPattern`, `dataType`/`sourceDataType`, or `targetDataType`; `sourceExpression` / `targetExpression` with `{{ col_name }}` placeholder. `targetDataType: "*"` uses the datatype mapping of `sourceDataType`. Quote the star in YAML. |
 | `validationCustomNormalizations` | Legacy datatype-keyed lists (still supported; granular rules win when both match) |
 | `validationCustomTypes` / `validationCustomTypeRules` | L1 schema type expectations — pair with normalization when types differ but values should compare equal |
 
