@@ -28,7 +28,7 @@ Assess → Convert → (optional) Register CUR → scai test
 
 1. **Assess** produces portfolio-level analysis (`assessment.json`, reports, wave plan).
 2. **Convert** reuses `assessment.json` when present to prioritize and inform conversion.
-3. **Register CUR** (optional) writes CUR entries for the converted objects so `scai test seed`/`validate` can run in Snowflake self-consistency mode. See `convert-sas-to-snowflake/workflows/scai-test-selfconsistency.md`.
+3. **Register CUR** (optional) writes CUR entries for the converted objects so `scai test seed`/`validate` can run in Snowflake self-consistency mode. See step 4 of `register-sas-converted-units/SKILL.md`.
 
 **Migrate-data** (`.sas7bdat` load) is **independent** — it does not require Assess or Convert and can run on its own when the user only needs dataset ingestion from a stage.
 

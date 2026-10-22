@@ -17,7 +17,7 @@ Load for **all conversions** - comprehensive function translation reference.
 | `FIND(str, substr, pos, 'i')` | `CHARINDEX(LOWER(substr), LOWER(str), pos)` | Case-insensitive with 'i' modifier |
 | `UPCASE(str)` | `UPPER(str)` | |
 | `LOWCASE(str)` | `LOWER(str)` | |
-| `PROPCASE(str)` | `INITCAP(str)` | Title case |
+| `PROPCASE(str)` | `INITCAP(str, ' /-(.\t')` | SAS delimiters (blank / - ( . tab); bare INITCAP also splits on `_ , ; '` |
 | `TRIM(str)` | `TRIM(str)` | |
 | `LEFT(str)` | `LTRIM(str)` | Left trim |
 | `RIGHT(str)` | `RTRIM(str)` | Right trim |
@@ -161,7 +161,11 @@ DATEDIFF('month', start_date, end_date)
 ## INTNX (Date Arithmetic)
 
 ```sql
--- SAS: INTNX('MONTH', date, 3)           -- Default alignment = 'S' (same day)
+-- SAS: INTNX('MONTH', date, 3)           -- Default alignment = 'B' (beginning), NOT same day
+-- Snowflake:
+DATE_TRUNC('month', DATEADD('month', 3, date))
+
+-- SAS: INTNX('MONTH', date, 3, 'S')      -- Same day
 -- Snowflake:
 DATEADD('month', 3, date)
 
@@ -189,9 +193,9 @@ DATE_TRUNC('year', DATEADD('year', 1, date))
 -- Snowflake:
 DATEADD('day', -1, DATE_TRUNC('year', DATEADD('year', 1, date)))
 
--- SAS: INTNX('WEEK', date, 0, 'B')       -- Beginning of current week
--- Snowflake:
-DATE_TRUNC('week', date)
+-- SAS: INTNX('WEEK', date, 0, 'B')       -- Beginning of current week (SAS weeks start Sunday)
+-- Snowflake (DATE_TRUNC('week') starts Monday / follows WEEK_START):
+DATEADD('day', -MOD(DAYOFWEEKISO(date), 7), date)
 
 -- SAS: INTNX('QTR', date, 1, 'B')        -- Beginning of next quarter
 -- Snowflake:
@@ -213,13 +217,19 @@ DATE_TRUNC('quarter', DATEADD('quarter', 1, date))
 
 **INPUT (string to typed value):**
 ```sql
--- SAS: INPUT(str, 8.)        -- To number
+-- SAS: INPUT(str, 8.)        -- To number ('.' and blank are missing; TRY_TO_NUMBER('.') is 0)
 -- Snowflake:
-TRY_TO_NUMBER(str)
+TRY_TO_NUMBER(NULLIF(TRIM(str), '.'))
 
 -- SAS: INPUT(str, DATE9.)    -- To date
 -- Snowflake:
 TRY_TO_DATE(str)
+
+-- SAS: INPUT(str, YYMMDD6.) and other 2-digit-year informats -- century from YEARCUTOFF C
+-- (OPTIONS YEARCUTOFF= in code/autoexec, else 1926); Snowflake 'YY' pivots at 1970 instead.
+-- Record the C you assumed as MANUAL_REVIEW_REQUIRED.
+DATE_FROM_PARTS(IFF(TO_NUMBER(LEFT(str,2)) >= MOD(C,100), 1900, 2000) + TO_NUMBER(LEFT(str,2)),
+                TO_NUMBER(SUBSTR(str,3,2)), TO_NUMBER(SUBSTR(str,5,2)))
 
 -- SAS: INPUT(str, DATETIME20.)
 -- Snowflake:
@@ -233,12 +243,12 @@ TRIM(str)
 **PUT (typed value to string):**
 ```sql
 -- SAS: PUT(num, 8.)
--- Snowflake:
-TO_VARCHAR(num)
+-- Snowflake (a missing numeric PUTs as '.', right-aligned in the width -- never NULL):
+COALESCE(TO_VARCHAR(num), LPAD('.', 8))
 
--- SAS: PUT(date, DATE9.)
+-- SAS: PUT(date, DATE9.)       -- SAS prints upper case: 05OCT2026
 -- Snowflake:
-TO_VARCHAR(date, 'DDMONYYYY')
+UPPER(TO_VARCHAR(date, 'DDMONYYYY'))
 
 -- SAS: PUT(num, Z5.)         -- Zero-padded
 -- Snowflake:
@@ -369,14 +379,28 @@ TO_TIMESTAMP('01JAN2024:12:30:00', 'DDMONYYYY:HH24:MI:SS')
 | `YYMMDD10.` | `YYYY-MM-DD` |
 | `DDMMYY10.` | `DD/MM/YYYY` |
 | `MMDDYY10.` | `MM/DD/YYYY` |
-| `DATE9.` | `DDMONYYYY` |
+| `DATE9.` | `UPPER(TO_CHAR(d, 'DDMONYYYY'))` -- SAS prints `05OCT2026`; `MON` alone gives `Oct` |
 | `DATETIME20.` | `YYYY-MM-DD HH24:MI:SS` |
 | `TIME8.` | `HH24:MI:SS` |
-| `MONYY7.` | `MONYYYY` |
+| `MONYY7.` | `UPPER(TO_CHAR(d, 'MONYYYY'))` |
 | `YEAR4.` | `YYYY` |
 | `COMMA12.2` | `999,999,999.99` |
 | `DOLLAR12.2` | `$999,999,999.99` |
 | `PERCENT8.2` | `999.99%` |
+
+### Name-producing date formats (`PUT(d, fmt.)`) -- verified output
+
+These print words, not digits, so they need expressions rather than one format string.
+Width truncates: `MONNAME3.` is the first 3 letters of `MONNAME.`.
+
+| SAS | Snowflake | `2026-10-05` gives |
+|---|---|---|
+| `MONNAME3.` | `TO_CHAR(d, 'MON')` | `Oct` |
+| `MONNAME.` / `MONNAME9.` | `TO_CHAR(d, 'MMMM')` | `October` |
+| `DOWNAME3.` | `DAYNAME(d)` | `Mon` |
+| `DOWNAME.` | `DECODE(DAYOFWEEKISO(d), 1,'Monday', 2,'Tuesday', 3,'Wednesday', 4,'Thursday', 5,'Friday', 6,'Saturday', 7,'Sunday')` (no full-name format exists) | `Monday` |
+| `WORDDATE.` | `TO_CHAR(d, 'MMMM') \|\| ' ' \|\| DAY(d) \|\| ', ' \|\| YEAR(d)` | `October 5, 2026` |
+| `WEEKDATE.` | the `DOWNAME.` expression `\|\| ', ' \|\|` the `WORDDATE.` expression | `Monday, October 5, 2026` |
 
 ## Special Variables
 
@@ -395,7 +419,7 @@ SAS supplies automatic macro variables resolved at compile time. Convert each to
 
 | SAS Automatic Variable | Snowflake Equivalent |
 |------------------------|----------------------|
-| `&SYSDATE` / `&SYSDATE9` | `TO_CHAR(CURRENT_DATE(), 'DDMONYY')` / `'DDMONYYYY'` |
+| `&SYSDATE` / `&SYSDATE9` | `UPPER(TO_CHAR(CURRENT_DATE(), 'DDMONYY'))` / `UPPER(TO_CHAR(CURRENT_DATE(), 'DDMONYYYY'))` |
 | `&SYSTIME` | `TO_CHAR(CURRENT_TIME(), 'HH24:MI')` |
 | `&SYSDAY` | `DAYNAME(CURRENT_DATE())` |
 | `&SYSUSERID` | `CURRENT_USER()` |

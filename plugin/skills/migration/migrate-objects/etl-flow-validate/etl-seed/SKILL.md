@@ -51,7 +51,11 @@ Handle skips at their cause:
 
 ## Step 2: Fill comparison settings
 
-Open `{ARTIFACTS_PATH}/etl-test/<name>.yml`. For every `comparison.tables[]` entry:
+Open `{ARTIFACTS_PATH}/etl-test/<name>.yml`.
+
+A unit that writes no table (a File System Task or Foreach package) is seeded with `comparison.sink: none` and no `comparison.tables`. It passes when both of its execution branches succeed, so it has no table pairs, keys or exclusions to fill: skip to Step 3. Never add `sink: none` by hand beside an `external_command` source or target, or beside a target that is not a Snowflake task (the runner refuses it there), and never beside `comparison.tables`. A seed that leaves `comparison.tables: []` with a warning is not sink-less: list the tables the unit writes.
+
+For every `comparison.tables[]` entry:
 
 1. Set `index_columns` to stable row keys.
 2. Set `target_index_columns` only when target key names differ.
@@ -88,7 +92,7 @@ INSERT INTO "TASKS" ("TASKID", "TITLE", "DESCRIPTION", "ASSIGNEEID", "PRIORITY",
 VALUES (1, 'Sample', NULL, 1, 'Medium', 'Open', '2020-01-02', NULL, NULL);
 ```
 
-For write sinks:
+For write sinks (a `sink: none` unit has none to empty, so arrange only its read tables):
 
 1. `TRUNCATE` the Snowflake sink.
 2. Leave the source sink empty.
@@ -100,12 +104,12 @@ Never arrange SQL Server only, and never use MCP `query_source` for DML. Stop wh
 
 Show the user:
 
-- seeded table pairs;
+- seeded table pairs, or that the unit is seeded `sink: none`;
 - keys and exclusions;
 - source and Snowflake read counts;
 - empty sink checks.
 
-Only after the YAML contains non-empty `comparison.tables`, arrangement is confirmed, and the user accepts the settings:
+Only after the YAML contains non-empty `comparison.tables` or declares `comparison.sink: none`, arrangement is confirmed, and the user accepts the settings:
 
 ```text
 transition_status(status="advance", task="validateEtlSeed", outcome="completed", where="id = '{ETL_ID}'")

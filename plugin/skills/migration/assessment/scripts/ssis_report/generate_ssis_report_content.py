@@ -24,7 +24,7 @@ import os
 import sys
 import json
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, List, Optional, Tuple
 
 _scripts_dir = str(Path(__file__).resolve().parent.parent)
 if _scripts_dir not in sys.path:
@@ -36,13 +36,19 @@ from snowconvert_reports.console_utils import DONE  # noqa: E402
 from .ssis_html_report_generator import HTMLReportGenerator, sanitize_filename
 
 
-def generate_ssis_html_content(ssis_json_path: Path, output_html_path: Path = None) -> Tuple[str, str, str]:
+def generate_ssis_html_content(
+    ssis_json_path: Path,
+    output_html_path: Path = None,
+    registry_packages: Optional[List[Dict[str, str]]] = None,
+) -> Tuple[str, str, str]:
     """
     Generate HTML content for SSIS tab using the same generator as standalone reports.
     
     Args:
         ssis_json_path: Path to SSIS assessment JSON file
         output_html_path: Path where the main HTML file will be saved (optional, for package page generation)
+        registry_packages: SSIS packages from the code unit registry (``{"path", "status"}``),
+            so packages missing from the assessment JSON are still counted and listed
         
     Returns:
         Tuple of (html_content, javascript_code, css_content)
@@ -66,7 +72,8 @@ def generate_ssis_html_content(ssis_json_path: Path, output_html_path: Path = No
         generator = HTMLReportGenerator(
             json_path=str(ssis_json_path),
             executive_summary_path=str(summary_html_path) if summary_html_path else None,
-            ai_estimation_enabled=False
+            ai_estimation_enabled=False,
+            registry_packages=registry_packages,
         )
         
         # Determine output folder for package pages
@@ -174,6 +181,7 @@ def generate_ssis_html_content(ssis_json_path: Path, output_html_path: Path = No
         # but without the full page structure (no sidebar, no wrapping HTML)
         executive_summary = generator.generate_executive_summary()
         metrics_section = generator.generate_metrics_section()
+        unassessed_section = generator.generate_unassessed_packages_section()
         not_supported_section = generator.generate_not_supported_section()
         # Pass output_folder to generate package pages if output path is provided
         package_summary = generator.generate_package_summary(output_folder=output_folder)
@@ -187,6 +195,7 @@ def generate_ssis_html_content(ssis_json_path: Path, output_html_path: Path = No
         
             {executive_summary}
             {metrics_section}
+            {unassessed_section}
             {package_summary}
             {not_supported_section}
         </div>

@@ -70,6 +70,8 @@ _KIND_LABEL = {
     "etl_pipeline": "ETL pipeline",
     "etl_system": "ETL system",
     "etl_package": "ETL package",
+    "etl_script": "ETL script",
+    "etl_workflow": "ETL workflow",
     "report_system": "Power BI",
     "report_report": "Power BI report",
     "unresolved": "Unresolved",
@@ -248,23 +250,54 @@ _EMPTY_STATE_EXTRA_LINE = {
     "unreadable": "An existing data lineage artifact was found, but it could not be read.",
 }
 
+_DL_EMPTY_SCOPE = (
+    "Data Lineage maps ETL pipelines and reporting files such as Power BI (.pbit or .pbix). "
+    "Procedure, view, and table relationships are on Object Lineage."
+)
+_DL_EMPTY_MISSING = (
+    f"Data lineage assessment data is not available. Run <code>{_esc(_CLI_COMMAND)}</code> to generate it."
+)
+_DL_EMPTY_NO_PIPELINE_TITLE = "No ETL pipelines or reporting files to map"
+_DL_EMPTY_NO_PIPELINE = (
+    "This assessment has no ETL pipelines or reporting files such as Power BI, so the map is "
+    "empty. Procedure, view, and table relationships are on Object Lineage."
+)
+_DL_OPEN_OBJECT_LINEAGE = "Open Object Lineage"
+# Marker the multi-report uses to default the Lineage toggle to Object Lineage
+# and to skip v-pre around authored empty copy (safe: no artifact strings).
+_DL_EMPTY_MARKER = "data-lineage-empty"
 
-def _render_empty_state(reason: Optional[str] = None) -> str:
-    """`reason` is None for a missing file, or one of `_EMPTY_STATE_EXTRA_LINE`'s
-    keys for a file that exists but couldn't be turned into a rendered tab.
-    The base remediation paragraph (naming the CLI regeneration command) is
-    always shown; a malformed/unreadable file additionally gets one
-    grammatical, accurate extra line -- never a claim of "invalid JSON" for
-    an input that was actually valid JSON with the wrong shape or content.
+
+def _render_empty_state(reason: Optional[str] = None, *, kind: str = "missing") -> str:
+    """Render the Data Lineage empty panel.
+
+    `kind="missing"` covers a missing or unreadable artifact and still names the
+    CLI regeneration command. `kind="no_pipelines"` covers a valid artifact whose
+    canvas has no ETL or reporting cards — a SQL-only estate, not a load failure.
+    Both point the reader at Object Lineage for procedure, view, and table edges.
     """
-    body = f"<p>Data lineage assessment data is not available. Run <code>{_esc(_CLI_COMMAND)}</code> to generate it.</p>"
-    extra = _EMPTY_STATE_EXTRA_LINE.get(reason)
-    if extra:
-        body += f"<p>{extra}</p>"
-    return '<div id="data-lineage-report">' + _render_page_header() + '<div class="empty-state"><h3>No Data Available</h3>' + body + "</div></div>"
+    if kind == "no_pipelines":
+        title = _DL_EMPTY_NO_PIPELINE_TITLE
+        body = f"<p>{_esc(_DL_EMPTY_NO_PIPELINE)}</p>"
+    else:
+        title = "No Data Available"
+        body = f"<p>{_esc(_DL_EMPTY_SCOPE)}</p><p>{_DL_EMPTY_MISSING}</p>"
+        extra = _EMPTY_STATE_EXTRA_LINE.get(reason)
+        if extra:
+            body += f"<p>{_esc(extra)}</p>"
+    body += (
+        f'<p><button type="button" class="prompt-copy" '
+        f'@click="lineageView = \'object\'">{_esc(_DL_OPEN_OBJECT_LINEAGE)}</button></p>'
+    )
+    return (
+        f'<div id="data-lineage-report" class="{_DL_EMPTY_MARKER}">'
+        + _render_page_header()
+        + f'<div class="empty-state"><h3>{_esc(title)}</h3>'
+        + body
+        + "</div></div>"
+    )
 
 
-_DL_H1 = '<h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 8px;">Data Lineage</h1>'
 _DL_BLURB = "Follow how data moves from sources through pipelines to targets and reports."
 # The introduction carries the ask for reporting-layer files because an empty
 # Reports lane cannot make it: a reader whose project supplied no report files
@@ -280,6 +313,7 @@ _DL_INTRO_PARAGRAPHS = (
     "or .pbix are included in the code supplied for assessment, every report that queries these "
     "systems is drawn in the Reports lane. Without them the map stops at the systems the "
     "pipelines write, and who consumes the data stays unknown.",
+    "Procedure, view, and table relationships are on Object Lineage.",
 )
 _DL_INTRO = "".join(
     '<p style="color: #64748B; font-size: 1rem; line-height: 1.6; '
@@ -348,7 +382,9 @@ _SUPPRESSED_MISSING_INPUT_KIND = "LandingWithoutReportingLayer"
 
 
 def _render_page_header() -> str:
-    return f'<div class="dl-page-header">{_DL_H1}{_DL_INTRO}</div>'
+    # Discovery already names the Lineage view; the Data Lineage panel opens on
+    # the intro rather than repeating a page subheader.
+    return f'<div class="dl-page-header">{_DL_INTRO}</div>'
 
 
 def _info_icon(text: str, extra_class: str = "") -> str:
@@ -391,6 +427,12 @@ def _render_content(data: Dict[str, Any]) -> Tuple[str, str]:
     missing_inputs = data.get("MissingInputs", []) or []
     narrative = data.get("Narrative")
     findings = data.get("Findings", []) or []
+
+    # A valid artifact with no canvas cards is a SQL-only (or otherwise
+    # non-ETL) estate: show the no-pipeline empty state instead of three blank
+    # lanes that look like the assessment found nothing at all.
+    if not nodes:
+        return _render_empty_state(kind="no_pipelines"), _EMPTY_GRAPH_JSON
 
     layout = layout_lineage(nodes, canvas_width=_DEFAULT_CANVAS_WIDTH)
 
@@ -542,7 +584,7 @@ def _render_canvas(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]], lay
             cards.append(_render_card(child, layout))
         if children:
             rails.append(_render_child_rail(node_id, layout))
-            toggles.append(_render_expand_toggle(node, node_id, layout))
+            toggles.append(_render_expand_toggle(node, node_id, layout, children))
     detail_ids = {node_id for node_id, card in layout.cards.items() if card.parent_id is not None}
     svg = _render_edges_svg(edges, layout, detail_ids)
     return (
@@ -641,6 +683,10 @@ def _grain_nouns(node: Dict[str, Any]) -> Tuple[str, str]:
     a database."""
     kind = str(node.get("Kind") or "").strip().lower()
     platform = str(node.get("Platform") or "").strip()
+    if kind == "etl_script":
+        return "script", "scripts"
+    if kind == "etl_workflow":
+        return "workflow", "workflows"
     if platform == "PowerBI" and kind in ("report_system", "report_report"):
         return "report", "reports"
     if platform == "Ssis" and kind in ("etl_system", "etl_package"):
@@ -660,7 +706,24 @@ def _detail_meta(node: Dict[str, Any]) -> str:
     return singular.capitalize()
 
 
-def _render_expand_toggle(node: Dict[str, Any], parent_id: str, layout: LineageLayout) -> str:
+def _expand_grain(node: Dict[str, Any], children: List[Dict[str, Any]]) -> Tuple[str, str]:
+    """The toggle sits on the parent, whose platform noun is not the child's.
+    A Teradata schema card expands into databases; the same platform's script
+    card expands into scripts. An Informatica folder expands into workflows."""
+    child_kinds = {str(child.get("Kind") or "").strip().lower() for child in children}
+    if "etl_workflow" in child_kinds:
+        return "workflow", "workflows"
+    if "etl_script" in child_kinds:
+        return "script", "scripts"
+    return _grain_nouns(node)
+
+
+def _render_expand_toggle(
+    node: Dict[str, Any],
+    parent_id: str,
+    layout: LineageLayout,
+    children: List[Dict[str, Any]],
+) -> str:
     """The control is a sibling of the card it expands, not a child of it: a
     collapsed card is `role="button"`, so nesting a `<button>` inside it is
     invalid content and folds the toggle's copy into the card's accessible
@@ -675,7 +738,7 @@ def _render_expand_toggle(node: Dict[str, Any], parent_id: str, layout: LineageL
     """
     card = layout.cards[parent_id]
     label = _esc(_fallback_system_card_label(node))
-    plural = _grain_nouns(node)[1]
+    plural = _expand_grain(node, children)[1]
     expand = f"Expand {label} {plural}"
     collapse = f"Collapse {label} {plural}"
     return (
@@ -950,7 +1013,7 @@ _JS = """
     var dlExpandedParents = {};
     function dlAnyExpanded() { return Object.keys(dlExpandedParents).length > 0; }
 
-    var KIND_LABELS = { system: 'System', etl_pipeline: 'ETL pipeline', etl_system: 'ETL system', etl_package: 'ETL package', report_system: 'Power BI', report_report: 'Power BI report', unresolved: 'Unresolved' };
+    var KIND_LABELS = { system: 'System', etl_pipeline: 'ETL pipeline', etl_system: 'ETL system', etl_package: 'ETL package', etl_script: 'ETL script', etl_workflow: 'ETL workflow', report_system: 'Power BI', report_report: 'Power BI report', unresolved: 'Unresolved' };
     function dlHumanizeKind(kind) {
         if (KIND_LABELS[kind]) { return KIND_LABELS[kind]; }
         if (!kind) { return 'Unknown'; }

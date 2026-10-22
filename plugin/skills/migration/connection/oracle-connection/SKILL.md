@@ -54,9 +54,9 @@ Ask the user:
 > "I need the following to connect to Oracle:
 > - **Host** (hostname or IP)
 > - **Service name**
-> - **Username** and **Password**
+> - **Username**
 >
-> How would you like to provide these?"
+> How would you like to provide these? For security, enter the password only in the masked terminal prompt; do not send it in chat."
 
 Options:
 1. **Enter manually** - Provide values interactively
@@ -133,7 +133,7 @@ Then return to the calling skill.
 
 - **NEVER** log or display passwords in plain text
 - **NEVER** include passwords in command-line arguments that might be logged
-- Use interactive mode to avoid password exposure
+- Omit `--password`; the CLI prompts for it securely in an interactive terminal
 
 ## Quick Reference
 

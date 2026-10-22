@@ -4,10 +4,13 @@ Read this file in full after `assessment_inputs` is complete. Substitute every
 placeholder and use absolute paths, except `staged_pbits` (see §6.8).
 
 When `data_lineage.dispatch` is true and `staged_pbits` is non-empty, dispatch
-is **two turns**, not one: enrichment first, then the remaining fan-out. When
-dispatch is false or `staged_pbits` is empty, skip the first turn and send the
-remaining in-scope runners in one message. After each dispatch message, end
-the turn.
+is **two steps**, not one: enrichment first, then the remaining fan-out. When
+dispatch is false or `staged_pbits` is empty, skip the first step and send the
+remaining in-scope runners in one message. After each dispatch message, wait
+for its agents in the same turn with `agent_output(agent_id=<id>, wait=true)`;
+do not end the turn. Before waiting, tell the user what is running, where to
+watch it and how completion is signalled, and report each analysis as it
+finishes (see SKILL.md Step 5).
 
 ## Contents
 
@@ -18,7 +21,7 @@ the turn.
 
 ## Common contract
 
-- Never dispatch an excluded analysis or a `review_mode: skip` analysis.
+- Never dispatch an excluded analysis, a `review_mode: skip` analysis, or conversion issues when `conversion_issues.run` is false.
 - Every child calls `configure(project_dir=...)`; MCP state is not inherited.
 - Tell every child it is non-interactive and must not ask questions.
 - Each child writes only its own artifacts; never registry/source/other-child
@@ -35,7 +38,8 @@ the turn.
 }
 ```
 
-Data Lineage adds `manifest`. End the parent turn after the dispatch message.
+Data Lineage adds `manifest`. The parent waits for these returns in the same
+turn as the dispatch message.
 
 ## Core assessment runners
 
@@ -113,11 +117,15 @@ total/REVIEWED/PENDING counts.
 Read and follow plugin/skills/migration/assessment/conversion-issues/SKILL.md.
 You are a non-interactive sub-agent. Do not ask questions.
 Context: project_dir.
-Call configure(project_dir), run scai assessment conversion-issues, research
-each summary-panel pair, write artifacts/assessment/conversion-issues/updates.json,
-and rerun with --updates. Return the common JSON contract for conversion-issues
-with artifacts/assessment/conversion-issues.json.
-ASM0045 is error, not skipped. Zero pairs is ok. Do not upload the ZIP.
+Call configure(project_dir). The first command only collects issues and leaves
+problem_description and recommended_fix empty. That is not done.
+Run scai assessment conversion-issues. For each summary-panel pair, research
+the problem and the fix, write
+artifacts/assessment/conversion-issues/updates.json, and rerun:
+scai assessment conversion-issues --updates artifacts/assessment/conversion-issues/updates.json
+Read conversion-issues.json again. Return ok only when every summary row has
+both fields non-empty, or when there are zero pairs. Do not return ok after
+the first command. ASM0045 is error, not skipped. Do not upload the ZIP.
 ```
 
 ## ETL and Discovery runners
@@ -127,13 +135,22 @@ ASM0045 is error, not skipped. Zero pairs is ok. Do not upload the ZIP.
 ```text
 Read and follow plugin/skills/migration/assessment/etl-assessment/SKILL.md.
 You are a non-interactive sub-agent. Do not ask questions.
-Context: project_dir, output_dir=<project_dir>/assessment/ssis,
-etl_replatform_sources_path, review_mode=generate-only|auto-review-all.
-Call configure(project_dir). Locate newest ETL.Elements.*.csv and
+Resolve etl_assessment_skill_dir before dispatch: the absolute directory of
+etl-assessment/SKILL.md under this plugin (plugin root +
+skills/migration/assessment/etl-assessment). The install root differs between
+a checkout and a packaged plugin, and the sub-agent runs from project_dir,
+where no relative ai project exists.
+Context: project_dir, output_dir=<project_dir>/artifacts/assessment/etl,
+etl_replatform_sources_path, ssis_target=dbt|scripting,
+review_mode=generate-only|auto-review-all,
+etl_assessment_skill_dir=<absolute directory containing etl-assessment/SKILL.md>.
+Call configure(project_dir, etl_ssis_target=<ssis_target>). Locate newest ETL.Elements.*.csv and
 ETL.Issues.*.csv; auto-detect replatform sources when context is empty. From
-the project root run scai assessment etl generate, render DAG HTML from the
-newest dag_model_*.json, and for auto-review-all classify every package and
-produce ai_ssis_summary.html. Return the common JSON contract for
+the project root run scai assessment etl generate. Render DAG HTML from the
+newest dag_model_*.json with:
+uv run --project "<etl_assessment_skill_dir>" python "<etl_assessment_skill_dir>/scripts/dag_renderer/render_dags.py" "$dag_model"
+Never pass project_dir as --project. For auto-review-all classify every
+package and produce ai_ssis_summary.html. Return the common JSON contract for
 etl-assessment with the newest etl_assessment_analysis_*.json and package
 counts.
 ```
@@ -264,7 +281,7 @@ were safely omitted are successful output and must remain in the summary.
 
 1. **Enrichment before the fan-out.** When `data_lineage.dispatch` is true and
    `staged_pbits` is non-empty, send `data-lineage` alone first and wait. Then
-   send all remaining in-scope dispatches in a single tool-use turn. With no
+   send all remaining in-scope dispatches in a single tool-use message. With no
    templates, `data-lineage` may join that fan-out because it does not enrich
    the registry.
 2. **Absolute paths only** in every context block, **except `staged_pbits`**.
@@ -280,4 +297,5 @@ were safely omitted are successful output and must remain in the summary.
 5. **JSON return only** — free-form text in the report is harder to consume
    reliably.
 
-End your turn after the dispatch message.
+Do not end your turn after the dispatch message: wait for every launched agent
+with `agent_output(agent_id=<id>, wait=true)` in the same turn.

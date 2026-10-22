@@ -1,5 +1,9 @@
 # Advanced operations reference
 
+`<metadata_database>` below is `.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
+overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
+project's.
+
 Use this when a customer asks about **protecting the source**, **bounded migration dry-runs**, **incremental validation**, **re-validating failed partitions**, **throttling concurrent tasks**, **custom L3 normalization**, or **why checksum/incremental sync missed a change**. These are optional — default migrate/validate flows do not require them.
 
 **Related references:** [Metadata storage mode (Hybrid vs standard)](./metadata-storage-mode-reference.md), [DM workflow config](../../migrate-objects/actions/data-migration/references/workflow-config-reference.md), [DV workflow config](../../setup/data-validation/references/workflow-config-reference.md), [validate_tables.md](../../validate-objects/actions/validate_tables.md).
@@ -21,15 +25,15 @@ Use this when a customer asks about **protecting the source**, **bounded migrati
 
 ```sql
 -- At most 5 concurrent loading tasks (any table):
-INSERT INTO SNOWCONVERT_AI.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, TARGET_CONCURRENT_TASKS)
+INSERT INTO <metadata_database>.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, TARGET_CONCURRENT_TASKS)
 VALUES ('Table[%]::Loading', 5);
 
 -- Cap one workflow's partition loads:
-INSERT INTO SNOWCONVERT_AI.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, WORKFLOW_ID, TARGET_CONCURRENT_TASKS)
+INSERT INTO <metadata_database>.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, WORKFLOW_ID, TARGET_CONCURRENT_TASKS)
 VALUES ('Table[%]::Partition[%]::Loading', <workflow_id>, 2);
 
 -- Pause all tasks matching a pattern:
-INSERT INTO SNOWCONVERT_AI.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, TARGET_CONCURRENT_TASKS)
+INSERT INTO <metadata_database>.DATA_MIGRATION.RATE_LIMIT (SCOPE_PATTERN, TARGET_CONCURRENT_TASKS)
 VALUES ('Table[MY_DB.%]::%', 0);
 ```
 
@@ -135,7 +139,7 @@ CLI equivalent: `scai data validate revalidate <WORKFLOW_NAME>` (add `--recheck-
 
 | Field | Purpose |
 |-------|---------|
-| `validationCustomNormalizationRules` | **Preferred** — per `column`, `columnPattern`, or `dataType`; `sourceExpression` / `targetExpression` with `{{ col_name }}` placeholder |
+| `validationCustomNormalizationRules` | **Preferred** — per `column`, `columnPattern`, `dataType`/`sourceDataType`, or `targetDataType`; `sourceExpression` / `targetExpression` with `{{ col_name }}` placeholder. `targetDataType: "*"` uses the datatype mapping of `sourceDataType`. Quote the star in YAML. |
 | `validationCustomNormalizations` | Legacy datatype-keyed lists (still supported; granular rules win when both match) |
 | `validationCustomTypes` / `validationCustomTypeRules` | L1 schema type expectations — pair with normalization when types differ but values should compare equal |
 
@@ -155,6 +159,36 @@ validationCustomNormalizationRules:
 4. DM **`columnTypeMappings` do not apply to DV** — do not copy migration type overrides into validation YAML expecting L3 to follow them.
 
 Workflow fields: [DV workflow config reference](../../setup/data-validation/references/workflow-config-reference.md#custom-normalization-l3).
+
+---
+
+## Custom L2 metrics / skip aggregations on a column (Data Validation)
+
+**When the customer asks:** skip `avg` (or all aggregations) on a VARCHAR/text primary key; L2 length-based metrics on IDs are noise; keep schema + row validation on that key; override a metric for one column only.
+
+**What it is:** `validationCustomMetrics` entries that target a **source-qualified column** (`{table.fullyQualifiedName}.{columnName}`) instead of a datatype. Omitting `metricQuery` **removes** that named metric for that column in L2 only. L1 and L3 still use the column (including as `indexColumnList`).
+
+**Key rules:**
+
+1. Requires `metricsValidation: true` — otherwise there is nothing to override.
+2. Put column-scoped entries under **`validationCustomMetrics.source` only** (mapped to the target column automatically).
+3. Do **not** exclude a PK/index column via `columnSelectionList` + `useColumnSelectionAsExcludeList` — that is rejected and would break L3.
+4. Prefer column-scoped removals over turning off L2 for the whole workflow when other columns should still get metrics.
+
+Example — remove length-`avg` on a VARCHAR PK:
+
+```yaml
+validationConfiguration:
+  metricsValidation: true
+validationCustomMetrics:
+  source:
+    - column: public.orders.order_id
+      metrics:
+        - name: avg
+  target: []
+```
+
+Full field reference: [Custom L2 metrics](../../setup/data-validation/references/workflow-config-reference.md#custom-l2-metrics-validationcustommetrics).
 
 ---
 

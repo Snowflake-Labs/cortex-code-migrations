@@ -50,6 +50,8 @@ For each catalog setting a signal supports, record:
 
 Skip any setting whose `currentValue` already equals your proposal.
 
+If the user named a setting they want ("I need `--<flag>`"), propose it even when no signal supports it, with their ask as the rationale. If it is not in the catalog, say so, and offer the closest settings that are; never pass a flag the catalog lacks.
+
 ### Step 5: Confirm with the user
 
 Present the recommendations as a table (Setting | Proposed | Current | Why), then ask via `ask_user_question` (`multiSelect = true`):

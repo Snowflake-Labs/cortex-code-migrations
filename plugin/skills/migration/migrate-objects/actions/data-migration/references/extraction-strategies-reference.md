@@ -3,7 +3,7 @@
 **Extraction strategy** controls *how* data leaves the source system. It is separate from **migration type** (preliminary / incremental / full) and **sync strategy** (none / checksum / watermark).
 
 The `data-migration-setup` state machine (`progress_setup(mode="data_migration")`) presents methods in
-preferred order. Selecting one is explicit confirmation that its listed prerequisites can be met; if
+recommended order. Selecting one is explicit confirmation that its listed prerequisites can be met; if
 not, walk down to the next option. Never infer a server-side method from table size.
 
 After the user chooses, persist it as `data_migration_extraction_strategy` and pass
@@ -23,7 +23,7 @@ projects configured earlier keep their behavior. Prefer `odbc` when the user act
 
 | Strategy | How data moves | When to use |
 |----------|----------------|-------------|
-| **`cet_as`** (preferred) | SQL Server CETAS → Azure Blob → Snowflake external stage | SQL Server 2022+ / compatible SKU with CETAS objects ready |
+| **`cet_as`** (recommended) | SQL Server CETAS → Azure Blob → Snowflake external stage | SQL Server 2022+ / compatible SKU with CETAS objects ready |
 | **`cloud_direct`** | Worker streams Parquet to object storage → Snowflake external stage | Azure SQL Database, or SQL Server Iceberg when CETAS is unavailable; write credentials + matching stage ready |
 | **`bcp`** (worker method; workflow `regular`) | Worker runs **BCP** for **bulk** extraction → Snowflake internal stage | `bcp` on worker PATH + `use_bcp = true` |
 | **`odbc`** | Data Exchange Worker reads via **Microsoft ODBC Driver** → Snowflake internal stage | Fallback |
@@ -45,7 +45,7 @@ ready, otherwise `odbc`. SQL Server Iceberg requires `cet_as` or `cloud_direct`,
 
 | Strategy | How data moves | When to use |
 |----------|----------------|-------------|
-| **`pg_copy`** (preferred worker method; workflow `regular`) | Worker runs `psql \copy` | `use_copy = true`; `psql` on PATH preferred |
+| **`pg_copy`** (recommended worker method; workflow `regular`) | Worker runs `psql \copy` | `use_copy = true`; `psql` on PATH preferred |
 | **`odbc`** | Worker reads through PostgreSQL ODBC | Only to rule COPY out; `use_copy = false` |
 
 **Setup required**
@@ -63,7 +63,7 @@ ready, otherwise `odbc`. SQL Server Iceberg requires `cet_as` or `cloud_direct`,
 
 | Strategy | How data moves | When to use |
 |----------|----------------|-------------|
-| **`dbms_cloud`** (preferred) | Oracle runs **`DBMS_CLOUD.EXPORT_DATA`** to HTTPS object storage → Snowflake **external stage** | Grants, credential/ACL, and matching stage ready |
+| **`dbms_cloud`** (recommended) | Oracle runs **`DBMS_CLOUD.EXPORT_DATA`** to HTTPS object storage → Snowflake **external stage** | Grants, credential/ACL, and matching stage ready |
 | **`regular`** | Worker reads via **Oracle ODP.NET** (`Oracle.ManagedDataAccess`) → Snowflake internal stage | Fallback |
 
 **Setup — `regular`**
@@ -93,7 +93,7 @@ See DMVF doc `dmvf/data-exchange-agent/docs/oracle-dbms-cloud-local-setup.md` fo
 
 | Strategy | How data moves | When to use |
 |----------|----------------|-------------|
-| **`unload`** (preferred) | Redshift **`UNLOAD`** to **S3** → Snowflake **external stage** | IAM, bucket/prefix, worker fields, and matching stage ready |
+| **`unload`** (recommended) | Redshift **`UNLOAD`** to **S3** → Snowflake **external stage** | IAM, bucket/prefix, worker fields, and matching stage ready |
 | **`regular`** | Worker reads via **ODBC** → Snowflake internal stage | Fallback |
 
 **Setup — `regular`**
@@ -117,16 +117,29 @@ See DMVF doc `dmvf/data-exchange-agent/docs/oracle-dbms-cloud-local-setup.md` fo
 
 See [worker-config-reference.md](../../../../data-infrastructure/references/worker-config-reference.md#advanced-redshift-unload).
 
-### Iceberg target (Redshift only — partial support)
+### Iceberg target (relational sources only)
 
-**`target_table_type=iceberg` is only supported for Redshift sources today.** Other dialects should use `native` (default). Do not offer Iceberg unless `source_language` is Redshift and the user explicitly wants it.
+Iceberg is a **target** choice (`tableType: iceberg` + `icebergConfig`), separate from extraction. It is
+available for **every supported source dialect**, with one hard rule.
 
-Iceberg is a **target** choice (`tableType: iceberg` + `icebergConfig`), separate from extraction. Supported paths:
+> **The source must be fully relational.** Migrate to Iceberg **only** when the source object is a plain
+> relational table. **If the source is itself an Iceberg table (or any external / catalog-backed table),
+> do not continue** — surface it to the user and stop. This migration builds a **new Snowflake-managed
+> Iceberg table from relational data**; it is not a path for re-pointing or adopting data that is already
+> Iceberg.
+>
+> **Supported flavor: a Snowflake-managed Iceberg table (spec v2 or v3) on an external volume** with
+> `storageMode: compatible` and load mode `ADD_FILES_COPY` or `FULL_INGEST`. External / AWS-Glue / other
+> catalogs are out of scope. If that is not what the user wants, migrate to **native** tables instead.
+
+Supported path:
 
 | Path | Extraction | `migrationStrategy` | Worker? |
 |------|------------|---------------------|---------|
-| Redshift native tables → Snowflake Iceberg | `unload` (typical) | `copy_files` | UNLOAD on Redshift; Snowflake loads from stage |
-| Redshift / Glue Iceberg tables → Snowflake Iceberg | none (metadata only) | `catalog_link` or `convert_to_managed` | Often **no worker** — orchestrator issues Snowflake DDL |
+| Relational source tables → Snowflake-managed Iceberg | the dialect's cloud/server strategy (`unload`, `cet_as`, `cloud_direct`, `write_nos`, `dbms_cloud`, `export_data`) → external stage | `copy_files` | Worker/server writes Parquet; Snowflake loads from the stage |
+
+`catalog_link` and `convert_to_managed` operate on source data that is **already Iceberg**, so they are
+**out of scope under this rule** — do not offer them and do not continue when the source is Iceberg.
 
 Prerequisites and AWS/Snowflake setup: [iceberg-setup-reference.md](./iceberg-setup-reference.md). Workflow fields and type mappings: [workflow-config-reference.md](./workflow-config-reference.md#icebergconfig). Orchestrator detail: `dmvf/docs/data-migration-orchestrator/iceberg-migration-support.md`.
 
@@ -136,7 +149,7 @@ Prerequisites and AWS/Snowflake setup: [iceberg-setup-reference.md](./iceberg-se
 
 | Strategy | How data moves | When to use |
 |----------|----------------|-------------|
-| **`write_nos`** (preferred) | Teradata **`WRITE_NOS`** → cloud storage → Snowflake external stage | NOS + matching-stage prerequisites ready |
+| **`write_nos`** (recommended) | Teradata **`WRITE_NOS`** → cloud storage → Snowflake external stage | NOS + matching-stage prerequisites ready |
 | **`tpt`** (worker method; workflow `regular`) | **Teradata Parallel Transporter** on worker → Snowflake internal stage | TTU/tbuild + `tpt_*` ready |
 | **`odbc`** | Worker reads via **`teradatasql`** or Teradata ODBC → Snowflake internal stage | Fallback |
 
@@ -168,7 +181,7 @@ See DMVF docs: `teradata-odbc-extraction.md`, `tpt-extraction.md`, `write-nos-ex
 
 ## Azure Synapse (`synapse`)
 
-1. **`cet_as`** (preferred): CETAS to Azure Blob; requires external data source, Parquet format, and a
+1. **`cet_as`** (recommended): CETAS to Azure Blob; requires external data source, Parquet format, and a
    Snowflake external stage on the same prefix.
 2. **`regular`**: ODBC fallback.
 
@@ -176,7 +189,7 @@ Synapse has **no BCP** path.
 
 ## BigQuery (`BigQuery`)
 
-1. **`export_data`** (preferred): BigQuery `EXPORT DATA` to GCS; requires source and Snowflake service
+1. **`export_data`** (recommended): BigQuery `EXPORT DATA` to GCS; requires source and Snowflake service
    accounts plus a matching Snowflake external stage.
    Put the bucket (and prefix) in the workflow config as top-level `exportDataGcsBucket` /
    `exportDataGcsPrefix` (`scai data migrate generate-config --export-data-gcs-bucket <BUCKET>
@@ -185,7 +198,7 @@ Synapse has **no BCP** path.
 
 ## DB2 (`Db2`)
 
-1. **`cloud_direct`** (preferred): worker streams Parquet to object storage; requires write credentials
+1. **`cloud_direct`** (recommended): worker streams Parquet to object storage; requires write credentials
    plus a matching Snowflake external stage.
 2. **`regular`**: `ibm_db` worker fallback.
 
@@ -206,3 +219,22 @@ Synapse has **no BCP** path.
 
 > Setup owns `defaultTableConfiguration.extraction.strategy`: re-running it re-applies the persisted
 > method over a hand-edit. Change the method with `extraction_strategy=`, not by editing the YAML.
+
+## External stage, unload path, and Iceberg prefix must match
+
+Every server/cloud strategy writes the data files to **one exact cloud location**; the Snowflake
+external stage is only how the orchestrator reads them back. These must describe the **same bucket or
+container and the same path**:
+
+| Strategy | Where the data is written | What must match it |
+|----------|---------------------------|--------------------|
+| `cloud_direct` (S3, GCS) | Worker's `[connections.target.s3|gcs]` `bucket_name` + `prefix` | `extraction.externalStage` URL |
+| `cloud_direct` (Azure) | Container (+ optional `prefix`) plus the orchestrator's `task_results/workflows/...` path | stage URL at the container + `prefix`, so `@stage/task_results/...` is where the files are |
+| `cet_as` | SQL Server / Synapse `EXTERNAL DATA SOURCE` location + `cet_as_path_prefix` | `extraction.externalStage` URL |
+| `unload` | Redshift `unload_s3_bucket` (+ prefix) | `extraction.externalStage` URL |
+| `write_nos` | Teradata authorization object's cloud location | `extraction.externalStage` URL |
+| `dbms_cloud` | Oracle `dbms_cloud_file_uri_prefix` | `extraction.externalStage` URL |
+| `export_data` | BigQuery `exportDataGcsBucket` / `exportDataGcsPrefix` | `extraction.externalStage` URL |
+
+The stage URL in that table is also the unload path that must sit on the Snowflake external volume.
+Confirm it before run: [object-store path restrictions](../../../../data-infrastructure/references/object-store-path-restrictions.md).

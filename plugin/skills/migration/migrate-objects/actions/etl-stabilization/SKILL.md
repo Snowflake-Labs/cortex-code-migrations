@@ -27,15 +27,23 @@ Fix SnowConvert ETL conversion gaps through phased execution with upfront unit a
 
 ### When the converted-output folder is not isolated
 
-The default contract above assumes one folder per unit. If instead you're handed a flat, whole-repository conversion output where a dbt project is referenced by more than one sibling unit's orchestration file (e.g. Informatica `SHORTCUT` mappings reused across workflows), do not edit the shared project in place:
+The default contract above assumes one folder per unit. If instead you're handed a flat, whole-repository conversion output where a dbt project **or a mapping procedure** is referenced by more than one sibling unit (e.g. Informatica `SHORTCUT` mappings, or a scripting workflow that `CALL`s a procedure another unit also calls), do not edit the shared project or procedure in place:
 
-1. Stage a real copy of the orchestration file and every dbt project it references under `{PACKAGE_FOLDER}/Output/ETL/{unit}/`. Treat the original location read-only until sync-back.
+1. Stage a real copy of the orchestration/workflow SQL **and every dbt project or mapping procedure it references** under `{PACKAGE_FOLDER}/Output/ETL/{unit}/`. A scripting-flavor unit stages every mapping procedure the workflow `CALL`s, not a dbt project. Treat the original location read-only until sync-back.
 2. If a staged dbt project's `packages.yml` has a local `path:` dependency, do **not** edit the path to account for the extra staging depth — that breaks canonical when synced back. Instead, symlink the shared-assets directory into the unit folder at the depth `packages.yml` already expects.
-3. Before syncing any fix back, run the leak gate on every touched file, then diff against the original — test-environment values (schema/database names, credentials) must never reach the canonical copy:
+3. Before syncing any fix back, run the leak gate on every touched file — test-environment values (schema/database names, credentials) must never reach the canonical copy. Pass `--original <path>` before a file to compare it against its pre-fix copy under `stabilization/original/`, so a qualifier that was already there (not introduced by this fix) isn't flagged:
    ```bash
-   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/check_sync_leaks.py {SESSION_JSON} <file1> [<file2> ...]
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/check_sync_leaks.py {SESSION_JSON} --original <original1> <file1> [--original <original2> <file2> ...]
    ```
    Do not copy until this exits 0.
+4. **Shared mapping procedure or dbt project sync-back:** run `sync_guard.py` for *every* shared mapping procedure or dbt project before writing to canonical — never `cp`/copy the staged file onto canonical directly, and never add a separate copy step after the guard call. Pass `--apply` so the guard performs the write itself, atomically, only once every check in the same process has already passed; this is what makes it impossible to accidentally copy after a failure (there is no second command whose execution depends on remembering `&&`):
+   ```bash
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/sync_guard.py \
+     --canonical <canonical_path> --backup <original_backup_path> --current <staged_path> \
+     --fix-log {UNIT}/stabilization/tracking/fix-log.md --element <element_name> \
+     --staged-root <Output/ETL> [--sibling <other_unit_staged_path> ...] --apply
+   ```
+   Pass `--staged-root` as the `Output/ETL` directory on every sync. The guard finds every other unit folder that holds the same relative path and compares it, including when canonical does not exist yet. `--sibling` remains for a copy that lives outside that tree. The guard compares four things — this unit's pre-fix backup, this unit's staged fix (`--current`), canonical, and every `--sibling` copy — and refuses (exit 1, canonical untouched) if either canonical drifted from the backup or a sibling drifted from `--current`, unless `{UNIT}/stabilization/tracking/fix-log.md` already names the element in a `<!-- sync-winner: element=<name> winner=<this-unit|other-unit> reason=<why> -->` record. Only `winner=this-unit` authorizes this unit's write — `winner=other-unit` is a valid, logged decision that this unit's sync must still refuse to act on.
 
 ## Persistent Files
 
@@ -49,11 +57,14 @@ All files stored in `{UNIT}/stabilization/`:
 | `planning/source-excerpts.md` | Source-definition excerpts for traceability (conditional — only if source file is large) |
 | `planning/ROADMAP.md` | Phase plan (agent-authored from template; updated in-place during execution). Never delete content. |
 | `tracking/STATE.md` | Resumption bookmark (GENERATED — use `track_status.py` commands, do not edit directly) |
-| `tracking/progress.json` | Element-level tracking (machine-readable) |
+| `tracking/session_status.json` | Element-level tracking (machine-readable) |
 | `tracking/fix-log.md` | Append-only record of every fix applied. Absent until Phase 1 completes. |
+| `tracking/friction-notes.md` | Notes an agent writes when it skips a documented skill step. Optional — final validation does not fail when it is absent. |
 | `phases/phase-{N}/` | Per-phase artifacts: baselines, batch reports, learnings, infrastructure SQL |
 | `report.html` | Self-contained HTML report aggregating all artifacts. Generated during Final Validation by `generate_report.py`. |
 > **Progressive disclosure:** Reference files are loaded on-demand — only read a reference file when its content is needed for the current step.
+
+> **Friction notes:** When this skill documents a step and the orchestrator skips it, append one line to `tracking/friction-notes.md` naming the step and why. The file is optional. Final validation does not require it.
 
 ## Agent Wait Protocol
 
@@ -63,14 +74,41 @@ You are the orchestrator. Do **not** spawn a subagent whose job is "run etl-stab
 
 **Claim in-flight work only from this turn's spawn tool results.** If this turn did not return live agent ids, nothing is running. Do not tell the user a subagent is executing.
 
+**A helper finishing, or a phase boundary, is never unit completion.** Whichever wait
+strategy below applies, the moment results land you process them and continue straight
+into the next pending step or phase per the Execution Workflow — you do not stop to
+report progress, and you do not treat "my last spawn returned" as a stopping point. The
+only approved stopping points are the Planning Workflow's Steps 1/4/9, a genuine error
+requiring user input, or true unit completion (report exists, every element/dbt node
+completion-eligible, STATE.md says complete, progress 100% — verifiable with
+`track_status.py check-complete`, see "Closing a Unit Without an Agent" below).
+
+**Know which kind of run you are before you end a turn to wait.** Ending a turn after a
+`run_in_background=true` spawn is only safe when something outside this process is
+guaranteed to deliver a following turn once that agent finishes — true in an
+interactive, supervised Cortex session, where the harness or a human keeps the
+conversation open. It is **not** true for a one-shot / headless invocation (e.g. an
+autonomous pipeline that runs this skill non-interactively and exits when the process
+produces a final response): there, nothing resumes the process, so ending the turn
+*is* ending the run, with the unit left wherever it was — mid-phase, nothing closed, no
+report. Treating that exit as success is exactly the failure this protocol exists to
+prevent. If you cannot confirm you are in a supervised session, assume you are not.
+
 How to wait, by spawn mode:
 
 - **`run_in_background=false`** (planning mappers, and any blocking spawn): results return in **this** turn. Process them here. Do **not** end the turn to wait.
-- **`run_in_background=true`**: spawn all agents in one message (parallel tool calls). Confirm each spawn returned an agent id. **Then** end the turn — no extra tool calls, no "still running" narration. A new turn arrives when each agent finishes. Process that result, then verify output files exist.
+- **`run_in_background=true` in a confirmed interactive/supervised session**: spawn all agents in one message (parallel tool calls). Confirm each spawn returned an agent id. **Then** end the turn — no extra tool calls, no "still running" narration. A following turn arrives when each agent finishes. Process that result, verify output files exist, then continue into the next step — do not stop there.
+- **Headless / one-shot, or supervision unconfirmed**: prefer `run_in_background=false` spawns so results return within the same run. If a background spawn is unavoidable, do not end the turn on the assumption of a later wake — stay in the run and actively wait for the result (e.g. a bounded poll of the expected output files/artifacts), then process it and continue through the remaining phases in the same run. The run is not finished until the unit is complete per the four-condition bar above, regardless of how many of its own turns that takes.
 
 Do not attempt to call `agent_output` — it may not be available and failed attempts waste a turn.
 
 **Stall:** If `STATE.md` / phase artifacts have not changed and you have no live agent ids, you are stalled. Resume from `STATE.md` (Execution Workflow) or tell the user it stalled — do not keep claiming work is in progress.
+
+**For whoever is watching this run from the outside:** do not infer success from the
+orchestrator's turn ending, its process exiting cleanly, or any prose summary it
+produced. Run `track_status.py check-complete <SESSION_JSON>` — it is read-only, exits
+0 only when the unit is genuinely complete, and prints exactly which condition is unmet
+otherwise.
 
 ## Entry Point
 
@@ -86,6 +124,12 @@ On every invocation:
 3. **If STATE.md exists** → read it → run **Execution Workflow** for next pending phase. If status is "Ready to execute" (or next-action is Execute Phase N) and Phase N has no cortex task / `start-phase` has not run, that is the post-ROADMAP stall: **start Execution Step 2 in this turn**. Do not wait for a subagent.
 
 ---
+
+## Queue / Continue Mode
+
+When the user names a queue of units, or says "continue" / "next unit" / "run next phase", record the known answers the first time — unit folder, source path, platform, test database — and reuse them. Skip the Step 1, Step 4, and Step 9 stopping points when those answers are already known. Still derive a fresh per-unit schema (`ETL_FIX_{UNIT}`). Still show the ROADMAP, but do not block on approval unless the user asked to review each unit or this unit's plan deviates from the queue. A single named unit, on its first invocation, still stops at all three. Resumption of an in-progress unit is still governed by STATE.md.
+
+When a unit finishes — final validation passes, or close-unit succeeds — update the queue in the same turn, before starting the next unit. If the user did not name a queue file, use `stabilization-queue.md` in the directory that holds the unit folders. Move that unit from remaining to done. A finished unit must not still be listed as remaining.
 
 ## Scripting Flavor Routing
 
@@ -141,7 +185,7 @@ cortex ctx step add -t <task_id> \
 ```
 
 **Marking steps done — group them.** `cortex ctx step done` accepts multiple step IDs
-(`cortex ctx step done <id> <id> ...`), so mark completed steps in groups rather than one
+(`cortex ctx step done -t <task_id> <id> <id> ...`), so mark completed steps in groups rather than one
 call per step. Every such call is a separate agent round-trip that does not change any
 file, so grouping them is measurably faster with no effect on the work performed.
 
@@ -164,11 +208,11 @@ Ask the user for:
 - Original source definition file path (e.g., `.dtsx` for SSIS, `.xml` for Informatica)
 - Source platform (if not obvious from file extension)
 
-**STOPPING POINT**: Use `ask_user_question` to get the user's answer before proceeding.
+**STOPPING POINT**: Use `ask_user_question` to get the user's answer before proceeding — unless this is a Queue / Continue Mode run and the answer is already known.
 
 ### Step 1b: Detect Platform
 
-1. **Auto-detect from file extension**: `.dtsx` → `ssis`, `.yxmd` → `alteryx`, `.xml` → ask user to confirm platform
+1. **Auto-detect from file extension**: `.dtsx` → `ssis`, `.yxmd` → `alteryx`, `.item` → `talend`, `.xml` → ask user to confirm platform
 2. **If ambiguous**, ask the user which platform via `ask_user_question`
 3. **Fallback rule**: if no platform was named by the user or established from an original source file (omitted/ambiguous), or a named platform has no `{SKILL_DIR}/platforms/{PLATFORM_ID}/` directory, set `{PLATFORM_ID}` = `unsupported` instead of proceeding with a missing pack. A remediation brief's `platform` field describes where its findings originated; it is **not** source-platform evidence and must not override this fallback. Never pass that field to `scan_unit.py --platform`. Never carry a null or made-up platform into Step 2 — `scan_unit.py` re-derives and records this same fallback independently.
 4. **Read the platform profile** from `{SKILL_DIR}/platforms/{PLATFORM_ID}/platform-profile.md`
@@ -192,7 +236,7 @@ If scan_unit.py fails, check: (1) unit folder contains a `.sql` orchestration fi
 uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py init {SCAN_JSON}
 ```
 
-Output: `{UNIT}/stabilization/tracking/progress.json` — all elements start `pending`.
+Output: `{UNIT}/stabilization/tracking/session_status.json` — all elements start `pending`.
 
 
 ### Step 3b: Apply Remediation Brief
@@ -201,13 +245,17 @@ When `Reports/AiFirstRemediation/remediation-brief.json` is present, correlate i
 tracked elements and persist an honest ledger. Conversion lanes become `return-to-convert`,
 residual / unmatched items stay explicit, and unmatched items are never dropped.
 
+Check `{REPORTS_DIR}/AiFirstRemediation/{UNIT_NAME}/remediation-brief.json` first (package-scoped,
+multi-unit conversion) and fall back to the unscoped path below only when the scoped one is
+absent — same precedence as `remediation_brief_path()` in `scan_unit.py`.
+
 ```bash
 uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/apply_brief.py {UNIT_FOLDER}/stabilization/tracking/session_status.json {REPORTS_DIR}/AiFirstRemediation/remediation-brief.json
 ```
 
 ### Step 4: Configure Test Environment
 
-Check `session_status.json` for existing `test_environment`. If not found, ask the user via `ask_user_question` with two options:
+Check `session_status.json` for existing `test_environment`. In a Queue / Continue Mode run, reuse a database already chosen for an earlier unit in the queue (still derive this unit's own `ETL_FIX_{UNIT}` schema). Otherwise, if not found, ask the user via `ask_user_question` with two options:
 1. **"Use current connection's database"** — run `SELECT CURRENT_DATABASE()` to get it
 2. The user can type a different database name via "Something else"
 
@@ -216,9 +264,9 @@ The question text:
 Which database should be used for test schemas? You need CREATE SCHEMA, CREATE TABLE, CREATE FUNCTION, and CREATE PROCEDURE privileges. Each phase creates per-batch schemas automatically and drops them when done.
 ```
 
-After getting the database name:
+After getting the database name, set the schema to an isolated unit-prefixed name such as `ETL_FIX_{UNIT}` — never `PUBLIC`, which is SnowConvert's own default qualifier and cannot be used as a leak signal:
 ```bash
-uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py set-test-env {SESSION_JSON} {DATABASE} PUBLIC
+uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py set-test-env {SESSION_JSON} {DATABASE} ETL_FIX_{UNIT}
 ```
 
 ### Step 5: Backup and Strip Dead Code
@@ -240,12 +288,14 @@ uv run --project {SKILL_DIR} python {PLATFORM_DIR}/{STRIP_SCRIPT} {ORCHESTRATION
 
 Use `team_create` tool: team_name="etl-plan-{unit_name}".
 
-**Orchestration context mapper** (always):
+**If `team_create` or the teammate-spawn tool is unavailable:** that is not a protocol violation and it does not block planning. The orchestrator writes `{UNIT}/stabilization/planning/orchestration-context.md` itself from `scan.json`, the orchestration SQL, and the source-workflow links. That document satisfies this step. If dbt projects exist, the orchestrator likewise writes `{UNIT}/stabilization/planning/dbt-context.md` from the scan and the project files.
+
+**Orchestration context mapper** (when teammate tools are available):
 Spawn a teammate with `name="context-mapper"`, `run_in_background=false`, and the prompt template at `{SKILL_DIR}/reference/agent-prompts/context-mapper.md` (substitute `{ORCH_SQL_PATH}`, `{SOURCE_FILE_PATH}`, `{UNIT}`, `{SKILL_DIR}`, `{PLATFORM_DIR}`, `{ORCHESTRATION_GUIDE}` placeholders).
 
 Output: `orchestration-context.md` — element inventory, duplicate groups, behavioral patterns, container hierarchy.
 
-**dbt context mapper** (conditional — dbt flavor only, when dbt_projects exist):
+**dbt context mapper** (conditional — dbt flavor only, when dbt_projects exist and teammate tools are available):
 Spawn a teammate with `name="dbt-context-mapper"`, `run_in_background=false`, and the prompt template at `{SKILL_DIR}/reference/agent-prompts/dbt-context-mapper.md` (substitute `{UNIT}`, `{SOURCE_FILE_PATH}`, `{SKILL_DIR}`, `{TRANSFORMATION_GUIDE}` placeholders).
 
 Output: `dbt-context.md` — project health, model inventory, macro inventory, source mapping, bootstrap blockers.
@@ -253,11 +303,11 @@ Output: `dbt-context.md` — project health, model inventory, macro inventory, s
 **Scripting flavor:** skip the dbt context mapper. Instead, discover the mapping procedures per
 [Scripting Flavor Routing](#scripting-flavor-routing) — for each converted mapping proc, record its source
 mapping and its defective blocks (block-locate / ewi-extract). The orchestration context mapper still runs for
-the workflow task graph.
+the workflow task graph (or the orchestrator-authored fallback above, if teammate tools are unavailable).
 
 **Spawn both agents in a single message** (parallel tool calls) with `run_in_background=false`. Process both tool results in this turn. Verify both output files exist and are non-empty before continuing. Do not end the turn to wait — blocking spawns are not background jobs.
 
-Use `team_delete` tool after verifying outputs.
+Use `team_delete` tool after verifying outputs (skip if `team_create` was unavailable).
 
 ### Step 6b: Classify dbt Project Readiness (if dbt projects exist)
 
@@ -357,7 +407,7 @@ Display the ROADMAP to the user. Highlight:
 - Phase types and procedure alignment
 - Test strategies (grouped vs isolated, and why)
 
-**STOPPING POINT**: Use `ask_user_question` to get the user's approval or revision requests.
+**STOPPING POINT**: Use `ask_user_question` to get the user's approval or revision requests — unless this is a Queue / Continue Mode run with no material deviation from the already-approved pattern, in which case display the ROADMAP but do not block.
 
 ### Step 10: Begin Execution
 
@@ -379,8 +429,8 @@ externally and re-injected via system-reminders every turn.
 
 - **Created by:** Execution Workflow Step 2 (for the first phase or after restart)
   or the previous phase's Phase Transition step (for subsequent phases)
-- **Verified by:** `cortex ctx show tasks` — must show a task matching "Phase {P}:"
-- **Never skip:** If no task exists, create it before any phase work begins
+- **Verified by:** `cortex ctx show tasks` lists the task id recorded in STATE.md as `Cortex task: <task_id>`. Do not verify by title.
+- **Never skip:** If no task exists, create it before any phase work begins — unless the `cortex` CLI is unavailable, in which case skip the gate and resume from `STATE.md` and `session_status.json`
 
 ---
 
@@ -396,10 +446,15 @@ Read `{UNIT}/stabilization/tracking/STATE.md`
 
 ### Step 2: Ensure Cortex Task Exists (MANDATORY GATE)
 
-Run `cortex ctx show tasks` via bash.
+Every task title includes the unit name: `Phase {P}: {PHASE_NAME} ({unit_name})`. Pass the task id returned at creation into every later step command. Do not search by title again.
 
-**Branch A — Task already exists:** A task matching "Phase {P}:" is found
-with unchecked steps. Continue from its first unchecked step at Step 3.
+If the `cortex` CLI is unavailable, skip this gate and continue from `STATE.md` and `session_status.json`. Do not block execution on cortex.
+
+Otherwise run `cortex ctx show tasks` via bash.
+
+**Branch A — Task already exists:** STATE.md records `Cortex task: <task_id>` for this phase.
+Continue that task (`cortex ctx task start <task_id>`) from its first unchecked step at Step 3.
+Do not select a task by matching its title. If the recorded id is not listed, use Branch B.
 Each step description says "(see ROADMAP.md § Phase {P})" — read those
 instructions from disk before executing.
 
@@ -410,7 +465,7 @@ instructions from disk before executing.
    (substitute actual values for all placeholders). `cortex ctx step add` takes
    multiple step texts, so register every step in ONE call, not one call per step:
    ```bash
-   cortex ctx task add "Phase {P}: {PHASE_NAME}"
+   cortex ctx task add "Phase {P}: {PHASE_NAME} ({unit_name})"
    cortex ctx task start <task_id>
    # One call, one text per ROADMAP execution step (Steps {P}.1 through {P}.{LAST}):
    cortex ctx step add -t <task_id> \
@@ -418,18 +473,18 @@ instructions from disk before executing.
      "Step {P}.2: {step_description} (see ROADMAP.md § Phase {P})" \
      "... one text per remaining ROADMAP step"
    ```
-3. **Verify creation:** Run `cortex ctx show tasks` again — confirm a task
-   matching "Phase {P}:" exists. If not, STOP and repeat this step.
+3. **Verify creation:** Write `Cortex task: <task_id>` into STATE.md using the id
+   returned by `task add`. Run `cortex ctx show tasks` again and confirm that id
+   is listed. Do not confirm by title. If the id is missing, STOP and repeat this step.
 4. Mark Step {P}.0 as `[x]` in the ROADMAP
 5. If some later steps are already `[x]` in the ROADMAP (session restart),
    mark those cortex steps done — in a single grouped call
-   (`cortex ctx step done <id> <id> ...`). Also check disk artifacts for
+   (`cortex ctx step done -t <task_id> <id> <id> ...`). Also check disk artifacts for
    the current phase: if step outputs exist (e.g., `baseline_batch_*.md`
    for test-gen, `batch_*.md` for fix wave) but the ROADMAP checkbox was
    not marked, include those steps in the same grouped call.
 
-**GATE CHECK:** Do NOT proceed to Step 3 until `cortex ctx show tasks`
-confirms a task for "Phase {P}:" exists with at least one unchecked step.
+**GATE CHECK:** Do NOT proceed to Step 3 until `cortex ctx show tasks` lists the task id recorded in STATE.md, with at least one unchecked step — or the cortex CLI is unavailable and execution resumed from the ledger. Do not pass this gate by matching a title.
 
 ### Step 3: Execute Steps
 For each pending cortex step:
@@ -442,7 +497,7 @@ For each pending cortex step:
 5. **Multi-unit / package runs — track per unit as you go, never batch to the end.** After each unit or phase completes, mark the ROADMAP `[x]` (item 3) immediately, flush the pending cortex step-done group (item 4 — a unit or phase boundary is a mandatory flush point, see below), AND run `track_status.py update <element> --status <fixed|test-passed|...>` for the element plus `track_status.py update-state --current-phase <N> ...`. Also confirm the unit's `proc-test-gen` seed + assertion files were written under `{UNIT}/stabilization/tests/proc/<unit>/`. Deferring ROADMAP ticks or state updates to the end leaves `STATE.md` and the generated `report.html` under-reporting progress mid-run (element count and percent both stale).
 
 **Flush pending cortex step-done calls in one grouped call**
-(`cortex ctx step done <id> <id> ...`) at these points:
+(`cortex ctx step done -t <task_id> <id> <id> ...`) at these points:
 - **after each unit or phase completes** (item 5 above — never carry pending
   step-dones across a unit boundary)
 - before spawning an agent wave, and before ending a turn to await notifications
@@ -470,6 +525,34 @@ always has a pending task.
 - **Stalled after ROADMAP / fake subagent progress**: `STATE.md` still "Ready to execute", no new artifacts, agent claiming a subagent is running. Nothing is running. Resume at Execution Step 2 in this turn. Tell the user it stalled if you cannot start.
 
 ---
+
+## Closing a Unit Without an Agent
+
+When every element (and dbt node, if any) is already completion-eligible, close the unit directly:
+
+```bash
+uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py close-unit {SESSION_JSON}
+```
+
+The command rejects the unit if any element (or dbt node) is pending, in progress, fixed-but-untested, needs-user, test-failed, or failed; if progress is not 100% (`auto-fixed-needs-review`, `return-to-convert`, and `residual` do not count); if changed SQL has no valid fix-log entry; or if the leak gate fails. On success it regenerates STATE.md and report.html. It does not deploy or CALL procedures. This is the single guarded local closure path — `generate_report.py` carries the same completion gate independently (see below), so a direct invocation of it cannot bypass this bar either, and a rejected `close-unit` never creates or overwrites an existing `report.html`.
+
+`generate_report.py` (called by `close-unit`, and runnable directly) refuses to write `report.html` while any element or dbt node is not completion-eligible, including `fixed` elements/nodes awaiting post-apply or semantic-gate validation, and while element progress is not 100%. A refusal leaves any existing `report.html` untouched, and a rejected `close-unit` does not stamp `Status: complete`.
+
+### Verifying completion from outside the run
+
+A unit is complete only when **all four** hold: `report.html` exists, every element and
+dbt node is completion-eligible, `STATE.md` reports `Status: complete`, and progress is
+100%. None of these follow from an agent turn ending, a phase finishing, or a helper
+returning — see the Agent Wait Protocol above. The machine-checkable way to verify them
+is a read-only check that never writes anything:
+
+```bash
+uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py check-complete {SESSION_JSON}
+```
+
+Exits 0 only when all four conditions hold; otherwise exits 1 and prints exactly which
+ones don't. A parent process or headless caller should use this — not the orchestrator's
+exit status or final message — to decide whether the unit actually finished.
 
 ## Batch Output Format
 
@@ -517,5 +600,5 @@ See [reference/troubleshooting.md](reference/troubleshooting.md).
 - Fixed dbt model files (per sub-project)
 - Test artifacts in `{UNIT}/stabilization/tests/`
 - `{UNIT}/stabilization/report.html` — self-contained HTML report aggregating all artifacts (generated during Final Validation)
-- `artifacts/tracking/fix_log.md` — append-only record of every fix applied. Each entry carries per-instance anchors (file + stable symbol/tag anchor into the fixed tree and the `stabilization/original/` backup) plus a `Classification` — `engine-defect | conversion-improvement | intentional-decline | context-dependent`. **An `!!!RESOLVE EWI!!!` breaking wrapper (or any correctly emitted supported EWI/FDM) is `intentional-decline`, resolved manually — never log it as `engine-defect`.** See [reference/templates/fix-log-format.md](reference/templates/fix-log-format.md) and [reference/templates/batch-artifacts.md](reference/templates/batch-artifacts.md).
-- `artifacts/phases/phase_{N}/` — per-phase baselines, batch reports, learnings
+- `{UNIT}/stabilization/tracking/fix-log.md` — append-only record of every fix applied. Each entry carries per-instance anchors (file + stable symbol/tag anchor into the fixed tree and the `stabilization/original/` backup) plus a `Classification` — `engine-defect | conversion-improvement | intentional-decline | context-dependent`. **An `!!!RESOLVE EWI!!!` breaking wrapper (or any correctly emitted supported EWI/FDM) is `intentional-decline`, resolved manually — never log it as `engine-defect`.** See [reference/templates/fix-log-format.md](reference/templates/fix-log-format.md) and [reference/templates/batch-artifacts.md](reference/templates/batch-artifacts.md).
+- `{UNIT}/stabilization/phases/phase-{N}/` — per-phase baselines, batch reports, learnings

@@ -51,6 +51,8 @@ class SASScript:
     complexity_score: int = 0
     line_endings_normalised: bool = False
     includes: List[Dict] = field(default_factory=list)
+    line_offset: int = 0      # lines dropped before parsing (EGP header)
+    called_macros: set = field(default_factory=set)   # macros the file invokes (%name)
 
 
 # ``%include 'path';`` / ``%include "path";`` / ``%include fileref;``
@@ -64,6 +66,7 @@ _DS_REF = rf"{_DS_PART}(?:\.{_DS_PART}){{0,2}}"
 # Option values (DATA=, OUT=, CREATE TABLE) may also be macro-built: &lib..&tbl.
 _DS_MACRO_PART = r"(?:[\w&]+|'[^'\n]*'[nN]|\"[^\"\n]*\"[nN])"
 _DS_MACRO_REF = rf"{_DS_MACRO_PART}(?:\.{{1,2}}{_DS_MACRO_PART}){{0,2}}\.?"
+_DS_READ_REF = rf"{_DS_MACRO_PART}(?:\.{{1,2}}{_DS_MACRO_PART}){{0,2}}"   # FROM/JOIN: keep &suffix
 
 # A dataset reference: LIB.TABLE, DB.SCHEMA.TABLE, or bare name; macro refs
 # (&lib..tbl) are allowed. Anything else in a DATA/SET/MERGE list is an option,
@@ -163,6 +166,7 @@ class SASParser:
                     for m in _INCLUDE_RE.finditer(content)]
 
         macros = {b.metadata.get('name', ''): b for b in blocks if b.block_type == BlockType.MACRO_DEF}
+        called = {n for n in macros if re.search(rf'%{re.escape(n)}\b', content, re.I)}
 
         for block in blocks:
             block.complexity_score = self._calculate_block_complexity(block)
@@ -178,11 +182,14 @@ class SASParser:
             libraries=self.libraries.copy(),
             complexity_score=total_complexity,
             includes=includes,
+            called_macros=called,
         )
 
     def _remove_comments_preserve_structure(self, content: str) -> str:
-        content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
-        content = re.sub(r'^\s*\*[^;]*;', '', content, flags=re.MULTILINE)
+        # keep the newlines so block line numbers still match the source file
+        keep_lines = lambda m: '\n' * m.group(0).count('\n')  # noqa: E731
+        content = re.sub(r'/\*.*?\*/', keep_lines, content, flags=re.DOTALL)
+        content = re.sub(r'^\s*\*[^;]*;', keep_lines, content, flags=re.MULTILINE)
         return content
 
     def _extract_blocks(self, content: str) -> List[SASBlock]:
@@ -287,14 +294,14 @@ class SASParser:
         # Writes into an existing table, including pass-through
         # ``execute(insert into DB.SCH.T ...) by snow`` — the only way a
         # pass-through job hands data to the next job.
-        insert_pattern = rf"(?i)\bINSERT\s+INTO\s+({_DS_REF})"
+        insert_pattern = rf"(?i)\bINSERT\s+INTO\s+({_DS_READ_REF})"
         for match in re.finditer(insert_pattern, sql_body):
             metadata['output_datasets'].append(_canonical_ref(match.group(1)))
 
         # Up to three parts (DB.SCHEMA.TABLE) so distinct pass-through tables
         # are not truncated to DB.SCHEMA and merged.
-        from_pattern = rf"(?i)\bFROM\s+({_DS_REF})"
-        join_pattern = rf"(?i)\bJOIN\s+({_DS_REF})"
+        from_pattern = rf"(?i)\bFROM\s+({_DS_READ_REF})"
+        join_pattern = rf"(?i)\bJOIN\s+({_DS_READ_REF})"
         for match in re.finditer(from_pattern, sql_body):
             tbl = _canonical_ref(match.group(1))
             if tbl.upper() not in ('DUAL', 'DICTIONARY'):

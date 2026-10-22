@@ -36,6 +36,46 @@ if _scripts_dir not in sys.path:
 from snowconvert_reports.console_utils import DONE, WARN  # noqa: E402
 
 
+def _normalize_package_path(path: str) -> str:
+    return (path or '').replace('\\', '/').strip().strip('/').lower()
+
+
+def find_unassessed_packages(
+    assessed_packages: List[Dict[str, Any]],
+    registry_packages: List[Dict[str, str]],
+) -> List[Dict[str, str]]:
+    """Return the registry's SSIS packages that the ETL assessment JSON lacks.
+
+    The assessment only holds packages with rows in the SnowConvert
+    ETL.Elements CSV, so a package taken out of ``source/`` before conversion,
+    or an empty one, is missing from it while the Overview still counts it.
+    Assessment paths are relative (``SSIS/.../Pkg.dtsx``) and registry paths
+    carry the ``source/_etl/`` prefix, so a registry unit matches an assessed
+    package whose path is a whole-segment suffix of its own. Each assessed
+    package matches one registry unit, which keeps same-named packages
+    (``Package.dtsx`` in many projects) apart.
+    """
+    remaining: Dict[str, int] = {}
+    for package in assessed_packages:
+        key = _normalize_package_path(package.get('path', ''))
+        if key:
+            remaining[key] = remaining.get(key, 0) + 1
+
+    unassessed = []
+    for unit in registry_packages or []:
+        path = _normalize_package_path(unit.get('path', ''))
+        match = next(
+            (k for k in sorted(remaining, key=len, reverse=True)
+             if remaining[k] > 0 and (path == k or path.endswith('/' + k))),
+            None,
+        )
+        if match is None:
+            unassessed.append(unit)
+        else:
+            remaining[match] -= 1
+    return unassessed
+
+
 def sanitize_filename(name: str) -> str:
     """Sanitize a package name for use as a filename."""
     name = unquote(name)
@@ -73,7 +113,13 @@ class HTMLReportGenerator:
         'danger': '#EF4444',
     }
     
-    def __init__(self, json_path: str, executive_summary_path: str = None, ai_estimation_enabled: bool = False):
+    def __init__(
+        self,
+        json_path: str,
+        executive_summary_path: str = None,
+        ai_estimation_enabled: bool = False,
+        registry_packages: Optional[List[Dict[str, str]]] = None,
+    ):
         """
         Initialize the report generator.
         
@@ -81,6 +127,9 @@ class HTMLReportGenerator:
             json_path: Path to etl_assessment_analysis.json (contains AI analysis)
             executive_summary_path: Optional path to executive summary text file
             ai_estimation_enabled: Whether to show AI effort estimation (default: False)
+            registry_packages: Optional SSIS packages from the code unit registry
+                (``{"path", "status"}``); those missing from the JSON are counted
+                and listed with their conversion status.
         """
         self.json_path = Path(json_path)
         self.executive_summary_path = Path(executive_summary_path) if executive_summary_path else None
@@ -92,6 +141,7 @@ class HTMLReportGenerator:
         
         # Packages with AI analysis are in the main data structure
         self.packages = self.data.get('packages', [])
+        self.unassessed_packages = find_unassessed_packages(self.packages, registry_packages or [])
         
         # Load executive summary if provided
         self.executive_summary = None
@@ -486,6 +536,13 @@ class HTMLReportGenerator:
             if analysis_text:
                 analyzed_count += 1
         
+        unassessed_count = len(self.unassessed_packages)
+        total_packages = summary.get('packages', 0) + unassessed_count
+        total_packages_description = (
+            f"SSIS packages found, {unassessed_count:,} without ETL assessment data"
+            if unassessed_count else "SSIS packages found"
+        )
+
         # Conditionally include AI Effort card
         ai_effort_card = ""
         if self.ai_estimation_enabled:
@@ -503,8 +560,8 @@ class HTMLReportGenerator:
             <div class="metric-grid">
                 <div class="metric-card">
                     <div class="metric-label">Total Packages</div>
-                    <div class="metric-value">{summary.get('packages', 0)}</div>
-                    <div class="metric-description">SSIS packages found</div>
+                    <div class="metric-value">{total_packages:,}</div>
+                    <div class="metric-description">{total_packages_description}</div>
                 </div>
                 
                 <div class="metric-card">
@@ -541,6 +598,60 @@ class HTMLReportGenerator:
         </section>
         """
     
+    def generate_unassessed_packages_section(self) -> str:
+        """List the registry's SSIS packages that have no ETL assessment data.
+
+        Empty when every package is in the assessment JSON.
+        """
+        if not self.unassessed_packages:
+            return ""
+
+        assessed_count = self.data.get('summary', {}).get('packages', 0)
+        total = assessed_count + len(self.unassessed_packages)
+        by_status: Dict[str, int] = {}
+        for unit in self.unassessed_packages:
+            status = unit.get('status') or 'Unknown'
+            by_status[status] = by_status.get(status, 0) + 1
+        breakdown = ", ".join(
+            f"{count:,} {html.escape(status)}" for status, count in sorted(by_status.items())
+        )
+
+        rows_html = ""
+        for unit in sorted(self.unassessed_packages, key=lambda u: u.get('path', '')):
+            path = unit.get('path', '')
+            name = path.replace('\\', '/').rsplit('/', 1)[-1]
+            rows_html += f"""
+                <tr>
+                    <td><strong>{html.escape(format_display_name(name))}</strong><br>
+                        <span style="color: #6b7280; font-size: 0.8rem;">{html.escape(path)}</span></td>
+                    <td style="text-align: center;">{html.escape(unit.get('status') or 'Unknown')}</td>
+                </tr>
+            """
+
+        return f"""
+        <section id="unassessed-packages" class="section">
+            <h2>Packages Without Assessment Data</h2>
+            <div class="info-box" style="background-color: #fff3cd; border-left: 4px solid #ffc107;">
+                Showing assessment detail for {assessed_count:,} of {total:,} SSIS packages.
+                {len(self.unassessed_packages):,} package{'s' if len(self.unassessed_packages) != 1 else ''}
+                ({breakdown}) have no rows in the SnowConvert ETL reports, usually because they
+                were not part of the last conversion run or contain no components, so they
+                are listed here with their conversion status and left out of the metrics below.
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 75%;">Package</th>
+                        <th style="width: 25%; text-align: center;">Conversion Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows_html}
+                </tbody>
+            </table>
+        </section>
+        """
+
     def generate_not_supported_section(self) -> str:
         """Generate comprehensive component breakdown section showing all conversion statuses."""
         packages = self.data.get('packages', [])
@@ -1787,6 +1898,7 @@ class HTMLReportGenerator:
     {self.generate_header()}
     {self.generate_executive_summary()}
     {self.generate_metrics_section()}
+    {self.generate_unassessed_packages_section()}
     {self.generate_package_summary(output_folder)}
     {self.generate_not_supported_section()}
     

@@ -7,6 +7,10 @@ license: Proprietary. See License-Skills for complete terms
 
 # Cloud Data Validation Setup
 
+`<metadata_database>` below is `.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
+overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
+project's.
+
 One-time infrastructure setup for validating migrated data between a source database and Snowflake using the **Cloud Data Validation** feature via the **scai CLI**.
 
 > **Supported sources**: SQL Server, Azure Synapse, Redshift, Oracle, Teradata, PostgreSQL, BigQuery, Snowflake
@@ -28,13 +32,13 @@ Load `../../data-infrastructure/SKILL.md` first. It handles shared prerequisites
 After the shared infrastructure step has registered the compute pool, confirm the orchestrator service started:
 
 ```sql
-SELECT SYSTEM$GET_SERVICE_STATUS('SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE');
+SELECT SYSTEM$GET_SERVICE_STATUS('<metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE');
 ```
 
 If it returns `[]` (suspended/not started), resume it manually:
 
 ```sql
-ALTER SERVICE SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE RESUME;
+ALTER SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE RESUME;
 ```
 
 Wait 30-60s and re-check until status shows `READY`.
@@ -50,7 +54,7 @@ The actual validation is started later by the `validate-objects` skill via:
 
 **Do not run `scai data validate create-workflow` directly** — use `validate_data` for dispatch and `data_infrastructure` for the orchestrator/worker lifecycle. **Do not write ad-hoc comparison scripts** — use the validation workflow YAML and `validate_data` instead.
 
-When editing validation workflows, load [Workflow Config Reference](./references/workflow-config-reference.md) for camelCase field names (`sourceWhereClause`, `targetWhereClause`, `indexColumnList`, …) and accepted snake_case/legacy aliases. See common edit scenarios there (including excluding drift-prone timestamp columns from row compare **before** `validate_data(mode="run")`). For L3 extract transport (`extraction.strategy` / `externalStage`), load [L3 pushdown extract](./references/l3-pushdown-extraction.md). For task-level debugging, see [Task model reference](../../validate-objects/actions/references/task-model-reference.md).
+When editing validation workflows, load [Workflow Config Reference](./references/workflow-config-reference.md) for camelCase field names (`sourceWhereClause`, `targetWhereClause`, `indexColumnList`, …) and accepted snake_case/legacy aliases. See common edit scenarios there (including excluding drift-prone timestamp columns from row compare, and column-scoped `validationCustomMetrics` to skip L2 aggregations on a PK **without** dropping L1/L3 — apply **before** `validate_data(mode="run")`). For L3 extract transport (`extraction.strategy` / `externalStage`), load [L3 pushdown extract](./references/l3-pushdown-extraction.md). For task-level debugging, see [Task model reference](../../validate-objects/actions/references/task-model-reference.md).
 
 ---
 

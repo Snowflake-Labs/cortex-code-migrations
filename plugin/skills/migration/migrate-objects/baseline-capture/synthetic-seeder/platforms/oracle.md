@@ -58,7 +58,7 @@ Oracle packages bundle related procedures/functions under one schema-level name.
 | Source (Oracle) | `{source_schema}.{PACKAGE}.{MEMBER}({args})` — three-part FQN, no `CALL` |
 | Target (Snowflake) | `CALL {target_schema}.{MEMBER}({args})` — member lives in the package schema |
 
-> **Critical:** Never use a two-part FQN (`SCHEMA.MEMBER`) for Oracle package members. The test runner resolves call schemas from the third segment of the FQN (SNOW-3677527). A two-part name produces zero matched test cases.
+> **Critical:** Never use a two-part FQN (`SCHEMA.MEMBER`) for Oracle package members. The test runner resolves call schemas from the third segment of the FQN. A two-part name produces zero matched test cases.
 
 **Full example** — `ITEM_MGMT.ADD_ITEM`, `source.package = "ITEM_MGMT"`, `source.schema = "TEST"`, `target.schema = "TEST_ITEM_MGMT"`:
 

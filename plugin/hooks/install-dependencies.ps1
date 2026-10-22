@@ -678,9 +678,48 @@ if ($cortexCli) {
     }
 }
 
+# GitHub archive of $Ref (a branch, or a v* tag). git clone returns
+# "RPC failed; HTTP 403 curl 22" on some proxies; the archive GET still works.
+# Copies plugin/ into the Cortex plugin dir. A download with no plugin/VERSION
+# does not replace the installed plugin.
+function Install-PluginFromArchive {
+    param([string]$Ref)
+    $dest = Join-Path $cortexHome "plugins\$PluginName"
+    if ($Ref -match '^v[0-9]') {
+        $url = "https://github.com/$PluginRepo/archive/refs/tags/$Ref.zip"
+    } else {
+        $url = "https://github.com/$PluginRepo/archive/refs/heads/$Ref.zip"
+    }
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("aim-plugin-" + [guid]::NewGuid().ToString("n"))
+    New-Item -ItemType Directory -Path $tmp | Out-Null
+    try {
+        $zip = Join-Path $tmp "plugin.zip"
+        Invoke-WebRequest -Uri $url -OutFile $zip -TimeoutSec 60 -UseBasicParsing -ErrorAction Stop
+        $extract = Join-Path $tmp "extract"
+        Expand-Archive -LiteralPath $zip -DestinationPath $extract -Force
+        $versionFile = Get-ChildItem -Path $extract -Filter VERSION -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.Directory.Name -eq "plugin" } |
+            Select-Object -First 1
+        if (-not $versionFile) {
+            Log "WARNING: plugin archive has no plugin/VERSION"
+            return $false
+        }
+        if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
+        New-Item -ItemType Directory -Path $dest | Out-Null
+        Copy-Item -Path (Join-Path $versionFile.Directory.FullName "*") -Destination $dest -Recurse -Force
+        return $true
+    } catch {
+        Log "WARNING: could not download $url ($($_.Exception.Message))"
+        return $false
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 # snowflake-migration plugin: `cortex plugin install <URL> --force` from the
 # branch of the resolved channel (see SCAI_CHANNEL above), or from the tag of a
-# pinned version. Skipped with a .no-auto-update file
+# pinned version. If that git clone fails, download the GitHub archive instead.
+# Skipped with a .no-auto-update file
 # in the plugin root (the source tree and dev checkouts have one), without a
 # Cortex Code CLI, or when the plugin is not in the Cortex registry from the
 # public repo (loaded with --plugin-dir, or from a fork). Last, since the install may replace this plugin directory.
@@ -769,6 +808,12 @@ if (Test-Path (Join-Path $PluginRoot ".no-auto-update")) {
             Log "Updated the $PluginName plugin to v$published. It takes effect in the next session or after /plugin reload."
         } else {
             Log "WARNING: cortex plugin install $installUrl --force failed (exit $updateExit)"
+            Log "Downloading the $PluginName plugin archive (git clone is blocked on some networks)..."
+            if (Install-PluginFromArchive $installRef) {
+                Log "Updated the $PluginName plugin to v$published from the GitHub archive. It takes effect in the next session or after /plugin reload."
+            } else {
+                Log "WARNING: GitHub archive fallback failed for $installRef"
+            }
         }
     }
 }

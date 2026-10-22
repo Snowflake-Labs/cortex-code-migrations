@@ -19,10 +19,9 @@ Tell the user:
 
 > **Semantic equivalence check** — I'll compare an Informatica workflow XML against its converted dbt model and tell you whether the conversion preserves the business logic. I won't change any files. I need the XML, the dbt models folder, and which workflow to check.
 
-`<SKILL_DIR>` below is the absolute path to the directory containing this file. Loaded the
-normal way, from the migration skill's `<skill-match>` block, that is the
-`semantic-equivalence-checker` directory sitting beside the migration skill's own `SKILL.md`,
-so resolve it from wherever you read this file.
+`<SKILL_DIR>` below is the absolute path to the directory containing this file: the
+`semantic-equivalence-checker` directory sitting beside the migration skill's own `SKILL.md`.
+Resolve it from wherever you read this file.
 
 If you do not have an absolute path for it, say so and stop. Every command here runs as
 `uv run --project <SKILL_DIR>`, and a relative path gives `--project` nothing to resolve. Do

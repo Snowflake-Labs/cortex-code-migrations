@@ -367,7 +367,7 @@ See [`synthetic-seeder/platforms/oracle.md`](../baseline-capture/synthetic-seede
 - **Authoring a YAML from scratch.** [`baseline-capture/synthetic-seeder/SKILL.md`](../baseline-capture/synthetic-seeder/SKILL.md) is the only place that authors whole step-based YAMLs without a `scai test seed` stub.
 - **Schema reference.** See [`step-based-yaml.md`](../references/step-based-yaml.md).
 
-If a YAML edit is needed but no recipe above matches, prefer to read the [upstream schema doc](https://github.com/snowflakedb/migrations-snowconvert-desktop/blob/main/testing-infrastructure/docs/step-based-test-yaml-configuration.md) directly before guessing.
+If a YAML edit is needed but no recipe above matches, prefer to read the [upstream schema doc](https://github.com/snowflakedb/migrations-snowconvert-desktop/blob/main/testing-infrastructure/docs/pr-design/step-based-test-yaml-configuration.md) directly before guessing.
 
 ---
 

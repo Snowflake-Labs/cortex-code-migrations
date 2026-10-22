@@ -1,6 +1,6 @@
 ---
 name: migration
-description: End-to-end database migration and data validation to Snowflake. Orchestrates migrations from source connection through conversion, and project-based in-warehouse validation between Snowflake tables. Triggers: migrate, migration, migrate to snowflake, Snowflake to Snowflake validation, validate Snowflake tables, compare Snowflake databases.
+description: End-to-end database migration and data validation to Snowflake. Orchestrates migrations from source connection through conversion (including ETL jobs from Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory, and other ETL platforms alongside SSIS and Informatica PowerCenter), and project-based in-warehouse validation between Snowflake tables. Triggers: migrate, migration, migrate to snowflake, migrate ETL, migrate Talend, migrate Alteryx, migrate Informatica Cloud, migrate IICS, migrate DataStage, migrate Pentaho, migrate ADF, migrate Azure Data Factory, migrate other ETL, convert ETL, Snowflake to Snowflake validation, validate Snowflake tables, compare Snowflake databases.
 license: Proprietary. See License-Skills for complete terms
 ---
 
@@ -11,9 +11,13 @@ Tell the user:
 
 On the first message of a session, the plugin injects whether a migration project exists in this directory. If the user's message already states what they want, act on it (Step 1); otherwise begin with Step 0. Either way, do **not** call `migration_status` — `configure` returns the status.
 
-## IMPORTANT NOTE
+## Working with the MCP state machine
 
-The built-in MCP server has a state machine that will guide you through user flows and ask you to "tell the user x" or "ask the user y". This is expected and you should follow its lead, as it is the official MCP server of Snowflake migrations.
+The built-in MCP server runs a state machine that guides you through user flows and will ask you to "tell the user x" or "ask the user y". This is expected — follow its lead. It is the official MCP server of Snowflake migrations.
+
+## Install check
+
+Before the first tool call of this flow, run `scai doctor`. Exit 0: continue. Any other exit: stop, show the output, and do not call `configure`, `progress_setup`, or `migration_status`. If the `doctor` command is missing, this scai predates the check — continue; SessionStart already gated the install.
 
 ## Step 0: Ask first (no tools)
 
@@ -83,6 +87,8 @@ Present the narrative summary followed by the progress checklist, then continue 
 ## Prescribed Path
 
 <prescribed-path>
+**Missing Snowflake connection:** when the status JSON has `snowflake_connection_missing`, the project's Snowflake connection (`name`) is not defined on this machine, so nothing that touches Snowflake can run. Do not route on. Ask the user which of `available` to use instead, or whether to create a new one (load `./connection/snowflake-connection/SKILL.md`), then call `configure(snowflake_connection=<their choice>)` and run `migration_status` again.
+
 Use `routing` from the status JSON to delegate to the next step. If the user already named a stopping point, do not follow this table past it. A request to stop after conversion does not load `./assessment/SKILL.md`.
 
 | Condition | Sub-skill |
@@ -106,10 +112,11 @@ These answer common questions about project state without loading a sub-skill:
 - **"What should I work on next?"** — Call `migration_status(mode="my_objects_summary")` to get per-`(task, object_type)` counts plus `errored_count` and `done_count`. Present the list and **ask the user what they want to work on — do not pick for them**. When the user picks a group, drill down with `migration_status(mode="my_objects_details", group=<id>)`.
 
 - **"Show me objects that match rule X"** — Load `./migrate-objects/rule-engine/propagate/SKILL.md`.
+- **"Can I change conversion settings?"** / **"I picked defaults but need a conversion flag"** — Load `./convert/SKILL.md` → "Changing Conversion Settings Later". The same project keeps working: no new project or re-import.
 
 - **"How do I extend / customize the migration plugin?"** / **"How do I override task X?"** — Load `./extensibility/TASKS.md` for the full reference: overridable task ids, per-task contracts, the project-local + `$AIM_SKILL_EXT_DIR` paths, and registering code units with `kind=custom` plus a free-form `customKind` discriminator. Optionally call `migration_status(mode='extensions')` to show which overrides are active.
 
-- **"My migration also has FiveTran / SSAS / dbt / Airflow / Oracle PACKAGE bodies / scripts the engine doesn't generate"** / **"How do I track <non-built-in asset> in the migration?"** — Load `./setup/discover-extras/SKILL.md`. Registers each asset as a code unit with `kind=custom` and a `customKind` discriminator, then writes a `.scai/skills/<customKind>.md` cookbook with the customer so every object of that kind runs the same playbook (see `./extensibility/TASKS.md` → "Custom code units").
+- **"My migration also has FiveTran / SSAS / dbt / Airflow / Oracle PACKAGE bodies / scripts the engine doesn't generate"** / **"How do I track <non-built-in asset> in the migration?"** — Load `./setup/discover-extras/SKILL.md`. Registers each asset as a code unit with `kind=custom` and a `customKind` discriminator, then writes a `.scai/skills/<customKind>.md` cookbook with the customer so every object of that kind runs the same playbook (see `./extensibility/TASKS.md` → "Custom code units"). **Do not** list ETL platforms this migration converts (SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory) here — those go through **setup → register local ETL → convert**, not `discover-extras`.
 
 ---
 
@@ -123,6 +130,22 @@ Match the user's request to the most relevant skill and load it.
 - Indentation = parent/child. A child only applies when its parent's domain already fits.
 - If the request is ambiguous between siblings, ask one clarifying question.
 - If no skill matches, fall back to the section below.
+
+**ETL routing (do not shortcut):** any request to convert or migrate ETL jobs — SSIS,
+Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho,
+Azure Data Factory, or "some other ETL platform" — flows through **setup → register local
+ETL → convert**, not `discover-extras`. `discover-extras` is for orchestration or engine-gap
+assets the user *doesn't* want converted (Airflow DAGs, Fivetran connectors, SSAS cubes,
+custom scripts). Never route a convert-my-ETL ask to `discover-extras` and never register
+those ETL jobs as `customKind` cookbooks.
+
+- **Informatica PowerCenter** (on-prem repo XML export) → native SnowConvert via the normal
+  convert path.
+- **Informatica Cloud / IICS** → AI-First via convert Step 4.5. Do not confuse the two.
+- Local `.dtsx`, PowerCenter XML repo export, or any unsupported ETL platform is **not**
+  `project_type: code_conversion_only`. `code-conversion-only` is Sybase / Spark /
+  Databricks / Greenplum / Netezza / Vertica / Hive / DB2 SQL. If the user has ETL to
+  convert, follow **setup → convert**, not `code-conversion-only`.
 
 ### SAS (Preview — parallel track, not SnowConvert)
 - **sas** (Preview) — SAS → Snowflake: assess portfolios, convert `.sas` programs, or load `.sas7bdat` from a stage → `./sas/SKILL.md`
@@ -146,6 +169,7 @@ Match the user's request to the most relevant skill and load it.
 ### Data infrastructure (reusable actions)
 - **data-infrastructure** — shared infrastructure for data migration and validation: compute pools, workers, network access → `./data-infrastructure/SKILL.md`
   - **worker-local-setup** — install and start the worker on a user-managed machine (laptop, VM, or on-prem) → `./data-infrastructure/worker-local-setup/SKILL.md`
+  - **budget-guardrail** — cap SPCS / hybrid spend: one Snowflake Budget over the warehouse and compute pool that suspends both at a threshold; runs before the first `up` on SPCS. Triggers: "cap spend", "budget", "stop overspending" → `./data-infrastructure/budget-guardrail/SKILL.md`
 
 ### Source code: register & convert
 - **register-code-units** — router for getting source code into the project → `./register-code-units/SKILL.md`
@@ -155,15 +179,15 @@ Match the user's request to the most relevant skill and load it.
   - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
   - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
   - **tableau-repointing** — collect `.twb`/`.tds` folder path and `--tableauRepointing` flag for Tableau repointing. Triggers: tableau, tableau migration, tableau repointing, migrate tableau, repoint tableau → `./tableau-repointing/SKILL.md`
-  - **dbt-consolidation** — confirm opt-in `--consolidate-dbt-model-chains` and SSIS `--consolidate-dbt-projects` before convert → `./dbt-consolidation/SKILL.md`
+  - **dbt-consolidation** — before SSIS or Informatica dbt conversion, ask one question about consolidating projects and models by package/folder or retaining the per-Data-Flow/per-mapping layout; use only `--consolidate-dbt-projects` → `./dbt-consolidation/SKILL.md`
 - **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
 
 ### Migration & validation
 - **migrate-objects** — deploy tables, views, functions, procedures wave-by-wave → `./migrate-objects/SKILL.md`
-  - **sandbox** — private `AIMSBX_*` catalogs for procedure tests (`deploySandbox`) and shared source-catalog setup (`setupSandbox`). Not common-catalog `deploy`. → `./migrate-objects/sandbox/SKILL.md`
+  - **sandbox** — private `AIMSBX_*` catalogs for procedure tests (`createIsolatedSandbox`) and shared source-catalog setup (`deployCommonSandbox`). Not common-catalog `deploy`. → `./migrate-objects/sandbox/SKILL.md`
   - **migrate-etl** — claim an ETL code unit, then stabilize it. Entry point for "fix ETL package", "fix SSIS/Informatica conversion", "proceed with stabilization", "resume ETL fixing" — it claims the unit (so it appears in `my_objects_summary` with the current user as owner) before delegating to the phase-based etl-stabilization engine. → `./migrate-objects/migrate-etl/SKILL.md`
   - **data-migration-setup** — choose approach, generate workflow YAML, create target database for `migrate_data` → `./migrate-objects/actions/data-migration/SKILL.md`
-  - **testbed-generator** — mine → validate → compile → generate the synthetic testbed for a workload: run/resume each phase, inspect unsolved constraints, readiness, and data-coupling clusters. Triggers: generate testbed, mine testbed, validate testbed, compile testbed, testbed data source → `./migrate-objects/baseline-capture/testbed-generator/SKILL.md`
+  - **testbed-generator** — bootstrap coupling state (`generateTestbed`); generate one table's CSV (`INCREMENTAL.md`); or mine/validate/enrich/compile/generate the whole workload (`WHOLE-WORKLOAD.md`). Triggers: generate testbed, mine testbed, validate testbed, compile testbed, enrich testbed, testbed data source → `./migrate-objects/baseline-capture/testbed-generator/SKILL.md`
 - **validate-objects** — validate data between a source and Snowflake, including project-based Snowflake-to-Snowflake validation. Triggers: "validate Snowflake to Snowflake", "compare Snowflake tables/databases", "run SF-to-SF DV" → `./validate-objects/SKILL.md`
   - **l3-pushdown-setup** — configure L3 extract transport (object storage vs through the worker) before row validation runs → `./setup/data-validation/l3-pushdown/SKILL.md`
 
@@ -177,7 +201,7 @@ Match the user's request to the most relevant skill and load it.
 
 ### Customization
 - **task-overrides** — replace the skill that runs for any built-in task with the user's own `SKILL.md`, scoped to the project or to a global directory via `$AIM_SKILL_EXT_DIR`. Triggers: "extend the plugin", "customize task X", "swap out the skill for Y", "override registerCode/convertCode/deploy/...". Reference: `./extensibility/TASKS.md`
-- **discover-extras** — register assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, Informatica, SSAS cubes, Oracle PACKAGE bodies, custom shell scripts) as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved `databaseObject` / `script` / `etl` / `custom` set) so they flow through orchestration alongside built-in units. Triggers: "I have FiveTran / SSAS / dbt / a script that touches the database", "register custom asset", "track <non-built-in> in the migration". Skill: `./setup/discover-extras/SKILL.md`. Reference: `./extensibility/TASKS.md` (Custom code units).
+- **discover-extras** — register assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PACKAGE bodies, custom shell scripts) as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved `databaseObject` / `script` / `etl` / `custom` set) so they flow through orchestration alongside built-in units. Triggers: "I have FiveTran / SSAS / dbt / a script that touches the database", "register custom asset", "track <non-built-in> in the migration". **Not** for ETL the user wants converted: SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, and Azure Data Factory go through **setup → register → convert** (native or AI-First Step 4.5). Skill: `./setup/discover-extras/SKILL.md`. Reference: `./extensibility/TASKS.md` (Custom code units).
 
 ## Fallback
 
@@ -189,4 +213,4 @@ If no skill matches, say so explicitly, then help with your own knowledge.
 
 1. **Configure returns status** — `configure(project_dir=...)` includes the `## Migration status` block; route from it. No separate `migration_status` call on the continue path.
 2. **Follow sub-skill instructions** — Complete each sub-skill fully before returning
-3. **Confirm transitions** — Ask user before moving to next stage
+3. **Confirm transitions through the machine** — stage gates arrive as MCP prompts (`continueToMigration`, `chooseRunMode`); ask those when they come rather than adding a confirmation turn between sub-skills, and ask before loading migrate-objects after setup completes

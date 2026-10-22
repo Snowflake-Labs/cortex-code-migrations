@@ -1,6 +1,6 @@
 # Baseline Report Schema
 
-Defines the format for `artifacts/phases/phase_{N}/baseline_batch_{B}.md` written by test-gen agents.
+Defines the format for `{UNIT}/stabilization/phases/phase-{N}/baseline_batch_{B}.md` written by test-gen agents.
 
 ## Required Structure
 

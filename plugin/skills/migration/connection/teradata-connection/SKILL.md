@@ -15,7 +15,9 @@ Tell the user:
 - Network access to the Teradata database instance
 - Teradata credentials (username/password) — standard or LDAP-backed
 - The `scai` CLI installed and available
-- The Teradata .NET driver NuGet package (`Teradata.Client.Provider.nupkg`) — see Step 1
+- The Teradata .NET driver NuGet package (`Teradata.Client.Provider.nupkg`) — see Step 1. **Code pipeline only** (connection test, `scai code extract`).
+
+> **Data migration / validation need only Python dependencies.** The worker connects with `teradatasql` (or Teradata ODBC) from its own Python venv; it never uses the NuGet driver. When the user's goal is only to migrate or validate data, do not download or install the NuGet driver. If a data run fails on missing packages, fix the Python dependencies (`scai data doctor`), not the .NET driver.
 
 ## Required Connection Details
 
@@ -54,10 +56,10 @@ Ask the user:
 > "I need the following to connect to Teradata:
 > - **Host** (hostname or IP)
 > - **Database** name
-> - **Username** and **Password**
+> - **Username**
 > - **Authentication method** — `standard` (username/password) or `ldap` (LDAP-backed credentials)
 >
-> How would you like to provide these?"
+> How would you like to provide these? For security, enter the password only in the masked terminal prompt; do not send it in chat."
 
 Options:
 1. **Enter manually** - Provide values interactively
@@ -158,7 +160,7 @@ Then return to the calling skill.
 
 - **NEVER** log or display passwords in plain text
 - **NEVER** include passwords in command-line arguments that might be logged
-- Use interactive mode to avoid password exposure
+- Omit `--password`; the CLI prompts for it securely in an interactive terminal
 
 ## Quick Reference
 

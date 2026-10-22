@@ -64,9 +64,10 @@ _BAND_LABELS = {"critical": "Critical", "high": "High", "medium": "Medium", "low
 class CalculatorRow:
     """One calculator line item, mirroring the .NET record it is rehydrated from.
 
-    A row is priced one of two ways, readable from its fields. A *banded* row
-    prices counted objects and carries ``band_counts`` plus ``band_rates``; a
-    *flat* row is one budget for the whole line and carries ``flat_hours``.
+    ``pricing`` says which fields are live. A *banded* row prices counted objects
+    and carries ``band_counts`` plus ``band_rates``. A *flat* row is one budget
+    for the whole line. A *flat_total* row shows the object count and charges
+    ``flat_hours`` once. A *per_object* row charges ``unit_hours`` times the count.
     """
 
     # Stable config key, unique per row: how an override addresses a row without
@@ -90,6 +91,12 @@ class CalculatorRow:
     manual_rewrite_hours: Optional[float]
     automation_pct: Optional[float]
     comments: str = ""
+    # Absent on artifacts written before these shapes existed. Missing means banded
+    # when band counts are present and flat otherwise; the shared JS module decides.
+    pricing: str = "banded"
+    unit_hours: Optional[float] = None
+    # Present on a Code Conversion row. Absent on v1 artifacts and on every other row.
+    repetition: Optional[Dict[str, Any]] = None
 
 
 def load_effort_assessment(path: Path) -> Optional[Dict[str, Any]]:
@@ -199,7 +206,13 @@ EFFORT_MIXIN_JS = r"""
       // Grouping and its subtotals come from the shared module, not from this
       // template, so the report and the dashboard cannot disagree about one.
       effortSections() {
-        return shared.groupSections(this.effortApplied, baseline.summary, this.effortRollup);
+        return shared.groupSections(this.effortApplied, baseline.summary, this.effortRollup)
+          .filter(function (section) {
+            return section.key === "fixed_budget"
+              || section.rows.length
+              || section.zeroTypes.length
+              || section.extraRows.length;
+          });
       },
       // Component, object type, quantity, one per band, hours, comments. Derived so
       // a new band cannot leave a spanning cell one column short.
@@ -215,9 +228,6 @@ EFFORT_MIXIN_JS = r"""
       effortCodeChanged() {
         return this.effortRollup.custom.code !== this.effortRollup.sf.code;
       },
-      effortTestingChanged() {
-        return this.effortRollup.custom.testing !== this.effortRollup.sf.testing;
-      },
       effortFixedBudgetChanged() {
         return this.effortRollup.custom.fixed_budget !== this.effortRollup.sf.fixed_budget;
       },
@@ -226,6 +236,9 @@ EFFORT_MIXIN_JS = r"""
       },
       effortSummary() {
         return baseline.summary || {};
+      },
+      effortRepetition() {
+        return baseline.repetition || null;
       },
     },
     methods: {
@@ -375,19 +388,17 @@ EFFORT_MIXIN_JS = r"""
       },
       effortDdlTableTotal(types) {
         const rollup = this.effortRollup;
-        const listed = (Array.isArray(types) ? types : []).reduce((sum, type) => {
+        return (Array.isArray(types) ? types : []).reduce((sum, type) => {
           const entry = rollup.ddl_by_type[type];
           return sum + (entry ? entry.custom : 0);
         }, 0);
-        return listed + rollup.custom.testing;
       },
       effortDdlTableTotalSf(types) {
         const rollup = this.effortRollup;
-        const listed = (Array.isArray(types) ? types : []).reduce((sum, type) => {
+        return (Array.isArray(types) ? types : []).reduce((sum, type) => {
           const entry = rollup.ddl_by_type[type];
           return sum + (entry ? entry.sf : 0);
         }, 0);
-        return listed + rollup.sf.testing;
       },
       effortDdlCell(type) {
         const entry = this.effortRollup.ddl_by_type[type];
@@ -494,9 +505,9 @@ _EFFORT_KPI_CARDS_HTML = """
 _EFFORT_BAND_LEGEND_HTML = """
         <div class="effort-band-legend">
             <span class="effort-band-legend-lead">Every object is counted in exactly one complexity band:</span>
-            <span><strong>Critical</strong> — a critical finding, or SnowConvert could not convert it</span>
-            <span><strong>High</strong> — a high-severity finding, or a partial conversion</span>
-            <span><strong>Medium</strong> — converted, with medium-severity findings</span>
+            <span><strong>Critical</strong> — a critical finding</span>
+            <span><strong>High</strong> — a high-severity finding</span>
+            <span><strong>Medium</strong> — a medium-severity finding</span>
             <span><strong>Low</strong> — converted clean, or minor findings only</span>
         </div>
 """
@@ -551,31 +562,40 @@ _EFFORT_TOOLBAR_HTML = """
         </p>
 """
 
-# Rows are grouped into three sections, each with its own subtotal: code
-# conversion, unit testing, and the flat budgets. In the first two, each object
-# type occupies two table rows — the band object counts, then the editable
-# hours-per-object beneath each count. Reading down a column gives `count x rate`,
-# and the row total is the sum across the four columns: the same shape, and the
-# same arithmetic, as the FDE workbook's Scope Input sheet.
+# Rows are grouped into two sections, each with its own subtotal: code conversion
+# and testing, then the fixed budgets. Code conversion leads with its flat
+# budgets and then the counted object types. A banded object type occupies two
+# table rows — the band object counts, then the editable hours-per-object beneath
+# each count. Code Conversion rows print one line per EWI group; those published
+# hours are what add up to the row, after the repetition discount.
 #
-# The third section has no complexity dimension, so it restates the column headers
-# rather than stretching one budget under Critical / High / Medium / Low. Its
-# subtotal is the grand total less the other two, so the three always add up even
-# when the summary counts a flat budget that no calculator row carries.
+# The shared column names stay in one header over the table. Inside code
+# conversion, the flat budgets restate Migration Component, Line Item, Objects,
+# Base effort (h), Est. Hours and Comments, and the counted rows then print
+# "Objects by complexity · hours per object" with Critical, High, Medium and Low.
+# The fixed-budget section restates its own middle column, so one budget is not
+# labelled with those bands.
+# The fixed-budget section's subtotal is the grand total less conversion and
+# testing, so the sections always add up even when the summary counts a flat
+# budget that no calculator row carries.
 _EFFORT_CALCULATOR_TABLE_HTML = """
+        <p v-if="effortRepetition" class="effort-lead">
+            Repetition discount (Preview): after the first {{ effortRepetition.first_full_price_count }}
+            object of an EWI, further objects of that EWI are charged
+            {{ effortRepetition.discount_factor }}× the band rate.
+            Full price: {{ (effortRepetition.non_repetitive_codes || []).join(', ') }}.
+            Group hours are printed on each Code Conversion row.
+        </p>
         <div class="effort-table-wrap">
             <table class="effort-table">
                 <thead>
                     <tr>
-                        <th rowspan="2">Migration Component</th>
-                        <th rowspan="2">Object Type</th>
-                        <th class="num" rowspan="2">Objects</th>
-                        <th class="ctr" :colspan="effortBands.length">Objects by complexity · hours per object</th>
-                        <th class="num" rowspan="2">Est. Hours</th>
-                        <th rowspan="2">Comments</th>
-                    </tr>
-                    <tr>
-                        <th class="num" v-for="band in effortBands" :key="band">{{ effortBandLabel(band) }}</th>
+                        <th>Migration Component</th>
+                        <th>Object Type</th>
+                        <th class="num">Objects</th>
+                        <th :colspan="effortBands.length"></th>
+                        <th class="num">Est. Hours</th>
+                        <th>Comments</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -598,15 +618,26 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                             </button>
                         </th>
                     </tr>
-                    <tr v-if="effortSectionOpen(section) &amp;&amp; section.shape === 'flat'">
+                    <template v-for="group in section.groups" :key="group.shape">
+                    <tr v-if="effortSectionOpen(section) &amp;&amp; group.shape === 'banded'">
+                        <th class="effort-subhead" colspan="3"></th>
+                        <th class="effort-subhead ctr" :colspan="effortBands.length">Objects by complexity · hours per object</th>
+                        <th class="effort-subhead" colspan="2"></th>
+                    </tr>
+                    <tr v-if="effortSectionOpen(section) &amp;&amp; group.shape === 'banded'">
+                        <th class="effort-subhead" colspan="3"></th>
+                        <th class="effort-subhead ctr" v-for="band in effortBands" :key="band">{{ effortBandLabel(band) }}</th>
+                        <th class="effort-subhead" colspan="2"></th>
+                    </tr>
+                    <tr v-if="effortSectionOpen(section) &amp;&amp; group.shape !== 'banded'">
                         <th class="effort-subhead">Migration Component</th>
                         <th class="effort-subhead">Line Item</th>
-                        <th class="effort-subhead num">Basis</th>
-                        <th class="effort-subhead num" :colspan="effortBands.length">Budget (hours)</th>
+                        <th class="effort-subhead num">{{ group.shape === 'flat' ? 'Basis' : 'Objects' }}</th>
+                        <th class="effort-subhead num" :colspan="effortBands.length">{{ group.shape === 'per_object' ? 'Hours per object' : (group.shape === 'flat_total' ? 'Base effort (h)' : 'Budget (hours)') }}</th>
                         <th class="effort-subhead num">Est. Hours</th>
                         <th class="effort-subhead">Comments</th>
                     </tr>
-                    <template v-for="row in section.rows" :key="row.key">
+                    <template v-for="row in group.rows" :key="row.key">
                         <tr v-if="effortSectionOpen(section)" :class="{'effort-row-overridden': row.is_overridden}">
                             <td :rowspan="row.band_counts ? 2 : 1">{{ row.component }}</td>
                             <td :rowspan="row.band_counts ? 2 : 1">{{ row.object_type }}</td>
@@ -621,13 +652,13 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                                        :class="{'effort-input-error': effortCellError(row, null)}"
                                        :value="effortInputValue(row, null)"
                                        :disabled="!row.is_editable"
-                                       :aria-label="'Budget hours for ' + row.component + ' ' + row.object_type"
-                                       :title="row.is_unestimated ? 'Snowflake publishes no figure for this line — enter your own budget' : 'Enter your own budget for this line'"
+                                       :aria-label="row.pricing === 'per_object' ? ('Hours per object for ' + row.object_type) : ('Budget hours for ' + row.component + ' ' + row.object_type)"
+                                       :title="row.pricing === 'per_object' ? 'Hours to handle one object. The row total is this rate times the object count.' : (row.pricing === 'flat_total' ? 'One budget for every object of this type. The count does not multiply it.' : (row.is_unestimated ? 'Snowflake publishes no figure for this line — enter your own budget' : 'Enter your own budget for this line'))"
                                        @input="effortOnInput(row, null, $event.target.value)"
                                        @blur="effortOnBlur(row, null)">
                                 <span v-if="effortCellError(row, null)" class="effort-error">{{ effortCellError(row, null) }}</span>
                                 <span v-else-if="row.is_unestimated" class="effort-sf-note">Snowflake: not estimated</span>
-                                <span v-else-if="row.is_overridden" class="effort-sf-note">Snowflake: {{ effortCompact(row.flat_hours) }}</span>
+                                <span v-else-if="row.is_overridden" class="effort-sf-note">Snowflake: {{ effortCompact(row.pricing === 'per_object' ? row.unit_hours : row.flat_hours) }}</span>
                             </td>
                             <td class="num" style="font-weight:600;" :rowspan="row.band_counts ? 2 : 1">
                                 {{ effortHoursOrNa(row.custom_estimated_hours) }}
@@ -638,6 +669,12 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                             <td style="color:#64748B;font-size:0.85rem;" :rowspan="row.band_counts ? 2 : 1">
                                 {{ row.comments }}
                                 <span v-if="row.automation_pct !== null" class="effort-sf-note">{{ effortPercent(row.automation_pct) }} auto-converted</span>
+                                <div v-if="row.repetition && row.repetition.groups && row.repetition.groups.length" class="effort-sf-note">
+                                    <div v-for="group in row.repetition.groups" :key="(group.code || 'none') + '-' + group.band">
+                                        {{ group.code || 'No EWI' }} · {{ group.band }} · {{ effortCount(group.count) }} objects · {{ effortHours(group.hours) }}h
+                                        <span v-if="group.full_price"> · full price</span>
+                                    </div>
+                                </div>
                             </td>
                         </tr>
                         <tr v-if="effortSectionOpen(section) &amp;&amp; row.band_counts" class="effort-rate-row"
@@ -656,6 +693,7 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                                 <span v-else-if="effortBandChanged(row, band)" class="effort-sf-note">Snowflake: {{ effortCompact(effortSfBandRate(row, band)) }}</span>
                             </td>
                         </tr>
+                    </template>
                     </template>
                     <template v-if="effortSectionOpen(section)">
                         <tr v-for="extra in section.extraRows" :key="extra.label">
@@ -760,6 +798,7 @@ def effort_payloads_js(
         "source_dialect": assessment.get("source_dialect", ""),
         "artifact": artifact_name,
         "summary": assessment.get("summary", {}),
+        "repetition": assessment.get("repetition"),
         "calculator_rows": [asdict(row) for row in assessment.get("calculator_rows", [])],
     }
     return (
@@ -999,7 +1038,6 @@ def _ddl_effort_cell(obj_type: str) -> str:
 
 def _render_ddl_assessment_table(
     ddl_summary: Dict[str, Dict[str, Any]],
-    testing_hours: float = 0.0,
 ) -> str:
     """Per-object-type conversion detail: inventory, bands, findings, and hours.
 
@@ -1036,27 +1074,14 @@ def _render_ddl_assessment_table(
             <td style="color:#64748B;font-size:0.8rem;">{_esc(st.get('notes', ''))}</td>
         </tr>"""
     total_pct = f"{(totals['success'] / totals['total'] * 100):.1f}%" if totals["total"] else "—"
-    # Always the true sum of the rows displayed above (+ testing) so TOTALS never
-    # understates what's visibly listed in this table.
+    # Always the true sum of the rows displayed above so TOTALS never understates
+    # what's visibly listed in this table.
     types_literal = _js_str_array(displayed_types)
-    testing_cell = (
-        "{{ effortHours(effortRollup.custom.testing) }}"
-        '<span v-if="effortTestingChanged" class="effort-sf-note">'
-        "Snowflake: {{ effortHours(effortRollup.sf.testing) }}</span>"
-    )
     total_effort_cell = (
         "{{ effortHours(effortDdlTableTotal(" + types_literal + ")) }}"
         '<span v-if="effortDdlTableTotalChanged(' + types_literal + ')" class="effort-sf-note">'
         "Snowflake: {{ effortHours(effortDdlTableTotalSf(" + types_literal + ")) }}</span>"
     )
-    if testing_hours:
-        rows_html += f"""
-        <tr style="background:#F8FAFC;">
-            <td style="padding:8px 12px;">Code Conversion Testing</td>
-            <td colspan="9" style="padding:8px 12px;color:#64748B;font-size:0.8rem;">Unit testing for functions and stored procedures</td>
-            <td style="padding:8px 12px;text-align:right;font-weight:600;">{testing_cell}</td>
-            <td style="padding:8px 12px;color:#64748B;font-size:0.8rem;">Priced per object by band (see calculator)</td>
-        </tr>"""
     rows_html += f"""
         <tr class="effort-total">
             <td>TOTALS</td>
@@ -1112,7 +1137,10 @@ def _render_top_issues_section(top_issues: List[Dict[str, Any]]) -> str:
         </div>"""
 
 
-def _render_effort_formulas_legend(summary: Dict[str, Any]) -> str:
+def _render_effort_formulas_legend(
+    summary: Dict[str, Any],
+    repetition: Optional[Dict[str, Any]] = None,
+) -> str:
     """Collapsible legend explaining how each effort figure is derived."""
     automation_note = ""
     if summary.get("hours_saved_by_automation", 0) > 0:
@@ -1125,22 +1153,35 @@ def _render_effort_formulas_legend(summary: Dict[str, Any]) -> str:
             f"against the {summary.get('code_estimated_hours', 0):,.0f} h charged, so automation "
             f"saved ≈ {summary.get('hours_saved_by_automation', 0):,.0f} h.</p>"
         )
+    repetition_note = ""
+    if isinstance(repetition, dict):
+        codes = ", ".join(repetition.get("non_repetitive_codes") or []) or "none"
+        repetition_note = (
+            "<p><strong>Repetition discount (Preview):</strong> on a Code Conversion row, "
+            f"after the first {_esc(repetition.get('first_full_price_count'))} object of an EWI, "
+            f"further objects of that EWI are charged {_esc(repetition.get('discount_factor'))}× "
+            "the band rate. Full price: "
+            f"{_esc(codes)}. The group hours printed on the row are the ones that add up.</p>"
+        )
     return f"""
         <details style="margin-bottom:32px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:16px;">
             <summary style="font-weight:700;color:#102E46;cursor:pointer;">How these hours are calculated</summary>
             <div style="margin-top:12px;font-size:0.88rem;color:#475569;line-height:1.6;">
-                <p><strong>One formula, per object type:</strong></p>
+                <p><strong>Rows with no repeated EWI</strong> price each band as objects times its rate:</p>
                 <p style="font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#FFFFFF;border:1px solid #E2E8F0;border-radius:6px;padding:10px 12px;">
                     hours = (critical objects × h/critical) + (high × h/high) + (medium × h/medium) + (low × h/low)
                 </p>
                 <p>Every object is counted in exactly one band, so the band counts always add up to the
                 object total — which means you can reproduce any figure in the calculator with a
-                calculator. Unit testing is priced the same way, from its own hours-per-object card.</p>
-                <p><strong>Bands:</strong> Critical = a critical finding, or SnowConvert could not convert it.
-                High = a high-severity finding, or a partial conversion. Medium = converted, with
-                medium-severity findings. Low = converted clean, or minor findings only.</p>
+                calculator. A Code Conversion row adds up the group hours printed on it.</p>
+                {repetition_note}
+                <p><strong>Bands:</strong> Critical = a critical finding.
+                High = a high-severity finding. Medium = a medium-severity finding.
+                Low = minor findings only, or none. Conversion status does not set the band.</p>
                 {automation_note}
-                <p><strong>Fixed Budget:</strong> data migration setup plus phase budgets scaled by workload size — Small (≤{summary.get('workload_small_max', 500):,} objects), Medium ({summary.get('workload_small_max', 500) + 1:,}–{summary.get('workload_medium_max', 1500):,}), Large (&gt;{summary.get('workload_medium_max', 1500):,}).</p>
+                <p><strong>Fixed Budget:</strong> data migration setup and project-phase lines are left for you to fill in —
+                Snowflake publishes no figure for those yet. Workload size still labels the phase rows —
+                Small (≤{summary.get('workload_small_max', 500):,} objects), Medium ({summary.get('workload_small_max', 500) + 1:,}–{summary.get('workload_medium_max', 1500):,}), Large (&gt;{summary.get('workload_medium_max', 1500):,}).</p>
                 <p><strong>Sources:</strong> SnowConvert conversion statistics — per-object conversion status and issue severities.</p>
             </div>
         </details>"""
@@ -1153,7 +1194,7 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
     top_issues = assessment.get("top_issues", [])
 
     issues_section = _render_top_issues_section(top_issues)
-    formulas_legend = _render_effort_formulas_legend(summary)
+    formulas_legend = _render_effort_formulas_legend(summary, assessment.get("repetition"))
 
     return f"""
     <div class="tab-content" :class="{{active: activeTab === 'effort-estimates'}}">
@@ -1165,8 +1206,8 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
             <p class="effort-lead">
                 A person-hours estimate for this migration, derived from SnowConvert's own conversion
                 results. Every object lands in exactly one complexity band — Critical, High, Medium or
-                Low — and each band carries an hours-per-object rate. So every figure below is
-                objects × rate, and you can check any of them by hand.
+                Low — and each band carries an hours-per-object rate. The hours on each row are
+                printed beside the counts they came from, so you can check any of them by hand.
             </p>
             <p class="effort-lead">
                 Snowflake's rates are a starting point, not a verdict: real effort varies with project
@@ -1209,7 +1250,7 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
                     <th class="num">Effort (h)</th>
                     <th>Priced as</th>
                 </tr></thead>
-                <tbody>{_render_ddl_assessment_table(ddl, summary.get("testing_estimated_hours", 0))}</tbody>
+                <tbody>{_render_ddl_assessment_table(ddl)}</tbody>
             </table>
         </div>
 

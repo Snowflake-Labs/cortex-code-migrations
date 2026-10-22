@@ -116,7 +116,7 @@ class Mapping:
         mapping_sanitized = sanitize_filename(self.name)
         return f"{workflow_sanitized}__{mapping_sanitized}_mapping.html"
 
-    def to_dict(self, workflow_path: str = None) -> dict:
+    def to_dict(self, workflow_path: str = None, count_components: bool = True) -> dict:
         result = {
             "name": self.name,
             "full_path": self.full_path,
@@ -145,5 +145,10 @@ class Mapping:
             result["dag_file"] = f"dags/{self.get_dag_filename(workflow_path)}"
         elif self.dag_file:
             result["dag_file"] = self.dag_file
+
+        # A mapping shown on a workflow that also has its own entry. The workflow
+        # page lists it. The conversion breakdown counts the entry, not this copy.
+        if not count_components:
+            result["count_components"] = False
 
         return result

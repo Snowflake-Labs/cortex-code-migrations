@@ -9,11 +9,15 @@ license: Proprietary. See License-Skills for complete terms
 
 ## Prerequisite: Support Level Check
 
-Check `support` from the `configure()` response.
+Check `project_type` and `source_language` from the `configure()` response.
 
-If `support` is `basic`, load [BASIC_SUPPORT.md](BASIC_SUPPORT.md) and **STOP**. Do not continue with the steps below.
+If `project_type` is `code_conversion_only` and `source_language` is not Snowflake (any letter case), load [BASIC_SUPPORT.md](BASIC_SUPPORT.md) and stop here; the steps below do not apply to that project type.
 
-## On Entry **IMPORTANT DO NOT SKIP**
+## Install check
+
+Before `progress_setup()` or any other tool in this flow, run `scai doctor`. Exit 0: continue. Any other exit: stop, show the output, and do not advance the state machine. If the `doctor` command is missing, this scai predates the check — continue; SessionStart already gated the install. Skip the command when this session already ran it and it exited 0.
+
+## On Entry
 
 Tell the user:
 > **Phase 2: Migrate Objects.** Now we'll deploy your objects to Snowflake according to your wave plan (if you created one in assessments). Each object goes through a deploy-test-fix loop.
@@ -43,7 +47,7 @@ manual vs autonomous is `chooseRunMode`'s question.
 This rule is the same for **every** task in the loop below — deploy, test, capture, seed, fix, validate:
 
 1. **Do the task's work** as its skill describes.
-2. **Ask what's next.** Re-pull `migration_status(mode="my_objects_summary")` (or `migration_status(mode="next_task", object_id="<id>")` for one object). The machine advances you when it can see the work is done — a tool wrote the registry field, the object exists in Snowflake, or the expected file exists.
+2. **Ask what's next.** Re-pull `migration_status(mode="my_objects_summary")` (or `migration_status(mode="next_task", object_ids=["<id>"])` for one object). The machine advances you when it can see the work is done — a tool wrote the registry field, the object exists in Snowflake, or the expected file exists.
 3. **Call `transition_status` to report or override:**
    - a **failure** you can't fix — `transition_status(status='advance', task='<task>', outcome='failed', error='<sql|infra>')`;
    - an outcome the system **can't observe** and you had to judge — e.g. view parity ([migrate-object/VALIDATE_VIEW.md](migrate-object/VALIDATE_VIEW.md)), ETL stabilization ([migrate-etl/SKILL.md](migrate-etl/SKILL.md)). `runTests` is an oracle (`testValidationResults`); do not stamp it;
@@ -71,7 +75,7 @@ as a menu item in 2b, and do not switch to it unless the user asks.
 
 ## Step 2: Object Loop
 
-**IMPORTANT** Ask the user to `/compact` between work units to free up context. **IMPORTANT**
+Between work units, ask the user to run `/compact` to free up context.
 
 ### 2a. Pull status
 
@@ -99,7 +103,7 @@ Then ask the user to pick a next action. **Only list actions you are actually of
 1. One numbered item per task group, labelled `<group.user_label> for the <group.count> <group.object_type>(s)` — e.g. `Deploy for the 5 tables`, `Generate test cases from source database for the 1 function`. Use `group.user_label` verbatim.
 2. One numbered item per `blocked_groups` entry, labelled `Resolve blocked <object_type>s waiting on "<blocked_group.user_label>" (see deps)` — only if `blocked_groups` is non-empty.
 3. `finishObjects` — only if `done_count > 0`.
-4. `claimObjects` — only if `done_count == 0` (when `done_count > 0`, omit this entirely; the user must merge first). The exception: if the user *explicitly overrides* on a later turn ("I know, claim anyway", "skip the merge for now"), proceed to claim and flag the unmerged done objects in your reply.
+4. `claimObjects` — only if `done_count == 0` (its picker also offers *Bulk-deploy N clean tables* when `next_objects` reports `clean_tables_at_deploy`) (when `done_count > 0`, omit this entirely; the user must merge first). The exception: if the user *explicitly overrides* on a later turn ("I know, claim anyway", "skip the merge for now"), proceed to claim and flag the unmerged done objects in your reply.
 5. The errored bucket — only if `errored_count > 0`.
 
 **Wait for the user's response — do not proceed to 2c until they choose.**
@@ -114,7 +118,7 @@ migration_status(mode="my_objects_details", group=<group.id>)
 
 When `object_type == "etl"`, the group is an ETL stabilization batch — load [migrate-etl/SKILL.md](migrate-etl/SKILL.md) and follow it. When `object_type == "dbt"`, the group is a dbt Jinja repointing batch — load [../dbt/SKILL.md](../dbt/SKILL.md) and follow it. SQL object types (`table`, `view`, `procedure`, `function`, `bteq`) follow the loop already described by `instructions` (BTEQ scripts skip deploy).
 
-VERY IMPORTANT: **Wait for user input before acting.** Once the user confirms which objects to operate on, follow the `instructions` field on the response.
+Wait for the user to confirm which objects to operate on before acting — they own that choice. Once the user confirms which objects to operate on, follow the `instructions` field on the response.
 
 **User picked `claimObjects`** → load [actions/claim_objects.md](actions/claim_objects.md).
 
@@ -124,14 +128,14 @@ VERY IMPORTANT: **Wait for user input before acting.** Once the user confirms wh
 
 > **Differentiate "missing" deps from "not-yet-completed" deps.** Walk every `objects[i].blocked_on[]` entry and look at `reason`:
 >
-> - `reason == "missing"` → the dep is **not in the project at all** (the resolver also classifies orphan deps with no registry entry as missing). Present a per-object resolution menu:
+> - `reason == "missing"` → the dep is **not in the project at all** (the resolver also classifies orphan deps with no registry entry as missing). Spawn **one** foreground [`cur_reconciler`](../../../agents/cur_reconciler.md) with the missing name; it scans `source/` and source-bindable, mints a CUR entry when the file is there, and qualifies bindable identity on any object kind. If it returns `repaired` / `clean`, re-run the blocked group. If it returns `escalate`, present a per-object resolution menu:
 >
 >   1. **Register the missing dep** — extract DDL from the source database (or import a local SQL file) and add it to the project. Load `../register-code-units/SKILL.md` for the matching dep `object_type`. After registration completes, re-run the blocked group; the dep should now resolve.
 >   2. **Stub the missing dep in Snowflake** — create a placeholder object (empty table / no-op procedure / view returning the right column shape) so the dependent unit can deploy. Use this when the source isn't available but the shape is known. Capture what was stubbed in `extensions.notes` on the registry entry so the team has a record.
 >   3. **Mark this object out of scope** — when the dependent shouldn't migrate at all because its missing dep is genuinely deprecated. Run `update_registry(field="inScope", status="false", objects="<object_id>")`.
 >   4. **Bypass the precondition** — **last resort, not a peer of the options above.** Do not offer it proactively; use it only when the user has already mitigated the dep externally (e.g. it lives in another database that's already in Snowflake) and explicitly insists on proceeding without registering. A `reason` is required and the bypass is surfaced distinctly downstream (never as a satisfied precondition). Use `transition_status(status="bypass", task="<blocking_task>", where="id IN ('<object_id>')", reason="<why the dep is safe to skip>")`. This is logged and reversible.
 >
->   **Wait for the user to pick one option per object** before acting. Do not auto-pick — "missing" usually surfaces a real data-modeling decision the user needs to make.
+>   **Wait for the user to pick one option per object** before acting on that menu. Do not auto-pick — "missing" with no file on disk usually surfaces a real data-modeling decision the user needs to make.
 >
 > - any other `reason` (e.g. `"deploy not completed"`, `"migrateData not completed"`) → the dep exists in the project but its prerequisite task hasn't finished yet. No prompt needed; the dep will resolve itself once the user finishes the upstream group. Tell the user which upstream group is blocking and offer to switch to it.
 
@@ -160,6 +164,12 @@ out-of-band and wants the resolver to re-evaluate — for example,
 they corrected a column type in Snowflake and want `validateData` to
 re-run.
 
+**Not for a data mismatch.** An errored `validateData` with `error: "data"`
+is a finished validation that found differences, so re-running the same workflow
+reproduces it. Use the re-validation menu in
+[validate_tables.md Step 5.G](../validate-objects/actions/validate_tables.md#5g--offer-re-validation-when-data-mismatches-remain)
+instead.
+
 ### After `migrateData` (data migration run)
 
 When the current task is **`migrateData`** and you call `migrate_data(mode="run")` (from FSM instructions or this skill), you **must** complete poll and report before marking work done:
@@ -173,6 +183,21 @@ When the current task is **`validateData`** and you call `validate_data(mode="ru
 
 1. Load [../validate-objects/actions/validate_tables.md](../validate-objects/actions/validate_tables.md) **Steps 4–6** if you have not already (background Monitor or poll fallback with `job_status`, present the error-first validation report, offer re-validation when eligible, then teardown).
 2. Do not return to the object loop or claim the next task until the user has seen the summary.
+
+### After the Iceberg data phase — deploy dependent objects?
+
+In an **interactive Iceberg project** (`data_migration_target_table_type: iceberg`), `table` units are created by the orchestrator during `migrateData`, not by `deploy` — so a table finishes the whole data phase (migrate, and validate if the user chose to) without ever running `deploy`. Subagent mode still deploys tables: sandbox setup forces a native target and SQL Server loads with `scai --direct`. Once those tables exist in Snowflake, any object that depends on them (views, procedures, functions, and any other dependent type) becomes deployable.
+
+When the wave's Iceberg tables have finished the data phase (migrated, and validated if requested), **before returning to the object loop, ask the user** whether to deploy those dependent objects now:
+
+> Your Iceberg tables are migrated and in place. The objects that depend on them — views, procedures, functions, and any other dependent type — are ready to deploy. Deploy them now?
+>
+> 1. **Yes, deploy the dependent objects**  2. **No, I'll do it later**
+
+- **Yes** → return to the object loop (`migration_status(mode="my_objects_summary")`) and work the now-unblocked groups in dependency order as usual.
+- **No** → leave those units pending; they stay visible in `migration_status` and are resumable later. Do not deploy them.
+
+Skip this prompt for native projects — there the dependent objects already follow `deploy` in the normal loop. In `subagent_mode` / autonomous runs, auto-accept (deploy the dependents) rather than prompting.
 
 ## Step 3: Report
 

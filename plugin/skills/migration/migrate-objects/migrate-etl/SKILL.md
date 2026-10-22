@@ -23,11 +23,15 @@ The platform of an ETL code unit is recorded on its registry entry as `source.pl
 
 This skill is the **orchestrated (registry-backed) entry point** for ETL stabilization. It claims the unit and records the result on the registry, then delegates the actual fixing to `etl-stabilization`.
 
+## Do not stabilize SSIS Snowflake Scripting output
+
+SSIS converted to Snowflake Scripting is a conversion preview: it ends after conversion and is never stabilized or deployed. Before claiming the unit, check whether it is SSIS (`source.platform = ssis`) and either `configure` reports `etl_ssis_target = scripting` or `.scai/config/project.yml` lists `ssis` under `etl_scripting_platforms`. If so, stop here. Do not claim the unit, run `etl-stabilization`, or call `deploy`. Tell the user the conversion is a preview and that the generated procedures and Task graph under `snowflake/_etl/` are for review only. The `deploy` tool refuses these units regardless.
+
 ## Step 0: Claim Ownership
 
 The ETL unit must be claimed before stabilization begins, so it is registered in `MIGRATION_REGISTRY.claims`, shows the current user as owner, and appears in `my_objects_summary` alongside SQL objects. Resolve `<etl_id>` first: the executor passes `object_id`; if entered by name ("fix ETL package …"), locate the unit via `migration_status(mode="my_objects_summary")` (already-claimed) or `migration_status(mode="next_objects")` (not yet claimed).
 
-**Resumption check first.** If `{UNIT}/stabilization/tracking/STATE.md` already exists, stabilization is already in progress and the unit was claimed on a prior run — **skip claiming** and go to Step 1.
+**Resumption check first.** If `{UNIT}/stabilization/tracking/STATE.md` already exists, stabilization is already in progress and the unit was claimed on a prior run — **skip claiming** and go to Step 0b.
 
 **Otherwise claim it:**
 
@@ -36,6 +40,16 @@ transition_status(status="begin", where="id = '<etl_id>'")
 ```
 
 `begin` is idempotent (it refreshes the claim if the unit was already claimed via the picker), so it is safe to call whenever no `STATE.md` exists. Surface any error and stop without retry.
+
+## Step 0b: Record skill start
+
+After claim (or on resume), record a `started` TASK_EVENT for this stabilization run:
+
+```
+transition_status(status="started", task="etlStabilization", where="id = '<etl_id>'")
+```
+
+Do this once per dispatch into this skill. Finish with `transition_status` in Step 3.
 
 ## Step 1: Resolve Inputs From the Registry
 

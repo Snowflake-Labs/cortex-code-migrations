@@ -6,7 +6,7 @@ Quick reference for the YAML shape `scai test capture` and `scai test validate` 
 - [`migrate-object/DIAGNOSE_FIX.md`](../migrate-object/DIAGNOSE_FIX.md) when interpreting a failing test.
 - [`migrate-object/EDIT_TEST_YAML.md`](../migrate-object/EDIT_TEST_YAML.md) when editing a YAML for a special case (multi-RS, OUT params, table-read, cursor, side-effect DML, before/after capture).
 
-> **Source of truth:** [`testing-infrastructure/docs/step-based-test-yaml-configuration.md`](https://github.com/snowflakedb/migrations-snowconvert-desktop/blob/main/testing-infrastructure/docs/step-based-test-yaml-configuration.md). This file is a distilled cheat sheet — when the two disagree, the upstream doc wins.
+> **Source of truth:** [`testing-infrastructure/docs/pr-design/step-based-test-yaml-configuration.md`](https://github.com/snowflakedb/migrations-snowconvert-desktop/blob/main/testing-infrastructure/docs/pr-design/step-based-test-yaml-configuration.md). This file is a distilled cheat sheet — when the two disagree, the upstream doc wins.
 
 ---
 

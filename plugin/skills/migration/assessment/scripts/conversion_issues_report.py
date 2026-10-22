@@ -12,6 +12,12 @@ EMPTY_COPY = (
     "No conversion issues. AIM did not record SSC-EWI issues on in-scope code units."
 )
 SUPPORT_EMAIL = "aim-support@snowflake.com"
+AI_FIX_DISCLAIMER = (
+    "This Recommended Fix was produced by an AI assistant and has not been fully validated. "
+    "Treat it as a starting hypothesis only: it is not an acceptance criterion and not the only "
+    "correct remediation. Research is required for this specific issue to confirm the correct fix "
+    "before implementation."
+)
 SHARE_FORM_URL = (
     "https://docs.google.com/forms/d/e/1FAIpQLSepvYNbuCp-sE-PCeqG2kWFuGNZjNUHGGI5WW6SLlo8B9_W6w/viewform?usp=dialog"
 )
@@ -64,7 +70,6 @@ def _report(artifact: dict) -> str:
     share_url = SHARE_FORM_URL if artifact.get("share_url") == SHARE_FORM_URL else ""
     zip_path = _text(artifact.get("zip_path"))
     pairs = _int(artifact.get("distinct_pairs"))
-    top_n = _int(artifact.get("top_n"))
     panels = artifact.get("panels") if isinstance(artifact.get("panels"), list) else []
 
     buttons = []
@@ -92,7 +97,7 @@ def _report(artifact: dict) -> str:
             '<div class="ci-panel" '
             + _vue_bind("v-show", "ciPanel === '" + _vue_str(panel_id) + "'")
             + ">"
-            f"{_panel(panel, panel_id, label, index == 0, pairs, top_n, source_language)}"
+            f"{_panel(panel, panel_id, label, index == 0, pairs, source_language)}"
             "</div>"
         )
 
@@ -132,7 +137,6 @@ def _panel(
     label: str,
     is_summary: bool,
     pairs: int,
-    top_n: int,
     source_language: str,
 ) -> str:
     instance_count = _int(panel.get("instance_count"))
@@ -142,15 +146,15 @@ def _panel(
     pair_count = _int(uncapped) if isinstance(uncapped, int) else (pairs if is_summary else shown)
     if is_summary:
         first_label = "Total Conversion Issues Instances"
-        heading = f"Overall Top {top_n:,} Conversion Issues"
+        heading = "Overall Conversion Issues"
     else:
         first_label = f"Conversion Issues Instances in {label}"
-        heading = f"Top {shown:,} Conversion Issues for {label}"
+        heading = f"Conversion Issues for {label}"
     return f"""
         <div class="ci-stats">
             <div class="ci-stat-card"><div class="ci-stat-num">{instance_count:,}</div><div class="ci-stat-lbl">{html.escape(first_label)}</div></div>
             <div class="ci-stat-card"><div class="ci-stat-num">{pair_count:,}</div><div class="ci-stat-lbl">Distinct Pairs</div></div>
-            <div class="ci-stat-card"><div class="ci-stat-num">{shown:,}</div><div class="ci-stat-lbl">Top-N Analyzed</div></div>
+            <div class="ci-stat-card"><div class="ci-stat-num">{shown:,}</div><div class="ci-stat-lbl">Pairs Listed</div></div>
             <div class="ci-stat-card"><div class="ci-stat-num">{html.escape(source_language)}</div><div class="ci-stat-lbl">Source Language</div></div>
         </div>
         <h3 class="ci-heading">{html.escape(heading)}</h3>
@@ -336,7 +340,7 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
             + ">"
             + "<td colspan=\"7\">"
             + f"<h4>Problem Description</h4><p>{html.escape(_text(row.get('problem_description')))}</p>"
-            + f"<h4>Recommended Fix</h4><p>{html.escape(_text(row.get('recommended_fix')))}</p>"
+            + f"<h4>Recommended Fix (AI-generated — must be validated)</h4><p>{html.escape(customer_recommended_fix(row.get('recommended_fix')))}</p>"
             + _code_sample(
                 detail_id + "-source",
                 source_heading,
@@ -440,6 +444,19 @@ def _zip_href(zip_path: str) -> str | None:
 
 def _text(value: object) -> str:
     return "" if value is None else str(value)
+
+
+def customer_recommended_fix(value: object) -> str:
+    """The researched fix. The AI disclaimer stays in the Jira CSV, not the report."""
+    kept: list[str] = []
+    for line in _text(value).replace(AI_FIX_DISCLAIMER, "").splitlines():
+        plain = line.replace(">", " ").replace("*", "").replace("⚠️", "").strip()
+        if "AI-generated recommendation" in plain and "not a mandatory fix" in plain:
+            continue
+        if line.strip() == ">":
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
 
 
 def _int(value: object) -> int:

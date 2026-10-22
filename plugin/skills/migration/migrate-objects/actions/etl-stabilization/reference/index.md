@@ -84,7 +84,7 @@ Templates for generated artifacts.
 | [templates/ROADMAP_TEMPLATE.md](templates/ROADMAP_TEMPLATE.md) | Template for agent-authored ROADMAP.md |
 | [templates/batch-artifacts.md](templates/batch-artifacts.md) | Batch artifact and learning artifact format specs |
 | [templates/baseline-artifacts.md](templates/baseline-artifacts.md) | Baseline report schema (baseline_batch_{B}.md format) |
-| [templates/fix-log-format.md](templates/fix-log-format.md) | Cross-phase fix log format (fix_log.md structure) |
+| [templates/fix-log-format.md](templates/fix-log-format.md) | Cross-phase fix log format (fix-log.md structure) |
 | [templates/report-template.html](templates/report-template.html) | HTML report template (CSS + shell for `generate_report.py`) |
 
 ### Other

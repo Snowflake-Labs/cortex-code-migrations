@@ -9,6 +9,7 @@ Each subdirectory represents a source ETL platform that the stabilization can pr
 | `ssis/` | SQL Server Integration Services | `.dtsx` |
 | `informatica/` | Informatica PowerCenter | `.xml` |
 | `alteryx/` | Alteryx Designer | `.yxmd` |
+| `talend/` | Talend Open Studio / Talend Data Integration | `.item` |
 
 A `.yxmd` has no orchestration layer — it is a single data-flow canvas whose execution order is
 implied by the connection graph. Units converted from one are a dbt project with no orchestration

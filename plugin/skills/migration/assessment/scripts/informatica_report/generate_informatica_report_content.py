@@ -38,7 +38,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .informatica_dag_service import InformaticaDagService
 
@@ -208,6 +208,47 @@ def _generate_ai_summary_section(data: Dict, json_path: Path) -> str:
     return _build_rich_summary_fallback(data)
 
 
+def _plural(count: int, noun: str) -> str:
+    return f"{count:,} {noun}{'' if count == 1 else 's'}"
+
+
+def _is_workflow_entry(entry: Dict) -> bool:
+    """True for a workflow file. Entries written before `kind` existed stay workflows."""
+    return entry.get("kind", "workflow") == "workflow"
+
+
+_CUSTOM_TRANSFORM_SUBTYPES = ("Custom Transformation", "Java Transformation")
+
+
+def _page_component_counts(mappings: List[Dict], workflow_tasks: List[Dict]) -> Tuple[int, Dict[str, int]]:
+    """Rows on the workflow page: every mapping it shows, plus its own tasks."""
+    counts = {"Success": 0, "Partial": 0, "NotSupported": 0}
+    total = 0
+    for mapping in mappings:
+        for component in mapping.get("components", []):
+            total += 1
+            status = component.get("status")
+            if status in counts:
+                counts[status] += 1
+    for task in workflow_tasks:
+        total += 1
+        status = task.get("status")
+        if status in counts:
+            counts[status] += 1
+    return total, counts
+
+
+def _workflow_has_custom_transform(entry: Dict) -> bool:
+    """True when this workflow, or a mapping it shows, has a Java/C++ transform."""
+    if entry.get("flags", {}).get("has_custom_transforms"):
+        return True
+    for mapping in entry.get("mappings", []):
+        for component in mapping.get("components", []):
+            if component.get("subtype") in _CUSTOM_TRANSFORM_SUBTYPES:
+                return True
+    return False
+
+
 def _build_rich_summary_fallback(data: Dict) -> str:
     """Build a full 7-section AI Summary from JSON data alone."""
     summary = data.get("summary", {})
@@ -219,6 +260,8 @@ def _build_rich_summary_fallback(data: Dict) -> str:
     total_components = summary.get("total_components", 0)
     total_ewis = summary.get("total_ewis", 0)
     total_fdms = summary.get("total_fdms", 0)
+    # Classification and complexity describe workflows. Mapping files are not rows.
+    total_entries = sum(1 for wf in workflows if _is_workflow_entry(wf))
 
     # --- Compute derived data ---
     classification_counts: Dict[str, int] = {}
@@ -230,35 +273,56 @@ def _build_rich_summary_fallback(data: Dict) -> str:
     not_supported_types: List[str] = []
     largest_wf_name = ""
     largest_wf_components = 0
+    seen_mapping_paths: Set[str] = set()
+    seen_sources: Set[str] = set()
+    seen_targets: Set[str] = set()
 
     for wf in workflows:
         ai = wf.get("ai_analysis") or {}
-        c = ai.get("classification", "Unclassified") or "Unclassified"
-        classification_counts[c] = classification_counts.get(c, 0) + 1
-
         metrics = wf.get("metrics", {})
-        cx = metrics.get("workflow_complexity", {}).get("complexity", "Unknown")
-        complexity_counts[cx] = complexity_counts.get(cx, 0) + 1
 
-        if wf.get("flags", {}).get("has_custom_transforms"):
-            custom_transform_count += 1
+        if _is_workflow_entry(wf):
+            c = ai.get("classification", "Unclassified") or "Unclassified"
+            classification_counts[c] = classification_counts.get(c, 0) + 1
 
-        wf_components = metrics.get("total_components", 0)
-        if wf_components > largest_wf_components:
-            largest_wf_components = wf_components
-            largest_wf_name = wf.get("name", "Unknown")
+            cx = metrics.get("workflow_complexity", {}).get("complexity", "Unknown")
+            complexity_counts[cx] = complexity_counts.get(cx, 0) + 1
 
-        ns = metrics.get("not_supported_elements", {})
-        ns_count = ns.get("total_count", 0)
-        total_not_supported += ns_count
-        for ct in ns.get("component_types", []):
-            if ct not in not_supported_types:
-                not_supported_types.append(ct)
+            wf_components, _shown = _page_component_counts(
+                wf.get("mappings", []), wf.get("workflow_tasks", [])
+            )
+            if wf_components > largest_wf_components:
+                largest_wf_components = wf_components
+                largest_wf_name = wf.get("name", "Unknown")
+
+            # The sentence says workflow(s). A mapping file is not one.
+            if _workflow_has_custom_transform(wf):
+                custom_transform_count += 1
+
+        for task in wf.get("workflow_tasks", []):
+            if task.get("status") != "NotSupported":
+                continue
+            total_not_supported += 1
+            subtype = task.get("subtype") or "Unknown"
+            if subtype not in not_supported_types:
+                not_supported_types.append(subtype)
+        for mapping in wf.get("mappings", []):
+            # One mapping run by two workflows, or listed on its own file too.
+            path = mapping.get("full_path")
+            if path and path in seen_mapping_paths:
+                continue
+            if path:
+                seen_mapping_paths.add(path)
+            ns = mapping.get("metrics", {}).get("not_supported_components", {})
+            total_not_supported += ns.get("total_count", 0)
+            for ct in ns.get("component_types", []):
+                if ct not in not_supported_types:
+                    not_supported_types.append(ct)
 
         for src in wf.get("source_definitions", []):
-            _acc_db_type(src, source_db_types)
+            _acc_db_type_once(src, source_db_types, seen_sources)
         for tgt in wf.get("target_definitions", []):
-            _acc_db_type(tgt, target_db_types)
+            _acc_db_type_once(tgt, target_db_types, seen_targets)
 
     # Success rate
     status_totals = summary.get("status_totals", {})
@@ -283,19 +347,19 @@ def _build_rich_summary_fallback(data: Dict) -> str:
     # --- Section 1: Workload Overview ---
     complexity_desc_parts = []
     easy_total = complexity_counts.get("Very Easy", 0) + complexity_counts.get("Easy", 0)
-    if easy_total > 0 and total_workflows > 0:
+    if easy_total > 0 and total_entries > 0:
         complexity_desc_parts.append(
-            f"{round(easy_total / total_workflows * 100)}% Easy/Very Easy"
+            f"{round(easy_total / total_entries * 100)}% Easy/Very Easy"
         )
     medium = complexity_counts.get("Medium", 0)
-    if medium > 0 and total_workflows > 0:
+    if medium > 0 and total_entries > 0:
         complexity_desc_parts.append(
-            f"{round(medium / total_workflows * 100)}% Medium"
+            f"{round(medium / total_entries * 100)}% Medium"
         )
     hard_total = complexity_counts.get("Complex", 0) + complexity_counts.get("Very Complex", 0)
-    if hard_total > 0 and total_workflows > 0:
+    if hard_total > 0 and total_entries > 0:
         complexity_desc_parts.append(
-            f"{round(hard_total / total_workflows * 100)}% Complex"
+            f"{round(hard_total / total_entries * 100)}% Complex"
         )
     complexity_desc = ", ".join(complexity_desc_parts) if complexity_desc_parts else "not assessed"
 
@@ -303,7 +367,7 @@ def _build_rich_summary_fallback(data: Dict) -> str:
   <div style="background: #f0f9ff; border-left: 4px solid #29B5E8; border-radius: 8px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;">
     <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Workload Overview</h3>
     <p style="font-size: 0.9rem; color: #334155; line-height: 1.7; margin: 0;">
-      This Informatica PowerCenter workload comprises <strong>{total_workflows} workflows</strong> containing <strong>{total_mappings} mappings</strong> and <strong>{total_components:,} total components</strong>. Complexity distribution: {complexity_desc}. Conversion success rate: <strong>{success_rate}%</strong> ({success_count:,} of {total_status:,} components).
+      This Informatica PowerCenter workload comprises <strong>{_plural(total_workflows, 'workflow')}</strong> and <strong>{_plural(total_mappings, 'mapping')}</strong> with <strong>{total_components:,} total components</strong>. Complexity distribution: {complexity_desc}. Conversion success rate: <strong>{success_rate}%</strong> ({success_count:,} of {total_status:,} components).
     </p>
   </div>"""
 
@@ -326,7 +390,7 @@ def _build_rich_summary_fallback(data: Dict) -> str:
     }
     row_bg = False
     for label, count in ordered_classes:
-        pct = round((count / total_workflows) * 100, 1) if total_workflows else 0
+        pct = round((count / total_entries) * 100, 1) if total_entries else 0
         color = class_colors.get(label, "#9CA3AF")
         target = class_targets.get(label, target_transform)
         bg = ' background: #fafafa;' if row_bg else ''
@@ -537,7 +601,7 @@ def _build_rich_summary_fallback(data: Dict) -> str:
                            f"{total_ewis} Early Warning Issues identified during conversion requiring manual review and resolution."))
     if success_rate >= 95 and len(risk_cards) < 4:
         risk_cards.append(("green", "High Conversion Confidence",
-                           f"{success_rate}% success rate with only {total_ewis} EWIs across {total_workflows} workflows. Single-mapping workflows simplify migration — each maps cleanly to one {target_short.rstrip('s') if target_short.endswith('s') else target_short}."))
+                           f"{success_rate}% success rate with only {total_ewis} EWIs across {_plural(total_workflows, 'workflow')} and {_plural(total_mappings, 'mapping')}. Single-mapping workflows simplify migration — each maps cleanly to one {target_short.rstrip('s') if target_short.endswith('s') else target_short}."))
     elif success_rate < 80 and len(risk_cards) < 4:
         risk_cards.append(("red", "Low Conversion Rate",
                            f"Only {success_rate}% conversion success rate indicates significant manual effort needed for migration."))
@@ -579,6 +643,16 @@ def _build_rich_summary_fallback(data: Dict) -> str:
         """
 
 
+def _acc_db_type_once(definition: Dict, accumulator: Dict[str, int], seen: Set[str]) -> None:
+    """Count a folder source or target once. The same declaration is copied onto each mapping file."""
+    name = definition.get("full_name")
+    if name:
+        if name in seen:
+            return
+        seen.add(name)
+    _acc_db_type(definition, accumulator)
+
+
 def _acc_db_type(definition: Dict, accumulator: Dict[str, int]) -> None:
     """Accumulate databaseType from a source/target definition's additional_info."""
     info = definition.get("additional_info", "")
@@ -601,10 +675,10 @@ def _generate_metrics_section(summary: Dict, workflows: List[Dict]) -> str:
     total_ewis = summary.get("total_ewis", 0)
     total_fdms = summary.get("total_fdms", 0)
 
-    # Calculate AI analyzed count
+    # Mapping files are not analyzed. A stale analysis on one must not raise this past Total Workflows.
     analyzed_count = sum(
         1 for wf in workflows
-        if (wf.get("ai_analysis") or {}).get("status") == "DONE"
+        if _is_workflow_entry(wf) and (wf.get("ai_analysis") or {}).get("status") == "DONE"
     )
 
     status_totals = summary.get("status_totals", {})
@@ -627,7 +701,7 @@ def _generate_metrics_section(summary: Dict, workflows: List[Dict]) -> str:
             <div class="metric-card">
                 <div class="metric-label">Total Workflows</div>
                 <div class="metric-value">{total_workflows}</div>
-                <div class="metric-description">XML files analyzed</div>
+                <div class="metric-description">Workflow definitions</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">AI Analyzed</div>
@@ -822,8 +896,9 @@ def _generate_workflow_classification(workflows: List[Dict], output_html_path: P
     """Generate Workflow Classification section (equivalent to SSIS Package Classification).
 
     Shows workflow classification distribution, analysis status, and a filterable
-    workflow table with clickable links to detail pages.
+    workflow table with clickable links to detail pages. Mapping files are not rows.
     """
+    workflows = [wf for wf in workflows if _is_workflow_entry(wf)]
     if not workflows:
         return """
         <section id="informatica-workflow-classification">
@@ -1028,6 +1103,9 @@ def _generate_component_breakdown(workflows: List[Dict]) -> str:
 
         # Mapping components (Data Flow equivalent) — classify by Informatica semantics
         for mapping in wf.get("mappings", []):
+            # Shown on a workflow that also keeps this mapping as its own entry.
+            if mapping.get("count_components", True) is False:
+                continue
             for component in mapping.get("components", []):
                 subtype = component.get("subtype", "Unknown")
                 status = component.get("status", "Unknown")
@@ -1196,6 +1274,8 @@ def _generate_workflow_detail_pages(
     # output_dir is the informatica_mappings/ subdir; parent is main output dir
     dag_root = output_dir.parent
     dag_service = InformaticaDagService
+    # Mapping files stay in the analysis. They do not get their own detail page.
+    workflows = [wf for wf in workflows if _is_workflow_entry(wf)]
 
     # Generate DAG HTML files for each workflow and mapping
     for wf in workflows:
@@ -1280,24 +1360,24 @@ def _build_workflow_detail_html(wf: Dict, main_report_filename: str, dag_base_pa
     workflow_tasks = wf.get("workflow_tasks", [])
     workflow_dag_file = wf.get("workflow_dag_file", "")
 
-    rates = metrics.get("conversion_rates", {})
     complexity_data = metrics.get("workflow_complexity", {})
     classification = ai_analysis.get("classification", "Unclassified") or "Unclassified"
     complexity = complexity_data.get("complexity", "\u2014") if classification != "Unclassified" else "\u2014"
     analysis_text = ai_analysis.get("analysis", "").strip()
 
-    # Metrics
-    total_components = metrics.get("total_components", 0)
+    # The Components card, the success rate, and the breakdown badge are the rows
+    # on this page, including a mapping whose file is kept separately.
+    total_components, shown_status = _page_component_counts(mappings, workflow_tasks)
     total_mappings = metrics.get("total_mappings", 0)
-    success_rate = rates.get("success_rate", 0)
-    partial_rate = rates.get("partial_rate", 0)
-    not_supported_rate = rates.get("not_supported_rate", 0)
-
-    # Status counts
-    status_summary = metrics.get("status_summary", {})
-    success_count = status_summary.get("Success", 0)
-    partial_count = status_summary.get("Partial", 0)
-    not_supported_count = status_summary.get("NotSupported", 0)
+    success_count = shown_status["Success"]
+    partial_count = shown_status["Partial"]
+    not_supported_count = shown_status["NotSupported"]
+    if total_components:
+        success_rate = round(success_count / total_components * 100, 2)
+        partial_rate = round(partial_count / total_components * 100, 2)
+        not_supported_rate = round(not_supported_count / total_components * 100, 2)
+    else:
+        success_rate = partial_rate = not_supported_rate = 0
 
     # Classification styling
     classification_styles = {
@@ -1542,6 +1622,9 @@ def _build_workflow_detail_html(wf: Dict, main_report_filename: str, dag_base_pa
         st = task.get("subtype", "Unknown")
         subtype_counts[st] = subtype_counts.get(st, 0) + 1
 
+    # Same rows as the Components card above.
+    breakdown_count = total_components
+
     component_breakdown_html = ""
     if subtype_counts:
         breakdown_rows = ""
@@ -1716,7 +1799,7 @@ def _build_workflow_detail_html(wf: Dict, main_report_filename: str, dag_base_pa
                                 <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
                             </svg>
                             Component Breakdown
-                            <span style="background: #f1f5f9; padding: 0.125rem 0.5rem; border-radius: 99px; font-size: 0.75rem; color: #64748b; font-weight: 500;">{total_components}</span>
+                            <span style="background: #f1f5f9; padding: 0.125rem 0.5rem; border-radius: 99px; font-size: 0.75rem; color: #64748b; font-weight: 500;">{breakdown_count}</span>
                         </div>
                         <span class="toggle-icon">&#9654;</span>
                     </div>

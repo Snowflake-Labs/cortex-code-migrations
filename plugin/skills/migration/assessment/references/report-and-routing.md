@@ -20,6 +20,7 @@ end-to-end path is fully defined in `SKILL.md`.
 | Migration effort/hours | `effort-estimate/SKILL.md` |
 | SQL Server migration risks/anti-patterns | `anti-patterns/SKILL.md` |
 | Dynamic SQL patterns | `analyzing-sql-dynamic-patterns/SKILL.md` |
+| Conversion issues, EWI report, Jira ZIP | Parent input collection, then `conversion-issues/SKILL.md` |
 | SQL Server Extended Events, Teradata DBQL, or Redshift SYS_QUERY_HISTORY discovery | Parent input collection, then `workload-insights/SKILL.md` |
 | SSIS packages | `etl-assessment/SKILL.md` |
 | Informatica PowerCenter | `informatica-assessment/SKILL.md` |
@@ -58,6 +59,9 @@ uv run --project "<directory containing the applicable SKILL.md>" \
 For `data-lineage/scripts/query_cur_catalog.py`, that `--project` directory is
 `assessment_skill_dir` from the 6.7 context block — never `project_dir`. The
 helper is not a carve-out: it uses the same `uv run --project` form as staging.
+The ETL DAG renderer is the same form: `--project` is `etl_assessment_skill_dir`
+(the absolute `etl-assessment` directory under the plugin) and the script is
+`<etl_assessment_skill_dir>/scripts/dag_renderer/render_dags.py`.
 
 Do not create custom scripts or bash loops. Follow the selected sub-skill's
 commands exactly.
@@ -73,6 +77,8 @@ scai assessment report \
   [--ssis-json "<path>" when SSIS succeeded] \
   [--informatica-json "<path>" when Informatica succeeded]
 ```
+
+The command also writes a PDF of every tab beside the HTML (`multi_report.pdf`, or the `-o` stem with a `.pdf` extension). It needs Google Chrome, Microsoft Edge, or Chromium on the machine.
 
 Always pass `--project-dir`; its registry is required to enrich UUID-based
 waves with names, categories, paths, statuses, and dependencies. The command

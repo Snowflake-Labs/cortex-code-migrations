@@ -13,7 +13,7 @@ Detailed reference for PostgreSQL connection options, authentication methods, SS
 | Host | `--host` | PostgreSQL hostname or IP address |
 | Database | `--database` | Database name (bound at connection time) |
 | Username | `--user` | PostgreSQL username |
-| Password | `--password` | PostgreSQL password |
+| Password | `--password` | PostgreSQL password (prompted securely if omitted) |
 
 ### Optional Parameters
 
@@ -37,14 +37,15 @@ scai connection add-postgresql \
   --port 5432 \
   --database mydb \
   --user myuser \
-  --password mypassword \
   --ssl-mode Require
 ```
+
+The CLI prompts for the password securely. Never include it in the command line.
 
 **When to use:**
 - All PostgreSQL connections (only method available in MVP)
 
-**Full inline example with all options:**
+**Inline example with optional settings:**
 
 ```bash
 scai connection add-postgresql \
@@ -54,7 +55,6 @@ scai connection add-postgresql \
   --port 5432 \
   --database mydb \
   --user myuser \
-  --password mypassword \
   --ssl-mode VerifyFull \
   --connection-timeout 60
 ```
@@ -72,7 +72,6 @@ scai connection add-postgresql \
   --host my-instance.us-east-1.rds.amazonaws.com \
   --database mydb \
   --user myuser \
-  --password mypassword \
   --ssl-mode Require
 ```
 
@@ -87,7 +86,6 @@ scai connection add-postgresql \
   --host pg-server.example.com \
   --database mydb \
   --user myuser \
-  --password mypassword \
   --ssl-mode VerifyFull
 ```
 
@@ -103,7 +101,6 @@ scai connection add-postgresql \
   --port 5432 \
   --database mydb \
   --user postgres \
-  --password postgres \
   --ssl-mode Disable
 ```
 
@@ -132,8 +129,7 @@ scai connection add-postgresql \
   --auth standard \
   --host pg-server.example.com \
   --database mydb \
-  --user myuser \
-  --password mypassword
+  --user myuser
 ```
 
 ### Non-Default Port
@@ -147,8 +143,7 @@ scai connection add-postgresql \
   --host pg-server.example.com \
   --port 5433 \
   --database mydb \
-  --user myuser \
-  --password mypassword
+  --user myuser
 ```
 
 ### Common Port Scenarios

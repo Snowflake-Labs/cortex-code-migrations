@@ -9,6 +9,21 @@ license: Proprietary. See License-Skills for complete terms
 
 Apply matched rules to a single converted SQL file. For batch application (multiple files from propagation), see [BATCH.md](BATCH.md).
 
+## Migration state machine (`applyRules`)
+
+When the executor dispatches this skill as the `applyRules` task:
+
+1. At entry:
+   ```
+   transition_status(status="started", task="applyRules", where="id = '<object_id>'")
+   ```
+2. Apply rules (steps below).
+3. When finished applying (or there was nothing to apply):
+   ```
+   transition_status(status="advance", task="applyRules", outcome="completed", where="id = '<object_id>'")
+   ```
+   The machine routes to `fixCode`. Do not leave completion to `next_task` alone.
+
 ## Inputs
 
 - `rules` — matched rules array from `search_rules` (sorted by priority)
