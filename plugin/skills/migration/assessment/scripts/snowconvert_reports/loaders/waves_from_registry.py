@@ -4,7 +4,8 @@
 
 Every in-scope registry entry becomes a row in `objects[]`, including entries
 marked `isMissing: true` or with `objectType == "other"` (which usually means a
-referenced target that has no source file). Only `objectType == "schema"` is
+referenced target that has no source file). The exception is a SQL Server
+`#`/`##` temp table's missing stub, which the loader drops with its edges. Only `objectType == "schema"` is
 skipped (current registry bug, to be fixed upstream). This mirrors what
 `scai assessment waves` itself emits — no filtering at the synthesizer layer.
 
@@ -32,9 +33,13 @@ from typing import Any
 
 from ..conversion_status import is_etl as _is_etl
 from ..conversion_status import map_conversion_status as _map_conversion_status
+from ..conversion_status import summarize_issues as _summarize_issues
 from .registry_loader import (
+    _entry_full_name,
     build_id_to_name_map,
+    drop_temp_table_stubs,
     load_registry_entries,
+    temp_table_dependencies,
 )
 
 # Empty — schemas and `other`/missing entries are all valid code units for
@@ -104,24 +109,21 @@ def _canonical_name(entry: dict) -> str:
     (especially ``isMissing`` ones like ``Dash.U.value``) store it unbracketed,
     which causes downstream deduplication against ``build_id_to_name_map`` to
     fail. Reconstructing from the parts guarantees the bracketed form used
-    everywhere else in the pipeline.
+    everywhere else in the pipeline — including bindable-token unwrap so
+    overlay keys match ``build_id_to_name_map`` / ``_entry_full_name``.
 
-    ETL units (``kind == "etl"``) have no ``source.database/schema/name``;
-    their natural identifier is ``files.source.path`` (e.g. the ``.dtsx`` /
-    ``.xml`` definition file).
+    ETL units (``kind == "etl"``) and script units (``kind == "script"``,
+    e.g. BTEQ) have no ``source.database/schema``; their natural identifier
+    is ``files.source.path`` (the ``.dtsx`` / ``.xml`` / ``.btq`` file), so
+    same-named files in different folders stay distinct.
     """
-    if _is_etl(entry):
+    if _is_etl(entry) or entry.get("kind") == "script":
         path = (
             entry.get("files", {}).get("source", {}).get("path", "") or ""
         ).strip()
         return path or (entry.get("id") or "")
-    source = _source_or_target(entry)
-    parts = [
-        _bracket(v)
-        for v in (source.get("database", ""), source.get("schema", ""), source.get("name", ""))
-        if v and v.strip() and v.strip("[]")
-    ]
-    return ".".join(parts) if parts else ""
+    name = _entry_full_name(entry)
+    return "" if name == "[]" else name
 
 
 def _aggregate_etl_dependencies(entry: dict) -> tuple[list[dict], list[dict]]:
@@ -264,6 +266,7 @@ def _build_object(
         "technology": "",
         "fileName": file_name,
         "conversionStatus": _map_conversion_status(entry),
+        "issues": _summarize_issues(entry),
         "partitionNumber": MOCK_PARTITION_NUMBER,
         "partitionType": MOCK_PARTITION_TYPE,
         "isRoot": len(required_by) == 0,
@@ -431,7 +434,12 @@ def overlay_real_waves_json(
             f"`scai assessment waves` to regenerate with the current schema."
         )
 
-    entries = load_registry_entries(registry_dir)
+    raw_entries = load_registry_entries(registry_dir, keep_temp_table_stubs=True)
+    # The real waves JSON still counts the temp-table edges the synthesizer
+    # dropped; ``temp_deps`` is what to take back off each object's counts.
+    temp_deps = temp_table_dependencies(raw_entries)
+    temp_ids = set().union(*temp_deps.values()) if temp_deps else set()
+    entries = drop_temp_table_stubs(raw_entries)
     uuid_to_name = build_id_to_name_map(entries)
 
     # Only UUIDs whose canonical name is present as a synthesized object are
@@ -469,6 +477,10 @@ def overlay_real_waves_json(
         ):
             if key in real_obj:
                 obj[key] = real_obj[key]
+        dropped = len(temp_deps.get(uuid, ()))
+        for key in ("totalDependencies", "totalDirectDependencies"):
+            if dropped and isinstance(obj.get(key), int):
+                obj[key] = max(0, obj[key] - dropped)
         overlaid += 1
 
     # --- partitions: translate UUIDs, drop unresolved entries ---
@@ -512,10 +524,24 @@ def overlay_real_waves_json(
     # --- missingCodeUnits: copy through unchanged ---
     mcu = real.get("missingCodeUnits")
     if isinstance(mcu, dict):
+        code_units = [cu for cu in (mcu.get("codeUnits") or []) if isinstance(cu, dict)]
+        temp_units = [cu for cu in code_units if cu.get("id") in temp_ids]
+        relation_types = dict(mcu.get("relationTypes", {}) or {})
+        for cu in temp_units:
+            for rel, count in (cu.get("relationTypes") or {}).items():
+                remaining = int(relation_types.get(rel, 0) or 0) - int(count or 0)
+                if remaining > 0:
+                    relation_types[rel] = remaining
+                else:
+                    relation_types.pop(rel, None)
         synth["missingCodeUnits"] = {
-            "totalCount": int(mcu.get("totalCount", 0) or 0),
-            "totalReferences": int(mcu.get("totalReferences", 0) or 0),
-            "relationTypes": dict(mcu.get("relationTypes", {}) or {}),
+            "totalCount": max(0, int(mcu.get("totalCount", 0) or 0) - len(temp_units)),
+            "totalReferences": max(
+                0,
+                int(mcu.get("totalReferences", 0) or 0)
+                - sum(int(cu.get("requiredByCount", 0) or 0) for cu in temp_units),
+            ),
+            "relationTypes": relation_types,
             "codeUnits": [
                 {
                     "id": cu.get("id", ""),
@@ -523,8 +549,8 @@ def overlay_real_waves_json(
                     "requiredByCount": int(cu.get("requiredByCount", 0) or 0),
                     "relationTypes": dict(cu.get("relationTypes", {}) or {}),
                 }
-                for cu in (mcu.get("codeUnits") or [])
-                if isinstance(cu, dict)
+                for cu in code_units
+                if cu.get("id") not in temp_ids
             ],
         }
 

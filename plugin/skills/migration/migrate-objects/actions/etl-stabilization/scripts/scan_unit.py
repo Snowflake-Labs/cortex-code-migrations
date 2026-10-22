@@ -833,6 +833,7 @@ def print_summary(result: dict) -> None:
 PLATFORM_EXTENSIONS: dict[str, str] = {
     ".dtsx": "ssis",
     ".yxmd": "alteryx",
+    ".item": "talend",
 }
 
 AMBIGUOUS_EXTENSIONS: set[str] = {".xml"}
@@ -910,21 +911,43 @@ def _ai_first_reports_root(reports_dir: Path) -> Path:
     return reports_dir.parent if reports_dir.name == "SnowConvert" else reports_dir
 
 
-def ai_first_issues_path(reports_dir: Path | None) -> Path | None:
-    """`{output_root}/Reports/AiFirstIssues/issues.json` -- the AI-First marker beside `reports_dir`."""
+def _scoped_or_unscoped(root: Path, unit_name: str | None, relative_file: str) -> Path:
+    """Prefer `{root}/<subdir>/<unit_name>/<relative_file>` when it exists.
+
+    The AI-First convert path (`etl-aifirst/MIGRATE.md`) writes each unit's
+    `AiFirstIssues`/`AiFirstRemediation` tree under its own `<PACKAGE>` subdirectory so a
+    multi-unit conversion can't have one unit's artifacts overwrite another's. A unit with
+    no scoping (single-unit conversions predating that change) still has its artifacts
+    directly under `root`, so an absent scoped path falls back to the unscoped one rather
+    than reporting "missing" for a unit that was never scoped in the first place.
+    """
+    if unit_name:
+        scoped = root / unit_name / relative_file
+        if scoped.is_file():
+            return scoped
+    return root / relative_file
+
+
+def ai_first_issues_path(reports_dir: Path | None, unit_name: str | None = None) -> Path | None:
+    """`{output_root}/Reports/AiFirstIssues/issues.json` -- the AI-First marker beside `reports_dir`,
+    or `{output_root}/Reports/AiFirstIssues/<unit_name>/issues.json` when the unit's artifacts are
+    package-scoped."""
     if reports_dir is None:
         return None
-    return _ai_first_reports_root(reports_dir) / "AiFirstIssues" / "issues.json"
+    root = _ai_first_reports_root(reports_dir) / "AiFirstIssues"
+    return _scoped_or_unscoped(root, unit_name, "issues.json")
 
 
-def remediation_brief_path(reports_dir: Path | None) -> Path | None:
-    """`{output_root}/Reports/AiFirstRemediation/remediation-brief.json` (`findings/61` SS10)."""
+def remediation_brief_path(reports_dir: Path | None, unit_name: str | None = None) -> Path | None:
+    """`{output_root}/Reports/AiFirstRemediation/remediation-brief.json` (`findings/61` SS10), or its
+    `<unit_name>`-scoped counterpart when the unit's artifacts are package-scoped."""
     if reports_dir is None:
         return None
-    return _ai_first_reports_root(reports_dir) / "AiFirstRemediation" / "remediation-brief.json"
+    root = _ai_first_reports_root(reports_dir) / "AiFirstRemediation"
+    return _scoped_or_unscoped(root, unit_name, "remediation-brief.json")
 
 
-def check_unsupported_brief(reports_dir: Path | None) -> str:
+def check_unsupported_brief(reports_dir: Path | None, unit_name: str | None = None) -> str:
     """Classify brief availability for a unit that selected the `unsupported` pack.
 
     Returns "missing_required" only when the unit carries AI-First artifacts (Gate A/B + AIM ran)
@@ -933,10 +956,10 @@ def check_unsupported_brief(reports_dir: Path | None) -> str:
     A unit with no AI-First artifacts at all is not held to that bar: it never had a brief to
     write, so "not_applicable" is the honest state, not a failure.
     """
-    brief_path = remediation_brief_path(reports_dir)
+    brief_path = remediation_brief_path(reports_dir, unit_name)
     if brief_path is not None and brief_path.is_file():
         return "present"
-    issues_path = ai_first_issues_path(reports_dir)
+    issues_path = ai_first_issues_path(reports_dir, unit_name)
     if issues_path is not None and issues_path.is_file():
         return "missing_required"
     return "not_applicable"
@@ -1133,7 +1156,7 @@ def main() -> None:
 
     unsupported_brief_status = None
     if pack_id == UNSUPPORTED_PACK_ID:
-        unsupported_brief_status = check_unsupported_brief(reports_dir)
+        unsupported_brief_status = check_unsupported_brief(reports_dir, unit_name)
 
     result = {
         "unit_name": unit_name,

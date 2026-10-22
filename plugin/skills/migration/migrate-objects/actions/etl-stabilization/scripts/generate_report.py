@@ -36,7 +36,70 @@ from datetime import datetime, timezone
 from pathlib import Path
 from html import escape
 
-from path_resolver import report_path, stabilization_root
+from path_resolver import report_path, session_status_path, stabilization_root
+
+
+class MissingLedgerError(RuntimeError):
+    """Raised when session_status.json is absent -- there is no safe default to render."""
+
+# Mirrors track_status.py's COMPLETION_ELIGIBLE_STATUSES / DBT_NODE_COMPLETION_ELIGIBLE_STATUSES
+# (allow-list form, so an unrecognized future status fails closed rather than passing).
+# Kept as a local literal rather than an import: track_status.py already does a late
+# `import generate_report` inside close-unit, and importing back would reintroduce the cycle.
+_REPORT_READY_ELEMENT_STATUSES = {
+    "test-passed", "no-fix-needed", "skipped", "auto-fixed-needs-review",
+    "return-to-convert", "residual",
+}
+_REPORT_READY_DBT_NODE_STATUSES = {"passing", "skipped", "test-passed", "unverified"}
+
+
+class ReportNotReadyError(Exception):
+    """Raised when report generation is refused because the unit isn't done.
+
+    See reference/protocols/element-statuses.md for the status vocabulary.
+    """
+
+
+# Same three statuses as track_status.STATE_PROGRESS_STATUSES. A local copy, same
+# reason as the allow-lists above: close-unit already imports this module.
+_PROGRESS_COUNTED_STATUSES = {"test-passed", "no-fix-needed", "skipped"}
+
+
+def _element_progress_percent(session: dict) -> int:
+    elements = session.get("elements", [])
+    if not elements:
+        return 0
+    counted = sum(1 for el in elements if el.get("status") in _PROGRESS_COUNTED_STATUSES)
+    return int(counted / len(elements) * 100)
+
+
+def completion_gate_errors(session: dict) -> list[str]:
+    """Elements/dbt nodes that must resolve further before a report may be generated.
+
+    `fixed` means a fix was applied but never (re-)validated by tests -- generating a
+    report against it would claim a correctness result nobody checked. Statuses that
+    are terminal but not assertion results (`auto-fixed-needs-review`,
+    `return-to-convert`, `residual`) also refuse the report: progress is not 100%.
+    """
+    errors: list[str] = []
+    not_ready = [
+        el.get("name", "?") for el in session.get("elements", [])
+        if el.get("status") not in _REPORT_READY_ELEMENT_STATUSES
+    ]
+    if not_ready:
+        errors.append(f"Elements not completion-eligible: {', '.join(not_ready)}")
+
+    pct = _element_progress_percent(session)
+    if pct != 100:
+        errors.append(f"Progress is {pct}%, not 100%")
+
+    not_ready_nodes = [
+        n.get("name", "?") for n in session.get("dbt_nodes", [])
+        if n.get("status") not in _REPORT_READY_DBT_NODE_STATUSES
+    ]
+    if not_ready_nodes:
+        errors.append(f"dbt nodes not completion-eligible: {', '.join(not_ready_nodes)}")
+    return errors
 
 
 def _load_json(path: Path) -> dict | None:
@@ -214,7 +277,20 @@ def generate_report(unit_path: Path, template_path: Path) -> Path:
     tracking_directory = stab_root / "tracking"
 
     scan = _load_json(planning_directory / "scan.json") or {}
-    session = _load_json(tracking_directory / "progress.json") or {}
+    session_file = session_status_path(unit_path)
+    session = _load_json(session_file)
+    if session is None:
+        raise MissingLedgerError(
+            f"{session_file} not found. If this unit has a legacy 'progress.json', rename it "
+            f"to 'session_status.json' -- generate_report.py no longer reads the old name."
+        )
+
+    gate_errors = completion_gate_errors(session)
+    if gate_errors:
+        raise ReportNotReadyError(
+            "Refusing to generate report.html -- unit is not complete:\n"
+            + "\n".join(f"  - {e}" for e in gate_errors)
+        )
     roadmap_md = _load_text(planning_directory / "ROADMAP.md") or ""
     pkg_orch_context_md = _load_text(planning_directory / "orchestration-context.md") or ""
     pkg_dbt_context_md = _load_text(planning_directory / "dbt-context.md") or ""
@@ -434,12 +510,13 @@ def generate_report(unit_path: Path, template_path: Path) -> Path:
     file_ref_rows = ""
     artifact_files = [
         ("artifacts/planning/scan.json", "Unit scan output"),
-        ("artifacts/tracking/session_status.json", "Element-level tracking"),
+        ("tracking/session_status.json", "Element-level tracking"),
         ("artifacts/planning/ROADMAP.md", "Phase plan"),
         ("artifacts/planning/orchestration-context.md", "Orchestration structural understanding"),
         ("artifacts/planning/dbt-context.md", "dbt project analysis"),
-        ("artifacts/tracking/STATE.md", "Resumption bookmark"),
-        ("artifacts/tracking/fix_log.md", "Append-only fix record"),
+        ("tracking/STATE.md", "Resumption bookmark"),
+        ("tracking/fix-log.md", "Append-only fix record"),
+        ("tracking/friction-notes.md", "Skipped-step notes (optional, never required)"),
     ]
     for fname, desc in artifact_files:
         fpath = stab_root / fname
@@ -508,7 +585,11 @@ def main() -> None:
         print(f"Error: Template not found: {template_path}", file=sys.stderr)
         sys.exit(1)
 
-    generate_report(unit_folder, template_path)
+    try:
+        generate_report(unit_folder, template_path)
+    except (MissingLedgerError, ReportNotReadyError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,46 +1,32 @@
 # Validate data (per-object)
 
-Guide for the `validateData` task — validate the batch of tables the machine handed you (`where = id IN (...)`). 
-The shared orchestrator + worker are already up (brought up once via `data_infrastructure(mode="up")`).
-This step is **pure dispatch**, not infrastructure setup.
+Guide for the `validateData` task — validate the tables the machine handed you (`where = id IN (...)`).
 
-## 1. Choose validation scope (once per batch, if not already set)
+Under `subagent_mode` on SQL Server this is **synchronous** `scai data validate start --direct`. No orchestrator, no worker, no Monitor, no waiting.
 
-Validation type / sync strategy were chosen during setup and persist across
-objects. Do not ask or run setup here. If they are missing, or the user asks
-to change them, return the request to the main agent, who owns setup.
+## 0. Record task start
 
-## 2. Generate the workflow
+```
+transition_status(status="started", task="validateData", where=<the batch's object filter>)
+```
 
-Call `validate_data(mode="setup", where=<the batch's object filter>)`. It writes a validation
-workflow YAML and returns `edit_hints`. Review and edit the toggles (schema / metrics /
-row validation, continue-on-failure) if needed before running.
+Do this once before `run`. Finish with `transition_status(status="advance", …)` once
+the result is known (§2).
 
-## 3. Dispatch
+## 1. Run it
 
-Call `validate_data(mode="run", workflow_path=<path from setup>)` — **pure
-dispatch** against the already-running infrastructure. If the response says
-infrastructure is not up, stop and return that remediation to the main agent.
-Do not call `data_infrastructure` from this subagent; the main agent resumes
-the persisted setup and redispatches the task. Use
-`validate_data(mode="revalidate", workflow_name=<finished parent>)` to retry
-only failed partitions of a finished run.
+Call `validate_data(mode="run", where=<the batch's object filter>)`. Setup is folded in: `run` generates the one-table workflow if needed (matching keys, `sync=none`) and blocks until validation finishes. Pass `workflow_path` only to reuse an edited YAML.
 
-The response carries a `monitor` block (a `job_id` and a ready-made `watch_command`).
+Do not call `data_infrastructure`. Do not arm Monitor. Do not return `waiting`. The response `status` is the result (`completed` / `failed`).
 
-## 4. Track it
+## 2. Stamp the outcome
 
-If you are a a general_task subagent, you will be woken up. Otherwise, arm the
-`monitor.watch_command` with the Monitor tool. Its terminal event's
-`detail.completion` is the authoritative result and supplies the final
-verdict, counts, and failures. Use `job_status(job_id)` only for an on-demand
-status or lost-watch recovery; use `details=true` for deeper failure
-diagnostics.
+The machine reads live `DATA_VALIDATION.TABLE_PROGRESS_DETAIL` — there is no registry stamp.
 
-## When it finishes
+- **Completed** → `transition_status(status="advance", task="validateData", outcome="completed", where=<batch filter>)` so `TASK_EVENTS` get an `advanced` row — do not leave completion to `next_task` alone. The server refuses it unless the job oracle confirms.
+- **Failed** → do not stamp (only a completed advance is oracle-confirmed for `validateData`).
 
-The machine reads live `DATA_VALIDATION.TABLE_PROGRESS_DETAIL` — do not stamp the registry.
-Present the error-first validation report (`validate_tables.md` Step 5) and offer re-validation when eligible.
+Then `migration_status(mode="next_task")`.
 
 Offer re-validation only after the report identifies a changed input or a transient
 condition that has cleared. A repeatable source/target row mismatch, schema drift,
@@ -48,7 +34,11 @@ or invalid identifier / compilation error in generated validation SQL is
 deterministic: park it with the exact evidence and required repair instead of
 dispatching the same workflow again.
 
-## Troubleshooting
+## Interactive (not a walker)
 
-If you are stuck and need additional details, for the full monitoring / reporting /
-teardown walkthrough, load `validate_tables.md` (Steps 4–6) in this folder.
+If the response has `status="started"` and a `monitor` block, you are on the
+orchestrated path: infrastructure must already be up via `data_infrastructure(mode="up")`.
+Arm the `monitor.watch_command` (or return `waiting` if you are a walker on a
+sibling blocker). When its terminal event's `detail.completion` arrives, stamp the
+outcome as in §2. Use `validate_data(mode="revalidate", workflow_name=<finished parent>)`
+to retry only failed partitions of a finished orchestrated run.

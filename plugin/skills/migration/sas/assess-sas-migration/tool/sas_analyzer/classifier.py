@@ -1,22 +1,14 @@
 import re
 from typing import Dict
 from .parser import SASScript, SASBlock, BlockType
-from .constants import iter_countable_blocks
+from .constants import (iter_countable_blocks, statement_text, HASH_MUTATION_MARKERS,
+                        TIER3_STAT_PROCS, TIER3_STAT_PROC_PREFIXES, TIER3_PREFIX_EXCEPTIONS)
 
 
 class TierClassifier:
 
-    TIER3_TRIGGERS = [
-        ('declare hash', 'HASH objects - no SQL equivalent'),
-    ]
-
-    # Statistical-modeling PROCs -> Tier 3 (PySpark/SCOS). Canonical list, kept in
-    # sync with references/block-tiering-spec.md and the conversion skill.
-    TIER3_STAT_PROCS = [
-        'proc reg', 'proc glm', 'proc logistic', 'proc cluster',
-        'proc factor', 'proc phreg', 'proc lifetest', 'proc surveyselect',
-        'proc mixed', 'proc genmod', 'proc nlmixed',
-    ]
+    # Canonical list lives in constants.py (TIER3_STAT_PROCS); kept here as an alias for callers.
+    TIER3_STAT_PROCS = [f'proc {p}' for p in TIER3_STAT_PROCS]
 
     # External DB engines -> LOW confidence. Canonical union list.
     EXTERNAL_ENGINES = [
@@ -31,49 +23,54 @@ class TierClassifier:
     })
 
     def classify_block(self, block: SASBlock) -> Dict:
-        content_lower = block.content.lower()
+        content_lower = statement_text(block.content)
 
-        for trigger, reason in self.TIER3_TRIGGERS:
-            if trigger in content_lower:
-                return {'tier': 3, 'label': 'TIER_3_PYSPARK', 'reason': reason, 'confidence': 'HIGH'}
+        if re.search(r'\bdeclare\s+hash\b', content_lower):
+            marker = next((m for m in HASH_MUTATION_MARKERS if m in content_lower), None)
+            if marker:
+                return {'tier': 3, 'label': 'TIER_3_PYSPARK',
+                        'reason': f'HASH object mutated/iterated ({marker}) - no SQL equivalent', 'confidence': 'HIGH'}
+            # lookup-only hash = keyed JOIN; fall through to the remaining rules
 
-        if ('do until' in content_lower or 'do while' in content_lower):
+        if re.search(r'\bdo\s+(until|while)\b', content_lower):
             # CALL EXECUTE is not external state (it is Tier 2 below); don't count it.
-            other_calls = content_lower.count('call ') - content_lower.count('call execute')
+            other_calls = len(re.findall(r'\bcall\s+(?!execute\b)\w', content_lower))
             if 'symput' in content_lower or other_calls > 2:
                 return {'tier': 3, 'label': 'TIER_3_PYSPARK', 'reason': 'DO loop with external state', 'confidence': 'HIGH'}
 
-        for proc in self.TIER3_STAT_PROCS:
-            if proc in content_lower:
-                return {'tier': 3, 'label': 'TIER_3_PYSPARK', 'reason': f'Statistical modeling: {proc}', 'confidence': 'HIGH'}
+        for proc in re.findall(r'\bproc\s+(\w+)', content_lower):
+            if proc in TIER3_STAT_PROCS or (proc.startswith(TIER3_STAT_PROC_PREFIXES) and proc not in TIER3_PREFIX_EXCEPTIONS):
+                return {'tier': 3, 'label': 'TIER_3_PYSPARK', 'reason': f'Statistical modeling: proc {proc}', 'confidence': 'HIGH'}
 
         # CALL EXECUTE is dynamic dispatch, not something SQL cannot express:
         # both conversions rebuilt it as a procedure. HASH / stat PROCs in the
         # same block still win above. See block-tiering-spec.md.
-        if 'call execute' in content_lower:
+        if re.search(r'\bcall\s+execute\b', content_lower):
             return {'tier': 2, 'label': 'TIER_2_SP',
                     'reason': 'CALL EXECUTE - dynamic dispatch -> stored procedure with EXECUTE IMMEDIATE / cursor loop',
                     'confidence': 'MEDIUM'}
 
-        if 'retain ' in content_lower and 'first.' in content_lower:
+        outputs = len(re.findall(r'\boutput\s+\w', content_lower))
+        if re.search(r'\bretain\b', content_lower) and 'first.' in content_lower:
             if '= 0' in content_lower or '= .' in content_lower:
                 return {'tier': 2, 'label': 'TIER_2_SP', 'reason': 'RETAIN with conditional reset', 'confidence': 'HIGH'}
 
         if ('first.' in content_lower or 'last.' in content_lower):
-            if content_lower.count('output ') > 1:
+            if outputs > 1:
                 return {'tier': 2, 'label': 'TIER_2_SP', 'reason': 'FIRST./LAST. with multiple OUTPUT', 'confidence': 'HIGH'}
 
-        if content_lower.count('output ') > 1 and 'output;' not in content_lower:
+        if outputs > 1 and not re.search(r'\boutput\s*;', content_lower):
             return {'tier': 2, 'label': 'TIER_2_SP', 'reason': 'Multiple OUTPUT datasets', 'confidence': 'MEDIUM'}
 
         # Procedural IF/THEN/ELSE and SELECT/WHEN branching only exists in DATA
         # steps. A PROC SQL CASE WHEN is pure SQL (Tier 1) no matter how many
         # WHEN clauses, so gate this rule to DATA steps. See block-tiering-spec.md.
         if block.block_type == BlockType.DATA_STEP and (
-                content_lower.count('if ') > 5 or content_lower.count('when ') > 5):
+                len(re.findall(r'(?<![%\w])if\b', content_lower)) > 5 or
+                len(re.findall(r'(?<![%\w])when\b', content_lower)) > 5):
             return {'tier': 2, 'label': 'TIER_2_SP', 'reason': 'Complex branching (>5 IF/WHEN) in DATA step', 'confidence': 'MEDIUM'}
 
-        dml_count = sum(1 for kw in ['delete ', 'insert ', 'update '] if kw in content_lower)
+        dml_count = sum(1 for kw in ('delete', 'insert', 'update') if re.search(rf'\b{kw}\b', content_lower))
         if dml_count >= 3:
             return {'tier': 2, 'label': 'TIER_2_SP', 'reason': '3+ sequential DML operations', 'confidence': 'MEDIUM'}
 

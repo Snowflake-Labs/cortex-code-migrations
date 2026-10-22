@@ -71,7 +71,9 @@ Call `configure(ensure_metadata_schema=true)` (no other args). This:
    database.
 2. Re-runs `ensure_schemas`. `check_validation` now sees
    `testing_data_source` is set and **auto-deploys VALIDATION** via
-   `scai test validate --create-schema` if it's missing.
+   `scai test validate --create-schema` if it's missing. `check_dmv`
+   **auto-deploys DATA_MIGRATION / DATA_VALIDATION** via
+   `scai data migrate-schema` if `DATA_MIGRATION.WORKFLOW` is missing.
 3. Re-runs `ensure_prereqs`. `clone_perms` now sees `testing_data_source`
    is set and actually probes (was `not_applicable` before).
 
@@ -88,6 +90,7 @@ applies the GRANT or fixes the connection externally, then says "done" /
 everything is green.
 
 - `schema_status_validation: error("<msg>")` → surface `<msg>`; common cause is missing `CREATE SCHEMA on DATABASE` or `OWNERSHIP on VALIDATION`. Reference doc covers both.
+- `schema_status_dmv: error("<msg>")` → surface `<msg>`; `scai data migrate-schema` failed while installing DATA_MIGRATION / DATA_VALIDATION in the metadata database. Common cause is missing `CREATE SCHEMA` on that database.
 - `prereq_status_clone_perms: failed("<msg>")` → surface `<msg>`; cause is missing `CREATE DATABASE ON ACCOUNT` (needed for clone-based test isolation). Reference doc has the GRANT.
 - `schema_status_metadata: error("...not visible...recreate_metadata_database=true")` → surface the message. Ask the user whether to restore/GRANT USAGE / repoint `metadata_database`, or start fresh. Only after they confirm starting fresh, call `configure(recreate_metadata_database=true)`. Do **not** treat this as a transient recheck.
 - `schema_status_metadata: error("...cannot tell whether...already bootstrapped...")` → surface. Pre-upgrade stamp under a non-default pin, or the latch names a different metadata database. If the user confirms the database already exists, call `configure(ensure_metadata_schema=true)` (recheck latches it). Only after they confirm starting **empty**, call `configure(recreate_metadata_database=true)`.
@@ -110,9 +113,12 @@ Return to the parent setup skill. The state machine routes to the next
 step based on the testing path:
 
 - **testbed** (and legacy **synthetic**) → `generateTestbed`, then data
-  infrastructure. Tests query the generated catalog, so the testbed
-  generator (mine → validate → compile → generate) is the next step.
-  Tell the user that's coming.
+  infrastructure. The next step bootstraps non-table coupling state; each
+  dependency-ready table walker later mines, validates/enriches, generates,
+  and loads that table's CSV. Tell the user that's coming. On SQL Server
+  the rows load into an empty `AIMSBX_TB_*` catalog `configure` creates
+  and binds as `source:`; elsewhere, or if that create failed, an
+  extracted source is preserved and gets no rows.
 - **source-data** → data infrastructure. Autonomous skips the opt-in question
   and always continues to source-connection + sandbox bring-up. Manual is
   asked whether they need data migration/validation infrastructure.

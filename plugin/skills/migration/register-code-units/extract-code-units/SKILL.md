@@ -25,29 +25,14 @@ Tell the user:
 
 ## Workflow
 
-### Step 1: Ask What to Extract
+### Step 1: Extract all objects from the connection's database
 
-Ask the user what they want to extract. Present the available object types for their source dialect:
+Do **not** ask what to extract. The connection card already said we will
+pull all objects from that connection's database. Run `scai code extract`
+against the configured connection with no type / schema / name filter.
 
-- **SqlServer:** TABLE, VIEW, FUNCTION, PROCEDURE, SEQUENCE, TABLE_TYPE, TRIGGER
-- **AzureSynapse:** TABLE, VIEW, FUNCTION, PROCEDURE, SEQUENCE, TABLE_TYPE, TRIGGER
-- **Redshift:** TABLE, VIEW, MATERIALIZED_VIEW, FUNCTION, PROCEDURE
-- **Oracle:** TABLE, VIEW, MATERIALIZED_VIEW, FUNCTION, PROCEDURE, PACKAGE, PACKAGE_BODY, TRIGGER, SEQUENCE, TYPE, TYPE_BODY, SYNONYM
-- **Teradata:** TABLE, VIEW, FUNCTION, PROCEDURE
-- **Postgresql:** TABLE, VIEW, MATERIALIZED_VIEW, FUNCTION, PROCEDURE
-
-Ask the user via `ask_user_question` (`multiSelect = false`):
-
-> "What would you like to extract? You can choose:"
-> 1. **All objects** - Extract everything from the source database
-> 2. **Specific object types** - e.g. just tables and views, or just procedures
-> 3. **Specific schemas** - Limit to one or more schemas
-> 4. **Name filter** - Exact object name, or a wildcard with `*` (e.g. `Employees` or `Get*Data`)
-
-Allow combining options (e.g. specific types within a specific schema).
-
-If the source server hosts several databases and the user wants more than the connection's
-own, also ask **which databases** — see the multi-database flow in Step 2.
+If the user later asks to narrow the catalog, then filter with `--schema`,
+`-t`, `-n`, or `-d` as in Step 2. Do not invent that question up front.
 
 > **Name matching:** `-n` / `--name` is an **exact** case-insensitive match unless the
 > pattern contains `*`. Do **not** pass a bare prefix expecting substring match —
@@ -86,12 +71,23 @@ use the connection's own database / schemas.)
      `master`/`tempdb`/`model`/`msdb` system databases).
    - **Redshift / Postgresql:** `SELECT datname FROM pg_database WHERE datistemplate = false`.
    - **Teradata:** `SELECT DatabaseName FROM DBC.DatabasesV WHERE DBKind = 'D'`.
-2. **Ask which to extract** via `ask_user_question` (`multiSelect = true`), defaulting to the
-   connection's own database. Show the databases you found and ask even when the list has only
-   one database: one candidate on the server is not the user saying it is the one to migrate.
-   Never skip this question.
+2. Do **not** ask which databases up front: extract the connection's own database (omit
+   `-d`). Only when the user asks to include others, **ask which to extract** via
+   `ask_user_question` (`multiSelect = true`), defaulting to the connection's own database.
+   Show the databases you found and ask even when the list has only one database: one
+   candidate on the server is not the user saying it is the one to migrate. Never skip this
+   question once you are choosing databases.
 
    **Wait for the user's response — do not proceed until they choose.**
+3. **Run one extraction** with every selected database:
+
+```bash
+scai code extract -s <CONNECTION_NAME> -d Sales,Inventory --json
+```
+
+Output nests each under `source/<database>/…`, and the Code Unit Registry is regenerated once
+after the run (the command re-scans the whole `source/` tree), so all coexist in one project.
+Omit `-d` when the connection's own database is the only target.
 
 **The connection's database is missing or wrong.** When the connection's configured database
 does not exist on the server (e.g. SQL Server `Cannot open database "<name>"`), do not pick a
@@ -108,15 +104,6 @@ Never change a connection's database without the user's confirmation: every late
 (registry, conversion, deployment, data migration) inherits it, and an unconfirmed switch
 migrates the wrong database. This holds for `-d`, re-adding the connection, or editing its
 settings alike.
-3. **Run one extraction** with every selected database:
-
-```bash
-scai code extract -s <CONNECTION_NAME> -d Sales,Inventory --json
-```
-
-Output nests each under `source/<database>/…`, and the Code Unit Registry is regenerated once
-after the run (the command re-scans the whole `source/` tree), so all coexist in one project.
-Omit `-d` when the connection's own database is the only target.
 
 **Driver note (Oracle / Teradata):** `configure()` seeds the driver cache, so `--driver-path` is normally not needed here. If the cache was missed for any reason, pass `--driver-path <PATH_TO_NUPKG>` on first use; SCAI persists the path machine-wide and reuses it across projects.
 
@@ -198,48 +185,129 @@ source/
 
 ## CHECKPOINT
 
-Confirm with user:
-- [ ] Extraction completed without errors
-- [ ] Expected number of objects extracted
-- [ ] Source files appear in `source/` directory
+Check these yourself against the `--json` envelope and the Step 3 listing. Do
+**not** turn them into a question — the envelope already says whether the
+extraction was complete, and the user cannot verify a count you just computed
+for them:
+
+- [ ] `catalog.failed` is 0
+- [ ] `catalog.extracted` equals `catalog.discovered`
+- [ ] `.sql` files are present under `source/`
+
+Stop and ask only when a check fails: say which one, and what you propose to do
+about it.
 
 ## On Completion
 
-After the CHECKPOINT passes, tell the user. Fill placeholders from the JSON envelope returned by `scai code extract --json` (`catalog.{discovered,extracted,failed}`, `byType`, `databases[]`, `failures[]`, `executionTimeSeconds`). When you extracted several databases, read per-database counts from `databases[]` and the aggregate from `catalog` — do not sum envelopes across runs.
+After the CHECKPOINT passes, tell the user — a statement, not a question. Never
+ask whether the object count matches what they expected; narrowing the catalog
+is something they raise, not something you prompt for.
+
+Fill placeholders from the JSON envelope returned by `scai code extract --json` (`catalog.{discovered,extracted,failed}`, `byType`, `databases[]`, `failures[]`, `executionTimeSeconds`). When you extracted several databases, read per-database counts from `databases[]` and the aggregate from `catalog` — do not sum envelopes across runs.
 
 > **Extraction complete.** `<extracted>/<discovered>` objects extracted in `<duration>`, broken down by type (filled from `byType`). Files saved under `source/`.
 > *If `failed > 0`:* `<failed>` failed. Most common error: `<top_failure_reason>`. Full list in the reports.
 
-Then ask via `ask_user_question` (`multiSelect = false`):
+Then read `has_etl_code` from `configure()`. Never ask a standalone ETL
+yes/no — extras already collected that on the setup/register card.
 
-> "Do you have any ETL code (SSIS or Informatica Power Center) to include?"
+- If `has_etl_code` is **`false`** (explicitly): say that next we'll convert these to Snowflake SQL — then go straight on (below); the sentence announces the next step, it does not end the turn.
+- If `has_etl_code` is **not set**: return to the parent register skill and collect the extras card there, then re-read `has_etl_code`.
+- If `has_etl_code` is **`true`** (explicitly): ask which platform via `ask_user_question` (`multiSelect = false`):
+
+> "Which ETL platform is it?"
 >
-> 1. **Yes**
-> 2. **No**
+> 1. **SSIS** — `.dtsx` packages (native SnowConvert)
+> 2. **Informatica Power Center** — XML repo export (native SnowConvert)
+> 3. **Another ETL platform** — Talend, Alteryx, Informatica Cloud / IICS, DataStage,
+>    Pentaho, Azure Data Factory, or something else (routes through AI-First)
 
-- If **no**, continue to the Power BI prompt below.
-- If **yes**, ask for the ETL folder path and run (do **not** pass `--overwrite` — the extracted SQL is already in `source/`):
+- **SSIS / Informatica Power Center:** ask for the ETL folder path and
+  run (do **not** pass `--overwrite` — the extracted SQL is already in `source/`):
 
-```bash
-scai code add -i <ETL_PATH> --json
-```
+  ```bash
+  scai code add -i <ETL_PATH> --json
+  ```
 
-This arranges the packages into `source/_etl/`, where `convert` finds them without an external path flag.
+  This arranges the packages into `source/_etl/`, where `convert` finds them without an
+  external path flag.
 
-Power BI templates are **not** extracted from the database. After extract (and after any ETL add), ask independently via `ask_user_question` (`multiSelect = false`):
+  If this or the Power BI `scai code add` below times out, runs in the background or
+  fails, handle it as
+  [add-code-units Step 3](../add-code-units/SKILL.md#if-the-import-times-out-or-runs-in-the-background)
+  says before you go on.
 
-> "Do you have any local Power BI template (`.pbit`) files to include?"
->
-> 1. **Yes**
-> 2. **No**
+- **Another ETL platform:** these files never go through `scai code add` —
+  the native `EtlFileClassifier` under `source/_etl/` only understands SSIS and
+  Informatica PowerCenter. Instead:
+  1. Ask which platform. Accept a free-form name if it is not in the list. Store the
+     lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `adf`, …).
+  2. Ask for the folder path containing the platform's source documents.
+  3. Copy losslessly into `source/_etl_aifirst/<platform>/` by invoking the
+     enumeration helper — do **not** hand-copy files. The helper writes no parallel
+     manifest; its JSON envelope holds one `units` entry per source document that
+     step 4 hands to the MCP `create_registry_unit` tool.
 
-- If **no**, say that next we'll convert these to Snowflake SQL.
-- If **yes**, ask for the local folder that contains the `.pbit` files and run (do **not** pass `--overwrite`):
+     ```bash
+     python3 "<PLUGIN_ROOT>/register-code-units/scripts/import_aifirst_etl.py" \
+       --platform <PLATFORM_SLUG> \
+       --source "<ETL_PATH>" \
+       --json
+     ```
+
+     `<PLUGIN_ROOT>` is this skill's grandparent directory
+     (`.../plugin/skills/migration`). Add `--overwrite` when the user is re-importing
+     on purpose.
+  4. Query the deterministic `unit_id` values from the helper first. If an ID
+     already exists, verify its platform, format, and `files.source.path` exactly
+     match the helper output and do not recreate it; stop on a mismatch. For every
+     missing entry, call `create_registry_unit` — this is what `convert` Step 4.5
+     reads:
+
+     ```
+     create_registry_unit(
+       unit_id="<UNIT_ID>",
+       name="<NAME>",
+       platform="<PLATFORM_SLUG>",
+       format="<FORMAT>",
+       source_file="<PROJECT_RELATIVE_SOURCE_PATH>"
+     )
+     ```
+
+     The tool stamps `kind: etl`, `source.objectType: workflow`, keeps unlisted
+     platforms under `extensions.sourcePlatform` (never faked as SSIS or
+     Informatica), and refuses to overwrite an id. Query-before-create makes an
+     identical re-import idempotent while preserving that collision guard.
+     Do **not** call `register_units` for these units. Do **not** pass `customKind`;
+     that would create a `kind: custom` unit without `files.source.path`, which the
+     setup gate and Step 4.5 refuse.
+
+  5. Verify with `query_registry` that each unit exists with `kind = 'etl'`,
+     `source.objectType = 'workflow'`, and a `files.source.path` matching its
+     vendored source. If any is missing, stop and tell the user — the registry write
+     is the contract Step 4.5 reads at convert time.
+
+  Repeat once per platform if there is more than one AI-First ETL source.
+
+Power BI templates are **not** extracted from the database. A local Power BI template (`.pbit`)
+is staged separately. After extract (and after any ETL add), read `has_power_bi`
+from `configure()`:
+
+- If `has_power_bi` is **`false`**, proceed without asking.
+- If `has_power_bi` is not set, return to the parent register skill and collect
+  the extras card, then re-read it.
+- If `has_power_bi` is **`true`**, ask only for the local folder containing the
+  `.pbit` files and run (do **not** pass `--overwrite`):
 
 ```bash
 scai code add -i <POWER_BI_PATH> --json
 ```
 
 This copies templates to `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` only. Do not imply a database extract of Power BI.
+A timeout, background launch or failure here is handled as
+[add-code-units Step 3](../add-code-units/SKILL.md#if-the-import-times-out-or-runs-in-the-background) says.
 
-Then return to the calling skill.
+Then return to the calling skill **in this same turn**. Under setup that means
+calling `progress_setup()` now and starting the step it names. Ending the turn
+on "next we'll convert" leaves the user watching an idle screen with nothing to
+click until they type "continue".

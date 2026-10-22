@@ -100,6 +100,27 @@ class WavesJsonAdapter:
             )
         return self._cache("external_tables_count", build)
 
+    def ssis_packages(self) -> list[dict[str, str]]:
+        """SSIS ETL units as ``{"path", "status"}``, the set the Overview counts.
+
+        The ETL Report reconciles its package list against these so packages
+        with no ETL assessment data are still counted and shown.
+        """
+        def build() -> list[dict[str, str]]:
+            return [
+                {
+                    "path": obj.get("fileName") or obj.get("name") or "",
+                    "status": obj.get("conversionStatus") or "Unknown",
+                }
+                for obj in self._data.get("objects", [])
+                if (obj.get("category") or "").upper() == "ETL"
+                and (
+                    (obj.get("subtype") or "").upper() == "SSIS"
+                    or (obj.get("fileName") or "").lower().endswith(".dtsx")
+                )
+            ]
+        return self._cache("ssis_packages", build)
+
     def graph_summary(self) -> dict[str, Any]:
         def build() -> dict[str, Any]:
             raw = self._data.get("graphSummary", {}) or {}
@@ -173,6 +194,7 @@ class WavesJsonAdapter:
                     "file_name": obj.get("fileName", ""),
                     "technology": obj.get("technology", ""),
                     "conversion_status": obj.get("conversionStatus", ""),
+                    "issues": obj.get("issues") or [],
                     "subtype": obj.get("subtype", ""),
                     "partition_type": obj.get("partitionType", ""),
                 }

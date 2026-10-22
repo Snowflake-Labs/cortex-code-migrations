@@ -416,7 +416,8 @@ def generate_html_report(waves_json, output_path=None, reports_dir=None, registr
             'ewi_count': ewi_count,
             'fdm_count': fdm_count,
             'prf_count': prf_count,
-            'highest_ewi_severity': highest_ewi_severity
+            'highest_ewi_severity': highest_ewi_severity,
+            'issues': mem_info.get('issues') or [],
         })
     
     total_objects = len(membership)
@@ -634,6 +635,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
                 'conversion_status': obj.get('conversion_status', 'Unknown'),
                 'has_missing_deps': obj.get('has_missing_dependencies', False),
                 'missing_dependencies': obj.get('missing_dependencies', []),
+                'issues': obj.get('issues') or [],
             })
 
     # Add missing objects (external references not found in workload).
@@ -667,6 +669,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             'is_missing': 'Yes',
             'conversion_status': 'Missing',
             'has_missing_deps': False,  # Missing objects themselves don't have missing deps
+            'issues': [],
             'missing_dependencies': [],
         })
 
@@ -2037,8 +2040,8 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
         for obj_name, count, wave in top_dependencies:
             obj_name_attr = str(obj_name).replace('&', '&amp;').replace('"', '&quot;').replace("'", '&#39;').replace('<', '&lt;').replace('>', '&gt;')
             dependency_stats_html += f'''
-                            <tr>
-                                <td><span class="copyable-top-object" data-tooltip="{obj_name_attr}" style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1em; color: #111827; font-family: inherit; cursor: copy;">{obj_name}</span></td>
+                            <tr class="top-impact-row" data-object-name="{obj_name_attr}" style="cursor: pointer;">
+                                <td><span class="top-impact-object" data-tooltip="{obj_name_attr}" style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1em; color: #111827; font-family: inherit;">{obj_name}</span></td>
                                 <td style="text-align: center;"><strong>{count}</strong></td>
                                 <td style="text-align: center;">{wave}</td>
                             </tr>
@@ -2072,8 +2075,8 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
         for obj_name, count, wave in top_dependents:
             obj_name_attr = str(obj_name).replace('&', '&amp;').replace('"', '&quot;').replace("'", '&#39;').replace('<', '&lt;').replace('>', '&gt;')
             dependency_stats_html += f'''
-                            <tr>
-                                <td><span class="copyable-top-object" data-tooltip="{obj_name_attr}" style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1em; color: #111827; font-family: inherit; cursor: copy;">{obj_name}</span></td>
+                            <tr class="top-impact-row" data-object-name="{obj_name_attr}" style="cursor: pointer;">
+                                <td><span class="top-impact-object" data-tooltip="{obj_name_attr}" style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1em; color: #111827; font-family: inherit;">{obj_name}</span></td>
                                 <td style="text-align: center;"><strong>{count}</strong></td>
                                 <td style="text-align: center;">{wave}</td>
                             </tr>
@@ -2298,6 +2301,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
                     <div style="border: 1px solid #E2E8F0; border-radius: 10px; padding: 12px; background: #FFFFFF;">
                         <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:10px;">
                             <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">
+                                <button id="objectDetailsTabIssuesBtn" type="button" onclick="setObjectDetailsTab('issues')" style="padding:6px 10px; border: 1px solid #CBD5E1; border-radius: 999px; background:#FFFFFF; color:#475569; font-size:0.78rem; font-weight:700; cursor:pointer;">Issues (0)</button>
                                 <button id="objectDetailsTabDepsBtn" type="button" onclick="setObjectDetailsTab('dependencies')" style="padding:6px 10px; border: 1px solid #0C7AA6; border-radius: 999px; background:#E6F4FB; color:#0F3A57; font-size:0.78rem; font-weight:700; cursor:pointer;">Direct Dependencies</button>
                                 <button id="objectDetailsTabDependentsBtn" type="button" onclick="setObjectDetailsTab('dependents')" style="padding:6px 10px; border: 1px solid #CBD5E1; border-radius: 999px; background:#FFFFFF; color:#475569; font-size:0.78rem; font-weight:700; cursor:pointer;">Direct Dependants</button>
                                 <button id="objectDetailsTabMissingBtn" type="button" onclick="setObjectDetailsTab('missing')" style="padding:6px 10px; border: 1px solid #CBD5E1; border-radius: 999px; background:#FFFFFF; color:#475569; font-size:0.78rem; font-weight:700; cursor:pointer;">Missing Dependencies</button>
@@ -2711,6 +2715,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
         let selectedObjects = new Set();
         let modalObjectNameValue = '';
         let modalObjectMissingDependencies = [];
+        let modalObjectIssues = [];
         let objectDetailsCurrentTab = 'dependencies';
         let modalDependencyExpanded = new Set();
         let modalDependencyTypeFilters = new Set();
@@ -2727,6 +2732,32 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             const div = document.createElement('div');
             div.textContent = text == null ? '' : String(text);
             return div.innerHTML;
+        }}
+
+        // Keep in step with ISSUE_DOC_FAMILY in dashboard-ui snowconvertIssueDescriptions.ts.
+        const ISSUE_DOCS_ROOT = 'https://docs.snowflake.com/en/migrations/aim-for-datawarehouses/code-conversion/issues-and-troubleshooting';
+        const DIALECT_PAGE_STEM = {{
+            BQ: 'bigquery', DB: 'db2', HV: 'hive', INF: 'informatica', OR: 'oracle',
+            PG: 'postgresql', RS: 'redshift', SPK: 'spark', SSIS: 'ssis', SY: 'sybase',
+            TD: 'teradata', TS: 'sqlServer', VT: 'vertica',
+        }};
+        const ISSUE_DOC_FAMILY = {{
+            EWI: {{ folder: 'conversion-issues', suffix: 'EWI', dialects: null }},
+            FDM: {{ folder: 'functional-difference', suffix: 'FDM', dialects: null }},
+            PRF: {{ folder: 'performance-review', suffix: 'PRF', dialects: ['OR', 'TS'] }},
+            OOS: {{ folder: 'out-of-scope', suffix: 'OOS', dialects: [] }},
+        }};
+
+        function issueDocumentationUrl(code) {{
+            const match = /^SSC-(EWI|FDM|PRF|OOS)-([A-Z]*)\\d+$/i.exec(String(code || '').trim());
+            if (!match) return '';
+            const family = ISSUE_DOC_FAMILY[match[1].toUpperCase()];
+            if (!family) return '';
+            const infix = match[2].toUpperCase();
+            const stem = DIALECT_PAGE_STEM[infix];
+            const hasDialectPage = stem && (family.dialects === null || family.dialects.indexOf(infix) !== -1);
+            const page = hasDialectPage ? stem + family.suffix : 'general' + family.suffix;
+            return ISSUE_DOCS_ROOT + '/' + family.folder + '/' + page + '#' + String(code).trim().toLowerCase();
         }}
 
         function normalizeObjectNameForMatch(name) {{
@@ -3058,6 +3089,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
         }}
 
         function updateObjectDetailsTabStyles() {{
+            const issuesBtn = document.getElementById('objectDetailsTabIssuesBtn');
             const depsBtn = document.getElementById('objectDetailsTabDepsBtn');
             const dependentsBtn = document.getElementById('objectDetailsTabDependentsBtn');
             const missingBtn = document.getElementById('objectDetailsTabMissingBtn');
@@ -3069,18 +3101,25 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
                 btn.style.color = isActive ? '#0F3A57' : '#475569';
             }};
 
+            applyState(issuesBtn, objectDetailsCurrentTab === 'issues');
             applyState(depsBtn, objectDetailsCurrentTab === 'dependencies');
             applyState(dependentsBtn, objectDetailsCurrentTab === 'dependents');
             applyState(missingBtn, objectDetailsCurrentTab === 'missing');
+            document.querySelectorAll('[data-modal-filter-wrap]').forEach(wrap => {{
+                wrap.style.display = objectDetailsCurrentTab === 'issues' ? 'none' : '';
+            }});
         }}
 
         function updateObjectDetailsTabLabels() {{
+            const issuesBtn = document.getElementById('objectDetailsTabIssuesBtn');
             const depsBtn = document.getElementById('objectDetailsTabDepsBtn');
             const dependentsBtn = document.getElementById('objectDetailsTabDependentsBtn');
             const missingBtn = document.getElementById('objectDetailsTabMissingBtn');
+            const issueCount = Array.isArray(modalObjectIssues) ? modalObjectIssues.length : 0;
             const depsCount = getDirectDependencyNames(modalObjectNameValue).length;
             const dependentsCount = getDirectDependentNames(modalObjectNameValue).length;
             const missingCount = getDirectMissingDependencyNames(modalObjectNameValue).length;
+            if (issuesBtn) issuesBtn.textContent = `Issues (${{issueCount}})`;
             if (depsBtn) depsBtn.textContent = `Direct Dependencies (${{depsCount}})`;
             if (dependentsBtn) dependentsBtn.textContent = `Direct Dependants (${{dependentsCount}})`;
             if (missingBtn) missingBtn.textContent = `Missing Dependencies (${{missingCount}})`;
@@ -3089,6 +3128,31 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
         function renderObjectDetailsTabContent() {{
             const body = document.getElementById('objectDetailsRelationsBody');
             if (!body) return;
+
+            if (objectDetailsCurrentTab === 'issues') {{
+                const issues = Array.isArray(modalObjectIssues) ? modalObjectIssues : [];
+                const rows = issues.map(issue => {{
+                    const code = issue.code || '';
+                    const docUrl = issueDocumentationUrl(code);
+                    const codeHtml = docUrl
+                        ? `<a href="${{escapeHtmlText(docUrl)}}" target="_blank" rel="noopener noreferrer" style="color:#0C7AA6; text-decoration:none;">${{escapeHtmlText(code)}}</a>`
+                        : escapeHtmlText(code);
+                    return `
+                    <div style="display:grid; grid-template-columns: 4.5rem 1fr 4rem; gap: 8px; padding: 6px 0; border-bottom: 1px solid #E2E8F0; font-size: 0.84rem;">
+                        <span style="font-weight:700; color:#334155;">${{escapeHtmlText(issue.family || '')}}</span>
+                        <span style="font-family: ui-monospace, monospace; color:#0F172A;">${{codeHtml}}</span>
+                        <span style="text-align:right; color:#0F172A;">${{escapeHtmlText(issue.count ?? '')}}</span>
+                    </div>
+                `;
+                }}).join('');
+                body.innerHTML = `
+                    <div style="font-size: 0.78rem; font-weight: 700; color: #334155; text-transform: uppercase; letter-spacing: 0.03em; margin-bottom: 8px;">Issues</div>
+                    <div style="background:#FBFDFF; border: 1px solid #E2E8F0; border-radius: 10px; padding: 10px;">
+                        ${{rows || '<div style="font-size: 0.82rem; color: #64748B;">No conversion issues.</div>'}}
+                    </div>
+                `;
+                return;
+            }}
 
             if (objectDetailsCurrentTab === 'dependents') {{
                 const dependents = getDirectDependentNames(modalObjectNameValue);
@@ -3128,7 +3192,8 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
         }}
 
         function setObjectDetailsTab(tabKey) {{
-            objectDetailsCurrentTab = (tabKey === 'dependents' || tabKey === 'missing') ? tabKey : 'dependencies';
+            const allowed = ['issues', 'dependencies', 'dependents', 'missing'];
+            objectDetailsCurrentTab = allowed.includes(tabKey) ? tabKey : 'dependencies';
             modalDependencyExpanded = new Set();
             updateObjectDetailsTabStyles();
             renderObjectDetailsTabContent();
@@ -3140,6 +3205,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             modalObjectMissingDependencies = Array.from(new Set((Array.isArray(obj.missing_dependencies) ? obj.missing_dependencies : [])
                 .map(value => extractMissingDependencyName(value))
                 .filter(Boolean)));
+            modalObjectIssues = Array.isArray(obj.issues) ? obj.issues : [];
             modalDependencyTypeFilters = new Set();
             modalDependencyStatusFilters = new Set();
             modalActiveFilterMenu = '';
@@ -3179,7 +3245,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
                     <div style="font-size:0.86rem; font-weight:500; color:#0F172A; white-space:normal; word-break:break-word;">${{escapeHtmlText(obj.file || '-')}}</div>
                 </div>
             `;
-            objectDetailsCurrentTab = 'dependencies';
+            objectDetailsCurrentTab = modalObjectIssues.length ? 'issues' : 'dependencies';
             modalDependencyExpanded = new Set();
             renderModalFilterMenu('type');
             renderModalFilterMenu('status');
@@ -3871,7 +3937,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             }}, 900);
         }}
 
-        // Click-to-copy for compact object names in top summary tables
+        // Click-to-copy for compact object names in the other summary tables.
         document.addEventListener('click', function(e) {{
             const topObj = e.target.closest('.copyable-top-object');
             if (!topObj) return;
@@ -3880,6 +3946,17 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             const valueToCopy = (topObj.textContent || '').trim();
             if (!valueToCopy) return;
             copyObjectNameToClipboard(valueToCopy, topObj);
+        }});
+
+        // The two Top 5 tables open the same object-details window as All Objects.
+        document.addEventListener('click', function(e) {{
+            const row = e.target.closest('.top-impact-row');
+            if (!row || (e.target.closest && e.target.closest('input, button, a'))) return;
+            const name = row.getAttribute('data-object-name') || '';
+            const obj = (Array.isArray(allObjectsData) ? allObjectsData : []).find(function(item) {{
+                return item && item.name === name;
+            }});
+            if (obj) openObjectDetailsModal(obj);
         }});
 
         // Toggle select all
@@ -4157,7 +4234,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             }}
 
             document.addEventListener('mouseover', function(e) {{
-                const cell = e.target.closest('.object-table [data-tooltip], .copyable-top-object[data-tooltip]');
+                const cell = e.target.closest('.object-table [data-tooltip], .copyable-top-object[data-tooltip], .top-impact-object[data-tooltip]');
                 if (!cell) return;
                 removeTip();
                 tip = document.createElement('div');
@@ -4186,7 +4263,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             }});
 
             document.addEventListener('mouseout', function(e) {{
-                const cell = e.target.closest('.object-table [data-tooltip], .copyable-top-object[data-tooltip]');
+                const cell = e.target.closest('.object-table [data-tooltip], .copyable-top-object[data-tooltip], .top-impact-object[data-tooltip]');
                 if (!cell) return;
                 removeTip();
             }});

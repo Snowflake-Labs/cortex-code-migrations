@@ -34,7 +34,16 @@ those inputs into the project.
 3. Use existing `scai` commands/scripts only. Never author assessment JSON,
    registry state, or `multi_report.html`.
 4. Generate the final HTML export only with `scai assessment report`.
-5. Gather every user input before dispatch. Then follow the Step 5 dispatch
+5. Gather remaining user input before dispatch. When `assessment_options` is
+   already set (AIM collected Q1 and `assessment_name` on one
+   `progress_setup` card), skip the Step 3 confirmation — do not ask it again.
+   `progress_setup` returns those answers under `answered`; when that block is
+   present, the scope is settled and no scope question goes to the user.
+   When Q1 included `prioritize` or `custom_wave_size`, AIM collects
+   `prioritization_globs` and `assessment_wave_size` as text fields on the
+   next card; do not re-ask either, nor offer a skip / give-patterns choice. Still collect only the remaining Step 4 inputs selected by those
+   tokens. Then follow
+   the Step 5 dispatch
    reference: when Power BI templates are staged, Data Lineage runs alone first;
    otherwise send in-scope Task calls in one message. Do not prompt again until
    results are collected.
@@ -75,25 +84,28 @@ Conversion CSVs under `.scai/` or the legacy `reports/` folders are for tooling.
 
 ## Step 3: Confirm Scope
 
-Show one compact confirmation:
+Call `configure()` and read `assessment_options`. If it is a non-empty
+comma-separated token list, **do not wait** — those tokens are the scope
+answer. Continue to Step 4. Data Lineage always runs; Power BI enrichment uses
+the templates registration already staged without another yes/no.
+
+Otherwise use one `ask_user_question` call for a multi-select scope question
+and the report name (default from `metadata_tools.py --show-assessment-name`):
 
 ```text
-I will run:
-1. Waves (dependency analysis + deployment partitioning)
-2. Optimization Opportunities (SQL Server only)
-3. Effort Estimates (SQL Server and Redshift only)
-4. Dynamic SQL Patterns
-5. Conversion issues (registry EWIs, Jira ZIP, share link)
-6. Discovery (SQL Server, Teradata, and Redshift — query-log files are optional, asked next)
-7. ETL/SSIS Assessment (only if present)
-8. Informatica Assessment (only if present)
-9. Data Lineage (optional reporting layer such as Power BI — asked next)
-10. HTML Report (shareable export; the live dashboard opens when finished)
-
-Proceed with all, or pick a subset?
+Waves, standard analyses, Data Lineage, and the HTML report always run.
+What else do you want? Select all that apply:
+- Customize wave size
+- Prioritize specific objects
+- Dependency-based wave order
+- Deep Dynamic SQL review
+- Discovery (SQL Server, Teradata, or Redshift only)
+- AI analysis of SSIS packages (when present)
+- None of these
 ```
 
-Wait for yes or a subset. This is the only scope confirmation.
+Persist the comma-separated tokens to `assessment_options` and the second
+answer to `assessment_name`. This is the only scope/name confirmation.
 
 ## Step 4: Gather Sub-Skill Inputs
 
@@ -111,16 +123,49 @@ Use its exact gates, context fields, command requirements, and JSON return
 contracts.
 
 When `data_lineage.dispatch` is true and `staged_pbits` is non-empty, this
-step is **two turns**, not one:
+step is **two steps**, not one:
 
-1. **Enrichment first.** Dispatch only `data-lineage`. End your turn and wait.
+1. **Enrichment first.** Dispatch only `data-lineage` and wait for it.
 2. **Then the parallel fan-out.** In a later message, fire one Task call per
    remaining in-scope sub-skill. Do not include `data-lineage` again.
 
 When `data_lineage.dispatch` is false, or `staged_pbits` is empty, skip the
-first turn and send remaining in-scope sub-skills in one message. Include
-`data-lineage` in that fan-out when it is in scope. After each dispatch
-message, end the turn.
+first step and send remaining in-scope sub-skills in one message. Include
+`data-lineage` in that fan-out when it is in scope.
+
+**Wait in the same turn; do not end it.** After each dispatch message, call
+`agent_output(agent_id=<id>, wait=true)` for every agent that message launched,
+all in one message, and repeat the call for any agent that has not completed
+when it returns. Then go on to Step 6 in the same turn. Ending the turn to wait
+for the automatic completion notice hides everything after it in the AIM app:
+the turn cortex starts on its own is not streamed, so the verification, report
+and next questions never appear.
+
+**Tell the user what is running before you wait.** Put this message's text in
+the dispatch message itself, ahead of the Task calls, so the user sees it while
+the analyses run. In two or three plain sentences, with no table or checklist:
+
+- name every analysis you launched, e.g. "waves, object exclusion, effort
+  estimate, anti-patterns, dynamic SQL and SSIS"; say which are slow and why,
+  such as per-item review;
+- say that each one runs as its own tab above the conversation, where the user
+  can watch it, and that any command it asks to run shows a permission card
+  that needs approval before that analysis can go on;
+- say how the user will know the step is done: you report each analysis as it
+  finishes, then you build the combined report (`multi_report.html`), which
+  ends the step.
+
+**Update as they finish.** Each time an `agent_output` wait returns, say in one
+sentence which analyses just finished, with their one-line summary, and which
+are still running. Then wait again. A wait that returns before its agent
+finishes is not a failure, and the user sees no card for it, so never describe
+it as "timed out". Never close a message with a promise to collect the results
+later: keep waiting in the same turn.
+
+A permission card the user sees marked **Timed out** belongs to one analysis's
+command, which did not run. Do not explain it as your own wait. Name the
+analysis it belongs to, say its command was not approved in time so it did not
+run, and that you will offer to re-run it with the results (Step 8's retry).
 
 ## Step 6: Wait + Verify Outputs
 
@@ -149,9 +194,9 @@ Validate each:
 `"skipped"` is a valid return from any dispatched child, not only from a
 dispatch the parent already intended to skip. Because a skip had nothing to
 write, its `output_json: null` is the correct answer; it has no manifest and no
-enrichment artifact. Data Lineage is the exception: synthesize its skip only
-when Step 3 excluded it. A dispatched Data Lineage `"skipped"` return is a
-failure. No Power BI input or ASM0039 skips only enrichment; the child must
+enrichment artifact. Data Lineage is the exception: it always runs, and a
+`"skipped"` return is a failure. No Power BI input or ASM0039 skips only
+enrichment; the child must
 still run the Data Lineage graph and return `ok` with the stable
 `artifacts/assessment/data-lineage.json`. Unresolved references safely omitted
 by Data Lineage are also `ok` and must remain in its summary.
@@ -160,7 +205,7 @@ When Data Lineage returns a manifest, verify the manifest and
 `artifacts/assessment/powerbi/enrichment.json` exist. Do not inspect the
 registry to re-audit enrichment.
 
-Conversion issues does not skip a missing registry: `ASM0045` is `error`. Zero pairs is `ok`. The parent does not upload the ZIP; the HTML tab shows the ZIP path and the Share issues link.
+Conversion issues does not skip a missing registry: `ASM0045` is `error`. Zero pairs is `ok`. When the user declined it in Step 4, synthesize `skipped` and do not dispatch it. An `ok` return with one or more summary rows is complete only when every summary row has a non-empty `problem_description` and `recommended_fix`. Empty fields mean the child stopped after the first command: fail it with `error: "conversion-issues enrichment missing"` and offer the retry. The parent does not upload the ZIP; the HTML tab shows the ZIP path and the Share issues link.
 
 When Informatica returns `"ok"`, also verify
 `<project_dir>/assessment/informatica/ai_informatica_summary.html` exists and
@@ -183,7 +228,8 @@ Synthesize skipped rows for excluded/inapplicable analyses.
 
 ## Step 7: Generate Unified HTML Report
 
-Resolve the report name:
+Resolve the report name. Do not ask for a report name here; AIM collected it
+on the assessment scope card:
 
 ```bash
 uv run --project plugin/skills/migration/assessment \
@@ -191,13 +237,14 @@ uv run --project plugin/skills/migration/assessment \
   --project-dir "<project_dir>" --show-assessment-name
 ```
 
-When `assessmentName` is unset, ask once using `projectName` as default and
-store the answer with:
+Read `assessment_name` from `configure()`. When it is unset (legacy/direct
+entry), use `resolved` from the command above. Store that value with:
 
 ```bash
 uv run --project plugin/skills/migration/assessment \
   python plugin/skills/migration/assessment/scripts/metadata_tools.py \
-  --project-dir "<project_dir>" --set-assessment-name "<answer>"
+  --project-dir "<project_dir>" \
+  --set-assessment-name "<assessment_name, or resolved for a legacy session>"
 ```
 
 A failed write is a warning; continue with the project name.
@@ -212,6 +259,8 @@ scai assessment report \
   [--informatica-json "<path>" when informatica-assessment is ok]
 ```
 
+The command also writes a sibling PDF of every tab beside the HTML. It needs Chrome, Edge, or Chromium. If the PDF cannot be rendered, the HTML is still written and the command fails.
+
 Always pass `--project-dir` and successful SSIS/Informatica outputs explicitly.
 Other standard artifacts are auto-discovered. Do not write custom HTML. Record
 a report failure and continue so the user still receives analysis results.
@@ -222,13 +271,18 @@ paths, read
 
 ## Step 8: Surface Results + Retry
 
-Present one status line per result in the order above, then this report line:
+Present one status line per result in the order above, then the report path.
+Print the label as plain text and fence only the path, so copying the block
+yields a usable path:
+
+Multi-tab report:
 
 ```text
-Multi-tab report: <absolute multi_report.html path>
+<absolute multi_report.html path>
 ```
 
-If generation failed, print `FAILED — see error above`.
+If generation failed, print `Multi-tab report: FAILED — see error above`
+unfenced.
 
 Label the final row **Data Lineage**. Its summary includes graph counts,
 optional Power BI enrichment counts, and any unresolved references.
@@ -329,16 +383,15 @@ Recommend option 1 when `missing > 0`; otherwise recommend option 3. Wait.
 In the desktop app, show only options 2 and 3 (renumber accordingly) and
 recommend option 2 (move on to migration setup).
 
-For option 3, submit the answer instead of asking twice:
-
 If `configure` reported a dashboard URL at session start (not applicable in the
 desktop app), add one line before the menu:
 > The dashboard at `<url>` shows the same picture live as you migrate.
 
 Skip it if no URL came back (the user opted out, or the port was busy) — never guess one.
 
-On **(3)**, the user has just answered the setup machine's `continueToMigration`
-gate, so **submit it rather than letting the gate ask again**:
+On **Move on to migration setup** (option 3, or option 2 in the desktop app), the
+user has just answered the setup machine's `continueToMigration` gate, so
+**submit it rather than letting the gate ask again**:
 
 ```
 progress_setup(answers={"continue_to_migration": "true"})

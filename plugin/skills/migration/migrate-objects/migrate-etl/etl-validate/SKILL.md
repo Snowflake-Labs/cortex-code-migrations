@@ -1,6 +1,6 @@
 ---
 name: etl-validate
-description: Run scai test etl-validate to compare live ETL pipeline output (SSIS/Informatica natively, any platform via an external_command opt-in) against the converted Snowflake output. The CLI stamps codeStatus.etlValidate or codeStatus.validateEtlValidate from the dispatched task. Do not invent advance outcomes.
+description: Run scai test etl-validate to compare live ETL pipeline output (SSIS/Informatica natively, any platform via an external_command opt-in) against the converted Snowflake output. The CLI stamps codeStatus.etlValidate or codeStatus.validateEtlValidate from the dispatched task — confirm that stamp, then transition_status advance so TASK_EVENTS get an advanced row (do not invent green/red from narration).
 parent_skill: migrate-etl
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -11,7 +11,7 @@ Runs `scai test etl-validate --platform <platform>` against a single ETL code un
 
 This skill is the executor for both `etlValidate` and `validateEtlValidate`. The machine chooses the task and its preconditions; confirm only that task's stamp. Do not write the other field.
 
-**Deploy, the test YAML, and connections are all enforced by the state machine, not this skill.** Each dispatched task has deterministic preconditions: `deploy` (the unit is deployed to Snowflake), `artifactExists` on `etl-test/*.y*ml` (a `kind: etl` test YAML — `.yml` or `.yaml`, from the seed task for that flow or hand-authored — is present under the unit's artifacts dir), and `configureSourceConnectionExtract` + `configureSnowflakeTarget`. The executor only dispatches this skill once all hold, so it is safe to run standalone: the machine will not dispatch it against an undeployed unit, one with no test YAML, or an unconfigured session. `scai test etl-validate` reads the connection details from the project's `settings/test_config.yaml`; named-connection overrides can be passed with `-c` / `-s`.
+**Deploy, the test YAML, and connections are all enforced by the state machine, not this skill.** Each dispatched task has deterministic preconditions: `deploy` (the unit is deployed to Snowflake), `artifactExists` on `etl-test/*.y*ml` (a `kind: etl` test YAML — `.yml` or `.yaml`, from the seed task for that flow or hand-authored — is present under the unit's artifacts dir), and `configureExtractionSource` + `configureSandboxProfile`. The executor only dispatches this skill once all hold, so it is safe to run standalone: the machine will not dispatch it against an undeployed unit, one with no test YAML, or an unconfigured session. `scai test etl-validate` reads the connection details from the project's `settings/test_config.yaml`; named-connection overrides can be passed with `-c` / `-s`.
 
 ## Step 0: Resolve Unit
 
@@ -21,6 +21,14 @@ Read the registry entry (the executor passes `object_id`; if entered by name, lo
 |---|---|
 | `id` | `{ETL_ID}` for the `--where` filter |
 | `source.platform` | `{PLATFORM_ID}` for `--platform` (`ssis`, `informatica`, …) — pass the registry's value **verbatim**, including its casing (`sqlServer`, not `sqlserver`) |
+
+## Step 0a: Record skill start
+
+```
+transition_status(status="started", task="{TASK}", where="id = '{ETL_ID}'")
+```
+
+`{TASK}` is the dispatched task (`etlValidate` or `validateEtlValidate`). Do this once at entry. Finish with `transition_status` in Step 3 after the CLI stamp is confirmed.
 
 ## Step 0b: Platforms Without a Built-in Executor
 
@@ -88,6 +96,7 @@ The probe must test the **same** connection the real run in Step 2 will use, so 
 |---|---|
 | `sql_server_connectivity` | Can reach the source SQL Server instance (SSIS) |
 | `teradata_connectivity` | Can reach the source Teradata system (Informatica) |
+| `teradata_hash_md5` | The Teradata source can call the `HASH_MD5` UDF that row validation (L3) needs; passes without probing when `row_validation: false` and no seeded table entry sets `comparison_level: L3` (Informatica, Teradata source) |
 | `snowflake_connectivity` | Can reach the Snowflake account |
 | `ssisdb_catalog_access` | Can query `SSISDB.catalog.packages` (SSIS only) |
 | `pmcmd_accessibility` | The `informatica:` section exists and its `pmcmd` binary is present and executable (Informatica only) |
@@ -121,7 +130,7 @@ demanding them would fail a run that would otherwise work. The source connection
 where it exists because the table comparison reads the source tables through it. With
 `side: target` the source is still native and keeps its native checks, tooling included.
 
-If any check fails: **STOPPING POINT** — surface the failing check name and the error from the output, and help the user fix the live-system issue (start the server, refresh credentials, grant catalog access). Do not proceed to Step 2 with a failing probe. These are mostly runtime reachability checks, not config gates — a failure usually means the environment is down, not that the plugin is misconfigured. The exceptions are `informatica_service_domain`, `pmcmd_credentials`, and `pmcmd_accessibility` when it reports a missing section: those *are* configuration gaps, so the fix is an edit to `test_config.yaml`, a registered connection, or an exported variable — not a restart.
+If any check fails: **STOPPING POINT** — surface the failing check name and the error from the output, and help the user fix the live-system issue (start the server, refresh credentials, grant catalog access). Do not proceed to Step 2 with a failing probe. These are mostly runtime reachability checks, not config gates — a failure usually means the environment is down, not that the plugin is misconfigured. The exceptions are `informatica_service_domain`, `pmcmd_credentials`, and `pmcmd_accessibility` when it reports a missing section: those *are* configuration gaps, so the fix is an edit to `test_config.yaml`, a registered connection, or an exported variable — not a restart. `teradata_hash_md5` is a source-side install: its message names the UDF, where to create it and the grant; relay it to the user (the UDF DDL comes from Snowflake migration support), or set `validation_configuration.row_validation: false` (and drop any table entry's `comparison_level: L3`, which overrides it) to run without L3.
 
 ## Step 2: Run Live Comparison
 
@@ -149,14 +158,16 @@ The command streams per-package results. Watch for the summary line reporting th
 | Unit failed | `{ status: "failed", updatedAt, error: "comparison" }` |
 | Skipped (no ETL test YAML) | *no stamp* — field stays pending |
 
-## Step 3: Confirm stamp — do not invent advance
+## Step 3: Confirm stamp, then advance
 
-**Do not** call `transition_status(status="advance", …)` to invent a green or red outcome from narration. Re-read the unit via `query_registry` / `migration_status` and confirm the dispatched field matches the CLI summary.
+**Do not** invent a green or red outcome from narration. Re-read the unit via `query_registry` / `migration_status` and confirm the dispatched field matches the CLI summary. Then call `transition_status` so `TASK_EVENTS` get an `advanced` row (the CLI stamp alone is Path B — silent for the event log). `{TASK}` is the dispatched task (`etlValidate` or `validateEtlValidate`):
 
-- All packages passed → registry should already read `completed`. For `etlValidate` the live ETL flow is terminal. For `validateEtlValidate` confirm the stamp only; the machine owns any successor.
-- One or more packages failed → registry should read `failed` with `error: "comparison"`. Surface the failed package names and row-level differences from the CLI output so the user can investigate the conversion gap.
+- All packages passed → registry should read `completed`. For `etlValidate` the live ETL flow is terminal. For `validateEtlValidate` the machine owns any successor. Then:
+  `transition_status(status="advance", task="{TASK}", outcome="completed", where="id = '{ETL_ID}'")`
+- One or more packages failed → registry should read `failed` with `error: "comparison"`. Surface the failed package names and row-level differences, then:
+  `transition_status(status="advance", task="{TASK}", outcome="failed", error="sql", where="id = '{ETL_ID}'")`
 
-If the CLI exited non-zero but the stamp is missing (registry write failed), say so explicitly and do **not** stamp green yourself — ask the user to re-run or investigate the registry write error.
+If the CLI exited non-zero but the stamp is missing (registry write failed), say so explicitly and do **not** advance green — ask the user to re-run or investigate the registry write error.
 
 ## Step 4: Exclusion
 

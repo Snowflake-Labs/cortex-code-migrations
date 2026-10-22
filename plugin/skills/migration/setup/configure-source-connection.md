@@ -26,22 +26,31 @@ Before proceeding to connection setup, show this **verbatim** on every entry pat
 > extraction, schema introspection, data migration reads, and validation
 > queries.
 
-Then, when `progress_setup`'s `next_task` is `configureSourceConnectionTesting` or
-`configureSourceConnectionData`, also show this **verbatim**. **Never show it on
-`configureSourceConnectionExtract`** — extraction reads metadata and DDL, so telling
-the user their source must not be production is wrong there.
-
-> **Use a non-production instance.** Connect to a dev, test, or sandbox
-> database — not production. Migration operations can introduce significant
-> query load, long-running reads, and potential locking on the source database
-> during data migration and validation phases.
+**Never** show the non-production / heavy-read warning on
+`configureExtractionSource` — extraction reads metadata and DDL only. That
+warning belongs on `configureSandboxProfile` (see
+`configure-sandbox-profile.md`), which is the step that establishes the
+connections used for data migration and validation.
 
 ## Set up the connection
 
-Call `configure(needs_source_connection=true)` to list existing connections for
-the configured dialect. Safe to repeat — it only reads.
+If `progress_setup` already returned a connection picker as `next_prompt`
+(`write_to` is `source_connection`), ask that prompt as given — it already
+says we will extract all objects from the picked connection's database.
+Submit the chosen name with `progress_setup(answers={"source_connection": "<name>"})`.
+If they pick **Create a new connection**, do not write `source_connection`;
+create a connection with the per-dialect sub-skill below, then call
+`configure(source_connection=<name>)` with the new name.
 
-- If `existing_connections` is non-empty, ask the user to pick one.
+Otherwise, call `configure(needs_source_connection=true)` to list existing
+connections for the configured dialect. Safe to repeat — it only reads.
+
+- If `existing_connections` is non-empty, ask the user to pick one. Then call
+  `configure(source_connection=<name>)` with a name from that list. If they type
+  something that isn't a listed name, such as "show me the details" or "which
+  one is prod?", it's a request, not a connection. Run
+  `scai connection list -l <dialect>`, show what they asked for, and ask again.
+  If they want a new connection, load the per-dialect sub-skill below.
 - Otherwise, load the per-dialect connection sub-skill:
   - `sqlserver` → `../connection/sql-server-connection/SKILL.md`
   - `redshift` → `../connection/redshift-connection/SKILL.md`
@@ -60,7 +69,7 @@ don't want to connect now, or the re-entry question above gets a "no".
 **Defer for this run:**
 
 ```
-progress_setup(mode="setup", skip="configureSourceConnectionExtract")
+progress_setup(mode="setup", skip="configureExtractionSource")
 ```
 
 Nothing is persisted, so a later `progress_setup()` — or a re-entry from
@@ -69,7 +78,7 @@ Nothing is persisted, so a later `progress_setup()` — or a re-entry from
 **Permanent opt-out:**
 
 ```
-configure(tasks={"configureSourceConnectionExtract": {"enabled": false}})
+configure(tasks={"configureExtractionSource": {"enabled": false}})
 ```
 
 Say what it costs first: code already in the project still converts and

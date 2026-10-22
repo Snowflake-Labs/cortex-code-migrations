@@ -1,6 +1,6 @@
 ---
 name: discover-extras
-description: Surface assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PL/SQL packages, custom shell scripts, etc.) and register them as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved Kind enum) so the orchestration layer (next_object + state machine) tracks them alongside built-in units. Triggers from the setup state machine as its last step; can also be re-entered any time the user identifies more custom assets.
+description: Surface assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PL/SQL packages, custom shell scripts, etc.) and register them as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved Kind enum) so the orchestration layer (next_object + state machine) tracks them alongside built-in units. Triggers from the setup state machine as its last step; can also be re-entered any time the user identifies more custom assets. ETL platforms found here (SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory) are handed to the ETL register path as kind=etl, not registered as customKind.
 parent_skill: setup
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -10,6 +10,34 @@ license: Proprietary. See License-Skills for complete terms
 The conversion engine generates a known set of object types — tables, views, procedures, functions, SSIS packages, and so on. Real migrations almost always pull in **other things** that touch the same database: orchestration tools, BI assets, custom scripts, or object kinds the engine doesn't generate yet.
 
 This step catches those and registers them in the registry as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved Kind enum), so the orchestration layer tracks them alongside built-in units.
+
+## ETL platforms found here
+
+If the files are an ETL platform the migration is going to convert — SSIS, Informatica
+PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, or Azure
+Data Factory — this skill can be where they are found. Do not register them here.
+
+Hand them to **setup → register local ETL → convert**, registered as `kind: etl`:
+
+- SSIS and Informatica PowerCenter go through register-code-units into `source/_etl/`.
+- Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, and Azure Data Factory
+  go through the same register path into `source/_etl_aifirst/<platform>/`, via
+  `create_registry_unit`.
+
+Do not offer to register those ETL jobs as `customKind` cookbooks. A `customKind` unit
+skips both the native replatform and AI-First convert. Do not draft a cookbook, do not
+write `.scai/skills/talendJob.md` (or similar), and do not register those files
+as `customKind`.
+
+Say something like:
+
+> "Those Talend jobs (or Alteryx workflows / IICS mappings / DataStage `.dsx` / Pentaho
+> `.ktr` / ADF pipelines / etc.) stay in this discovery step only long enough to hand
+> them to register. They are registered as `kind: etl`, not as a `customKind` cookbook.
+> Airflow, FiveTran, SSAS, and hand-maintained scripts stay here."
+
+Then open the register-code-units ETL steps for those files. Keep going in this skill
+for orchestration, ingest, cubes, and scripts.
 
 ## On Entry
 
@@ -28,11 +56,21 @@ If the user has already registered some custom units (`migration_status` shows u
 Use `ask_user_question` (multi-select) with these top categories. Keep the list at five and let the auto-appended "Something else" cover the long tail:
 
 > "Which of these apply to your project? (multi-select)"
-> 1. **Orchestration / data movement** — FiveTran, Airflow, Informatica, Talend, ADF, Glue
+> 1. **Orchestration / data movement** — FiveTran, Airflow, Glue
 > 2. **BI / analytics layer** — SSAS cubes, Tableau extracts, Looker views, dbt models
 > 3. **Engine doesn't generate yet** — Oracle PACKAGE/PACKAGE BODY, SQL Server triggers, sequences, edge cases
 > 4. **Hand-maintained scripts** — bash/PowerShell jobs, cron tasks, manual deployment scripts
 > 5. **Nothing after all** — I was wrong upstream, move on
+
+The Orchestration category is for ingest and orchestration that will keep running
+against Snowflake, not for ETL you want to convert. Do not list an ETL platform the
+migration is going to convert as an orchestration extra — SSIS, Informatica PowerCenter
+(both native SnowConvert) and Talend, Alteryx, Informatica Cloud / IICS, DataStage,
+Pentaho, Azure Data Factory (AI-First) all belong in register-and-convert. If the user
+picks orchestration and then names one of those, refuse the cookbook path in one
+sentence and hand those files to the ETL register path as `kind: etl` (setup → register local ETL → convert). Do not draft a cookbook,
+do not write `.scai/skills/talendJob.md` (or similar), and do not register those files
+as `customKind`.
 
 If the user picks **Nothing after all**, jump to **Step 4** and mark the step done — that records the step as answered so it isn't put to them again.
 
@@ -41,18 +79,24 @@ If the user picks **Nothing after all**, jump to **Step 4** and mark the step do
 For every selected category, work through it in turn. The pattern is the same:
 
 1. Tell the user the recommended `customKind` value for this category — this string is the discriminator that will land in the registry's `source.customKind` and `target.customKind` fields. The unit's top-level `kind` is always `custom`. Recommended values:
-   - Orchestration: `fivetran`, `airflow`, `informaticaWorkflow`, `talendJob`, `adfPipeline`, `glueJob`
+   - Orchestration: `fivetran`, `airflow`, `glueJob`
    - BI: `ssasCube`, `tableauExtract`, `lookerView`, `dbtModel`
    - Engine gap: `oraclePackage`, `oraclePackageBody`, `sqlServerTrigger`, `sequence`, `synonym`
    - Scripts: `shellScript`, `powerShellScript`, `cronJob`, `manualScript`
    - Anything else: free-form. Pick something descriptive and stable — the agent uses it to group, filter, and route. Cannot be one of the four reserved Kind values (`databaseObject`, `script`, `etl`, `custom`).
+
+   The Orchestration recommendations deliberately drop `informaticaWorkflow`,
+   `talendJob`, `adfPipeline`, `alteryxWorkflow`, `datastageJob`, `pentahoJob`, and
+   `iicsMapping`. Those platforms convert through register-and-convert; giving them a
+   `customKind` cookbook would silently opt them out of the native or AI-First convert
+   path. Do not resurrect any of those slugs here.
 
 2. Ask the user — lead with pointing you at the code, since that's the cheapest thing for them to do:
    > "For `<customKind>`, where does it live? Point me at a directory or repo path and I'll scan it and work out the names and dependencies myself. If you'd rather list them, I need a name per item, plus optionally a Snowflake `objectType`, a repo path, and what each one reads from — inline, or as a CSV/JSON/YAML paste."
 
 3. Decide how the items get investigated. When the user hands you a ready manifest, there is nothing to investigate — go straight to step 4. When they point you at code (a directory, a repo path, "our FiveTran stuff is in ./fivetran/"), somebody has to read those files to work out the unit names, paths, and dependency ids. **Fan that reading out — don't do it serially yourself.** See [Orchestrating the investigation](#orchestrating-the-investigation) below.
 
-4. Register with **`register_units`** — that is the only register tool. If it is not in your loaded tools, search for `register_units` by that name. Do not look for `register_custom_unit` or `register_custom_units_from_manifest`; those names are gone.
+4. Register with **`register_units`** — that is the only register tool. If it is not in your loaded tools, search for `register_units` by that name.
 
    One call, one shape:
    - Investigation findings → `register_units(expected_slugs=[...])`
@@ -103,13 +147,13 @@ Three categories pointing at code is one round of agents and one merge, not thre
 
 ### How many agents
 
-> **MANDATORY: If the user pointed at a directory or config file, you MUST spawn sub-agents.** Do not read the directory yourself. Do not register units inline. Skipping the spawn loses the audit trail, skips dedup, and breaks the expected-slugs safety check.
+> When the user pointed at a directory or config file, spawn sub-agents to read it rather than reading it yourself or registering units inline: skipping the spawn loses the audit trail, skips dedup, and breaks the expected-slugs safety check.
 
 | Situation | Spawn | Registration tool |
 |---|---|---|
-| User pasted a manifest, or named 1–3 items inline | **None.** Register directly; spawning costs more than the work. | `register_custom_unit` (one call per item) |
-| One directory / config bundle per category | **One agent per `customKind`.** Mandatory — no exceptions for small directories. | `register_custom_units_from_manifest(expected_slugs=[...])` |
-| A category with many independent files (DAGs, scripts, cubes) | **Shard it** — group ~10 files per agent, up to 8 agents at once. Queue the rest. | `register_custom_units_from_manifest(expected_slugs=[...])` |
+| User pasted a manifest, or named 1–3 items inline | **None.** Register directly; spawning costs more than the work. | `register_units(entries=[...])`, or `register_units(custom_kind=..., name=...)` for a single item |
+| One directory / config bundle per category | **One agent per `customKind`.** Mandatory — no exceptions for small directories. | `register_units(expected_slugs=[...])` |
+| A category with many independent files (DAGs, scripts, cubes) | **Shard it** — group ~10 files per agent, up to 8 agents at once. Queue the rest. | `register_units(expected_slugs=[...])` |
 
 Sharding rule: **one agent owns a path, and paths never overlap.** Two agents reading the same directory produce duplicate entries that you then have to reconcile by hand.
 

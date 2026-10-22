@@ -76,7 +76,7 @@ Do NOT regenerate test files — use them as your TDD workbench.
 
 > **Context efficiency:** `session_status.json` is your input for building a fix plan. Read it once in Step 1 — don't re-read it per element in Step 2. Record statuses in your task artifact, not via `track_status.py`.
 
-> **Batch fixing strategy:** Group elements by EWI code in Step 1. Process all elements sharing the same code consecutively — this lets you build familiarity with the pattern and cross-reference prior fixes in `{UNIT}/stabilization/tracking/fix_log.md`. Read the orchestration SQL once at the start of Step 2 and build a mental index by `---- Start` tags.
+> **Batch fixing strategy:** Group elements by EWI code in Step 1. Process all elements sharing the same code consecutively — this lets you build familiarity with the pattern and cross-reference prior fixes in `{UNIT}/stabilization/tracking/fix-log.md`. Read the orchestration SQL once at the start of Step 2 and build a mental index by `---- Start` tags.
 
 ### Step 2: Fix Using Test Files as Workbench
 
@@ -158,7 +158,7 @@ After user confirms, mark all `EXECUTE DBT PROJECT` elements as `skipped` with r
 
 3. **Identify issues** — look for `!!!RESOLVE EWI!!!` markers and `--** SSC-*` comments
 
-4. **Check prior fixes (cross-learning)** — search `{UNIT}/stabilization/tracking/fix_log.md` for entries matching `**EWI/FDM**: <ISSUE_CODE>` (all entries are successful fixes — the file only records patterns that worked). If prior fixes exist for the same issue code:
+4. **Check prior fixes (cross-learning)** — search `{UNIT}/stabilization/tracking/fix-log.md` for entries matching `**EWI/FDM**: <ISSUE_CODE>` (all entries are successful fixes — the file only records patterns that worked). If prior fixes exist for the same issue code:
    - Read their **Fix pattern** and **After** fields to understand what approaches have worked before
    - Assess whether the same approach applies to THIS element — the same EWI/FDM code can cover very different scenarios (e.g., SSC-EWI-SSIS0004 covers ScriptTask, ForEachLoop, and other control flow elements)
    - If the element is structurally identical to a prior fix (same element type, same pattern), you can apply the same approach — but still verify with the test file
@@ -211,7 +211,7 @@ After user confirms, mark all `EXECUTE DBT PROJECT` elements as `skipped` with r
 
    > **Do NOT call `track_status.py` directly.** The orchestrator reads your task artifact and updates `session_status.json` after all fix agents complete.
 
-10. **Append to fix log** (Main Mode only — Task Mode agents write to `learnings_batch_{B}.md` instead; the orchestrator merges learnings into fix_log.md after all agents complete) — write a record to `{UNIT}/stabilization/tracking/fix_log.md`:
+10. **Append to fix log** (Main Mode only — Task Mode agents write to `learnings_batch_{B}.md` instead; the orchestrator merges learnings into fix-log.md after all agents complete) — write a record to `{UNIT}/stabilization/tracking/fix-log.md`:
    ```markdown
    ## Fix Record
    - **Unit**: <unit_name>
@@ -244,7 +244,7 @@ After all statements in this phase are processed:
      Needs user: K elements
      Failed: J elements
 
-   Fix log: <UNIT>/stabilization/tracking/fix_log.md
+   Fix log: <UNIT>/stabilization/tracking/fix-log.md
    Session: <UNIT>/stabilization/tracking/session_status.json
    ```
 
@@ -272,7 +272,7 @@ After all statements in this phase are processed:
 - Locate elements by name (from `---- Start` tags), never by line number
 
 #### Same element fails repeatedly across retries
-- Check `{UNIT}/stabilization/tracking/fix_log.md` for prior attempts — review what was tried
+- Check `{UNIT}/stabilization/tracking/fix-log.md` for prior attempts — review what was tried
 - After 3 failed cycles, mark as `test-failed` and move on
 - Log a decision via parent skill's `add-decision` command for orchestrator review
 
@@ -304,7 +304,7 @@ After all statements in this phase are processed:
   - Skill directory: `SKILL_DIR`
 - ROADMAP batch context section (provided in prompt)
 - Enriched baseline report (at `PHASES_DIR/baseline_batch_{B}.md` or provided in prompt)
-- Fix log path: `PACKAGE/stabilization/tracking/fix_log.md` (READ-ONLY — consult if exists; absent in Phase 1)
+- Fix log path: `PACKAGE/stabilization/tracking/fix-log.md` (READ-ONLY — consult if exists; absent in Phase 1)
 - Execute ALL SQL via `snowflake_sql_execute` MCP tool — no Python connections
 
 ### On-Demand References (read when needed)
@@ -318,7 +318,7 @@ After all statements in this phase are processed:
 - Test files (ACT updates only): `PACKAGE/stabilization/tests/orchestration/<task_procedure_name>/`
 - Batch artifact: `PHASES_DIR/batch_{B}.md`
 - Learnings artifact: `PHASES_DIR/learnings_batch_{B}.md`
-- **Do NOT** append to `artifacts/tracking/fix_log.md` — write fix patterns to `learnings_batch_{B}.md` only. The orchestrator merges learnings after all agents complete.
+- **Do NOT** append to `{UNIT}/stabilization/tracking/fix-log.md` — write fix patterns to `learnings_batch_{B}.md` only. The orchestrator merges learnings after all agents complete.
 
 Write artifacts **incrementally** — one element section appended at a time. The orchestrator handles partial artifacts: completed elements are already on disk and will not be re-processed on retry.
 
@@ -351,7 +351,7 @@ Process archetypes before clones within your element list.
 2. **If element passed baseline** — record status `no-fix-needed`, write artifact section, proceed to next element.
 3. **If element is an archetype** — apply full TDD fix loop:
    a. Analyze the EWI issue and the failing assertion(s) in the test file. Use the issue summary, source excerpt, and applicable EWI guide section from the enriched baseline.
-   b. Check `fix_log.md` for a reusable pattern before attempting from scratch.
+   b. Check `fix-log.md` for a reusable pattern before attempting from scratch.
    c. Consult the EWI guide content for the relevant code.
    d. Use the source definition excerpt to understand the intended logic.
    e. Apply a fix in the test file workbench (in `TASK_SCHEMA`).
@@ -360,7 +360,7 @@ Process archetypes before clones within your element list.
    h. If still failing after 3 iterations, set status `auto-fixed-needs-review` with the best-guess fix and document the assumption.
    i. **Record the proven fix**: Write the `Replacement SQL` to your task artifact (see format below). The Replacement SQL must use production database/schema references from the orchestration SQL file — NOT `TASK_SCHEMA`. Do NOT edit the orchestration SQL file.
 4. **If element is a clone** — apply accelerated fix:
-   a. Find its archetype in the learnings artifact for this batch (`PHASES_DIR/learnings_batch_{B}.md`) or in `fix_log.md`.
+   a. Find its archetype in the learnings artifact for this batch (`PHASES_DIR/learnings_batch_{B}.md`) or in `fix-log.md`.
    b. Read the archetype's fix pattern and adapt it to this clone's specific context, documenting your reasoning.
    c. Apply the adapted fix in the test file workbench and run SEED → ACT → ASSERT.
    d. If the adapted fix passes — record status `test-passed`.
@@ -429,7 +429,7 @@ If no fixes were applied, write: `No fixes applied in this task.`
 - Do NOT ask the user any questions — make reasonable defaults and proceed autonomously
 - For `needs-user` situations: attempt a best-guess fix, set status to `auto-fixed-needs-review`, document the assumption in the learnings artifact
 - Prefer EWI reference guide patterns over improvised fixes — the guides exist for exactly this purpose
-- Consult `fix_log.md` for reusable patterns before attempting fixes from scratch
+- Consult `fix-log.md` for reusable patterns before attempting fixes from scratch
 - If an element is completely blocked (infrastructure failure, not a test failure), set status to `failed` with a descriptive reason
 
 ### Context Management

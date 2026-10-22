@@ -7,44 +7,38 @@ sub-agent. Gather every applicable answer first. Sub-agents are non-interactive.
 
 - Data Lineage and Power BI inputs
 - Waves and analysis depth
+- Conversion issues
 - Informatica target
 - Discovery inputs
 - Input snapshot
 
 ### 5.0 Data Lineage reporting-layer inputs
 
-Ask only when Data Lineage is in scope whether the user wants to add or add
-more reporting-layer files. The graph always runs from the registry; Power BI
-`.pbit` files optionally enrich its Reports lane.
+Data Lineage always runs from the registry. Power BI `.pbit` files optionally
+enrich its Reports lane. Do not ask whether to add more: registration already
+collected that intent and staged the files.
 
 Inspect `<project_dir>/source/BI/PowerBI` first:
 
-- Existing `.pbit`: report the count and ask whether to add more files/folders.
-- None: ask for `.pbit` files or folders, or `no`.
-- Any `.pbix`: explain that `.pbix` is a binary format the assessment
-  **cannot** read. Ask for a Power BI template exported as
-  `.pbit`. Never copy one in and never stage `.pbix`.
+- Existing `.pbit`: inventory it with the helper below.
+- None: continue with registry-only Data Lineage.
+- Any `.pbix`: explain in the final input summary that `.pbix` is unsupported
+  and was not staged. Never copy or stage `.pbix`.
 
-Accept files or directories; search directories recursively. Do not ask for a
-report name, connection, database, registry path, CSV path, or output path.
+Do not ask for a report name, connection, database, registry path, CSV path,
+Power BI path, or output path.
 
-When the user supplies paths, run:
+Run:
 
 ```bash
 uv run --project plugin/skills/migration/assessment \
   python plugin/skills/migration/assessment/data-lineage/scripts/stage_powerbi_inputs.py \
-  --project-dir "<project_dir>" \
-  --input "<path>" [--input "<path>" ...]
+  --project-dir "<project_dir>"
 ```
-
-When the user says no but templates are already staged, run the helper without
-`--input` to obtain the authoritative inventory.
 
 Read `skipped[]` as well as `errors[]`:
 
 - Report `.pbix` entries in `skipped[]` briefly.
-- `"not-found"` or `"unreadable"` for a user-supplied path requires you to get a
-  corrected path; do not silently continue.
 - `errors[]` is never empty by accident. Every item requires resolution or
   explicit user agreement to omit
   that template. Do not proceed past it silently. Carry any omission into the
@@ -52,8 +46,6 @@ Read `skipped[]` as well as `errors[]`:
 - `a different file already occupies both the preferred and the
   content-addressed destination name` requires you to rename the incoming file
   or remove the stale staged file.
-- Incoming `[Errno 13]`, `[Errno 28]`, or similar means fix permissions or free
-  space and rerun.
 - An error reading a `.pbit` already under `source/BI/PowerBI` means it is
   missing from `pbit_files` and `pbit_count`. Fix its permissions, or delete
   and re-stage it. An already-staged template that errors is the easy one to
@@ -64,17 +56,14 @@ Read `skipped[]` as well as `errors[]`:
   escape. Do not work around it; the staging directory must be a real
   directory inside the project.
 
-This helper is the only thing that copies Power BI inputs in this workflow.
-Do not copy templates yourself. It never overwrites bytes that differ,
-de-duplicates identical content, and gives collisions a deterministic
-`<name>-<hash8>.pbit` name. Files already in the directory are inventoried,
-never re-copied and never rewritten.
+This helper only inventories files registration already staged. Do not copy
+templates during assessment.
 
 Record every returned `pbit_files[].path` as a project-relative path in
 `data_lineage.staged_pbits`.
 
-- `data_lineage.dispatch`: set `true` whenever Data Lineage is in scope, even
-  when the list is empty, and dispatch `data-lineage`.
+- `data_lineage.dispatch`: always set `true`, even when the list is empty, and
+  dispatch `data-lineage`.
 - When templates are staged, dispatch `data-lineage` first and alone, never in
   the same fan-out as another sub-skill. `scai assessment powerbi enrich`
   mutates the CUR; waves and object-exclusion patch those same units, so a
@@ -82,43 +71,65 @@ Record every returned `pbit_files[].path` as a project-relative path in
   then dispatch the rest. With no templates, include `data-lineage` in the
   single-message fan-out: the child skips Power BI extraction and enrichment
   but still builds the graph from the registry.
-- When the user excluded Data Lineage in Step 3, set
-  `data_lineage.dispatch: false`, then synthesize:
-
-```json
-{"status":"skipped","output_json":null,"summary":"excluded Data Lineage in Step 3"}
-```
+- Always set `data_lineage.dispatch: true`.
 
 ### 5.1 Waves inputs
 
 #### Waves
 
-When Waves is in scope, ask these in order:
+Waves always run. Read `assessment_options`:
 
-1. “The default wave size is 40–80 objects. Keep the defaults, or set custom
-   min/max?” Record integer `partition_min_size` / `partition_max_size`.
-2. “Any objects to push into the earliest waves? Provide patterns like
-   `*Payroll*` or `dbo.Customer`, or say no.” Record a list of globs.
-3. “Default is category-based (TABLE → VIEW → FUNCTIONS/PROCEDURES → ETL).
-   Switch to dependency-based?” Record `category` or `dependency`.
+1. When it contains `custom_wave_size`, read `assessment_wave_size` from
+   `configure()`. AIM collects it as a `min-max` text field on the same card
+   as the prioritization patterns; `default` means 40-80. **Do not ask for the
+   wave size again.** Only when the value is unset (legacy or CLI session) ask
+   once for integer min/max — together with the prioritization patterns in the
+   same `ask_user_question` call when those are unset too. Otherwise use
+   `partition_min_size=40` and `partition_max_size=80`.
+2. When it contains `prioritize`, read `prioritization_globs` from
+   `configure()`. AIM collects it as **one text field** right after Q1, where
+   `none` or empty means skip. **Do not ask whether to prioritize again** and
+   do not offer a skip / "I'll give patterns" choice — Q1 already answered
+   that. Only when the value is unset (legacy or CLI session) ask once, for the
+   patterns themselves; an empty answer is the skip. Otherwise use an empty
+   list.
+3. Use `dependency` when it contains `dependency_order`; otherwise use
+   `category`.
 
 ### 5.2 Dynamic SQL review
 
-When in scope ask once:
+Use `auto-review-all` when `assessment_options` contains `deep_dynamic_sql`;
+otherwise use `generate-only`. Do not ask again.
 
-> Are you interested in Dynamic SQL code analysis? Each occurrence will be
-> reviewed individually — pattern, complexity, migration considerations.
+### 5.2b Conversion issues
 
-Map yes to `auto-review-all`, no to `generate-only`, and exclusion to `skip`.
+When Conversion issues is in scope, ask once. Do not run it because it appeared in the scope list.
+
+> Include a Conversion Issues report? It ranks the SSC-EWI issues from this conversion, writes a local ZIP for Jira, and adds the section to the assessment report. Nothing is uploaded unless you share it later.
+> 1. Yes
+> 2. No
+
+Map yes to `run: true` and no to `run: false`. Do not dispatch when `run` is false; synthesize a skipped result. A yes still requires the child to research every summary row and rerun with `--updates` before the report is generated. Do not ask the user to write the problem or the fix.
 
 ### 5.3 ETL/SSIS review
 
-When ETL CSVs are present and SSIS is in scope, always generate baseline JSON.
-Ask once whether to add AI per-package classification, HTML summary, and effort:
-yes → `auto-review-all`; no → `generate-only`; exclusion → `skip`.
+When ETL CSVs are present, always generate baseline JSON. Use
+`auto-review-all` when `assessment_options` contains `ssis`; otherwise use
+`generate-only`. Do not ask again.
 
-Capture `etl_replatform_sources_path` from `migration_status` when available;
-otherwise let the child auto-detect it.
+Leave `etl_replatform_sources_path` empty unless the user named the ETL source
+directory (SSIS, Informatica, or any other ETL platform); the child auto-detects
+`<project_dir>/source/_etl/`.
+
+### 5.3a SSIS target
+
+When SSIS (`.dtsx`) is in scope, first look for a target the project already recorded: `etl_ssis_target` restored by `configure` (which also derives `scripting` when project.yml's `etl_scripting_platforms` lists `ssis`). If one exists, reuse it, tell the user which target the assessment will frame, and do not ask, so a re-assessment never contradicts an earlier conversion. Otherwise ask exactly once and never default:
+
+> Which conversion target for SSIS?
+> 1. **dbt** — data flows become dbt models orchestrated by Snowflake Tasks
+> 2. **scripting** — data flows become Snowflake Scripting procedures (preview; stabilization and deploy are not part of this flow)
+
+Record `ssis.target` as `dbt` or `scripting`. Pass it to the SSIS child as `ssis_target`. The review-mode rule in 5.3 is unchanged.
 
 ### 5.3b Informatica PowerCenter target
 
@@ -141,9 +152,10 @@ default to `generate-only`, or allow `skip` after Informatica is in scope.
 
 ### 5.7 Discovery (SQL Server, Teradata, and Redshift)
 
-Discovery is in scope only for SQL Server, Teradata, or Redshift. For every
-other dialect, ask nothing and synthesize a skipped result. On any supported
-dialect, always ask; never search for files or answer for the user.
+Discovery is in scope only when `assessment_options` contains `discovery` and
+the dialect is SQL Server, Teradata, or Redshift. Otherwise ask nothing and
+synthesize a skipped result. When selected, ask once; never search for files
+or answer for the user.
 
 First explain what the dialect's Discovery report adds:
 
@@ -362,9 +374,11 @@ assessment_inputs:
   dynamic_sql:
     review_mode: generate-only | auto-review-all | skip
     output_dir: <project_dir>/assessment/json
+  conversion_issues:
+    run: true | false
   etl:
     review_mode: generate-only | auto-review-all | skip
-    output_dir: <project_dir>/assessment/ssis
+    output_dir: <project_dir>/artifacts/assessment/etl
     etl_replatform_sources_path: <abs or empty>
   informatica:
     target: dbt | scripting

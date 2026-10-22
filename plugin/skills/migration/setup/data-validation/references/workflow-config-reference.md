@@ -35,7 +35,7 @@
 | `targetPartitionSizeRows` | Integer | No | Global partition row target (mutually exclusive with `targetPartitionSizeMb`) |
 | `targetPartitionSizeMb` | Integer | No | Global partition size target in MB |
 | `validationCustomTypes` | Object | `{}` | Source datatype normalizations for L1 |
-| `validationCustomMetrics` | Object | `{}` | Per-platform custom L2 metric overrides |
+| `validationCustomMetrics` | Object | `{}` | L2 metric overrides: per-datatype **or** per source column (see [Custom L2 metrics](#custom-l2-metrics-validationcustommetrics)) |
 | `validationCustomNormalizations` | Object | `{}` | Per-platform L2/L3 normalization SQL |
 | `acceptedTransformations` | Array | No | Global accepted source→target value differences (L3) |
 | `validationCustomNormalizationRules` | Array | No | Granular L3 normalization expression overrides |
@@ -59,8 +59,9 @@ qualified names before running.
 | `rowValidationMode` | String | `hybrid` | Only `hybrid` is supported (`row`/`cell` are rejected) |
 | `continueOnFailure` | Boolean | `true` | Continue validating remaining tables on failure |
 | `maxFailedRowsNumber` | Integer | No | Stop L3 after N mismatch rows per partition / early-stop threshold |
-| `excludeMetrics` | Boolean | No | Skip L2 metrics for matching tables |
-| `applyMetricColumnModifier` | Boolean | No | Apply metric column modifiers from templates |
+| `excludeMetrics` | Boolean | No | `true` drops the `avg` / `sum` / `stddev` L2 metrics on both source and target (the orchestrator's default is `false`) |
+| `includeCountDistinct` | Boolean | No | `true` adds the `count_distinct` L2 metric on both source and target (default `false`; the most expensive L2 metric on large tables). See [L2 `count_distinct`](#l2-count_distinct-opt-in-includecountdistinct) |
+| `applyMetricColumnModifier` | Boolean | No | Toggles the `% 2097143` overflow guard on L2 `avg` / `sum` / `stddev`, on both source and target (the orchestrator's default is `true`). `false` aggregates full values, which can overflow on large `BIGINT` / `DECIMAL` sums |
 | `maxColumnsPerMetricsBatch` | Integer | No | Split L2 metrics queries by column count |
 | `maxColumnsPerCellBatch` | Integer | No | Per-table: split L3 cell drill-down batch size |
 | `earlyStoppingForRowHashing` | Boolean | No | Hybrid L3 row-hash phase may stop early |
@@ -78,6 +79,73 @@ qualified names before running.
 For user-facing explanations of each level, see [Validation levels reference](../../../validate-objects/actions/references/validation-levels-reference.md).
 
 The four bool toggles can be set via setup-mode params (`schema_validation=true` only, `metrics_validation=`, `row_validation=`, `continue_on_failure=`) and persist as session defaults under `data_validation_*` in `plugin.yml`. Incremental mode uses `validation_type=` / `sync_strategy=` (also persisted) and patches `defaultTableConfiguration.synchronization.strategy`. Other fields (`watermarkColumn`, `checksumExpression`, `maxFailedRowsNumber`, …) require an in-place YAML edit.
+
+## L2 `count_distinct` (opt-in, `includeCountDistinct`)
+
+L2 skips the `count_distinct` metric unless `includeCountDistinct` is `true`. It is off by default because it is the most expensive L2 metric on large tables (one SQL Server batch: 26.4 s with it, 1.4 s without). The other L2 metrics (`min`, `max`, `avg`, `sum`, `stddev`, `count_null`, …) are unaffected, and L3 still compares every value.
+
+**Where it goes.** In the workflow file itself: the YAML that `validate_data(mode="setup")` writes to `artifacts/data_validation/workflows/<hash>.yaml`, or the JSON/YAML file passed to `create-data-validation-workflow`. It is read when the workflow is created and stored with each table's configuration in the metadata database, so it needs no image rebuild, account setting or Snowflake object. Change it in the file and create a new workflow. A running or finished workflow keeps the value it was created with.
+
+**Turn it on for every table:**
+
+```yaml
+validationConfiguration:
+  metricsValidation: true
+  includeCountDistinct: true
+```
+
+**Turn it on for one table only:**
+
+```yaml
+tables:
+  - fullyQualifiedName: db.dbo.orders
+    validationConfiguration:
+      includeCountDistinct: true
+```
+
+**Turn it on everywhere except one table:**
+
+```yaml
+validationConfiguration:
+  includeCountDistinct: true
+tables:
+  - fullyQualifiedName: db.dbo.big_fact
+    validationConfiguration:
+      includeCountDistinct: false
+  - fullyQualifiedName: db.dbo.orders   # inherits true
+```
+
+**Turn it off:** remove the key, or set it to `false`. Removing it from every level gives the default (off).
+
+**Precedence (most specific wins):**
+
+1. `tables[].validationConfiguration.includeCountDistinct`, or the same key under `defaultTableConfiguration.validationConfiguration`.
+2. `tables[].includeCountDistinct` (key directly on the table entry), or `defaultTableConfiguration.includeCountDistinct`. A table entry beats `defaultTableConfiguration` at the same level.
+3. Global `validationConfiguration.includeCountDistinct`.
+4. Default: `false`.
+
+| Global `validationConfiguration` | `defaultTableConfiguration` | Table entry | Result for that table |
+|---|---|---|---|
+| — | — | — | off |
+| `true` | — | — | on |
+| `false` / — | — | `includeCountDistinct: true` | on |
+| `true` | — | `includeCountDistinct: false` | off |
+| `true` | — | `validationConfiguration.includeCountDistinct: false` | off |
+| — | — | `includeCountDistinct: true` + `validationConfiguration.includeCountDistinct: false` | off (the `validationConfiguration` key wins) |
+| `false` | `includeCountDistinct: true` | — | on |
+| `true` | `includeCountDistinct: false` | — | off |
+| — | `includeCountDistinct: true` | `includeCountDistinct: false` | off |
+| — | `validationConfiguration.includeCountDistinct: true` | `includeCountDistinct: false` | **on**: a `validationConfiguration` key beats a key set directly on the entry, even from `defaultTableConfiguration`. Use `validationConfiguration.includeCountDistinct: false` on the table instead |
+
+To avoid the last case, set the flag in `validationConfiguration` blocks only.
+
+**Rules that hold for every permutation:**
+
+- Source and target always get the same value, so both compute `count_distinct` or neither does.
+- With the flag off, a `validationCustomMetrics` entry for `count_distinct` is skipped too. With it on, the custom entry replaces the default query as usual.
+- `excludeMetrics` (drops `avg` / `sum` / `stddev`) and `includeCountDistinct` are independent. `excludeMetrics: true` + `includeCountDistinct: true` gives `min`, `max`, `count_null`, `count_distinct` and the type-specific counts.
+- `metricsValidation: false` turns off all of L2, so `includeCountDistinct` has no effect.
+- snake_case `include_count_distinct` is accepted everywhere camelCase is.
 
 ## `comparisonConfiguration`
 
@@ -110,7 +178,7 @@ The four bool toggles can be set via setup-mode params (`schema_validation=true`
 | `columnMappings` | `{"source_col": "TARGET_COL"}` for renamed columns |
 | `indexColumnList` | Row-identity columns for L3. Snake_case alias: `index_column_list`. |
 | `targetIndexColumnList` | Target-side index columns when different. Snake_case alias: `target_index_column_list`. |
-| `columnNamesToPartitionBy` | Partition columns for large-table validation. The first column should be one the source can prune on (sort key, clustered index, primary index, partition key, or clustering key). |
+| `columnNamesToPartitionBy` | Partition columns for large-table validation. The first column should be one the source can prune on (sort key, clustered index, Teradata level-1 RANGE_N column, partition key, Oracle IOT primary key, or clustering key). A Teradata primary index does not prune range scans — prefer the RANGE_N column when present, or a composite `[partitioning column, PI column]` when the date is low-cardinality. |
 | `targetPartitionSizeRows` / `targetPartitionSizeMb` | Per-table partition sizing (mutually exclusive) |
 | `validationConfiguration` | Per-object override of validation toggles |
 | `synchronization` | Opt into **incremental validation** (or override `defaultTableConfiguration`) |
@@ -127,7 +195,7 @@ By default every run fully re-validates the table. Adding a `synchronization` bl
 
 In the plugin, choose mode/sync via `progress_setup(mode="data_validation")`, then pass `validation_type` / `sync_strategy` to `validate_data(mode="setup")`. Setup persists those in `plugin.yml` and patches `defaultTableConfiguration.synchronization.strategy` into the generated YAML. The agent still edits `watermarkColumn` (watermark) and partition columns when needed — see `edit_hints`.
 
-Like data migration, you can set shared defaults once via top-level `defaultTableConfiguration` (including `synchronization`). Each table/view inherits those defaults; per-table fields override, and nested `synchronization` is deep-merged field-by-field.
+Like data migration, you can set shared defaults once via top-level `defaultTableConfiguration` (including `synchronization`). Each table/view inherits those defaults and per-table fields override them: nested objects (`synchronization`, `queryModifiers`, `validationConfiguration`, `icebergConfig`) merge key by key, while lists, `columnMappings` and scalars are replaced whole. `targetPartitionSizeRows` / `targetPartitionSizeMb` are one setting (a table that sets either takes neither from the defaults), and so are `columnSelectionList` / `useColumnSelectionAsExcludeList`. Full rules: the orchestrator README's *defaultTableConfiguration merging (Data Validation)* section.
 
 **Prerequisite:** at least one prior full validation of the table must have completed — that run records the baselines the incremental run diffs against. The first run with `synchronization` set still validates everything (establishing the baseline); subsequent runs are incremental. Requires the table to be partitioned (`columnNamesToPartitionBy`). Unchanged incremental runs may show CLI status **Not validated** (skipped) rather than Valid/Failed.
 
@@ -200,7 +268,7 @@ Advanced **Data Validation** feature — SQL applied before L3 row-hash and cell
 
 | Field | Level | Purpose |
 |-------|-------|---------|
-| `validationCustomNormalizationRules` | root / `validationConfiguration` / per-table | **Preferred** — `column`, `columnPattern`, or `dataType` + `sourceExpression` / `targetExpression` (`{{ col_name }}` placeholder) |
+| `validationCustomNormalizationRules` | root / `validationConfiguration` / per-table | **Preferred** — `column`, `columnPattern`, `dataType`/`sourceDataType`, or `targetDataType` + `sourceExpression` / `targetExpression` (`{{ col_name }}` placeholder). Each expression matches that side's own catalog type. `targetDataType: "*"` applies `targetExpression` to the type the datatype mapping produces for `sourceDataType`. Quote the star in YAML. |
 | `validationCustomNormalizations` | root / per-table | Legacy datatype-keyed normalization lists |
 | `validationCustomTypes` | root / per-table | L1 source datatype → target type mappings |
 | `validationCustomTypeRules` | root / per-table | Per-column L1 cross-type overrides |
@@ -229,9 +297,50 @@ After L3 completes, partition results use standard codes:
 | `INVALID` | Row-level mismatches found |
 | `POSSIBLE_MISMATCH` | Early stopping triggered before full comparison — treat as needing review, not automatic pass |
 
-## Custom template shapes
+## Custom L2 metrics (`validationCustomMetrics`)
 
-Under `validationCustomMetrics`:
+Top-level (or rarely per-object) overrides for **metrics validation (L2)** only. Does **not** change L1 schema or L3 row identity.
+
+Each entry under `source` / `target` uses **exactly one** of:
+
+| Selector | Scope | Notes |
+|----------|-------|-------|
+| `datatype` | Every column of that type | Optional `replaceAll: true` replaces the built-in metric set for that type |
+| `column` | One source column | Value is `{table.fullyQualifiedName}.{columnName}` matching the table entry’s FQN + source column name. **`source` list only** — the orchestrator maps the override to the target column (via `columnMappings` when names differ). Do **not** put the PK in `columnSelectionList` with exclude mode to skip L2; that rejects index columns and would drop L3 |
+
+Metric list entries:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Metric id (`avg`, `min`, `max`, `sum`, `count_distinct`, …) |
+| `metricQuery` | No | SQL expression. **Omit or leave empty to remove** that metric for the selector |
+| `metricReturnDatatype` | No | Expected return type when defining/replacing a metric |
+| `metricColumnModifier` | No | Optional wrapper applied to the column before the metric |
+
+**Common ask — skip useless aggregations on a VARCHAR / text primary key** (e.g. length-based `avg` on an order id) while keeping the key in L1 and L3:
+
+```yaml
+validationConfiguration:
+  metricsValidation: true   # must be on for L2 overrides to matter
+validationCustomMetrics:
+  source:
+    - column: public.orders.order_id
+      metrics:
+        - name: avg
+        # omit metricQuery → remove avg for this column only
+    # Or remove every VARCHAR aggregation on the PK:
+    # - column: public.orders.order_id
+    #   metrics:
+    #     - name: min
+    #     - name: max
+    #     - name: avg
+    #     - name: count_empty
+    #     - name: count_distinct
+    #     - name: count_null
+  target: []
+```
+
+Datatype-scoped override (unchanged):
 
 ```yaml
 validationCustomMetrics:
@@ -246,11 +355,13 @@ validationCustomMetrics:
   target: []
 ```
 
+Apply these edits **before** `validate_data(mode="run")` when the user asks to skip L2 metrics on specific columns. Prefer column-scoped removals over turning off `metricsValidation` for the whole workflow when they still want L2 on other columns.
+
 ## Advanced
 
 | Field | Level | Description |
 |-------|-------|-------------|
-| `defaultTableConfiguration` | top-level | Shared defaults for every `tables[]` / `views[]` entry (DM parity); `synchronization` deep-merges |
+| `defaultTableConfiguration` | top-level | Shared defaults for every `tables[]` / `views[]` entry (DM parity); nested objects merge key by key, lists and scalars are replaced |
 | `affinity` | top-level | Affinity group — orchestrator only picks up matching workflows |
 | `cleanUpTransientResources` | top-level | Delete intermediate DV stage files after the workflow finishes (`never` / `on-success` / `always`; default `on-success`) |
 | `views` | top-level | Array of view validation entries (same schema as `tables`) |
@@ -294,8 +405,9 @@ Teradata uses **database.table** naming — omit source `schemaName` (there is n
 | Scenario | Fields to edit |
 |----------|----------------|
 | Limit validation to a subset of rows | `sourceWhereClause` + `targetWhereClause` (both sides; snake_case aliases accepted) |
-| Skip expensive L2 on wide tables | `excludeMetrics: true` or disable `metricsValidation` |
+| Skip expensive L2 on wide tables | Disable `metricsValidation`, split it with `maxColumnsPerMetricsBatch`, or drop the `avg` / `sum` / `stddev` aggregates with `excludeMetrics: true` |
 | Keep metrics off (default / user said off) | Leave `metricsValidation: false` — **Full** mode does not mean enable L2 |
+| Skip L2 aggregations on one column (e.g. VARCHAR PK) without dropping L1/L3 | Top-level `validationCustomMetrics.source` with `column: {table.fullyQualifiedName}.{columnName}` and metric `name`s with **no** `metricQuery` — see [Custom L2 metrics](#custom-l2-metrics-validationcustommetrics). Do **not** exclude the index/PK via `columnSelectionList` |
 | Exclude columns from L3 row compare (timestamp / audit drift) | Per table: `useColumnSelectionAsExcludeList: true` and `columnSelectionList: [created_at]` (or `CREATED_AT`, `updated_at`, …). Common for SQL Server `DATETIME2` → Snowflake `TIMESTAMP_*` precision or write-time drift. |
 | Whitelist known formatting differences | `acceptedTransformations` |
 | Reduce source locking | `queryModifiers` on table or worker TOML |

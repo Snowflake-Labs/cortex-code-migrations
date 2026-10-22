@@ -3,10 +3,22 @@
 Guide for the `deploy` task — common catalogs. The machine invokes this to
 push converted SQL to the project's Snowflake database.
 
+## Step 0: Record task start
+
+```
+transition_status(status="started", task="deploy", where="id = '<object_id>'")
+```
+
+Do this once at entry. Finish with `transition_status` after deploy succeeds or fails.
+
 ## Call the tool
 
 Use the `deploy` MCP tool with `object_name` = `<object_name>` (or the
-`invocation` from `next_task`).
+`invocation` from `next_task`). When several objects of the group are at
+`deploy`, deploy them in one call with `where="id IN ('<id1>', '<id2>')"`
+instead of one `object_name` per call; scai reports each object separately.
+Unclaimed clean tables go through `deploy(clean_tables=true)` from the picker
+([claim_objects.md](../actions/claim_objects.md#bulk-deploy)), not this guide.
 
 The tool uses the connection and database from `configure` and deploys via `scai code deploy`.
 Do **not** pass `--profile` or `--database-bindings` yourself — the tool injects them.
@@ -43,7 +55,7 @@ Converted files may contain issues that need manual fixes before deployment:
 |-------|-------|-----|
 | Syntax error | Invalid SQL | A pre-deploy check above, if one matches — otherwise `transition_status(outcome='failed', error='sql')` and let the fix loop take it |
 | `unexpected 'DEFAULT'` | An output argument carries a default | Pre-deploy check 5 — delete that argument's `DEFAULT`, nothing else |
-| Unknown function `<name>` | Missing dependency | Deploy that function first |
+| Unknown function `<name>` | Missing or non-bindable dependency | If that object's SQL/CUR has no `<%token%>`, spawn `cur_reconciler`; otherwise deploy that function first |
 | Object does not exist | Missing table/view | Deploy or check schema |
 | Schema does not exist | Missing schema | `CREATE SCHEMA IF NOT EXISTS <schema>` |
 | `Error [XXXXXXX]: ...` | Planner error | Try to fix the SQL and redeploy; if the error persists, do **not** use `sql_execute` — leave the task unstamped if a known dependency is not ready (the walk will show `blockedOn`), or `error='sql'` / escalate if a person must register or stub a missing object |
@@ -63,7 +75,12 @@ Workflow:
 
 ## After deployment
 
-Re-pull `migration_status(mode="my_objects_summary")` (or `next_task` with the object's
-`object_id`). If deployment **failed** with anything the pre-deploy checks do not cover, call
-`transition_status(status='advance', task='deploy', outcome='failed')` with the appropriate
-`error` code. See [Advancing and reporting](../SKILL.md#advancing-and-reporting).
+Confirm the deploy oracle (`remoteDeploymentInfo` / `cloudStatus.deployment` as
+appropriate), then stamp so `TASK_EVENTS` get an `advanced` row:
+
+- **Succeeded** → `transition_status(status="advance", task="deploy", outcome="completed", where="id = '<object_id>'")` (or `id IN (...)` for every object that deployed)
+- **Failed** with anything the pre-deploy checks do not cover → `transition_status(status="advance", task="deploy", outcome="failed", error="<sql|infra>", where="id = '<object_id>'")`
+
+If completed advance refuses (`does not confirm completion`), wait for the
+oracle and retry — do not leave success to `next_task` alone. See
+[Advancing and reporting](../SKILL.md#advancing-and-reporting).

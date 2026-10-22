@@ -55,13 +55,34 @@ preflight: true
 preflightKeepSchema: false
 ```
 
+## Identity columns and `continueIdentityColumns`
+
+**When:** the customer will insert new rows on Snowflake after cutover into tables whose keys come from a source identity, auto-increment or `serial` column, or asks why a new insert collides with a migrated key.
+
+**Default:** off. Identity values are copied as ordinary data and the target's generator is left alone, so the next generated value can collide with a migrated key.
+
+**Opt in:** `continueIdentityColumns: true` per table, or under `defaultTableConfiguration` for every table. Tables the orchestrator creates get a sequence default on each source identity column. After the final load, a cleanup task restarts each target identity or sequence-default column at `MAX(column) + 1` (empty tables keep their start value). It also covers existing targets, such as tables SnowConvert created with `IDENTITY`. It replaces the column's generator with a `<table>_<column>_IDENTITY_SEQ` sequence, so offer it only when the customer wants it; do not turn it on by default. Native targets only: Iceberg targets and preflight runs are skipped. For incremental sync it runs at the end of every workflow run. Detail: `dmvf/data-migration-orchestrator/README.md` ("Identity columns and sequences").
+
+```yaml
+defaultTableConfiguration:
+  continueIdentityColumns: true
+tables:
+  - source: { databaseName: SALES, schemaName: dbo, tableName: Orders }
+    target: { databaseName: TARGET_DB, schemaName: DBO, tableName: ORDERS }
+    columnNamesToPartitionBy: [OrderId]
+  - source: { databaseName: SALES, schemaName: dbo, tableName: AuditLog }
+    target: { databaseName: TARGET_DB, schemaName: DBO, tableName: AUDIT_LOG }
+    columnNamesToPartitionBy: [Id]
+    continueIdentityColumns: false   # leave this table's generator alone
+```
+
 ## TableConfiguration
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
 | `source` | `SourceTargetIdentifier` | Yes | Source table location |
 | `target` | `TargetIdentifier` | Yes | Target table location in Snowflake |
-| `columnNamesToPartitionBy` | `String[]` | Yes (native) | Columns used to partition data during extraction. **Not used for Iceberg loading** (see Iceberg section below). |
+| `columnNamesToPartitionBy` | `String[]` | No | Ordered columns used to partition data during extraction. When omitted or empty, the orchestrator extracts the table as a single unit, or infers a key at preprocessing when the table is large enough. **Not used for Iceberg loading** (see Iceberg section below). |
 | `extraction` | `ExtractionStrategy` | No | How data is extracted from source |
 | `synchronization` | `SynchronizationStrategy` | No | Incremental sync settings. **Does not apply to Iceberg migrations.** |
 | `columnTypeMappings` | `ColumnTypeMapping[]` | No | Type conversions during migration |
@@ -76,6 +97,8 @@ preflightKeepSchema: false
 | `intervalHandling` | `"interval"` \| `"varchar"` | No | Per-table override of top-level `intervalHandling`. |
 | `onUntranslatable` | `"substitute"` \| `"fail"` | No | **Teradata only.** How non-Unicode string columns handle untranslatable bytes during extraction. Default `"substitute"`. Set under `defaultTableConfiguration` for a workflow-wide default, or per table to override. Use `"fail"` when untranslatable non-Unicode bytes must abort the partition (Error 6706) instead of substituting U+FFFD. Detail: `dmvf/docs/data-migration-orchestrator/teradata-charset-extraction.md`. |
 | `executionTimeoutMinutes` | Integer | No | Wall-clock timeout in minutes for the **Analyze boundaries** DEA task only (orchestrator default is **20** when omitted). Does **not** apply to extraction or load. Use per table for large/slow boundary queries, or under `defaultTableConfiguration` to apply to all tables. |
+| `continueIdentityColumns` | Boolean | No | Continue source identity / auto-increment / `serial` generators on the Snowflake target after the final load (default **false**). Per table, or under `defaultTableConfiguration` for all tables. See [Identity columns](#identity-columns-and-continueidentitycolumns). |
+| `resetPartitions` | `"disabled"` \| `"enabled"` \| `"enabledWithDedup"` | No | Discard the partitions a previous workflow created for this table and repartition it on the next incremental (`checksum` / `watermark`) run (default **disabled**; `true` / `false` alias `enabled` / `disabled`). Neither value wipes the target; `enabledWithDedup` merges `watermark` tables on the primary key (not supported with Snowpipe or Iceberg). Set it for one run, then remove it. Per table, or under `defaultTableConfiguration`. Detail: `dmvf/data-migration-orchestrator/README.md` ("Resetting partitions"). |
 
 ## SourceTargetIdentifier
 
@@ -96,24 +119,61 @@ Extends `SourceTargetIdentifier` with optional Iceberg fields.
 | `databaseName` | String | Yes | Database name |
 | `schemaName` | String | Yes | Schema name (always required on Snowflake targets, including Teradata migrations) |
 | `tableName` | String | Yes | Table name |
-| `tableType` | `"native"` \| `"iceberg"` | No | Target table format. Defaults to `"native"`. **`"iceberg"` is Redshift-source only today** (partial support). |
+| `tableType` | `"native"` \| `"iceberg"` | No | Target table format. Defaults to `"native"`. **`"iceberg"` is allowed for any source dialect, but only when the source object is fully relational** — never when the source is itself an Iceberg / external table. |
 | `icebergConfig` | `IcebergConfig` | When `tableType` is `"iceberg"` | Iceberg-specific configuration (see below) |
 
 ## IcebergConfig
 
-> **Scope:** End-to-end Iceberg migration is **Redshift-only** (native → UNLOAD → `copy_files`, or Glue-catalog `catalog_link` / `convert_to_managed`). Do not set `tableType: iceberg` for other source dialects unless product support expands.
+> **Scope:** End-to-end Iceberg migration goes **relational source → Snowflake-managed Iceberg** via
+> `copy_files` (the source's cloud/server extraction strategy writes Parquet to a stage; Snowflake loads
+> it). It is available for every supported source dialect **only when the source object is a fully
+> relational table**. **Do not set `tableType: iceberg` when the source is itself an Iceberg / external /
+> catalog-backed table — stop instead.** The `catalog_link` / `convert_to_managed` strategies below adopt
+> data that is already Iceberg and are therefore **out of scope** under this rule.
 
 Configuration for Iceberg table targets. Required when `tableType` is `"iceberg"`.
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `catalog` | String | No | `"SNOWFLAKE"` (default) for Snowflake-managed Iceberg, or the name of a catalog integration (e.g. a Glue integration) |
-| `externalVolume` | String | When `catalog` is `"SNOWFLAKE"` | Name of the Snowflake external volume |
-| `baseLocationPrefix` | String | No | Prefix for the table's `BASE_LOCATION` path. Only applies when `catalog` is `"SNOWFLAKE"`. |
-| `catalogTableName` | String | When `catalog` is not `"SNOWFLAKE"` | Table name in the external catalog. **If the catalog integration has `CATALOG_NAMESPACE` set, use the bare table name only** (e.g., `"customer"`). The namespace is prepended automatically. Using `"namespace.table"` will cause a double-prefix error. |
-| `catalogSync` | String | No | Catalog integration name to sync Snowflake-managed metadata back to (for dual-engine access) |
-| `sourceDataStage` | String | No | Stage path (must start with `@`) pointing to existing Parquet files. Only applies when `catalog` is `"SNOWFLAKE"`. |
-| `migrationStrategy` | `"catalog_link"` \| `"convert_to_managed"` \| `"copy_files"` | No | Iceberg migration strategy. Auto-detected when omitted (see below). |
+| `catalog` | String | Yes | Must be `"SNOWFLAKE"` — Snowflake-managed catalog is the only released shape. |
+| `icebergSpec` | String | Yes | Iceberg format version. `"v2"` or `"v3"`. `scai data migrate generate-config --iceberg` writes `<ICEBERG_SPEC>`. |
+| `storageMode` | String | Yes | `"compatible"` with spec `v2` or `v3`, or `"native"` with spec `v3` only. generate-config writes `<STORAGE_MODE>`. Both the orchestrator and `scai data migrate create-workflow` accept `native` + `v3`. `native` with `v2` is rejected. |
+| `loadMode` | String | Yes | `"ADD_FILES_COPY"` or `"FULL_INGEST"`. generate-config writes `<LOAD_MODE>`. |
+| `externalVolume` | String | Yes | Name of the Snowflake external volume. Use `"SNOWFLAKE_MANAGED"` for Snowflake-managed storage. |
+| `baseLocationPrefix` | String | Required unless `externalVolume` is `"SNOWFLAKE_MANAGED"` | Prefix for the table's `BASE_LOCATION` path. **Must be omitted** when `externalVolume` is `"SNOWFLAKE_MANAGED"`. |
+| `migrationStrategy` | `"copy_files"` | No | Omit it (auto-resolves to `copy_files`), or set `"copy_files"` explicitly. `catalog_link` / `convert_to_managed` are not part of the released shape. |
+
+> **Official Iceberg shape — enforced by `scai data migrate create-workflow`.** The CLI gate
+> (`IcebergOfficialProfile.ValidateWorkflowConfig`) rejects the workflow before the orchestrator starts
+> unless every Iceberg table's effective `icebergConfig` is a released shape: `catalog: SNOWFLAKE`,
+> `externalVolume` present, and the `baseLocationPrefix` rule above. `icebergSpec` is `v2` or `v3`
+> with `storageMode: compatible`, or `v3` with `storageMode: native`. `loadMode` is `ADD_FILES_COPY`
+> or `FULL_INGEST` (`postLoadOptimize` may be set; the orchestrator defaults it per load mode).
+> generate-config writes `<ICEBERG_SPEC>`, `<STORAGE_MODE>`, and `<LOAD_MODE>` for the user to fill.
+> `catalog`, `icebergSpec`, `storageMode`, and `loadMode` are **required** — an omitted one fails
+> (DMVF's own defaults do not count as approval). The orchestrator accepts the same `native` + `v3`
+> pair and rejects `native` with spec `v2` or with `externalEngineAccess`. The following keys must be
+> **absent**: `sourceDataStage`, `catalogTableName`, `catalogSync`, `externalEngineAccess`.
+> `synchronization.strategy` must be `none` or `full-replace` (incremental is not released for Iceberg).
+> Set these once on `defaultTableConfiguration.target.icebergConfig`; they are inherited by every table.
+>
+> **`migrate_data(mode="setup")` writes this block** when `target_table_type=iceberg`: `tableType: iceberg`
+> and `icebergConfig` on `defaultTableConfiguration.target` (creating `defaultTableConfiguration` when the
+> workflow has none), with `catalog: SNOWFLAKE`. It fills only what the user has decided and leaves the rest
+> as generate-config's placeholders:
+>
+> - `icebergSpec` / `loadMode`: the persisted `iceberg_spec` / `load_mode`; else a valid value already in the
+>   YAML; else `<ICEBERG_SPEC>` / `<LOAD_MODE>`.
+> - `storageMode`: `compatible` with spec `v2` (the only legal pair); otherwise a `compatible` or `native`
+>   already in the YAML; else `<STORAGE_MODE>`.
+> - `externalVolume` / `baseLocationPrefix`: the value already in the YAML, else `<EXTERNAL_VOLUME>` /
+>   `<BASE_LOCATION_PREFIX>` (no prefix for `SNOWFLAKE_MANAGED`).
+>
+> Fill every placeholder left (ask the user; a spec or load mode can instead be set with
+> `migrate_data(mode="setup", iceberg_spec=..., load_mode=...)`). `migrate_data(mode="run")` refuses a
+> workflow whose Iceberg table still has one. A setup re-run re-applies the persisted spec and load mode
+> and keeps every other value filled by hand (a `native` storage mode becomes `compatible` once the spec is
+> `v2`). `target_table_type=native` removes the block.
 
 ### Strategy Auto-Detection
 
@@ -144,9 +204,9 @@ The `icebergConfig` at the table level is **merged** with `defaultTableConfigura
 
 | Strategy | Data Movement | DML on Target | Primary Use Case |
 |----------|---------------|---------------|------------------|
-| `catalog_link` | None (zero-copy) | Read-only | Quick access to existing Iceberg data without copying |
-| `convert_to_managed` | None (zero-copy) | Full DML | Take ownership of existing Iceberg data without rewriting files |
-| `copy_files` | Server-side binary copy | Full DML | Create a new Snowflake-managed Iceberg table from staged Parquet files |
+| `catalog_link` | None (zero-copy) | Read-only | Quick access to existing Iceberg data without copying — **source is already Iceberg → out of scope, do not continue** |
+| `convert_to_managed` | None (zero-copy) | Full DML | Take ownership of existing Iceberg data without rewriting files — **source is already Iceberg → out of scope, do not continue** |
+| `copy_files` | Server-side binary copy | Full DML | **Supported path:** create a new Snowflake-managed Iceberg table from a **relational** source's staged Parquet files |
 
 ## ExtractionStrategy
 
@@ -344,9 +404,30 @@ See also: `dmvf/docs/data-migration-orchestrator/features/QueryModifiersAntiLock
 
 - **Auto mode:** omit both `targetPartitionSizeMb` and `targetPartitionSizeRows`. The orchestrator picks platform-appropriate defaults.
 - **Explicit sizing:** set exactly one of `targetPartitionSizeMb` or `targetPartitionSizeRows`.
-- **`columnNamesToPartitionBy`:** required by the CLI validator. Use a monotonic integer/timestamp column for large tables, or `[]` only for very small tables (single full-table partition). When omitted from user input, scai may infer keys from registry metadata — review `partition_key_findings` from setup.
+- **`columnNamesToPartitionBy`:** optional. Prefer a column (or ordered list) the source can prune on for large tables. When omitted or empty, the orchestrator extracts the table as a single unit, or infers a key at preprocessing when the table is large enough — review `partition_key_findings` from setup. `[]` is not "skip the table"; data still moves as one slice.
 - **`executionTimeoutMinutes`:** optional wall-clock limit for **Analyze boundaries** only (default 20). Raise it when NTILE/boundary analysis on large tables exceeds 20 minutes; prefer a cheaper partition key when possible.
 - **Deprecated:** do not use legacy `partitionSize: auto` — use the flat `targetPartitionSizeMb` / `targetPartitionSizeRows` fields instead.
+
+### Composite partition keys
+
+`columnNamesToPartitionBy` is an **ordered list**. The orchestrator sorts and splits on the tuple (lexicographic NTILE), so order matters.
+
+- When the leading prune column (sort key, clustered index, partition key, clustering key, …) has too few distinct values for balanced slices, **keep it first** and append the remaining columns of that physical key in catalog order (for example the rest of a Redshift compound sort key, or further Oracle partition-key columns).
+- If cardinality is still too low, append a high-cardinality column such as the primary key: `[sale_date, id]`. On Teradata, prefer `[<RANGE_N column>, <PI column>]` when a daily/monthly partitioning column collapses NTILE buckets. On PostgreSQL, prefer `[<partition column>, <pk column>]` when a daily/monthly partition key collapses NTILE buckets.
+- Present the candidates to the user before writing the key.
+- The Doctor measures cardinality on the **leading** column only, so a low-cardinality warning on that column is expected for a composite key and does not mean the composite is wrong.
+
+### Oracle
+
+Prefer, in order: the table's physical partition key (`ALL_PART_KEY_COLUMNS`, via `query_source` or a `Partition prune:` finding), then an index-organized table (IOT) primary key, then a heap primary key or unique constraint. Leave the field empty to let the orchestrator infer (including `ROWID` only for a one-time full extract with sync `none` on a heap table with no better key). On a low-cardinality partition key, use a composite of the partition key and the PK.
+
+### Teradata
+
+Prefer, in order: the level-1 `RANGE_N(<bare column> BETWEEN ...)` column from `DBC.PartitioningConstraintsV` (via a `Partition prune:` finding or inference), then the primary index (`DBC.IndicesV` types `P` / `Q`). The PI hashes rows onto AMPs — a range filter on the PI does **not** prune; only row partitioning does. Leave the field empty to let the orchestrator infer. Skip expression `RANGE_N` (for example `EXTRACT(...)`) and `CASE_N` as prune columns. On a low-cardinality partitioning date, use a composite `[partitioning column, PI column]`. Verify pruning with `EXPLAIN` on a generated partition predicate — look for `n partitions of`, not an all-AMP scan.
+
+### PostgreSQL
+
+Prefer, in order: the declared partition key (`pg_partitioned_table.partattrs`, bare columns only — skip expression keys), then a valid non-partial minmax/minmax-multi BRIN column whose `pg_stats` shows `abs(correlation) >= 0.9`, `null_frac = 0`, and fresh stats (`n_mod_since_analyze` within 20% of live rows), then the leading column of the `indisclustered` index, then the primary key / unique index. Leave the field empty to let the orchestrator infer. Avoid `ctid`. When BRIN is skipped for missing or weak stats, running `ANALYZE <table>` on the source can re-enable it on the next inference. Verify with `query_source` against `pg_partitioned_table`, `pg_index` / `pg_am`, and `pg_stats`. On a low-cardinality partition date, use a composite `[partition column, pk column]`.
 
 ## ColumnTypeMapping
 
@@ -464,9 +545,11 @@ defaultTableConfiguration:
     tableType: iceberg
     icebergConfig:
       catalog: SNOWFLAKE
+      icebergSpec: v2
+      storageMode: compatible
+      loadMode: ADD_FILES_COPY
       externalVolume: my_iceberg_ext_vol
       baseLocationPrefix: migrations/redshift
-      sourceDataStage: "@TARGET_DB.PUBLIC.ICEBERG_SOURCE_STAGE"
   extraction:
     strategy: unload
     externalStage: TARGET_DB.PUBLIC.S3_EXTERNAL_STAGE
@@ -519,9 +602,11 @@ defaultTableConfiguration:
     tableType: iceberg
     icebergConfig:
       catalog: SNOWFLAKE
+      icebergSpec: v2
+      storageMode: compatible
+      loadMode: ADD_FILES_COPY
       externalVolume: my_iceberg_ext_vol
       baseLocationPrefix: migrations/redshift
-      sourceDataStage: "@TARGET_DB.PUBLIC.ICEBERG_SOURCE_STAGE"
   targetPartitionSizeMb: 512
 
 tables:
@@ -559,26 +644,47 @@ tables:
 
 ## Iceberg Data Type Mapping Reference
 
-### Redshift Native → Snowflake Iceberg
+DMVF picks the Iceberg column types itself from the effective `icebergConfig`
+(`TypeMappingLoader` → `build_iceberg_mappings` in
+`dmvf/data-migration-orchestrator/src/data_migration_orchestrator/data_migration_core/type_mappings/iceberg_mappings.py`).
+The mapping depends on the **profile**, `(icebergSpec, loadMode)`; `storageMode` is always `compatible`:
 
-| Redshift Native Type | Parquet Type (UNLOAD) | Snowflake Iceberg Type |
+- **VARCHAR-temporal profiles**: `ADD_FILES_COPY` (v2 or v3), and `FULL_INGEST` on `v2`. DMVF maps
+  temporal and geospatial columns to `VARCHAR`, matching the string footers the extractor writes.
+  How the files are loaded still follows the load mode: `ADD_FILES_COPY` registers the staged
+  Parquet unchanged, while `FULL_INGEST` (on either spec) loads through the transform COPY and
+  rewrites it into new files; on v2 that rewrite keeps the `VARCHAR` targets.
+- **`icebergSpec: v3` + `loadMode: FULL_INGEST`**: the transform COPY casts the staged values
+  (`TO_TIMESTAMP_*`, `TO_TIME`, `TO_GEOGRAPHY`, `TO_GEOMETRY`), so temporal and geospatial columns keep
+  native Iceberg types. FULL_INGEST is accepted only for Redshift `unload`, SQL Server `cet_as` /
+  `cloud_direct` / `regular`, and Teradata `write_nos` (or a `sourceDataStage` table on those sources).
+
+### Default Iceberg Target Types by Profile
+
+| Source type family (examples) | VARCHAR-temporal profiles | v3 + `FULL_INGEST` |
 |---|---|---|
-| `SMALLINT` | `INT32` | `INT` |
-| `INTEGER` | `INT32` | `INT` |
-| `BIGINT` | `INT64` | `LONG` |
-| `DECIMAL(p,s)` | `FIXED_LEN_BYTE_ARRAY` | `DECIMAL(p,s)` |
-| `REAL` | `FLOAT` | `FLOAT` |
-| `DOUBLE PRECISION` | `DOUBLE` | `DOUBLE` |
-| `BOOLEAN` | `BOOLEAN` | `BOOLEAN` |
-| `CHAR(n)` | `BYTE_ARRAY (UTF8)` | `STRING` |
-| `VARCHAR(n)` | `BYTE_ARRAY (UTF8)` | `STRING` |
-| `DATE` | `INT32 (DATE)` | `DATE` |
-| `TIMESTAMP` | `INT96` or `INT64` | `TIMESTAMP_NTZ` |
-| `TIMESTAMPTZ` | `INT96` or `INT64` | `TIMESTAMP_LTZ` |
-| `TIME` | N/A (cast to VARCHAR) | `STRING` |
-| `VARBYTE` | N/A (cast via TO_HEX) | `STRING` |
-| `GEOMETRY` | N/A (cast via ST_AsText) | `STRING` |
-| `SUPER` | `BYTE_ARRAY (UTF8)` | `STRING` |
+| Small integers (`SMALLINT`, `INT`, `INTEGER`, `TINYINT`) | `INTEGER` | `INTEGER` |
+| Big integers (`BIGINT`, `INT8`) | `BIGINT` | `BIGINT` |
+| Floats (Redshift `REAL` / `FLOAT4` / `FLOAT8`, SQL Server `FLOAT` / `REAL`, Teradata `FLOAT`) | `DOUBLE` | `DOUBLE` |
+| `DECIMAL(p,s)`, `NUMERIC`, `MONEY` | Native `NUMBER(p,s)` | Native `NUMBER(p,s)` |
+| `CHAR` / `VARCHAR` / `NVARCHAR` | `VARCHAR` | `VARCHAR` |
+| `BOOLEAN`, `DATE` | Unchanged | Unchanged |
+| Redshift / Teradata `TIMESTAMP`, SQL Server `DATETIME` / `DATETIME2` / `SMALLDATETIME` | `VARCHAR` | `TIMESTAMP_NTZ(6)` |
+| `TIMESTAMPTZ`, `DATETIMEOFFSET`, `TIMESTAMP WITH TIME ZONE`, Redshift `TIMETZ`, Teradata `TIME WITH TIME ZONE` | `VARCHAR` | `TIMESTAMP_LTZ(6)` (Iceberg has no `TIMESTAMP_TZ`; LTZ keeps the instant) |
+| `TIME` | `VARCHAR` | `TIME(6)` |
+| `GEOGRAPHY` (Teradata `ST_GEOMETRY` maps here) | `VARCHAR` | `GEOGRAPHY` |
+| `GEOMETRY` | `VARCHAR` | `GEOMETRY(4326)`, or `GEOMETRY(n)` for an explicit non-zero SRID |
+| Redshift `VARBYTE` / `VARBINARY` | `VARCHAR` | `VARCHAR` |
+| SQL Server `BINARY` / `VARBINARY` / `IMAGE`, and `TIMESTAMP` / `ROWVERSION` (a binary row version, not a date) | `BINARY` | `BINARY` |
+| Semi-structured (`SUPER`, `VARIANT`, `SQL_VARIANT`, `XML`, `JSON`, `ARRAY`, `OBJECT`), `INTERVAL*` | `VARCHAR` | `VARCHAR` |
+
+Timestamps use scale 6 under v3 `FULL_INGEST`: it covers the full date range (`NTZ(9)` cannot hold years
+before 1677).
+
+**Do not add `columnTypeMappings` to flatten temporal or geospatial columns.** A `columnTypeMappings`
+entry replaces DMVF's profile default for that source type, so `GEOMETRY → VARCHAR` on a v3
+`FULL_INGEST` workflow throws away the native `GEOMETRY` column DMVF would have created. Only override a
+type when the user asks for a different target.
 
 ### Redshift Iceberg (Glue) → Snowflake Iceberg
 
@@ -598,41 +704,3 @@ tables:
 | `list<T>` | Not supported | Flatten or convert to `VARCHAR` (JSON) |
 | `map<K,V>` | Not supported | Convert to `VARCHAR` (JSON) |
 | `struct<...>` | Not supported | Convert to `VARCHAR` (JSON) |
-
-### Supported Iceberg Column Types
-
-| Type | Notes |
-|---|---|
-| `BOOLEAN` | |
-| `INT` | 32-bit integer |
-| `LONG` | 64-bit integer |
-| `FLOAT` | Single precision |
-| `DOUBLE` | Double precision |
-| `DECIMAL(p,s)` | Exact numeric |
-| `DATE` | Date only |
-| `TIME` | Time only |
-| `TIMESTAMP_NTZ` | Timestamp without timezone |
-| `TIMESTAMP_LTZ` | Timestamp with timezone |
-| `STRING` / `VARCHAR` | Variable-length text |
-| `BINARY` | Variable-length binary |
-| `FIXED(n)` | Fixed-length binary |
-
-### Unsupported Types in Iceberg Tables
-
-The following Snowflake types are **not supported** in Iceberg tables and must be mapped to `STRING`/`VARCHAR` using `columnTypeMappings`:
-
-- `VARIANT`
-- `OBJECT`
-- `ARRAY`
-- `GEOGRAPHY`
-- `GEOMETRY`
-
-```yaml
-columnTypeMappings:
-  - sourceType: SUPER
-    targetType: VARCHAR
-  - sourceType: GEOMETRY
-    targetType: VARCHAR
-  - sourceType: VARIANT
-    targetType: VARCHAR
-```

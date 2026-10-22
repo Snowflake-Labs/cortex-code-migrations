@@ -7,6 +7,20 @@ license: Proprietary. See License-Skills for complete terms
 
 # Code Conversion Only
 
+## Not the right skill for ETL
+
+If the user's local files are ETL — SSIS `.dtsx`, Informatica PowerCenter XML repo
+export, Talend jobs, Alteryx `.yxmd`, Informatica Cloud / IICS mappings, DataStage
+`.dsx`, Pentaho `.ktr` / `.kjb`, Azure Data Factory pipelines, or any other ETL
+platform — this is **not** the skill to run. `code-conversion-only` is for the SQL
+dialects listed in the table below (Sybase, Spark, Databricks, Greenplum, Netezza,
+Vertica, Hive, DB2, and legacy PostgreSQL / BigQuery / Azure Synapse projects).
+Do not set `project_type: code_conversion_only` for an ETL migration; the CLI's `code_conversion_only` project type has no ETL step and would silently drop those files.
+Leave this skill and follow **setup → register local ETL → convert** — the convert
+skill's Step 4 handles native SSIS / Informatica PowerCenter and Step 4.5 handles
+every other ETL platform through AI-First. Stay here only when the user has one of
+the SQL dialects in the table below.
+
 ## On Entry
 
 Tell the user:
@@ -73,6 +87,9 @@ scai code add -i <INPUT_PATH> --skip-split --json
 ```
 
 If the user explicitly wants to replace existing source files, add `--overwrite`.
+If the import times out, runs in the background or fails, handle it as
+[add-code-units Step 3](../register-code-units/add-code-units/SKILL.md#if-the-import-times-out-or-runs-in-the-background)
+says before you go on.
 
 ### Step 3: Check for ETL Code
 
@@ -81,18 +98,19 @@ Any ETL imported by `scai code add` lands in `source/_etl/`. That is where `conv
 Check whether `source/_etl/` exists and contains ETL files — `.dtsx` for SSIS, `.xml` for Informatica PowerCenter (use whichever portable form fits the host).
 
 - If it is **missing or empty**, there is no ETL to convert; proceed to Step 4.
-- If it contains **SSIS** packages only, no conversion-target prompt is needed. Load `../dbt-consolidation/SKILL.md`, then proceed to Step 4.
+- If it contains **SSIS** (`.dtsx`), follow [../convert/references/ssis-target.md](../convert/references/ssis-target.md) before any dbt question. It asks dbt or Snowflake Scripting, sets `SSIS_SCRIPTING_MODE` for Step 5 when Snowflake Scripting is chosen, and loads `../dbt-consolidation/SKILL.md` for dbt; then proceed to Step 4.
 - If it contains **Informatica** PowerCenter XML, ask the remaining ETL questions up front, in one sequence, before running the conversion:
     1. Conversion target, via `ask_user_question` (`multiSelect = false`):
        > "How should Informatica mappings be converted?
-       > 1. **dbt** (default): each mapping becomes a dbt model orchestrated by Snowflake Tasks.
-       > 2. **Snowflake Scripting** (preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Stabilization and deploy are skipped for this preview flavor."
-    2. If the answer is **dbt**, load `../dbt-consolidation/SKILL.md`. It asks the user to confirm model-chain consolidation (and project consolidation only when SSIS is also present). Return here when complete.
+       > 1. **dbt**: each mapping becomes a dbt model orchestrated by Snowflake Tasks.
+       > 2. **Snowflake Scripting** (Preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Stabilization and deploy are skipped for this preview flavor."
+       Do not label either option recommended.
+    2. If the answer is **dbt** and SSIS is absent or chose Snowflake Scripting, load `../dbt-consolidation/SKILL.md`. For Informatica with no dbt SSIS it asks one question: consolidate dbt projects and models by folder, or generate 1 project per mapping. Return here when complete. When SSIS also chose dbt, the SSIS bullet above loads `dbt-consolidation` once after both answers.
     3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 5. Do **not** load `dbt-consolidation`.
 
     Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`.
 
-These questions are still required: the conversion target is not something `scai code add` can infer from the imported files. Ask them on every conversion, re-runs included — `scai code convert` defaults to dbt, so a missing flag in Step 5 silently changes the output.
+These questions are still required for both SSIS and Informatica: the conversion target is not something `scai code add` can infer from the imported files. Ask them on every conversion, re-runs included — `scai code convert` defaults to dbt for SSIS, so a missing flag in Step 5 silently changes the output.
 
 ### Step 4: Check for Power BI Reports
 
@@ -106,7 +124,7 @@ If **no**, proceed to Step 5. `PBIT_PATH` remains unset; do not pass `--powerbi-
 
 ### Step 5: Convert
 
-Before running, tell the user what the conversion will cover. If `PBIT_PATH` was set, mention Power BI repointing. If `SCRIPTING_MODE` was set, mention the Snowflake Scripting target.
+Before running, tell the user what the conversion will cover. If `PBIT_PATH` was set, mention Power BI repointing. If `SCRIPTING_MODE` or `SSIS_SCRIPTING_MODE` was set, mention the Snowflake Scripting target and that stabilization and deploy are not part of that preview. The generated procedures and Task graph are under `snowflake/_etl/`.
 
 Always include `--json` so the agent can parse the result envelope. Start from the base command and append one flag per decision already recorded in the steps above — nothing else:
 
@@ -117,11 +135,11 @@ scai code convert --json
 | Append | When |
 |--------|------|
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 3 (Informatica target is Snowflake Scripting) |
-| `--consolidate-dbt-model-chains` | `CONSOLIDATE_DBT` was set by `../dbt-consolidation/SKILL.md` |
-| `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS only) |
+| `--ssis-to-snowflake-scripting` | `SSIS_SCRIPTING_MODE` was set in Step 3 (SSIS target is Snowflake Scripting) |
+| `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt, or Informatica dbt) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 4 |
 
-The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. Either combines with `--powerbi-repointing`. If none of the conditions hold, run the base command as-is.
+The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. The SSIS scripting flag and the SSIS dbt-consolidation flags come from the SSIS answer, so a scripting SSIS convert does not also pass a consolidation flag. Either platform's choice combines with `--powerbi-repointing` and with the other platform's choice. If none of the conditions hold, run the base command as-is.
 
 Substitute `<PBIT_PATH>` with the actual folder path you stored. Do not emit literal placeholder tokens to the shell.
 
@@ -136,6 +154,7 @@ For Power BI output paths and the CHECKPOINT addendum, see `../powerbi-repointin
 | `-x, --show-ewis` | Show detailed EWI breakdown |
 | `--overwrite-working-directory` | Overwrite output files in `snowflake/` and registry |
 | `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor. |
+| `--ssis-to-snowflake-scripting` | Convert SSIS data flows to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; stabilization and deploy are not part of this flow. |
 
 For dbt consolidation options, see `../dbt-consolidation/SKILL.md`.
 For Power BI options, see `../powerbi-repointing/SKILL.md`.

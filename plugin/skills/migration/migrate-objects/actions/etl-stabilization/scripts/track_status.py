@@ -36,7 +36,9 @@ Situational commands (error recovery, dbt):
     python track_status.py update-dbt <session_status.json> <project_name> --status <status> [--reason <reason>]
     python track_status.py init-dbt <session_status.json> <project_name> <dbt_project_path>
     python track_status.py assign-dbt-phase <session_status.json> --phase <N> --project <name>
+    python track_status.py close-unit <session_status.json>
     python track_status.py update-dbt-node <session_status.json> <project_name> <node_name> --status <status> [--reason <reason>]
+    python track_status.py check-complete <session_status.json>
 """
 from __future__ import annotations
 
@@ -51,11 +53,13 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from check_sync_leaks import check_file
 from path_resolver import (
     fix_log_path,
     phase_dir_candidates,
     report_path,
     resolve_phase_dir,
+    roadmap_path,
     stabilization_root,
     tests_dir,
 )
@@ -67,6 +71,14 @@ TERMINAL_STATUSES = {
     "skipped", "needs-user", "auto-fixed-needs-review", "failed",
     "return-to-convert", "residual",
 }
+
+# "fixed" is deliberately excluded: it means a fix was applied but never
+# (re-)validated by tests (fixed -> test-passed|test-failed is the expected next
+# transition -- see reference/protocols/element-statuses.md). Treating it as
+# completion-eligible would let close-unit/check-complete/generate_report.py claim a
+# correctness result nobody actually checked. residual and return-to-convert are
+# terminal but not in the completion-eligible list in element-statuses.md.
+COMPLETION_ELIGIBLE_STATUSES = TERMINAL_STATUSES - {"needs-user", "test-failed", "failed", "fixed", "residual", "return-to-convert"}
 
 VALID_SKIP_REASONS = {"disabled-in-source", "container-only", "file-io-noop", "dbt-dependency", "external-dependency"}
 
@@ -193,6 +205,26 @@ def cmd_init(scan_path: Path) -> None:
                 "test_strategy": None,
             })
 
+    existing_names = {el["name"] for el in elements}
+    for mp in scan.get("mapping_procs", []):
+        mp_name = mp["name"]
+        if mp_name in existing_names:
+            continue
+        elements.append({
+            "name": mp_name,
+            "statement": mp.get("proc_name") or mp_name,
+            "status": "pending",
+            "is_mapping_procedure": True,
+            "path": mp.get("path"),
+            "initial_issues": [
+                {"code": code, "description": ""} for code in mp.get("ewi_codes", [])
+            ],
+            "has_dbt_project": False,
+            "phase": None,
+            "test_strategy": None,
+        })
+        existing_names.add(mp_name)
+
     dbt_projects = [
         {"name": p["name"], "path": p["path"], "status": "pending"}
         for p in scan.get("dbt_projects", [])
@@ -234,7 +266,10 @@ def cmd_init(scan_path: Path) -> None:
     out_path = out_dir / "session_status.json"
     save_json(out_path, session)
     print(f"Session initialized: {out_path}")
+    mapping_proc_count = sum(1 for el in elements if el.get("is_mapping_procedure"))
     print(f"  Elements: {len(elements)}")
+    if mapping_proc_count:
+        print(f"  Mapping procedures: {mapping_proc_count}")
     print(f"  dbt projects: {len(dbt_projects)}")
 
 
@@ -289,6 +324,7 @@ def cmd_update(status_path: Path, element_name: str, status: str, reason: str | 
 
         session["last_updated"] = now_iso()
         save_json(status_path, session)
+        _refresh_state_md(session, status_path)
     print(f"Updated '{element_name}' -> {status}")
 
 
@@ -595,6 +631,143 @@ def _validate_dataflow_proc_artifacts(session: dict, phase_num: int, pkg_path: s
     return errors
 
 
+_ROADMAP_PHASE_HEADER_RE = re.compile(r"^##\s+Phase\s+(\d+)\b")
+_ROADMAP_CHECKBOX_RE = re.compile(r"^-\s+\[([ xX])\]")
+
+
+def _roadmap_phase_checkbox_counts(roadmap_text: str) -> dict[int, tuple[int, int]]:
+    """Parse `## Phase N` sections of ROADMAP.md into {phase_num: (checked, total)}.
+
+    SNOW-4221307: the ledger (`session_status.json` + on-disk artifacts), not these
+    checkboxes, is the resume source of truth -- the checkboxes are a human-readable
+    mirror of it. This is the other half: final validation fails loudly when the two
+    disagree, instead of either side being silently trusted.
+    """
+    counts: dict[int, tuple[int, int]] = {}
+    current_phase: int | None = None
+    checked = total = 0
+
+    def _flush() -> None:
+        if current_phase is not None:
+            prev_checked, prev_total = counts.get(current_phase, (0, 0))
+            counts[current_phase] = (prev_checked + checked, prev_total + total)
+
+    for raw in roadmap_text.splitlines():
+        line = raw.strip()
+        header = _ROADMAP_PHASE_HEADER_RE.match(line)
+        if header:
+            _flush()
+            current_phase = int(header.group(1))
+            checked = total = 0
+            continue
+        box = _ROADMAP_CHECKBOX_RE.match(line)
+        if box and current_phase is not None:
+            total += 1
+            if box.group(1).lower() == "x":
+                checked += 1
+    _flush()
+    return counts
+
+
+def _roadmap_checkbox_errors(session: dict, pkg_path: str) -> list[str]:
+    """Flag a completed-in-ledger phase whose ROADMAP.md steps are not all checked."""
+    if not pkg_path:
+        return []
+    roadmap_file = roadmap_path(pkg_path)
+    if not roadmap_file.is_file():
+        return []
+    counts = _roadmap_phase_checkbox_counts(roadmap_file.read_text(encoding="utf-8", errors="replace"))
+    errors: list[str] = []
+    for phase in session.get("roadmap", {}).get("phases", []):
+        if phase.get("status") != "completed":
+            continue
+        checked, total = counts.get(phase["phase"], (0, 0))
+        if total and checked < total:
+            errors.append(
+                f"ROADMAP checkbox state disagrees with ledger: Phase {phase['phase']} is marked "
+                f"completed in session_status.json but {total - checked} of {total} step "
+                f"checkbox(es) in ROADMAP.md are still unchecked"
+            )
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# fix-log.md validation -- SNOW-4221308
+# ---------------------------------------------------------------------------
+
+VALID_FIX_LOG_CLASSIFICATIONS = {
+    "engine-defect", "conversion-improvement", "intentional-decline", "context-dependent",
+}
+
+# A fix-log entry whose SQL actually changed must carry this machine-readable marker
+# (see reference/templates/fix-log-format.md) -- the markdown table around it is for
+# humans; this is the one line a validator can parse without a markdown table parser.
+_FIX_LOG_ENTRY_RE = re.compile(r"<!--\s*fix-log-entry:\s*(.*?)\s*-->")
+_FIX_LOG_FIELD_RE = re.compile(r'(\w+)=("[^"]*"|\S+)')
+
+
+def _parse_fix_log_entries(text: str) -> list[dict]:
+    entries: list[dict] = []
+    for m in _FIX_LOG_ENTRY_RE.finditer(text):
+        fields: dict = {}
+        for fm in _FIX_LOG_FIELD_RE.finditer(m.group(1)):
+            fields[fm.group(1)] = fm.group(2).strip('"')
+        entries.append(fields)
+    return entries
+
+
+# Statuses that mean the element's SQL was actually touched by a fix -- these are the
+# ones a fix-log entry is required for. `no-fix-needed`/`skipped` never changed SQL,
+# so they are not held to this bar.
+_FIX_LOG_REQUIRED_STATUSES = {"fixed", "test-passed", "auto-fixed-needs-review"}
+
+
+def _fix_log_errors(session: dict, pkg_path: str) -> list[str]:
+    """Require a valid fix-log.md entry for every element whose SQL changed.
+
+    "Valid" means: a file anchor, a classification in VALID_FIX_LOG_CLASSIFICATIONS,
+    and a numeric assertion count. Also used by close-unit (SNOW-4221313).
+    """
+    if not pkg_path:
+        return []
+    changed_elements = [
+        el["name"] for el in session.get("elements", [])
+        if el.get("status") in _FIX_LOG_REQUIRED_STATUSES
+    ]
+    if not changed_elements:
+        return []
+
+    log_file = fix_log_path(pkg_path)
+    entries_by_element: dict[str, list[dict]] = {}
+    if log_file.is_file():
+        for entry in _parse_fix_log_entries(log_file.read_text(encoding="utf-8", errors="replace")):
+            name = entry.get("element")
+            if name:
+                entries_by_element.setdefault(name, []).append(entry)
+
+    errors: list[str] = []
+    for name in changed_elements:
+        records = entries_by_element.get(name)
+        if not records:
+            errors.append(
+                f"Fix log: element '{name}' changed SQL but has no entry in {log_file} "
+                f"-- see reference/templates/fix-log-format.md"
+            )
+            continue
+        for rec in records:
+            if not rec.get("file"):
+                errors.append(f"Fix log: entry for '{name}' is missing a file anchor")
+            classification = rec.get("classification")
+            if classification not in VALID_FIX_LOG_CLASSIFICATIONS:
+                errors.append(
+                    f"Fix log: entry for '{name}' has unknown classification "
+                    f"'{classification}' (valid: {', '.join(sorted(VALID_FIX_LOG_CLASSIFICATIONS))})"
+                )
+            if not (rec.get("assertions") or "").isdigit():
+                errors.append(f"Fix log: entry for '{name}' is missing a numeric assertion count")
+    return errors
+
+
 def _phase_scope(session: dict, phase_num: int) -> str:
     phases = session.get("roadmap", {}).get("phases", [])
     phase_data = next((p for p in phases if p["phase"] == phase_num), None)
@@ -628,13 +801,15 @@ def _validate_phase_artifacts(session: dict, phase_num: int) -> list[str]:
 
     if scope in ("final-validation", "validation"):
         errors: list[str] = []
-        non_terminal = [
-            el["name"] for el in session["elements"] if el["status"] not in TERMINAL_STATUSES
+        unresolved = [
+            el["name"] for el in session["elements"]
+            if el["status"] not in COMPLETION_ELIGIBLE_STATUSES
         ]
-        if non_terminal:
+        if unresolved:
             errors.append(
-                f"Elements not in terminal status across all phases ({', '.join(non_terminal)}): "
-                f"final-validation requires all elements resolved"
+                f"Elements not resolved ({', '.join(unresolved)}): final-validation requires every "
+                f"element to reach a completion-eligible status -- needs-user/test-failed/failed must "
+                f"be answered or re-fixed first, not just left terminal"
             )
         if pkg_path:
             report = report_path(pkg_path)
@@ -642,11 +817,113 @@ def _validate_phase_artifacts(session: dict, phase_num: int) -> list[str]:
                 errors.append(f"Missing artifact: {report} not found")
         else:
             errors.append("Missing artifact: migration_object_path not set; cannot locate report.html")
+        errors.extend(_roadmap_checkbox_errors(session, pkg_path))
+        errors.extend(_fix_log_errors(session, pkg_path))
         return errors
 
     # Default: orchestration
     return _validate_orch_artifacts(session, phase_num, pkg_path)
 
+
+def _phase_sql_files(session: dict, phase_num: int, pkg_path: str, scope: str) -> list[Path]:
+    """SQL files this phase wrote to, for the sync-back leak gate.
+
+    Orchestration phases share one file; dataflow-proc phases are one file per
+    assigned mapping-procedure element (`el["path"]`, recorded by `init` -- see
+    SNOW-4221299). Other scopes don't write SQL back and are not gated.
+    """
+    if not pkg_path:
+        return []
+    if scope == "orchestration":
+        orch_file = session.get("orchestration_file")
+        return [Path(orch_file)] if orch_file else []
+    if scope == "dataflow-proc":
+        unit_root = Path(pkg_path)
+        return [
+            unit_root / el["path"]
+            for el in session["elements"]
+            if el.get("phase") == phase_num and el.get("path")
+        ]
+    return []
+
+
+def _leak_gate_errors(session: dict, phase_num: int, pkg_path: str) -> list[str]:
+    """Run the sync-back leak gate on this phase's SQL files.
+
+    SQL-touching scopes fail closed. A dataflow-proc phase whose elements have no
+    recorded path, an orchestration phase with no file, and a phase with no stored
+    test schema cannot complete: there is nothing to prove the test schema stayed
+    out of the synced SQL.
+    """
+    scope = _phase_scope(session, phase_num)
+    if scope not in ("orchestration", "dataflow-proc"):
+        return []
+
+    files = _phase_sql_files(session, phase_num, pkg_path, scope)
+    if scope == "dataflow-proc":
+        unnamed = [
+            el.get("name") or "unnamed"
+            for el in session.get("elements", [])
+            if el.get("phase") == phase_num and not el.get("path")
+        ]
+        if unnamed or not files:
+            shown = ", ".join(unnamed) if unnamed else "none recorded"
+            return [
+                f"Leak gate: dataflow-proc phase {phase_num} has no SQL path to scan "
+                f"({shown}). A mapping-procedure phase cannot complete until each "
+                f"procedure's path is recorded."
+            ]
+    elif not files:
+        return [
+            f"Leak gate: orchestration phase {phase_num} has no orchestration file to scan"
+        ]
+
+    test_env = session.get("test_environment")
+    if test_env is None:
+        return [
+            "Leak gate: test_environment is not set -- run set-test-env before completing "
+            "a phase that touches SQL"
+        ]
+
+    schema = (test_env.get("schema") or "").strip()
+    database = (test_env.get("database") or "").strip()
+    if not schema or schema.strip('"').upper() == "PUBLIC":
+        reason = "empty" if not schema else "'PUBLIC'"
+        return [
+            f"Leak gate: test_environment.schema is {reason} -- run set-test-env with an "
+            f"isolated test schema before completing a phase that touches SQL"
+        ]
+
+    errors: list[str] = []
+    for f in files:
+        if not f.is_file():
+            errors.append(f"Leak gate: {f} is not a file -- cannot scan it")
+            continue
+        for line_no, token in check_file(f, database, schema):
+            errors.append(
+                f"Leak gate: {f}:{line_no} matched '{token}' -- remove the test-environment "
+                f"value from the synced file before completing this phase"
+            )
+    return errors
+
+def _leak_gate_errors_all_phases(session: dict, pkg_path: str) -> list[str]:
+    """Leak-gate every phase's SQL at once -- used by close-unit, which has no
+    single "current phase" to scope to the way complete-phase does."""
+    phases = session.get("roadmap", {}).get("phases", [])
+    if not phases:
+        if not session.get("orchestration_file"):
+            return []
+        faux = dict(session)
+        faux["roadmap"] = {"phases": [{"phase": 0, "scope": "orchestration"}]}
+        return _leak_gate_errors(faux, 0, pkg_path)
+    errors: list[str] = []
+    seen: set[str] = set()
+    for phase in phases:
+        for err in _leak_gate_errors(session, phase["phase"], pkg_path):
+            if err not in seen:
+                seen.add(err)
+                errors.append(err)
+    return errors
 
 def cmd_complete_phase(status_path: Path, phase_num: int) -> None:
     session = load_json(status_path)
@@ -668,7 +945,8 @@ def cmd_complete_phase(status_path: Path, phase_num: int) -> None:
         print(f"Error: phase {phase_num} is already completed", file=sys.stderr)
         sys.exit(1)
 
-    errors = _validate_phase_artifacts(session, phase_num)
+    pkg_path = session.get("migration_object_path", "")
+    errors = _validate_phase_artifacts(session, phase_num) + _leak_gate_errors(session, phase_num, pkg_path)
     if errors:
         for err in errors:
             print(f"Error: {err}", file=sys.stderr)
@@ -713,6 +991,46 @@ def cmd_start_phase(status_path: Path, phase_num: int) -> None:
 # update-state
 # ---------------------------------------------------------------------------
 
+def _normalize_phase_status(phase_status: str) -> str:
+    """Collapse free-form phase-status text to the canonical STATE.md vocabulary.
+
+    SNOW-4221307: STATE.md's `Status:` line previously echoed whatever free text a
+    caller passed ("Ready to execute", "Phase 1 completed", "complete", ...). Narrow
+    it to `ready | in_progress | complete` so a resuming agent can branch on it
+    without re-parsing prose.
+    """
+    text = phase_status.strip().lower()
+    words = set(re.findall(r"[a-z]+", text))
+    if words & {"not"} and (words & {"complete", "completed", "ready", "finished"}):
+        return "in_progress"
+    if words & {"complete", "completed", "finished"}:
+        return "complete"
+    if "ready" in words:
+        return "ready"
+    return "in_progress"
+
+
+# Counts toward the progress percent: assertions actually ran and passed
+# (`test-passed`), or there was genuinely nothing to assert (`no-fix-needed`,
+# `skipped`). `fixed` is deliberately excluded -- it means a fix was applied and
+# is awaiting post-apply validation (`fixed -> test-passed|test-failed`), not that
+# assertions passed. See SNOW-4221307 and NOTES.md.
+STATE_PROGRESS_STATUSES = {"test-passed", "no-fix-needed", "skipped"}
+
+
+def _progress_percent(session: dict) -> int:
+    """The STATE.md progress-bar percentage, recomputed live from `elements`.
+
+    Shared by `_generate_state_md` and `check-complete` so the two can never disagree
+    on what "100%" means.
+    """
+    total_elements = len(session.get("elements", []))
+    if total_elements == 0:
+        return 0
+    completed_count = sum(1 for el in session["elements"] if el["status"] in STATE_PROGRESS_STATUSES)
+    return int(completed_count / total_elements * 100)
+
+
 def _generate_state_md(session: dict, current_phase: int, phase_status: str, next_action: str) -> str:
     roadmap = session.get("roadmap", {})
     phases = roadmap.get("phases", [])
@@ -724,9 +1042,7 @@ def _generate_state_md(session: dict, current_phase: int, phase_status: str, nex
             break
 
     total_elements = len(session["elements"])
-    completed_statuses = {"test-passed", "fixed", "skipped", "no-fix-needed"}
-    completed_count = sum(1 for el in session["elements"] if el["status"] in completed_statuses)
-    pct = int(completed_count / total_elements * 100) if total_elements > 0 else 0
+    pct = _progress_percent(session)
     filled = pct // 10
     bar = "\u2588" * filled + "\u2591" * (10 - filled)
 
@@ -741,12 +1057,19 @@ def _generate_state_md(session: dict, current_phase: int, phase_status: str, nex
 
     blockers = session.get("blockers", [])
 
+    normalized_status = _normalize_phase_status(phase_status)
+    status_line = (
+        f"Status: {normalized_status}"
+        if normalized_status == phase_status.strip().lower()
+        else f"Status: {normalized_status} ({phase_status})"
+    )
+
     lines = [
         f"# State: {session['migration_object']}",
         "",
         "## Current Position",
         f"Phase: {current_phase} of {total_phases} ({current_phase_name})",
-        f"Status: {phase_status}",
+        status_line,
         f"Last activity: {session['last_updated'][:10]}",
         "",
         f"Progress: [{bar}] {pct}%",
@@ -776,6 +1099,37 @@ def _generate_state_md(session: dict, current_phase: int, phase_status: str, nex
     return "\n".join(lines)
 
 
+def _write_state_md(session: dict, status_path: Path, current_phase: int, phase_status: str, next_action: str) -> Path:
+    """Record the (phase, status, next-action) that produced STATE.md and write it.
+
+    `state_meta` is the only place that triple is remembered, so a later element/dbt-node
+    update (`_refresh_state_md`) can regenerate the progress bar without guessing a phase
+    or next action of its own.
+    """
+    session["state_meta"] = {
+        "current_phase": current_phase,
+        "phase_status": phase_status,
+        "next_action": next_action,
+    }
+    state_md = _generate_state_md(session, current_phase, phase_status, next_action)
+    state_path = status_path.parent / "STATE.md"
+    state_path.write_text(state_md, encoding="utf-8")
+    return state_path
+
+
+def _refresh_state_md(session: dict, status_path: Path) -> None:
+    """Regenerate STATE.md's progress bar after an element or dbt-node status write.
+
+    No-op before the first `update-state` call -- `state_meta` (and STATE.md itself)
+    does not exist yet during planning, and there is no phase/next-action to preserve.
+    SNOW-4221307: previously only `update-state` ever touched STATE.md, so it went
+    stale the moment any element changed status mid-phase.
+    """
+    meta = session.get("state_meta")
+    if not meta:
+        return
+    _write_state_md(session, status_path, meta["current_phase"], meta["phase_status"], meta["next_action"])
+
 def cmd_update_state(status_path: Path, current_phase: int, phase_status: str, next_action: str) -> None:
     with _locked(status_path):
         session = load_json(status_path)
@@ -785,12 +1139,8 @@ def cmd_update_state(status_path: Path, current_phase: int, phase_status: str, n
         session["last_updated"] = now_iso()
         if "planning_completed_at" not in session:
             session["planning_completed_at"] = now_iso()
+        state_path = _write_state_md(session, status_path, current_phase, phase_status, next_action)
         save_json(status_path, session)
-
-        state_md = _generate_state_md(session, current_phase, phase_status, next_action)
-        state_dir = status_path.parent
-        state_path = state_dir / "STATE.md"
-        state_path.write_text(state_md, encoding="utf-8")
 
     print(f"STATE.md generated: {state_path}")
 
@@ -1002,31 +1352,40 @@ def cmd_validate_phase(status_path: Path, phase_num: int, list_test_files: bool 
 
     if list_test_files:
         pkg_path = session.get("migration_object_path", "")
-        test_directory = (tests_dir(pkg_path) / "orchestration") if pkg_path else None
-        seen: set[str] = set()
         found: list[str] = []
-        for el in phase_els:
-            strategy = el.get("test_strategy") or ""
-            if strategy.startswith("grouped:"):
-                group_name = strategy.split(":", 1)[1]
-                short_name = f"grouped_{group_name}"
-            else:
-                short_name = el["name"].rsplit(".", 1)[-1]
-            fname = f"{short_name}.sql"
-            if fname in seen:
-                continue
-            seen.add(fname)
-            if test_directory:
-                matches = sorted(test_directory.rglob(fname))
-                if not matches:
-                    found.append(f"{fname}: (not found)")
-                elif len(matches) == 1:
-                    found.append(str(matches[0]))
+        if scope == "dataflow-proc":
+            # Mapping procedures are tested under tests/proc/{PROC}/, not tests/orchestration/.
+            proc_root = tests_dir(pkg_path) / "proc" if pkg_path else None
+            for el in phase_els:
+                report_file = (proc_root / el["name"] / "test_report.md") if proc_root else None
+                if report_file is None:
+                    continue
+                found.append(str(report_file) if report_file.is_file() else f"{el['name']}: (not found)")
+        else:
+            test_directory = (tests_dir(pkg_path) / "orchestration") if pkg_path else None
+            seen: set[str] = set()
+            for el in phase_els:
+                strategy = el.get("test_strategy") or ""
+                if strategy.startswith("grouped:"):
+                    group_name = strategy.split(":", 1)[1]
+                    short_name = f"grouped_{group_name}"
                 else:
-                    found.append(
-                        f"{fname}: {len(matches)} candidates — "
-                        f"{', '.join(str(m) for m in matches)} (verify)"
-                    )
+                    short_name = el["name"].rsplit(".", 1)[-1]
+                fname = f"{short_name}.sql"
+                if fname in seen:
+                    continue
+                seen.add(fname)
+                if test_directory:
+                    matches = sorted(test_directory.rglob(fname))
+                    if not matches:
+                        found.append(f"{fname}: (not found)")
+                    elif len(matches) == 1:
+                        found.append(str(matches[0]))
+                    else:
+                        found.append(
+                            f"{fname}: {len(matches)} candidates — "
+                            f"{', '.join(str(m) for m in matches)} (verify)"
+                        )
         print(f"\nTest files ({len(found)}):")
         for f in found:
             print(f"  {f}")
@@ -1232,6 +1591,7 @@ def cmd_update_dbt_node(status_path: Path, project_name: str, node_name: str, st
 
         session["last_updated"] = now_iso()
         save_json(status_path, session)
+        _refresh_state_md(session, status_path)
     print(f"Updated node '{node_name}' in '{project_name}' -> {status}")
 
 
@@ -1239,6 +1599,150 @@ def cmd_update_dbt_node(status_path: Path, project_name: str, node_name: str, st
 # main
 # ---------------------------------------------------------------------------
 
+# See the COMPLETION_ELIGIBLE_STATUSES comment above -- "fixed" is pre-test here too.
+DBT_NODE_COMPLETION_ELIGIBLE_STATUSES = VALID_DBT_NODE_STATUSES - {"pending", "failed", "test-failed", "fixed"}
+
+
+def cmd_close_unit(status_path: Path) -> None:
+    """Close a unit whose elements (and dbt nodes) are all resolved, with no agent.
+
+    Reuses the same gates execution already relies on: COMPLETION_ELIGIBLE_STATUSES
+    (SNOW-4221306/4221307 -- needs-user/test-failed/failed cannot close), the fix-log
+    rule (SNOW-4221308), and the sync-back leak gate (SNOW-4221302/4221312) across
+    every phase's SQL. Regenerates STATE.md and report.html. Never deploys or CALLs a
+    procedure -- this is pure local file bookkeeping. See SNOW-4221313.
+    """
+    import generate_report  # local import: only this command touches the HTML renderer
+
+    with _locked(status_path):
+        session = load_json(status_path)
+        pkg_path = session.get("migration_object_path", "")
+
+        non_closable = [
+            el["name"] for el in session["elements"]
+            if el["status"] not in COMPLETION_ELIGIBLE_STATUSES
+        ]
+        if non_closable:
+            print(
+                f"Error: cannot close unit -- elements not completion-eligible "
+                f"({', '.join(non_closable)}): needs-user/test-failed/failed must be "
+                f"resolved first; pending/in_progress must finish",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        non_closable_nodes = [
+            node["name"] for node in session.get("dbt_nodes", [])
+            if node.get("status") not in DBT_NODE_COMPLETION_ELIGIBLE_STATUSES
+        ]
+        if non_closable_nodes:
+            print(
+                f"Error: cannot close unit -- dbt nodes not completion-eligible "
+                f"({', '.join(non_closable_nodes)})",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        pct = _progress_percent(session)
+        if pct != 100:
+            print(
+                f"Error: cannot close unit -- progress is {pct}%, not 100%. "
+                f"auto-fixed-needs-review, return-to-convert, and residual do not count",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        errors = _fix_log_errors(session, pkg_path) + _leak_gate_errors_all_phases(session, pkg_path)
+        if errors:
+            for err in errors:
+                print(f"Error: {err}", file=sys.stderr)
+            sys.exit(1)
+
+        phases = session.get("roadmap", {}).get("phases", [])
+        last_phase = max((p["phase"] for p in phases), default=1)
+        state_path = _write_state_md(
+            session, status_path, last_phase, "complete", "Unit closed -- review report.html"
+        )
+        session["last_updated"] = now_iso()
+        session["closed_at"] = now_iso()
+        save_json(status_path, session)
+
+    report = None
+    if pkg_path:
+        skill_dir = Path(__file__).resolve().parent.parent
+        template_path = skill_dir / "reference" / "templates" / "report-template.html"
+        report = generate_report.generate_report(Path(pkg_path), template_path)
+
+    print(f"Unit closed. STATE.md: {state_path}")
+    if report:
+        print(f"Report: {report}")
+
+
+# ---------------------------------------------------------------------------
+# check-complete
+# ---------------------------------------------------------------------------
+
+def cmd_check_complete(status_path: Path) -> None:
+    """Read-only completion check for a parent/headless caller.
+
+    A one-shot orchestrator's turn ending is not evidence of anything -- it may have
+    stalled, been killed, or legitimately paused mid-phase. This is the explicit,
+    machine-checkable alternative: it never writes STATE.md, report.html, or
+    session_status.json, and only exits 0 when all four completion conditions hold:
+    report.html exists, every element and dbt node is completion-eligible, STATE.md's
+    own Status line says complete, and progress is 100%.
+    """
+    session = load_json(status_path)
+    pkg_path = session.get("migration_object_path", "")
+    errors: list[str] = []
+
+    non_eligible = [
+        el["name"] for el in session["elements"]
+        if el["status"] not in COMPLETION_ELIGIBLE_STATUSES
+    ]
+    if non_eligible:
+        errors.append(f"Elements not completion-eligible: {', '.join(non_eligible)}")
+
+    non_eligible_nodes = [
+        node["name"] for node in session.get("dbt_nodes", [])
+        if node.get("status") not in DBT_NODE_COMPLETION_ELIGIBLE_STATUSES
+    ]
+    if non_eligible_nodes:
+        errors.append(f"dbt nodes not completion-eligible: {', '.join(non_eligible_nodes)}")
+
+    if pkg_path:
+        report = report_path(pkg_path)
+        if not report.is_file():
+            errors.append(f"Missing report: {report} not found")
+    else:
+        errors.append("migration_object_path not set in session; cannot locate report.html")
+
+    state_file = status_path.parent / "STATE.md"
+    if not state_file.is_file():
+        errors.append(f"Missing STATE.md: {state_file} not found")
+    elif not re.search(
+        r"^Status:\s*complete\s*$",
+        state_file.read_text(encoding="utf-8", errors="replace"),
+        flags=re.MULTILINE,
+    ):
+        errors.append(f"{state_file} does not report an exact 'Status: complete' line")
+
+    pct = _progress_percent(session)
+    if pct != 100:
+        errors.append(f"Progress is {pct}%, not 100%")
+
+    if errors:
+        for err in errors:
+            print(f"Error: {err}", file=sys.stderr)
+        print("Unit is NOT complete.", file=sys.stderr)
+        sys.exit(1)
+
+    print("Unit is complete.")
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
 def main() -> None:
     if len(sys.argv) < 2:
         print(__doc__.strip(), file=sys.stderr)
@@ -1646,6 +2150,26 @@ def main() -> None:
             sys.exit(1)
 
         cmd_update_dbt_node(status_path, project_name, node_name, status, reason)
+
+    elif command == "close-unit":
+        if len(sys.argv) < 3:
+            print("Usage: python track_status.py close-unit <session_status.json>", file=sys.stderr)
+            sys.exit(1)
+        status_path = Path(sys.argv[2])
+        if not status_path.is_file():
+            print(f"Error: '{status_path}' not found", file=sys.stderr)
+            sys.exit(1)
+        cmd_close_unit(status_path)
+
+    elif command == "check-complete":
+        if len(sys.argv) < 3:
+            print("Usage: python track_status.py check-complete <session_status.json>", file=sys.stderr)
+            sys.exit(1)
+        status_path = Path(sys.argv[2])
+        if not status_path.is_file():
+            print(f"Error: '{status_path}' not found", file=sys.stderr)
+            sys.exit(1)
+        cmd_check_complete(status_path)
 
     else:
         print(f"Error: unknown command '{command}'", file=sys.stderr)

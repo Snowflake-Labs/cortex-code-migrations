@@ -21,12 +21,29 @@ class DependencyTracker:
         reads: Set[str] = set()
         external_sources: List[Dict] = []
 
+        read_first: Set[str] = set()     # read before this file writes it, e.g. PROC APPEND into a source
+        written: Set[str] = set()        # writes that run, in order (an uncalled %macro never runs)
+        dead = [(b.start_line, b.end_line) for b in script.blocks if b.block_type == BlockType.MACRO_DEF
+                and b.metadata.get('name', '') not in script.called_macros]
         for block in script.blocks:
             md = block.metadata
-            for ds in md.get('output_datasets', []):
-                creates.add(self._normalize_dataset(ds))
+            outs = {self._normalize_dataset(d) for d in md.get('output_datasets', [])}
+            runs = not any(lo <= block.start_line <= hi for lo, hi in dead)
+            head = block.content.lstrip()[:40].lower()
+            if re.match(r'proc\s+(delete|datasets)\b', head):
+                continue                     # names it drops, not data it reads
             for ds in md.get('input_datasets', []):
-                reads.add(self._normalize_dataset(ds))
+                ds = self._normalize_dataset(ds)
+                reads.add(ds)
+                # a PROC SQL that re-creates X from X created it in an earlier statement
+                if runs and ds not in written and not (block.block_type == BlockType.PROC_SQL and ds in outs):
+                    read_first.add(ds)
+            if runs and block.block_type == BlockType.PROC_APPEND:
+                read_first.update(outs - written)    # BASE= keeps its existing rows
+                reads.update(outs)
+            creates.update(outs)
+            if runs:
+                written.update(outs)
 
         for lib_name, lib_path in script.libraries.items():
             path_lower = lib_path.lower()
@@ -55,6 +72,7 @@ class DependencyTracker:
             'reads': sorted(reads),
             'external_sources': external_sources,
             'librefs': sorted(script.libraries),
+            'reads_before_create': sorted(read_first & creates),
         }
 
     def is_shared(self, dataset: str) -> bool:
@@ -148,7 +166,8 @@ class DependencyTracker:
         macro_refs = set()
         for filename, analysis in file_analyses.items():
             for dataset in analysis['reads']:
-                if not self.is_shared(dataset) or dataset in all_creates:
+                own_first = dataset in analysis.get('reads_before_create', []) and all_creates.get(dataset) == filename
+                if not self.is_shared(dataset) or (dataset in all_creates and not own_first):
                     continue
                 if self._has_macro_ref(dataset):
                     macro_refs.add(dataset)
@@ -160,6 +179,7 @@ class DependencyTracker:
             'edges': edges,
             'external_inputs': sorted(external_inputs),
             'unresolvable_macro_reference_count': len(macro_refs),
+            'macro_inputs': sorted(macro_refs),
         }
 
     @staticmethod
@@ -168,13 +188,8 @@ class DependencyTracker:
         return dataset.split('.', 1)[1] if dataset.upper().startswith(('WORK.', 'SWORK.')) else dataset
 
     def build_output_tables(self, file_analyses: Dict[str, Dict]) -> List[str]:
-        """Shared datasets created in scope that no file in scope reads."""
-        created = set()
-        read = set()
-        for analysis in file_analyses.values():
-            created.update(d for d in analysis['creates'] if self.is_shared(d) and not self._has_macro_ref(d))
-            read.update(analysis['reads'])
-        return sorted(created - read)
+        """Every permanent-libref dataset created in scope: a deliverable even when read again later."""
+        return sorted({d for a in file_analyses.values() for d in a['creates'] if self.is_shared(d)})
 
     SERVER_LIBREF_ENGINE = 'Defined on SAS server (Enterprise Guide)'
 

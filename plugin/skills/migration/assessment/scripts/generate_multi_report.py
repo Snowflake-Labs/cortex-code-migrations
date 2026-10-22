@@ -31,7 +31,6 @@ import base64
 import csv
 import html as html_escape_module
 import json
-import os
 import re
 import sys
 import tempfile
@@ -39,8 +38,7 @@ import traceback
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
-from urllib.parse import quote as url_quote
+from typing import Any, Dict, List, Optional
 
 _scripts_dir = str(Path(__file__).resolve().parent)
 if _scripts_dir not in sys.path:
@@ -969,29 +967,77 @@ def _temporal_table_key(name: str) -> str:
     return name.replace('[', '').replace(']', '').lower()
 
 
-def _count_temporal_tables(overview_stats: Dict, missing_objects_data: Dict) -> int:
-    """SQL Server #/## temp tables: workload objects plus missing references.
+def _count_temporal_tables(overview_stats: Dict) -> int:
+    """SQL Server #/## temp tables among the workload's objects.
 
-    A missing temp table the waves JSON already lists as an object (the
-    registry-synthesized mode emits ``isMissing`` entries in ``objects[]``) is
-    counted once, the way the All Objects table lists it once.
+    The Overview shows them as a subset of TABLEs, so a temp table known only
+    as a missing reference is left out: it is not in Total Objects either.
+    A missing temp table the waves JSON lists in ``objects[]`` (the
+    registry-synthesized ``isMissing`` entries) is an object, so it counts.
     """
     overview_stats = overview_stats or {}
     names = overview_stats.get('temporal_table_names')
     if names is None:
-        # Stats built without names: nothing to dedupe against.
-        keys = set()
-        count = overview_stats.get('temporal_tables_count', 0)
-    else:
-        keys = {_temporal_table_key(n) for n in names}
-        count = len(keys)
-    for item in (missing_objects_data or {}).get('missing_objects', []):
-        ref_name = item.get('referenced', '') if isinstance(item, dict) else str(item)
-        key = _temporal_table_key(ref_name)
-        if key.rsplit('.', 1)[-1].startswith('#') and key not in keys:
-            keys.add(key)
-            count += 1
-    return count
+        return overview_stats.get('temporal_tables_count', 0)
+    return len({_temporal_table_key(n) for n in names})
+
+
+_WORKLOAD_INVENTORY_LABELS = {
+    "PARAMETER_REF": "PARAMETER REFERENCES",
+}
+_PARAMETER_REFERENCES_TOOLTIP = (
+    "Object names in scripts and mappings that still contain a parameter, "
+    "so the referenced object could not be identified."
+)
+
+
+def _render_workload_inventory_cards(
+    overview_stats: Dict, total_objects: int, temporal_tables_count: int
+) -> str:
+    """The Workload Inventory cards: Total Objects, then one card per type.
+
+    Temporal and external tables are subsets of TABLEs, already in Total
+    Objects, so they are lines inside the TABLEs card rather than cards of
+    their own; the per-type cards then add up to Total Objects. Most labels
+    are the category plus a trailing "s"; PARAMETER_REF uses a display name
+    and a tooltip, and its category key is unchanged.
+    """
+    overview_stats = overview_stats or {}
+    objects_by_type = overview_stats.get('objects_by_type', {}) or {}
+    external_tables_count = overview_stats.get('external_tables_count', 0) or 0
+    table_subsets = []
+    if external_tables_count > 0 and 'EXTERNAL TABLE' not in objects_by_type:
+        table_subsets.append((external_tables_count, 'external'))
+    if temporal_tables_count > 0:
+        table_subsets.append((temporal_tables_count, 'temporal'))
+
+    cards = [f'''
+                <div class="effort-card">
+                    <div class="effort-card-num">{overview_stats.get('total_objects', total_objects)}</div>
+                    <div class="effort-card-lbl">Total Objects</div>
+                    <div class="effort-card-lbl">In {overview_stats.get('total_waves', 'N/A')} Waves</div>
+                </div>
+                ''']
+    for obj_type, count in objects_by_type.items():
+        subset_html = ''
+        if obj_type.upper() == 'TABLE':
+            subset_html = ''.join(
+                f'''
+                    <div class="effort-card-sub">{n} of {count} are {kind} tables</div>'''
+                for n, kind in table_subsets
+            )
+        label = _WORKLOAD_INVENTORY_LABELS.get(obj_type, f"{obj_type}s")
+        tooltip = ''
+        if obj_type == "PARAMETER_REF":
+            escaped = html_escape_module.escape(_PARAMETER_REFERENCES_TOOLTIP, quote=True)
+            tooltip = f' data-tooltip="{escaped}"'
+        cards.append(f'''
+                <div class="effort-card"{tooltip}>
+                    <div class="effort-card-num">{count}</div>
+                    <div class="effort-card-lbl">{html_escape_module.escape(str(label))}</div>{subset_html}
+                </div>
+                ''')
+    return ''.join(cards)
 
 
 def load_overview_stats(
@@ -1027,7 +1073,7 @@ def load_overview_stats(
     stats["objects_by_type"] = adapter.objects_by_type()
     stats["conversion_stats"] = {
         "Success":      counts.get("Success", 0),
-        "Partial":      counts.get("Require Attention", 0),
+        "Partial":      counts.get("Requires Attention", 0),
         "NotSupported": counts.get("Not Supported", 0),
     }
     stats["temporal_tables_count"] = adapter.temporal_tables_count()
@@ -1163,6 +1209,15 @@ def generate_multi_report(
                 default_tab = 'etl'
         except Exception as e:
             print(f"Warning: Could not load SSIS data: {e}", file=sys.stderr)
+
+    # The Overview counts ETL units from the waves JSON (registry); hand the
+    # SSIS ones to the ETL Report so it counts and lists the same packages.
+    ssis_registry_packages = None
+    if has_ssis and waves_json and WAVES_SUPPORT:
+        try:
+            ssis_registry_packages = WavesJsonAdapter(Path(waves_json)).ssis_packages()
+        except (FileNotFoundError, ValueError) as exc:
+            print(f"Warning: Could not read SSIS packages from waves JSON: {exc}", file=sys.stderr)
 
     # Load Informatica data
     informatica_data = None
@@ -1391,6 +1446,7 @@ def generate_multi_report(
         waves_info=waves_info,
         has_ssis=has_ssis,
         ssis_json=ssis_json if has_ssis else None,
+        ssis_registry_packages=ssis_registry_packages,
         has_anti_patterns=has_anti_patterns,
         anti_patterns_json=anti_patterns_json if has_anti_patterns else None,
         data_lineage_json=data_lineage_json,
@@ -1443,41 +1499,6 @@ def generate_multi_report(
     print(f"  open {output_file}")
 
 
-_WORKLOAD_INVENTORY_LABELS = {
-    "PARAMETER_REF": "PARAMETER REFERENCES",
-}
-_PARAMETER_REFERENCES_TOOLTIP = (
-    "Object names in scripts and mappings that still contain a parameter, "
-    "so the referenced object could not be identified."
-)
-
-
-def _workload_inventory_type_cards(objects_by_type, extra_after_table=""):
-    """One Workload Inventory card per object type.
-
-    Most labels are the category plus a trailing "s". PARAMETER_REF uses a
-    display name and a tooltip; the category key itself is unchanged.
-    """
-    cards = []
-    for obj_type, count in objects_by_type.items():
-        label = _WORKLOAD_INVENTORY_LABELS.get(obj_type, f"{obj_type}s")
-        tooltip = ""
-        if obj_type == "PARAMETER_REF":
-            escaped = html_escape_module.escape(_PARAMETER_REFERENCES_TOOLTIP, quote=True)
-            tooltip = f' data-tooltip="{escaped}"'
-        cards.append(
-            f'''
-                <div class="effort-card"{tooltip}>
-                    <div class="effort-card-num">{count}</div>
-                    <div class="effort-card-lbl">{html_escape_module.escape(label)}</div>
-                </div>
-            '''
-        )
-        if str(obj_type).upper() == "TABLE":
-            cards.append(extra_after_table)
-    return "".join(cards)
-
-
 def generate_html_template(
     default_tab: str,
     has_exclusion: bool,
@@ -1522,6 +1543,8 @@ def generate_html_template(
     testing_readiness: Any = None,
     data_migration_readiness: Any = None,
     assessment_name: str = "",
+    ssis_registry_packages: Optional[List[Dict[str, str]]] = None,
+
     initial_active_tab: str = "journey",
     initial_discovery_tab: str = "lineage",
     project_dir: Path = None,
@@ -1700,19 +1723,8 @@ def generate_html_template(
             </div>
         '''
 
-    temporal_tables_count = _count_temporal_tables(overview_stats, missing_objects_data)
+    temporal_tables_count = _count_temporal_tables(overview_stats)
 
-    temporal_tables_card_html = ''
-    if temporal_tables_count > 0:
-        temporal_tables_card_html = f'''
-                <div class="effort-card">
-                    <div class="effort-card-num">{temporal_tables_count}</div>
-                    <div class="effort-card-lbl">Temporal Tables</div>
-                </div>
-        '''
-
-    # External tables (only render if present)
-    external_tables_count = overview_stats.get('external_tables_count', 0) if overview_stats else 0
     source_dialect = (overview_stats.get('source_dialect', '') if overview_stats else '') or ''
     source_dialect_json = json.dumps(source_dialect)
     source_dialect_display = 'SQL Server' if source_dialect == 'Transact' else source_dialect
@@ -1786,16 +1798,6 @@ def generate_html_template(
             )
         )
 
-    external_tables_card_html = ''
-    objects_by_type = overview_stats.get('objects_by_type', {}) if overview_stats else {}
-    if external_tables_count > 0 and 'EXTERNAL TABLE' not in objects_by_type:
-        external_tables_card_html = f'''
-                <div class="effort-card">
-                    <div class="effort-card-num">{external_tables_count}</div>
-                    <div class="effort-card-lbl">External Tables</div>
-                </div>
-        '''
-
     has_effort_tab = bool(effort_assessment)
     effort_section_b_html = (
         render_overview_section_b_html(effort_assessment) if effort_assessment else ""
@@ -1850,11 +1852,6 @@ def generate_html_template(
         else ""
     )
 
-    workload_inventory_type_cards = _workload_inventory_type_cards(
-        overview_stats.get("objects_by_type", {}) if overview_stats else {},
-        external_tables_card_html + temporal_tables_card_html,
-    )
-
     # Overview tab HTML
     overview_html = f"""
         <!-- Overview Tab -->
@@ -1885,13 +1882,7 @@ def generate_html_template(
             </h2>
             
             <div class="effort-cards" style="margin-bottom: 40px;">
-                <div class="effort-card">
-                    <div class="effort-card-num">{overview_stats.get('total_objects', total_objects_excl)}</div>
-                    <div class="effort-card-lbl">Total Objects</div>
-                    <div class="effort-card-lbl">In {overview_stats.get('total_waves', 'N/A')} Waves</div>
-                </div>
-                
-                {workload_inventory_type_cards}
+                {_render_workload_inventory_cards(overview_stats, total_objects_excl, temporal_tables_count)}
             </div>
 
             {effort_section_b_html}
@@ -2052,25 +2043,16 @@ def generate_html_template(
     )
     journey_download_html = ""
     if project_dir:
-        archive_path = project_dir / ".scai" / "reports" / "conversion-reports.zip"
-        try:
-            relative_archive_path = Path(
-                os.path.relpath(archive_path, start=output_file.parent)
-            ).as_posix()
-        except ValueError:
-            # Windows cannot form a relative path across drives. The report itself remains useful,
-            # so omit only the download control instead of aborting HTML generation.
-            relative_archive_path = ""
-        if relative_archive_path:
-            safe_archive_href = html_escape_module.escape(
-                url_quote(relative_archive_path, safe="/"),
-                quote=True,
-            )
-            journey_download_html = f"""
+        # An absolute file URL, not one relative to the report: AIM's "Save to Downloads" and the
+        # dashboard's download copy only the HTML, and a relative link from that copy points at a
+        # zip that is not there.
+        archive_path = (project_dir / ".scai" / "reports" / "conversion-reports.zip").resolve()
+        safe_archive_href = html_escape_module.escape(archive_path.as_uri(), quote=True)
+        journey_download_html = f"""
                     <a class="journey-download" href="{safe_archive_href}" download="conversion-reports.zip">
                         Download conversion reports
                     </a>
-            """
+        """
     journey_overview_html = f"""
         <!-- Migration Journey Overview (entry point) -->
         <div class="tab-content" :class="{{active: activeTab === 'journey'}}">
@@ -2123,7 +2105,11 @@ def generate_html_template(
     ssis_css = ""
     if has_ssis and SSIS_SUPPORT and ssis_json:
         # Pass output_file so package pages can be generated in packages/ folder alongside it
-        ssis_content, ssis_js, ssis_css = generate_ssis_html_content(ssis_json, output_html_path=output_file)
+        ssis_content, ssis_js, ssis_css = generate_ssis_html_content(
+            ssis_json,
+            output_html_path=output_file,
+            registry_packages=ssis_registry_packages,
+        )
         ssis_html = ssis_content
     else:
         ssis_html = ""
@@ -2208,31 +2194,38 @@ def generate_html_template(
     data_lineage_content = ""
     data_lineage_js = ""
     data_lineage_css = ""
+    # SQL-only / missing-artifact estates default to Object Lineage so the
+    # reader lands on the view that holds procedure, view, and table edges.
+    initial_lineage_view = "data"
     if DATA_LINEAGE_SUPPORT:
         dl_content, data_lineage_js, data_lineage_css = generate_data_lineage_html_content(data_lineage_json)
-        # v-pre shields the artifact-controlled body from Vue's mustache
-        # compiler: a customer node Label/Narrative/Ask/Finding containing
-        # "{{ }}" would otherwise be evaluated as a Vue expression and blank
-        # the whole report. Only the rendered body is v-pre'd; the outer
-        # tab-content div keeps its normal :class active binding.
-        data_lineage_content = f"""
+        # Empty states are authored copy plus a Vue @click to Object Lineage —
+        # leave them outside v-pre. Populated maps stay v-pre'd so artifact
+        # strings with "{{ }}" cannot break the report compiler.
+        if "data-lineage-empty" in dl_content:
+            data_lineage_content = dl_content
+            initial_lineage_view = "object"
+        else:
+            data_lineage_content = f"""
             <div v-pre>
                 {dl_content}
             </div>
         """
     else:
+        initial_lineage_view = "object"
         data_lineage_content = """
-            <div style="margin-bottom: 32px;">
-                <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
-                    Data Lineage
-                </h1>
-                <p style="color: #64748B; font-size: 1.1rem;">
+            <div class="data-lineage-empty" id="data-lineage-report">
+            <div class="dl-page-header" style="margin-bottom: 24px;">
+                <p style="color: #64748B; font-size: 1rem; line-height: 1.6; margin-bottom: 0;">
                     Follow how data moves from sources through pipelines to targets and reports.
                 </p>
             </div>
             <div class="empty-state">
                 <h3>No Data Available</h3>
+                <p>Data Lineage maps ETL pipelines and reporting files such as Power BI (.pbit or .pbix). Procedure, view, and table relationships are on Object Lineage.</p>
                 <p>Data lineage assessment data is not available. Run <code>scai assessment data-lineage</code> to generate it.</p>
+                <p><button type="button" class="prompt-copy" @click="lineageView = 'object'">Open Object Lineage</button></p>
+            </div>
             </div>
         """
 
@@ -2250,7 +2243,7 @@ def generate_html_template(
         query_logs_panel_html = f"""
             <div v-show="discoveryTab === 'query-logs'" class="discovery-panel"
                  role="tabpanel" aria-label="Query Logs Analysis">
-                <div class="discovery-tabs" role="group" aria-label="Query log views">
+                <div class="lineage-segment" role="group" aria-label="Query log views">
                     <button type="button" data-query-logs-view="analysis"
                             :aria-pressed="queryLogsView === 'analysis'" aria-controls="query-logs-analysis-panel"
                             :class="{{active: queryLogsView === 'analysis'}}" @click="queryLogsView = 'analysis'">
@@ -2293,7 +2286,7 @@ def generate_html_template(
             </div>
             <div v-show="discoveryTab === 'lineage'" class="discovery-panel"
                  role="tabpanel" aria-label="Lineage">
-                <div class="discovery-tabs" role="group" aria-label="Lineage views">
+                <div class="lineage-segment" role="group" aria-label="Lineage views">
                     <button type="button" data-lineage-view="data"
                             :aria-pressed="lineageView === 'data'" aria-controls="data-lineage-panel"
                             :class="{{active: lineageView === 'data'}}" @click="lineageView = 'data'">
@@ -2376,6 +2369,26 @@ def generate_html_template(
                             <div class="metric-label">Duplicate Objects</div>
                             <div class="metric-value">{duplicate_count}</div>
                             <div class="metric-description">{duplicate_pct:.1f}% of flagged objects</div>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="exclusion-categories" style="margin-bottom:40px;">
+                    <div style="background:white;border-radius:12px;border:1px solid #E2E8F0;padding:24px;">
+                        <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+                            <button type="button" id="excl-cat-obj" onclick="toggleExclCategoryView('objects')"
+                                    style="padding:4px 12px;border-radius:6px;border:1px solid #29B5E8;
+                                           background:#29B5E8;color:white;font-size:0.82rem;cursor:pointer;">
+                                Object Count
+                            </button>
+                            <button type="button" id="excl-cat-pct" onclick="toggleExclCategoryView('percent')"
+                                    style="padding:4px 12px;border-radius:6px;border:1px solid #E2E8F0;
+                                           background:white;color:#64748B;font-size:0.82rem;cursor:pointer;">
+                                Percentage
+                            </button>
+                        </div>
+                        <div style="position:relative;height:240px;">
+                            <canvas id="exclusionCategoryChart" aria-label="Exclusion categories"></canvas>
                         </div>
                     </div>
                 </section>
@@ -2471,7 +2484,125 @@ def generate_html_template(
                 </div>
             </div>
         """
-    
+
+    # Vue drops <script> tags inside the mounted template, so the chart boots
+    # from a script block after the app mounts.
+    exclusion_category_js = ""
+    if has_exclusion:
+        exclusion_category_js = f"""
+                    (function() {{
+                        var steps = [
+                            {{ label: 'Temp/Staging', count: {temp_count}, color: '#5B98FF', category: 'temp' }},
+                            {{ label: 'Deprecated', count: {deprec_count}, color: '#F4BE5D', category: 'deprecated' }},
+                            {{ label: 'Testing', count: {testing_count}, color: '#E95240', category: 'testing' }},
+                            {{ label: 'Duplicates', count: {duplicate_count}, color: '#6FD8B7', category: 'duplicate' }}
+                        ];
+                        var flagged = steps.reduce(function(sum, step) {{ return sum + step.count; }}, 0);
+                        var labels = steps.map(function(s) {{ return s.label; }});
+                        var colors = steps.map(function(s) {{ return s.color; }});
+                        var mode = 'objects';
+                        var inst = null;
+
+                        function values(asPercent) {{
+                            return steps.map(function(step) {{
+                                if (!asPercent) return step.count;
+                                return flagged ? (step.count / flagged) * 100 : 0;
+                            }});
+                        }}
+                        function formatValue(n) {{
+                            return mode === 'percent' ? n.toFixed(1) + '%' : Math.round(n).toLocaleString();
+                        }}
+
+                        window.toggleExclCategoryView = function(m) {{
+                            mode = m;
+                            ['excl-cat-obj', 'excl-cat-pct'].forEach(function(id) {{
+                                var btn = document.getElementById(id);
+                                if (!btn) return;
+                                var active = (id === 'excl-cat-obj') ? (m === 'objects') : (m === 'percent');
+                                btn.style.background = active ? '#29B5E8' : 'white';
+                                btn.style.color = active ? 'white' : '#64748B';
+                                btn.style.borderColor = active ? '#29B5E8' : '#E2E8F0';
+                            }});
+                            if (inst) {{
+                                inst.data.datasets[0].data = values(m === 'percent');
+                                inst.update();
+                            }}
+                        }};
+
+                        function init() {{
+                            if (typeof Chart === 'undefined') {{ setTimeout(init, 200); return; }}
+                            var canvas = document.getElementById('exclusionCategoryChart');
+                            if (!canvas || inst || Chart.getChart(canvas)) return;
+                            if (canvas.offsetParent === null) {{
+                                var observer = new ResizeObserver(function() {{
+                                    if (canvas.offsetParent === null) return;
+                                    observer.disconnect();
+                                    init();
+                                }});
+                                observer.observe(canvas.parentElement || canvas);
+                                return;
+                            }}
+                            inst = new Chart(canvas, {{
+                                type: 'bar',
+                                plugins: typeof ChartDataLabels !== 'undefined' ? [ChartDataLabels] : [],
+                                data: {{
+                                    labels: labels,
+                                    datasets: [{{
+                                        data: values(false),
+                                        backgroundColor: colors,
+                                        borderRadius: 4,
+                                        barPercentage: 0.72
+                                    }}]
+                                }},
+                                options: {{
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    layout: {{ padding: {{ top: 22 }} }},
+                                    plugins: {{
+                                        legend: {{ display: false }},
+                                        tooltip: {{ callbacks: {{ label: function(c) {{
+                                            var text = formatValue(Number(c.raw) || 0);
+                                            return mode === 'percent' ? text : text + ' objects';
+                                        }} }} }},
+                                        datalabels: {{
+                                            display: true,
+                                            anchor: 'end',
+                                            align: 'top',
+                                            clamp: true,
+                                            color: '#374151',
+                                            font: {{ weight: '600', size: 11 }},
+                                            formatter: function(v) {{ return formatValue(Number(v) || 0); }}
+                                        }}
+                                    }},
+                                    scales: {{
+                                        y: {{
+                                            beginAtZero: true,
+                                            grace: '8%',
+                                            ticks: {{ callback: function(v) {{
+                                                return mode === 'percent'
+                                                    ? Number(v).toFixed(0) + '%'
+                                                    : Number(v).toLocaleString();
+                                            }} }}
+                                        }},
+                                        x: {{ grid: {{ display: false }} }}
+                                    }},
+                                    onHover: function(event, elements) {{
+                                        var target = event.native && event.native.target;
+                                        if (!target) return;
+                                        target.style.cursor = elements.length ? 'pointer' : 'default';
+                                    }},
+                                    onClick: function(_event, elements) {{
+                                        if (!elements.length || typeof navigateToCategory !== 'function') return;
+                                        var category = steps[elements[0].index].category;
+                                        if (category) navigateToCategory(category);
+                                    }}
+                                }}
+                            }});
+                        }}
+                        init();
+                    }})();
+        """
+
     dynamic_sql_html = ""
     if has_dynamic_sql:
         dynamic_sql_html = """
@@ -2991,6 +3122,7 @@ def generate_html_template(
         #workload-inventory + .effort-cards .effort-card[data-tooltip] {{ cursor: help; }}
         .effort-card-num {{ font-size: 28px; font-weight: 800; color: #1E252F; }}
         .effort-card-lbl {{ font-size: 14px; font-weight: 400; color: #5D6A85; line-height: 1.25rem; margin-top: 4px; }}
+        .effort-card-sub {{ font-size: 12px; font-weight: 400; color: #5D6A85; line-height: 1.1rem; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #D5DAE4; }}
         .effort-table-wrap {{ overflow-x: auto; margin-bottom: 24px; }}
         .effort-table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; border: 1px solid #E2E8F0; }}
         .effort-table th, .effort-table td {{ padding: 0.75rem; text-align: left; border-bottom: 1px solid #E2E8F0; font-size: 0.85rem; color: #1E252F; }}
@@ -3080,6 +3212,9 @@ def generate_html_template(
             font-weight: 600; padding: 6px 14px; border-bottom: 1px solid #E2E8F0;
             white-space: nowrap;
         }}
+        /* Comes after the subhead rule so Critical / High / Medium / Low center
+           in their cells. The later left alignment would otherwise win. */
+        .effort-table th.effort-subhead.ctr {{ text-align: center; }}
         .effort-table tr.effort-total td {{ border-top: 2px solid #CBD5E1; }}
         .effort-muted {{ color: #64748B; font-size: 0.85rem; }}
         .nav-preview-badge {{
@@ -4742,6 +4877,39 @@ def generate_html_template(
         .btn-primary:hover {{ background: #11567F; }}
         .tab-content {{ display: none; }}
         .tab-content.active {{ display: block; }}
+        /* Screen keeps one tab visible. Print (and the assessment report PDF) shows every tab.
+           html.is-printing is applied in beforeprint, while the screen stylesheet is still
+           active, so Chart.js can measure canvases that lived in display:none panes. */
+        @media print {{
+            .sidebar {{ display: none !important; }}
+            .content {{ margin-left: 0 !important; }}
+            .content > .tab-content {{ display: block !important; }}
+            .content > .tab-content ~ .tab-content {{
+                break-before: page;
+                page-break-before: always;
+            }}
+            .discovery-panel,
+            #data-lineage-panel,
+            #object-lineage-panel,
+            #query-logs-analysis-panel,
+            #query-logs-extract-panel {{
+                display: block !important;
+            }}
+            .wi-card {{
+                break-inside: avoid;
+                page-break-inside: avoid;
+            }}
+        }}
+        html.is-printing .sidebar {{ display: none !important; }}
+        html.is-printing .content {{ margin-left: 0 !important; }}
+        html.is-printing .content > .tab-content {{ display: block !important; }}
+        html.is-printing .discovery-panel,
+        html.is-printing #data-lineage-panel,
+        html.is-printing #object-lineage-panel,
+        html.is-printing #query-logs-analysis-panel,
+        html.is-printing #query-logs-extract-panel {{
+            display: block !important;
+        }}
         
         /* SSIS report styles (scoped to #ssis-report) */
 {ssis_css}
@@ -5713,8 +5881,47 @@ def generate_html_template(
         }}
 
         .discovery-tabs button.active {{
-            border-bottom-color: #29B5E8;
+            border-bottom-color: #1A56DB;
             color: #102E46;
+        }}
+
+        .lineage-segment {{
+            display: inline-flex;
+            align-items: stretch;
+            gap: 2px;
+            background: #F1F2F4;
+            border-radius: 6px;
+            padding: 2px;
+            margin: 0 0 24px;
+        }}
+
+        .lineage-segment button {{
+            border: 1px solid transparent;
+            background: transparent;
+            color: #3E4651;
+            cursor: pointer;
+            font: inherit;
+            font-size: 0.875rem;
+            font-weight: 500;
+            line-height: 1.25;
+            padding: 4px 12px;
+            border-radius: 4px;
+        }}
+
+        .lineage-segment button:hover:not(.active) {{
+            color: #1E252F;
+        }}
+
+        .lineage-segment button.active {{
+            background: #FFFFFF;
+            color: #1A56DB;
+            border-color: #D6DAE1;
+            box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+        }}
+
+        .lineage-segment button:focus-visible {{
+            outline: 2px solid #1A56DB;
+            outline-offset: 2px;
         }}
 
         .object-lineage-notice {{
@@ -5980,7 +6187,7 @@ def generate_html_template(
                 return {{
                     activeTab: '{initial_active_tab}',
                     discoveryTab: '{initial_discovery_tab}',
-                    lineageView: 'data',
+                    lineageView: '{initial_lineage_view}',
                     queryLogsView: 'analysis',
                     objectLineagePromptCopied: false,
                     sourceDialect: {source_dialect_json},
@@ -7037,6 +7244,11 @@ def generate_html_template(
         }}
     </script>
 
+    <!-- Exclusion chart boots after Vue mounts; a script inside the tab is dropped. -->
+    <script>
+        {exclusion_category_js}
+    </script>
+
     <!-- Workload Insights charts are defined after Vue has compiled and mounted the tab. -->
     <script>
         {workload_insights_javascript}
@@ -7155,6 +7367,28 @@ def generate_html_template(
                 }}
             }});
         }})();
+    </script>
+    <script>
+        function prepareReportForPrint() {{
+            document.documentElement.classList.add('is-printing');
+            if (window.Chart) {{
+                Chart.defaults.animation = false;
+            }}
+            void document.body.offsetHeight;
+            if (typeof window.renderWorkloadInsightsCharts === 'function') {{
+                window.renderWorkloadInsightsCharts();
+            }}
+            if (window.Chart && typeof Chart.getChart === 'function') {{
+                document.querySelectorAll('canvas').forEach(function (canvas) {{
+                    var chart = Chart.getChart(canvas);
+                    if (chart) chart.resize();
+                }});
+            }}
+        }}
+        window.addEventListener('beforeprint', prepareReportForPrint);
+        window.addEventListener('afterprint', function () {{
+            document.documentElement.classList.remove('is-printing');
+        }});
     </script>
 </body>
 </html>

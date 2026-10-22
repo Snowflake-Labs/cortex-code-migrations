@@ -24,6 +24,7 @@ tmp file below.
 2. Run each query with the `query_source` MCP tool: `query_source(sql="<SQL>")`.
 3. Build positional arrays matching the proc's parameter order. Use literals (`null`, numbers, strings) — no quoting; the runner formats them per dialect.
 4. Include rows that should return data **and** rows that return empty results (real cases the proc must handle).
+5. Skip a queried value the source statement cannot execute. If an unguarded `RIGHT`, `LEFT`, or `SUBSTRING` length is `LEN(arg) - N` or `LENGTH(arg) - N`, skip non-null strings for `arg` shorter than N.
 
 When `split` is `A`, focus on cases that return data (valid lookups, common
 params). When it is `B`, focus on edge data (oldest / newest records,

@@ -1,5 +1,9 @@
 # Data Migration Troubleshooting Reference
 
+`<metadata_database>` below is `.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
+overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
+project's.
+
 Common failure modes and their solutions when running data migration via `scai`.
 
 ---
@@ -13,7 +17,7 @@ ImportError: dlopen(.../data-migration-orchestrator/lib/pythonX.Y/site-packages/
   symbol not found in flat namespace '_OSSL_get_max_threads'
 ```
 
-(`_DTLS_get_data_mtu` is the same class of error.) It also shows up as `scai data doctor` **DEW doctor** / **Orchestrator doctor** warnings. The MCP run gate now treats this signature as a **blocking** failure instead of a warning, so `migrate_data(mode="run")` returns it in `doctor_failures` with this remediation rather than dying mid-workflow.
+(`_DTLS_get_data_mtu` is the same class of error.) `scai data doctor` reports it as a failing **DEW doctor** / **Orchestrator doctor** row, with the repair below as its suggestion, so `data_infrastructure(mode="up")` refuses with it in `doctor_failures` rather than letting the workflow die mid-run.
 
 **Cause:** The orchestrator/DEA run in bundled Python venvs under `~/.config/Snowflake Inc/SnowConvertDesktop/{data-migration-orchestrator,data-exchange-agent}/`, created by SnowConvert Desktop via `pip install`. `cryptography` is a transitive dependency. When pip installs it as a **source build (sdist)** instead of the self-contained binary wheel, `_rust.abi3.so` is linked to resolve OpenSSL symbols from an **external** OpenSSL at load time. If a different/older OpenSSL resolves first at runtime, the symbol lookup fails. The official `cryptography` wheels (maturin, e.g. `cp311-abi3-macosx_11_0_arm64`) instead **statically bundle** OpenSSL and link only `libSystem`/`libiconv` — those never hit this error. This is environment nondeterminism (Python version, available wheels), **not** an Apple-Silicon limitation: an arm64 machine that resolved the bundled wheel works fine.
 
@@ -51,20 +55,20 @@ Then re-run `scai data doctor` (or `migrate_data(mode="run")`). If pip reports n
 ```sql
 -- Check the orchestrator's affinity from service startup logs
 CALL SYSTEM$GET_SERVICE_LOGS(
-  'SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE', '0', 'orchestrator', 50
+  '<metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE', '0', 'orchestrator', 50
 );
 -- Look for: "Orchestrator affinity: <value>"
 
 -- Check the workflow's affinity
 SELECT ID, NAME, STATUS, AFFINITY
-FROM SNOWCONVERT_AI.DATA_MIGRATION.WORKFLOW
+FROM <metadata_database>.DATA_MIGRATION.WORKFLOW
 ORDER BY ID DESC LIMIT 5;
 ```
 
 **Fix:**
 1. Update the workflow's `AFFINITY` column to match the orchestrator's value:
    ```sql
-   UPDATE SNOWCONVERT_AI.DATA_MIGRATION.WORKFLOW
+   UPDATE <metadata_database>.DATA_MIGRATION.WORKFLOW
    SET AFFINITY = '<orchestrator_affinity>'
    WHERE ID = <workflow_id>;
    ```
@@ -86,7 +90,7 @@ Typically the task name is `Analyze boundaries: <table>`.
 **Diagnosis:**
 ```sql
 SELECT ID, NAME, STATUS, EXECUTION_TIMEOUT_MINUTES, LAST_ERROR_MESSAGE, ABANDONMENTS
-FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+FROM <metadata_database>.DATA_MIGRATION.TASK_QUEUE
 WHERE WORKFLOW_ID = <id>
   AND (NAME ILIKE 'Analyze boundaries%' OR LAST_ERROR_MESSAGE ILIKE '%Execution timeout%')
 ORDER BY ID;
@@ -115,7 +119,7 @@ Also consider a cheaper partition key / larger partitions so NTILE boundary anal
 **Diagnosis:**
 ```sql
 SELECT WORKFLOW_ID, STATUS, COUNT(*)
-FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+FROM <metadata_database>.DATA_MIGRATION.TASK_QUEUE
 WHERE STATUS IN ('pending', 'executing', 'blocked')
 GROUP BY WORKFLOW_ID, STATUS
 ORDER BY WORKFLOW_ID;
@@ -123,7 +127,7 @@ ORDER BY WORKFLOW_ID;
 
 **Fix:** Cancel stale tasks from old workflows:
 ```sql
-UPDATE SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+UPDATE <metadata_database>.DATA_MIGRATION.TASK_QUEUE
 SET STATUS = 'cancelled'
 WHERE WORKFLOW_ID != <your_workflow_id>
   AND STATUS IN ('pending', 'executing', 'blocked');
@@ -175,14 +179,14 @@ Using `TOP 1000 1=1` (SQL Server syntax) or `LIMIT 1000` (Redshift syntax) is in
 ```sql
 USE ROLE SYSADMIN; -- or whichever role owns the service
 
-GRANT USAGE ON DATABASE SNOWCONVERT_AI TO ROLE <your_role>;
-GRANT USAGE ON SCHEMA SNOWCONVERT_AI.DATA_MIGRATION TO ROLE <your_role>;
-GRANT OPERATE, MONITOR ON SERVICE SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE TO ROLE <your_role>;
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA SNOWCONVERT_AI.DATA_MIGRATION TO ROLE <your_role>;
-GRANT ALL PRIVILEGES ON ALL PROCEDURES IN SCHEMA SNOWCONVERT_AI.DATA_MIGRATION TO ROLE <your_role>;
-GRANT ALL PRIVILEGES ON ALL STAGES IN SCHEMA SNOWCONVERT_AI.DATA_MIGRATION TO ROLE <your_role>;
-GRANT ALL PRIVILEGES ON ALL FILE FORMATS IN SCHEMA SNOWCONVERT_AI.DATA_MIGRATION TO ROLE <your_role>;
-GRANT ALL PRIVILEGES ON ALL VIEWS IN SCHEMA SNOWCONVERT_AI.DATA_MIGRATION TO ROLE <your_role>;
+GRANT USAGE ON DATABASE <metadata_database> TO ROLE <your_role>;
+GRANT USAGE ON SCHEMA <metadata_database>.DATA_MIGRATION TO ROLE <your_role>;
+GRANT OPERATE, MONITOR ON SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE TO ROLE <your_role>;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA <metadata_database>.DATA_MIGRATION TO ROLE <your_role>;
+GRANT ALL PRIVILEGES ON ALL PROCEDURES IN SCHEMA <metadata_database>.DATA_MIGRATION TO ROLE <your_role>;
+GRANT ALL PRIVILEGES ON ALL STAGES IN SCHEMA <metadata_database>.DATA_MIGRATION TO ROLE <your_role>;
+GRANT ALL PRIVILEGES ON ALL FILE FORMATS IN SCHEMA <metadata_database>.DATA_MIGRATION TO ROLE <your_role>;
+GRANT ALL PRIVILEGES ON ALL VIEWS IN SCHEMA <metadata_database>.DATA_MIGRATION TO ROLE <your_role>;
 ```
 
 ---
@@ -193,13 +197,13 @@ GRANT ALL PRIVILEGES ON ALL VIEWS IN SCHEMA SNOWCONVERT_AI.DATA_MIGRATION TO ROL
 
 **Diagnosis:**
 ```sql
-SELECT SYSTEM$GET_SERVICE_STATUS('SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE');
+SELECT SYSTEM$GET_SERVICE_STATUS('<metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE');
 -- Returns [] when suspended, or a JSON array with status when running
 ```
 
 **Fix:** Manually resume the service:
 ```sql
-ALTER SERVICE SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE RESUME;
+ALTER SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE RESUME;
 ```
 
 Then wait 30-60 seconds for the container to start and re-check the status.
@@ -215,13 +219,13 @@ Then wait 30-60 seconds for the container to start and re-check the status.
 ```sql
 -- Find blocked tasks and their scopes
 SELECT ID, NAME, STATUS, SCOPE, SUCCESSOR_TASK_ID
-FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+FROM <metadata_database>.DATA_MIGRATION.TASK_QUEUE
 WHERE WORKFLOW_ID = <id> AND STATUS = 'blocked'
 ORDER BY ID;
 
 -- Find failed predecessors in the same table scope
 SELECT ID, NAME, STATUS, LAST_ERROR_MESSAGE, SCOPE
-FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+FROM <metadata_database>.DATA_MIGRATION.TASK_QUEUE
 WHERE WORKFLOW_ID = <id>
   AND SCOPE LIKE 'Table[MY_DB.MY_SCHEMA.MY_TABLE]::%'
 ORDER BY ID;
@@ -242,7 +246,7 @@ When MCP `reports` are insufficient, query failed tasks directly:
 
 ```sql
 SELECT NAME, EXECUTOR_TYPE, LAST_ERROR_MESSAGE, SCOPE, FAILURES
-FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+FROM <metadata_database>.DATA_MIGRATION.TASK_QUEUE
 WHERE WORKFLOW_ID = <id> AND STATUS = 'failed'
 ORDER BY ID;
 ```
@@ -313,27 +317,27 @@ If metadata/schema extraction completes with **zero rows** but no worker error, 
 
 ```sql
 -- Check service status
-SELECT SYSTEM$GET_SERVICE_STATUS('SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE');
+SELECT SYSTEM$GET_SERVICE_STATUS('<metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE');
 
 -- Read orchestrator logs (last 50 lines)
 CALL SYSTEM$GET_SERVICE_LOGS(
-  'SNOWCONVERT_AI.DATA_MIGRATION.DATA_MIGRATION_SERVICE', '0', 'orchestrator', 50
+  '<metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE', '0', 'orchestrator', 50
 );
 
 -- List recent workflows
 SELECT ID, NAME, STATUS, AFFINITY, INITIATOR_ID, CREATION_TIME
-FROM SNOWCONVERT_AI.DATA_MIGRATION.WORKFLOW
+FROM <metadata_database>.DATA_MIGRATION.WORKFLOW
 ORDER BY ID DESC LIMIT 10;
 
 -- Check task status for a specific workflow
 SELECT ID, NAME, EXECUTOR_TYPE, STATUS, FAILURES, LAST_ERROR_MESSAGE
-FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+FROM <metadata_database>.DATA_MIGRATION.TASK_QUEUE
 WHERE WORKFLOW_ID = <id>
 ORDER BY ID;
 
 -- Count active tasks by workflow
 SELECT WORKFLOW_ID, STATUS, COUNT(*)
-FROM SNOWCONVERT_AI.DATA_MIGRATION.TASK_QUEUE
+FROM <metadata_database>.DATA_MIGRATION.TASK_QUEUE
 WHERE STATUS NOT IN ('completed', 'failed', 'cancelled')
 GROUP BY WORKFLOW_ID, STATUS
 ORDER BY WORKFLOW_ID;

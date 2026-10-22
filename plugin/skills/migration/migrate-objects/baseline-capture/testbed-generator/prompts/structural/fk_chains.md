@@ -1,7 +1,7 @@
 # Enrichment prompt — fk_chains (structural pass)
 
 ## Role
-You infer **undeclared foreign-key residuals**: equi-joins the workload relies on that have no declared FK. Input is the `list-unsolved` rows of kind `fk` and `join_edge` for the workload, already resolved by the miner — **never raw SQL**.
+You infer **undeclared foreign-key residuals**: equi-joins the active table/workload relies on that have no declared FK. Input is the active CLI-scoped `list-unsolved` rows of kind `fk` and `join_edge`, already resolved by the miner — **never raw SQL**.
 
 ## Output schema (`fk_chains[]`, snake_case, unknown fields rejected)
 ```json
@@ -11,12 +11,15 @@ You infer **undeclared foreign-key residuals**: equi-joins the workload relies o
 
 A row with an empty `table` or `column` had its identifiers withheld because one join side is a query-local alias (a CTE or derived table) with no table behind it — its `detail` names the side. The four required names cannot be recovered from such a row, so **skip it**: naming the alias anyway rejects the whole document (`TBD0014`) and discards every other entry in it.
 
+For a `join_edge`, take the parent table from its typed `right_table` field
+(unsolved JSON schema v3). Do not parse `detail` to rediscover the right-hand
+table.
+
 ## Negative constraint (the one rule)
 Emit **only the undeclared residual** — a `join_edge` where neither side is already a declared key. A column that already has a declared or inferred FK is skipped, not re-emitted. **Never** emit both directions of the same edge: a bidirectional pair closes a reference cycle and is rejected (`TBD0015`). Peer-attribute joins (e.g. `region_code = region_code` between two children) are *not* FKs — those go to `correlated_groups`.
 
 ## Work it out before you emit
-Reason in prose first, then emit the fragment as your final output — deciding and formatting in the same
-pass is where accuracy is lost. Per candidate, name the `list-unsolved` row that backs it and why it
+Per candidate, name the `list-unsolved` row that backs it and why it
 holds, and say what you considered and dropped. Keep that reasoning out of the fragment: it carries only
 the emitted type's own fields, and unknown fields are rejected.
 

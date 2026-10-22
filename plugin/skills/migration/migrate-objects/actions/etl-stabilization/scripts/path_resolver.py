@@ -113,11 +113,24 @@ def state_path(code_unit_dir: str | Path) -> Path:
     return tracking_dir(code_unit_dir) / "STATE.md"
 
 
-def progress_json_path(code_unit_dir: str | Path) -> Path:
-    """Return path to progress JSON (session_status.json)."""
-    return tracking_dir(code_unit_dir) / "progress.json"
+def session_status_path(code_unit_dir: str | Path) -> Path:
+    """Return path to the element-level tracking ledger, session_status.json.
+
+    This is the one file track_status.py's `init` writes and every reader (generate_report.py,
+    the sub-skills) must agree on -- there is no separate `progress.json`.
+    """
+    return tracking_dir(code_unit_dir) / "session_status.json"
 
 
 def fix_log_path(code_unit_dir: str | Path) -> Path:
     """Return path to fix log markdown."""
     return tracking_dir(code_unit_dir) / "fix-log.md"
+
+
+def friction_notes_path(code_unit_dir: str | Path) -> Path:
+    """Return path to friction notes markdown.
+
+    Written when an agent skips a documented skill step. Optional: final validation
+    does not require this file to exist.
+    """
+    return tracking_dir(code_unit_dir) / "friction-notes.md"

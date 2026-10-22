@@ -15,6 +15,14 @@ Executor for the `seedScript` task. The CUR declares *which* shell variables eac
 
 Per binding, the value resolves from the first tier that can supply it: **shell-script literal → `${N}` arg → capture-time `{ eval }` → `__REPLACE_ME__` (manual)**.
 
+## On Entry
+
+Before any work, record skill start for the unit(s) you are seeding (prefer the current object's id; the corpus seed in Step 2 still covers every BTEQ unit):
+
+```
+transition_status(status="started", task="seedScript", where="id = '<object_id>'")
+```
+
 ## Step 1: Ask the user for the BTEQ shell script(s)
 
 Ask for the shell script(s) that set the BTEQ variables and run `bteq` (e.g. `runSqlScript_*.sh`), given as file paths **or a directory** (scanned recursively for `*.sh` / `*.ksh` / `*.bash`; `source` / `.` includes are followed when locatable). If a shell script derives values from invocation arguments (`CFG=${1}.cfg`, `. /etc/$1.cfg`), also ask for those positional arguments, **in order** ($1 first).
@@ -51,7 +59,17 @@ The seed prints exactly what needs a value — act on **its report**; do **not**
 
 Values the seed resolved to **`{ eval }` recipes need no action** — runtime-only inputs like a `` `date` ``, a `${N}`-built path, or a sourced `.cfg` that can't be reduced statically. They're recomputed in a sandbox at capture and pinned into the baseline. This is tier 3 of *literal → `${N}` arg → `{ eval }` → `__REPLACE_ME__`*: only the last tier needs a hand-filled value.
 
-If the seed reports none of the above, `seedScript` is done — proceed to capture. (The runner refuses to load while any binding is still `__REPLACE_ME__`, which is why the seed reports them for you.)
+If the seed reports none of the above, `seedScript` is done — advance and proceed to capture. (The runner refuses to load while any binding is still `__REPLACE_ME__`, which is why the seed reports them for you.)
+
+## Step 4: Advance
+
+When the per-object YAML exists under `<project_dir>/<files.artifacts.path>/test/` and Step 3 reported nothing unresolved, advance the walk. The oracle confirms the file is present — do not invent completion:
+
+```
+transition_status(status="advance", task="seedScript", outcome="completed", where="id = '<object_id>'")
+```
+
+If this pass seeded the whole BTEQ corpus, advance each unit that now has a YAML (or re-run per unit as the state machine offers them — idempotent). If advance refuses, finish unresolved bindings/fixtures and retry.
 
 ## Notes
 

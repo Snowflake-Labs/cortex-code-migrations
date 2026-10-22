@@ -27,7 +27,7 @@ Mappings are `MAPPING` elements with `NAME` and `ISVALID` attributes:
 </MAPPING>
 ```
 
-Each mapping corresponds to one dbt project (or sub-project) in the converted output.
+Without `--consolidate-dbt-projects`, each mapping corresponds to one dbt project in the converted output. With that flag, every mapping in a PowerCenter folder shares one dbt project (the project directory is the folder name); each mapping's models stay under `models/<mapping>/` and are tagged with the mapping name.
 
 ## Inside a Mapping
 

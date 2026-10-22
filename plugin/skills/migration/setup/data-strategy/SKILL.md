@@ -23,6 +23,14 @@ Drive the `data-migration-setup` machine to completion: call `progress_setup(mod
 loop until the response's `completed` is `true` — ask each response's `next_prompt` (plus any `then_ask`,
 in the same turn) and send the answers back with `progress_setup(mode="data_migration", answers={...})`.
 
+**Ask the whole strategy on one card.** Before the first question, also call
+`progress_setup(mode="data_validation")` (read only — no answers). Put the migration
+`next_prompt`, its `then_ask` (the extraction method), and the validation `next_prompt` in **one**
+`ask_user_question` call, up to four questions, each with its options in the order the machine gives
+(recommended first). Then send each machine its own answers: the migration ones with
+`mode="data_migration"` and the validation one with `mode="data_validation"`. Ask a follow-up card only
+for what the answers newly opened (Redshift target table type, an incremental validation sync strategy).
+
 The migration wizard does **not** ask for an incremental sync strategy (checksum / watermark). That
 choice needs each table's columns, so it is made per table when the workflow is generated
 (`migrate_data(mode="setup")`); see the data-migration action's Step 2a. Do not ask it here unless
@@ -30,6 +38,24 @@ the user volunteers one, in which case pass it as `sync_strategy=` to `migrate_d
 
 If the strategy was already chosen (e.g. a prior migration set it lazily), the first call returns
 `completed: true` immediately — do not re-prompt.
+
+### Target table type before extraction
+
+For Redshift, Teradata, and SQL Server the wizard asks the **target table type** (native vs Iceberg)
+**before** the extraction strategy, because Iceberg narrows which extraction mechanisms are valid: an
+Iceberg target loads from external cloud storage, so only cloud strategies that unload Parquet there are
+offered (SQL Server → `cet_as` / `cloud_direct`, Redshift → `unload` / `cloud_direct`, Teradata →
+`write_nos` / `cloud_direct`) — worker internal-stage reads (`odbc`, `bcp`) are not. Iceberg is valid
+only when the source object is fully relational; if the source is itself an Iceberg (or
+external / catalog-backed) table, do not continue. Other dialects skip the table-type question and go
+straight to their extraction ladder.
+
+Make the Iceberg support boundary explicit when presenting the choice: the supported Iceberg target is a
+**Snowflake-managed Iceberg table (spec v2 or v3) on an external volume** with `storageMode: compatible`
+— external / AWS-Glue / other catalogs are not supported. If that is not what the user wants, they should
+pick **native** tables. When the user picks Iceberg the wizard then asks the **spec** (v2 default, or v3)
+and, after the extraction strategy, the **load mode** (`ADD_FILES_COPY` default, or `FULL_INGEST`); both
+persist to `plugin.yml` (`data_migration_iceberg_spec` / `data_migration_load_mode`).
 
 ### Extraction prerequisite contract
 
@@ -58,7 +84,8 @@ a loop until `completed`. An already-chosen strategy returns `completed: true` a
 
 The choices persist to `plugin.yml` as `data_migration_type`,
 `data_migration_extraction_strategy` (the user-facing method, including worker methods),
-`data_migration_target_table_type` (Redshift), `data_validation_type`, and
+`data_migration_target_table_type` (asked only for Redshift, Teradata, and SQL Server),
+`data_validation_type`, and
 `data_validation_sync_strategy`. `data_migration_sync_strategy` is set only by an explicit
 `migrate_data(mode="setup", sync_strategy=...)`.
 

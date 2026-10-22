@@ -26,6 +26,13 @@ def strip_egp_header(text: str) -> str:
     return text[end + 3:] if end != -1 else text
 
 
+def egp_header_lines(path: Path) -> int:
+    """Lines ``strip_egp_header`` removes, so reported line numbers can match the file on disk."""
+    with open(path, encoding='utf-8', errors='replace', newline='') as fh:
+        text, _ = normalise_newlines(fh.read())
+    return text.count('\n') - strip_egp_header(text).count('\n')
+
+
 def normalise_newlines(raw: str) -> Tuple[str, bool]:
     """Return ``(text, changed)`` where ``changed`` means non-``\\n`` breaks existed."""
     text = _LINE_BREAK.sub('\n', raw)

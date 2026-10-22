@@ -50,6 +50,16 @@ converted code. Each test is a step-based YAML artifact directly consumable by
 | `configure()` | Retrieve `project_dir`, `source_dialect`, `snowflake_database` |
 | `query_registry` | Look up code unit metadata and transitive dependencies for isolation enrichment |
 | `snowflake_sql_execute` | Execute SQL on Snowflake for validation |
+| `transition_status(status="started")` | Record a `started` TASK_EVENT at skill entry (`task=seedSynthetic`) |
+| `transition_status` | Advance `seedSynthetic` when YAMLs are populated (`status=advance`, `outcome=completed`) |
+
+## On Entry
+
+Before any work, record skill start for this object:
+
+```
+transition_status(status="started", task="seedSynthetic", where="id = '<object_id>'")
+```
 
 ---
 
@@ -170,7 +180,7 @@ find <project_dir>/<files.artifacts.path>/test -name "*.yml" -type f
 ```
 
 If any `.yml` is found: **skip this object**, report it as already tested, and (if
-looping) call `next_object()` for the next candidate — no need to fetch dependencies.
+looping) move on to the next candidate object — no need to fetch dependencies.
 
 **Step 2 — Get the dependency files in one call.** Call `query_registry`
 again with:
@@ -354,9 +364,17 @@ find <project_dir>/<files.artifacts.path>/test -name "*.yml" -type f
 
 Count must equal the number of YAMLs in the coverage matrix that passed validation. If any file is missing: generate it before returning.
 
-### 6.2 — Report
+### 6.2 — Advance and report
 
-Report to the user (or `send_message` to `main` in autonomous mode):
+When every planned YAML is written and validated, advance the walk. The oracle re-checks on-disk `test_cases:` — do not invent completion:
+
+```
+transition_status(status="advance", task="seedSynthetic", outcome="completed", where="id = '<object_id>'")
+```
+
+If advance refuses (`does not confirm completion`), finish writing/enriching YAMLs and retry. Do not escalate solely because advance refused an incomplete seed.
+
+Then report to the user (or `send_message` to `main` in autonomous mode):
 
 ```
 Test generation complete for <object_name>:

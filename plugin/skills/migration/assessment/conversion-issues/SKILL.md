@@ -9,23 +9,25 @@ license: Proprietary. See License-Skills for complete terms
 
 Non-interactive child. Do not ask questions. Call `configure` with `project_dir` from the parent, then run the command from that project.
 
-## Generate
+The first command is not the result. It collects issues and leaves `problem_description` and `recommended_fix` empty. Returning after that command, or checking only counts and files, is a failure. Done means the regenerated JSON has both fields filled for every summary row, or there are zero pairs.
+
+## 1. Collect
 
 ```bash
 scai assessment conversion-issues
 ```
 
-This reads the code unit registry and converted files. It writes:
+This reads the code unit registry and converted files. It writes every distinct pair. Do not limit the run to a subset. It writes:
 
 - `<project_dir>/artifacts/assessment/conversion-issues.json`
 - `<project_dir>/artifacts/assessment/conversion-issues/conversion_issues.csv`
 - `<project_dir>/artifacts/assessment/conversion-issues/conversion_issues.zip`
 
-Zero `SSC-EWI-` pairs is success: JSON only, no CSV, no ZIP. `ASM0045` (no registry) is `error`, not `skipped`.
+Zero `SSC-EWI-` pairs is success: JSON only, no CSV, no ZIP, and no enrichment. Stop there and return `ok`. `ASM0045` (no registry) is `error`, not `skipped`.
 
-## Fill problem and fix
+## 2. Enrich
 
-Read `panels` where `id` is `summary`. For each row, take `code` and `description` only.
+Required whenever the summary panel has rows. Read `panels` where `id` is `summary`. For each row, take `code` and `description` only.
 
 For each distinct pair, write a Problem Description and a Recommended Fix that name the construct in the description. Use sources in this order:
 
@@ -33,7 +35,7 @@ For each distinct pair, write a Problem Description and a Recommended Fix that n
 2. The source dialect documentation
 3. Snowflake SQL documentation
 
-The fix must name a concrete replacement. Do not leave `<!-- ewi-skill:agent-must-fill -->`.
+The fix must name a concrete replacement. Do not leave `<!-- ewi-skill:agent-must-fill -->`. Do not add an AI disclaimer or the heading "AI-generated recommendation — not a mandatory fix". The CSV places that warning in a Jira `{warning}` panel above the fix. The report and dashboard show only the fix, under a heading that says it is AI-generated and must be validated.
 
 Write `<project_dir>/artifacts/assessment/conversion-issues/updates.json`:
 
@@ -42,17 +44,15 @@ Write `<project_dir>/artifacts/assessment/conversion-issues/updates.json`:
    "problem_description": "...", "recommended_fix": "..." }]
 ```
 
-When the summary panel has no rows, skip the updates file.
+When `updates.json` already exists, keep its entries and research only the rows whose `problem_description` is still empty.
 
-When `updates.json` already exists, the command reapplies it on every run. Keep its entries and research only the rows whose `problem_description` is still empty.
-
-## Rerun
+## 3. Regenerate
 
 ```bash
 scai assessment conversion-issues --updates artifacts/assessment/conversion-issues/updates.json
 ```
 
-Run that only when `updates.json` was written. The parent does not upload the ZIP. The report shows the ZIP path and the Share issues link.
+Run this after writing `updates.json`, before the HTML report. Then read `conversion-issues.json` again. Every summary row must have a non-empty `problem_description` and `recommended_fix`. If any field is empty, fill it and regenerate. Do not return `ok` while any summary field is empty. The parent does not upload the ZIP. The report shows the ZIP path and the Share issues link.
 
 ## Return
 

@@ -44,30 +44,59 @@ class AnalysisService:
         output_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Build summary
-        total_workflows = len(workflows)
-        total_mappings = sum(len(w.mappings) for w in workflows.values())
-        total_components = sum(w.total_components for w in workflows.values())
-        total_ewis = sum(w.total_ewi_count for w in workflows.values())
-        total_fdms = sum(w.total_fdm_count for w in workflows.values())
-        total_prfs = sum(w.total_prf_count for w in workflows.values())
-
-        # Aggregate status
+        # Counted the way the code unit registry counts them: workflows and
+        # mappings apart, not one "workflow" per XML file analyzed.
+        total_files = len(workflows)
+        total_workflows = sum(1 for w in workflows.values() if w.kind == "workflow")
+        # A dropped mapping is attached to every workflow that runs it. Count that
+        # mapping, its transforms, and its issues once. Each workflow's own tasks
+        # are still counted.
+        seen_mapping_paths: set[str] = set()
+        total_components = 0
+        total_ewis = 0
+        total_fdms = 0
+        total_prfs = 0
         status_totals: Dict[str, int] = {}
-        for w in workflows.values():
-            for status, count in w.status_summary.items():
-                status_totals[status] = status_totals.get(status, 0) + count
-
-        # Aggregate subtypes
         subtype_totals: Dict[str, int] = {}
-        for w in workflows.values():
-            for subtype, count in w.subtype_summary.items():
-                subtype_totals[subtype] = subtype_totals.get(subtype, 0) + count
+
+        def add_count(bucket: Dict[str, int], key: str) -> None:
+            if key and key.upper() != "N/A":
+                bucket[key] = bucket.get(key, 0) + 1
+
+        def add_issues(component) -> None:
+            nonlocal total_ewis, total_fdms, total_prfs
+            total_ewis += component.ewi_count
+            total_fdms += component.fdm_count
+            total_prfs += component.prf_count
+
+        for workflow in workflows.values():
+            total_components += len(workflow.workflow_tasks)
+            for component in workflow.workflow_tasks:
+                add_count(status_totals, component.status)
+                add_count(subtype_totals, component.subtype)
+                add_issues(component)
+            for component in workflow.source_definitions:
+                add_issues(component)
+            for component in workflow.target_definitions:
+                add_issues(component)
+            for mapping in workflow.mappings.values():
+                if mapping.full_path in seen_mapping_paths:
+                    continue
+                seen_mapping_paths.add(mapping.full_path)
+                total_components += len(mapping.components)
+                for component in mapping.components:
+                    add_count(status_totals, component.status)
+                    add_count(subtype_totals, component.subtype)
+                    add_issues(component)
+
+        total_mappings = len(seen_mapping_paths)
 
         data = {
             "summary": {
                 "generated_at": datetime.now().isoformat(),
                 "technology": "InformaticaPowerCenter",
                 "conversion_mode": conversion_mode,
+                "total_files": total_files,
                 "total_workflows": total_workflows,
                 "total_mappings": total_mappings,
                 "total_components": total_components,
