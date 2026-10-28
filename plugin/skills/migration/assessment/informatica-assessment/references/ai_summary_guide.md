@@ -17,9 +17,19 @@ Use this command to extract all signals in one place. It returns a well‑format
 2) Classification counts
 3) Top‑level summary (workflows, mappings, components, EWIs, FDMs)
 
-```bash
-uv run python -m informatica_assessment_analyzer informatica <JSON_PATH> summary
+Windows (PowerShell):
+
+```powershell
+& "<SKILL_DIR>\scripts\run-analyzer.ps1" informatica <JSON_PATH> summary
 ```
+
+macOS and Linux:
+
+```bash
+"<SKILL_DIR>/scripts/run-analyzer.sh" informatica <JSON_PATH> summary
+```
+
+If the launcher exits non-zero, stop. Do not write the summary HTML.
 
 ### Step: Draft AI Summary (HTML)
 Add this step after completing workflow analysis:
@@ -28,8 +38,16 @@ Add this step after completing workflow analysis:
 2. Write a medium AI summary in HTML using the template below.
 3. Save it as `ai_informatica_summary.html` so it can be embedded into the Informatica report later.
 4. Update the assessment JSON to point to the summary HTML:
+Windows (PowerShell):
+
+```powershell
+& "<SKILL_DIR>\scripts\run-analyzer.ps1" informatica <JSON_PATH> ai-summary ai_informatica_summary.html
+```
+
+macOS and Linux:
+
 ```bash
-uv run python -m informatica_assessment_analyzer informatica <JSON_PATH> ai-summary ai_informatica_summary.html
+"<SKILL_DIR>/scripts/run-analyzer.sh" informatica <JSON_PATH> ai-summary ai_informatica_summary.html
 ```
 
 ### What to Look For

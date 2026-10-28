@@ -74,6 +74,7 @@ Tasks fall into two categories: `setup` (one-time per project) and `main` (per-o
 | `etlStabilization` | Stabilizes a converted ETL code unit (SSIS, Informatica, ...) and validates the functionality. |
 | `etlSeed` | Runs `scai test seed` to generate the per-unit ETL test YAML (pipeline + validation.tables) with the source/target table pairs filled from the Code Unit Registry write-dependencies; the agent fills index_columns and the user confirms before validation runs. |
 | `etlValidate` | Runs `scai test etl-validate --platform <platform>` to compare source package output with the converted Snowflake output. |
+| `validateEtlResolveScripts` | Replaces each SSC-EWI-SSIS0004 block SnowConvert left in the validate-flow orchestration SQL before deploy: variable-only scripts become Snowflake Scripting, notification scripts are eliminated, scripts with external effects raise a named error, disabled ones are removed. |
 | `validateEtlSeed` | Seeds the ETL test YAML and arranges both source and target inputs for the validate flow. |
 | `validateEtlValidate` | Runs `scai test etl-validate --platform <platform>` for the validate flow. |
 | `validateEtlRepair` | Repairs a validate-flow comparison or converted-code failure without entering stabilization. |
@@ -126,8 +127,9 @@ Every entry below names the task id, what your override needs as input, and the 
 > **ETL route selection.** Missing `etl_flow` and `etl_flow=stabilize`
 > follow `convert` → `etlStabilization` → `deploy` → `etlSeed` →
 > `etlValidate`. `etl_flow=validate` follows `convert` → `deploy` →
-> `validateEtlSeed` → `validateEtlValidate`. The machine selects the route;
-> the shared migration skills do not.
+> `validateEtlSeed` → `validateEtlValidate`; a unit whose parts carry
+> `SSC-EWI-SSIS0004` first passes through `validateEtlResolveScripts` before
+> `deploy`. The machine selects the route; the shared migration skills do not.
 
 <cntrc>
 
@@ -151,7 +153,7 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `convertCode`
 - **Inputs:** Registered source code from the `registerCode` task.
-- **Done when:** Project is initialized and at least one file exists at `<project_dir>/snowflake/**/*.sql`.
+- **Done when:** Project is initialized, `<project_dir>/snowflake/**/*.sql` exists, and a convert succeeded: `reports/ConversionSummary.*.txt` exists or a registry unit has `codeStatus.conversion.status = 'completed'` while no in-scope SQL unit is still pending. scai writes the summary only once every check that can fail the convert passed. Converted SQL alone is not enough: the engine writes it mid-run and leaves it on failure.
 
 #### `dbtRepoint`
 - **Inputs:** A dbt project converted by `scai code convert --dbt` (kind=dbt CUR entries).
@@ -175,7 +177,7 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `setupDataInfrastructure`
 - **Inputs:** A configured Snowflake target and source connection from `configureSandboxProfile` (non-Snowflake) or `configureSnowflakeTarget` (Snowflake-source).
-- **Done when:** Either `.scai/config/dew_configuration.toml` (worker config, written for both local and SPCS) or `.scai/settings/cloud-migration.yaml` (SPCS compute pool) exists. The setup walkthrough writes the worker config, so local completes here too — unlike the dashboard `dataInfrastructure` tile, which still requires a compute pool.
+- **Done when:** Either `.scai/config/dew_configuration.toml` (worker config, written for both local and SPCS) or `.scai/settings/cloud-migration.yaml` (SPCS compute pool) exists, or plugin.yml records `data_orchestrator_placement: direct` (a small SQL Server source: no orchestrator or worker, so neither file is written). The setup walkthrough writes the worker config, so local completes here too — unlike the dashboard `dataInfrastructure` tile, which still requires a compute pool.
 
 #### `dataStrategy`
 - **Inputs:** A source language chosen in setup and the intent to migrate/validate table data (the data-infrastructure step establishes that intent).
@@ -213,6 +215,10 @@ Every entry below names the task id, what your override needs as input, and the 
 #### `etlValidate`
 - **Inputs:** ETL test YAML present (from etlSeed or hand-authored); ETL unit deployed to Snowflake and source/Snowflake connections configured — all enforced via preconditions.
 - **Done when:** `scai test etl-validate` stamps registry field `codeStatus.etlValidate` completed (failed runs stamp failed + error). Units skipped for a missing YAML stay pending.
+
+#### `validateEtlResolveScripts`
+- **Inputs:** A converted ETL unit on the validate flow whose parts carry SSC-EWI-SSIS0004.
+- **Done when:** Registry field `extensions.tasks.validateEtlResolveScripts` reads completed after `script_tasks.py check` passes on the unit's targets.
 
 #### `validateEtlSeed`
 - **Inputs:** Converted ETL unit deployed to Snowflake (deploy enforced via precondition).

@@ -70,10 +70,10 @@ Call `configure(ensure_metadata_schema=true)` (no other args). This:
    `schema_metadata_database` and does **not** recreate a vanished metadata
    database.
 2. Re-runs `ensure_schemas`. `check_validation` now sees
-   `testing_data_source` is set and **auto-deploys VALIDATION** via
-   `scai test validate --create-schema` if it's missing. `check_dmv`
+   `testing_data_source` is set and **runs** `scai test validate
+   --create-schema` (capture's own setup step), even if VALIDATION exists. `check_dmv`
    **auto-deploys DATA_MIGRATION / DATA_VALIDATION** via
-   `scai data migrate-schema` if `DATA_MIGRATION.WORKFLOW` is missing.
+   `scai data migrate-schema` once data migration is opted in.
 3. Re-runs `ensure_prereqs`. `clone_perms` now sees `testing_data_source`
    is set and actually probes (was `not_applicable` before).
 
@@ -91,6 +91,7 @@ everything is green.
 
 - `schema_status_validation: error("<msg>")` → surface `<msg>`; common cause is missing `CREATE SCHEMA on DATABASE` or `OWNERSHIP on VALIDATION`. Reference doc covers both.
 - `schema_status_dmv: error("<msg>")` → surface `<msg>`; `scai data migrate-schema` failed while installing DATA_MIGRATION / DATA_VALIDATION in the metadata database. Common cause is missing `CREATE SCHEMA` on that database.
+- `installing("…")` on any `schema_status_*` → still running, not a failure: tell the user, then call `configure()` with no arguments to keep waiting.
 - `prereq_status_clone_perms: failed("<msg>")` → surface `<msg>`; cause is missing `CREATE DATABASE ON ACCOUNT` (needed for clone-based test isolation). Reference doc has the GRANT.
 - `schema_status_metadata: error("...not visible...recreate_metadata_database=true")` → surface the message. Ask the user whether to restore/GRANT USAGE / repoint `metadata_database`, or start fresh. Only after they confirm starting fresh, call `configure(recreate_metadata_database=true)`. Do **not** treat this as a transient recheck.
 - `schema_status_metadata: error("...cannot tell whether...already bootstrapped...")` → surface. Pre-upgrade stamp under a non-default pin, or the latch names a different metadata database. If the user confirms the database already exists, call `configure(ensure_metadata_schema=true)` (recheck latches it). Only after they confirm starting **empty**, call `configure(recreate_metadata_database=true)`.

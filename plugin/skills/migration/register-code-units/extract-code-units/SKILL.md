@@ -59,8 +59,8 @@ scai code extract -s <CONNECTION_NAME> --json
 ```
 
 **Multiple databases on one server (SqlServer, AzureSynapse, Redshift, Postgresql, Teradata).**
-A source connection points at one database, but its server may host several. To migrate more
-than one, pass a comma-separated list with `-d` — the CLI loops internally, continues past a
+A source connection's database is only its default: one connection covers every database on its
+server, so never add a connection per database. To migrate more than one, pass a comma-separated list with `-d` — the CLI loops internally, continues past a
 single database's failure, and returns one JSON envelope with per-database counts plus the
 aggregate. Do **not** re-run without `-d`; that only re-pulls the connection's own database.
 (Oracle and BigQuery don't bind a swappable database in the connection, so `-d` is rejected there —
@@ -217,8 +217,8 @@ yes/no — extras already collected that on the setup/register card.
 
 > "Which ETL platform is it?"
 >
-> 1. **SSIS** — `.dtsx` packages (native SnowConvert)
-> 2. **Informatica Power Center** — XML repo export (native SnowConvert)
+> 1. **SSIS** — `.dtsx` packages (converted natively)
+> 2. **Informatica Power Center** — XML repo export (converted natively)
 > 3. **Another ETL platform** — Talend, Alteryx, Informatica Cloud / IICS, DataStage,
 >    Pentaho, Azure Data Factory, or something else (routes through AI-First)
 

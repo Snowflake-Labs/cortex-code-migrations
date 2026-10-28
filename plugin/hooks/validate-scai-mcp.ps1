@@ -6,10 +6,9 @@ $LogDir = Join-Path $PluginRoot "logs"
 $LogFile = Join-Path $LogDir "mcp-server-validation.log"
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
-$python = Get-Command "python3" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-if (-not $python) {
-    $python = Get-Command "python" -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-}
+# The Microsoft Store python stub exits 9009, which would fail SessionStart, so it counts as no Python.
+. (Join-Path $PSScriptRoot "lib/resolve-real-python.ps1")
+$python = Get-UvBootstrapPython
 if (-not $python) {
     $message = "SCAI_MCP_UNVERIFIED: Python is unavailable; skipped bounded MCP initialize probe"
     Add-Content -Path $LogFile -Value $message
@@ -17,7 +16,9 @@ if (-not $python) {
     exit 0
 }
 
-& $python.Source (Join-Path $PSScriptRoot "validate-scai-mcp.py")
+$pythonPrefix = @()
+if ($python.Prefix) { $pythonPrefix = @($python.Prefix) }
+& $python.Exe @pythonPrefix (Join-Path $PSScriptRoot "validate-scai-mcp.py")
 # Propagate INCOMPATIBLE (exit 1). Do not rewrite it as UNVERIFIED - SessionStart
 # must fail when the PATH-selected scai cannot serve as the plugin MCP server.
 exit $LASTEXITCODE

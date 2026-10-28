@@ -147,7 +147,7 @@ default to `generate-only`, or allow `skip` after Informatica is in scope.
 
 - Object exclusion needs no prompt.
 - Effort estimate needs no prompt and supports SQL Server/Redshift only.
-- Anti-patterns needs no prompt and is SQL Server-only.
+- Anti-patterns needs no prompt and supports SQL Server/Redshift only.
 - For unsupported dialects, do not dispatch; synthesize a skipped result.
 
 ### 5.7 Discovery (SQL Server, Teradata, and Redshift)
@@ -165,7 +165,7 @@ First explain what the dialect's Discovery report adds:
 - **Teradata:** DBQL request volume, duration mix and percentiles, daily
   timeline, statement types, applications/users, touched databases,
   long-running requests, and errors versus aborts. Nothing is installed on
-  Teradata and SnowConvert never connects to it.
+  Teradata and nothing connects to it.
 - **Redshift:** `SYS_QUERY_HISTORY` request volume, duration mix and
   percentiles, daily timeline, statement types, databases and users,
   long-running requests, and outcomes. Redshift has no application dimension.
@@ -295,7 +295,7 @@ later task, or mention it again after the normal skipped result.
 > or stored—the report shows counts, durations, and names from the query log.
 >
 > **This reads history DBQL already stored.** Nothing is installed on Teradata,
-> no logging setting is changed, and SnowConvert never connects to it.
+> no logging setting is changed, and nothing connects to it.
 >
 > **1. Find the query log you can read.** Run the probe statements one at a
 > time, top to bottom. Keep the first that succeeds and reports rows.

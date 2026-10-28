@@ -1,0 +1,16 @@
+[project]
+name = "resolve-scripts"
+version = "1.0.0"
+description = "Resolve SSC-EWI-SSIS0004 Script Task blocks in validate-flow ETL orchestration SQL"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["scripts"]

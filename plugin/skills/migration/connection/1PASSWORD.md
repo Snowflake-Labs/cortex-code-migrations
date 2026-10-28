@@ -174,6 +174,45 @@ EOF
 
 ---
 
+## Oracle
+
+Search for an existing 1Password item:
+
+```bash
+op item list | grep -i oracle
+```
+
+Get item details:
+
+```bash
+op item get <ITEM_NAME> --vault=<VAULT_NAME> --format=json
+```
+
+Add connection using `op run` with inline env-file:
+
+```bash
+op run --env-file=<(cat <<'EOF'
+ORA_HOST="op://vault_name/item_name/host"
+ORA_PORT="op://vault_name/item_name/port"
+ORA_SERVICE_NAME="op://vault_name/item_name/service_name"
+ORA_USER="op://vault_name/item_name/username"
+ORA_PASSWORD="op://vault_name/item_name/password"
+EOF
+) -- bash -c 'scai connection add-oracle \
+  -s <CONNECTION_NAME> \
+  --auth standard \
+  --host "$ORA_HOST" \
+  --port "${ORA_PORT:-1521}" \
+  --service-name "$ORA_SERVICE_NAME" \
+  --user "$ORA_USER" \
+  --password "$ORA_PASSWORD"'
+```
+
+Adding the connection needs no driver. The Oracle driver is first used when the
+Oracle skill's Step 4 tests the connection.
+
+---
+
 ## Troubleshooting
 
 | Issue | Solution |

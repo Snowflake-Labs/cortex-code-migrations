@@ -24,12 +24,20 @@ Tell the user:
 | `-s, --source-connection` | Yes | Friendly name for this connection |
 | `--auth` | Yes | Authentication method: `standard` or `windows` |
 | `--server-url` | Yes | SQL Server hostname or IP |
-| `--database` | Yes | Database name to connect to |
+| `--database` | Yes | Default database; the connection still reaches every database on the server |
 | `--user` | For standard auth | SQL Server username |
 | `--password` | For standard auth | SQL Server password (prompted securely) |
 | `--port` | No | Port number (default: 1433) |
 | `--trust-server-certificate` | No | Trust server certificate |
 | `--encrypt` | No | Encrypt connection |
+
+### One connection covers every database on the server
+
+`--database` is only the connection's default. Extraction reaches the server's other databases with `-d` (`scai code extract -s <NAME> -d A,B`, see `../../register-code-units/extract-code-units/SKILL.md`), and deploy, migrate and validate find each object's database through the project's database bindings.
+
+- **Never** create one connection per database: a project spanning several databases on one server uses one connection.
+- **Never** point the connection at `master` or another system database to "cover" several; pick a user database the project migrates.
+- "A connection with both databases" (or several) means one connection whose default is one of them, then extracting with `-d A,B`. Tell the user so.
 
 ## Workflow
 
@@ -39,7 +47,7 @@ Ask the user:
 
 > "I need the following to connect to SQL Server:
 > - **Server URL** (hostname or IP)
-> - **Database name**
+> - **Default database** (a user database, not `master`; the connection still reaches the server's other databases)
 > - **Username** and **Password** (for standard auth)
 >
 > How would you like to provide these?"
@@ -81,7 +89,8 @@ Call the `configure` tool with `source_connection` set to `<SOURCE_CONNECTION_NA
 
 - **On success:** the response includes `connection_test: ok`.
 - **On failure:** the tool returns an error containing the scai message. Surface it to the user, help them fix the issue, then re-run `configure(source_connection=<SOURCE_CONNECTION_NAME>)`. See `./references/REFERENCE.md` for troubleshooting.
-- **Database does not exist** (`Cannot open database "<name>"`): list the server's user databases with `SELECT name FROM sys.databases WHERE database_id > 4`, show them, and ask which to use via `ask_user_question`, even when only one is listed. **Wait for the user's response — do not proceed until they choose.** Never change a connection's database without the user's confirmation: everything extracted, converted and migrated afterwards comes from that database.
+- **`OpenSSL library could not be loaded` on macOS** (ODBC Driver 18): show the user the OpenSSL 3.0 install and `sudo ln -sf` commands from "macOS: ODBC Driver 18 can't load OpenSSL" in `./references/REFERENCE.md`, for them to run; then re-test. Do not upgrade `msodbcsql18` or re-link Homebrew's OpenSSL.
+- **Database does not exist** (`Cannot open database "<name>"`): list the server's user databases with `SELECT name FROM sys.databases WHERE database_id > 4`, show them, and ask which to use via `ask_user_question`, even when only one is listed. **Wait for the user's response — do not proceed until they choose.** Never change a connection's database without the user's confirmation: everything extracted without `-d` comes from that database.
 
 ## CHECKPOINT
 

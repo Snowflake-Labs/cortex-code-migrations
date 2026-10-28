@@ -36,6 +36,11 @@ choice needs each table's columns, so it is made per table when the workflow is 
 (`migrate_data(mode="setup")`); see the data-migration action's Step 2a. Do not ask it here unless
 the user volunteers one, in which case pass it as `sync_strategy=` to `migrate_data(mode="setup")`.
 
+For a full or preliminary load into native tables the wizard then asks what a re-run does to the rows
+already in the target: `full-replace` (delete them before loading) or `none` (append). Neither is
+right for every user, so present both as the machine gives them and let the user pick; Iceberg targets
+take `none` only and skip the question.
+
 If the strategy was already chosen (e.g. a prior migration set it lazily), the first call returns
 `completed: true` immediately — do not re-prompt.
 
@@ -52,7 +57,7 @@ straight to their extraction ladder.
 
 Make the Iceberg support boundary explicit when presenting the choice: the supported Iceberg target is a
 **Snowflake-managed Iceberg table (spec v2 or v3) on an external volume** with `storageMode: compatible`
-— external / AWS-Glue / other catalogs are not supported. If that is not what the user wants, they should
+(or `native` on v3) — external / AWS-Glue / other catalogs are not supported. If that is not what the user wants, they should
 pick **native** tables. When the user picks Iceberg the wizard then asks the **spec** (v2 default, or v3)
 and, after the extraction strategy, the **load mode** (`ADD_FILES_COPY` default, or `FULL_INGEST`); both
 persist to `plugin.yml` (`data_migration_iceberg_spec` / `data_migration_load_mode`).
@@ -86,8 +91,8 @@ The choices persist to `plugin.yml` as `data_migration_type`,
 `data_migration_extraction_strategy` (the user-facing method, including worker methods),
 `data_migration_target_table_type` (asked only for Redshift, Teradata, and SQL Server),
 `data_validation_type`, and
-`data_validation_sync_strategy`. `data_migration_sync_strategy` is set only by an explicit
-`migrate_data(mode="setup", sync_strategy=...)`.
+`data_validation_sync_strategy`. `data_migration_sync_strategy` is set by the re-run question or an
+explicit `migrate_data(mode="setup", sync_strategy=...)`.
 
 ## Changing an existing choice
 
@@ -104,6 +109,8 @@ the regenerated workflow and setting its real `watermarkColumn` (plus
 `primaryKeyColumns` / `trackModifications` when required for an already
 populated target). Explicit setup arguments persist the new defaults in
 `plugin.yml`; subsequent object dispatches reuse them without asking again.
+Only these strategy knobs persist: `target_schema` and the validation toggles
+apply to their own call, and a `subagent_mode` call persists nothing.
 
 If the change also affects placement or worker prerequisites, return through
 [`../../data-infrastructure/SKILL.md`](../../data-infrastructure/SKILL.md)

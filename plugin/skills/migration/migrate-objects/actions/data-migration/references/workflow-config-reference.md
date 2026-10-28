@@ -9,7 +9,7 @@
 | `schemaVersion` | String | No | Semantic version of this config shape (for example `"1"`, `"1.2"`). Omit for current defaults. |
 | `tables` | `TableConfiguration[]` | Yes | Tables to migrate |
 | `defaultTableConfiguration` | `TableConfiguration` | No | Shared defaults inherited by all tables |
-| `affinity` | String | No | Only orchestrator and worker instances with a matching affinity will process this workflow. If the SPCS orchestrator was started with a specific affinity (visible in service logs as `Orchestrator affinity: <value>`), the workflow **must** set the same value or it will be silently skipped. The worker's `[application].affinity` must also match. Omit from all sides for fresh setups. |
+| `affinity` | String | No | Routes every task of this workflow to workers whose affinity matches (exact and case-sensitive unless the worker's value contains `*`). Setup stamps the project-default affinity. The orchestrator stays without an affinity and claims every workflow. See [Affinity Reference](../../../../data-infrastructure/references/affinity-reference.md). |
 | `preflight` | Boolean | No | When `true`, cap each table to one partition and run against a transient `PREFLIGHT_<workflowId>` schema (bounded dry-run). Default `false`. |
 | `preflightKeepSchema` | Boolean | No | When `preflight` is `true`, skip cleanup so the transient schema remains for manual inspection. Default `false`. |
 | `exportDataGcsBucket` | String | No | BigQuery `export_data` only: GCS bucket name (no `gs://`) that `EXPORT DATA` writes to. `scai data migrate start` copies it into the local worker config as `export_data_gcs_bucket`, replacing any value already there. `extraction.externalStage` must point at the same bucket and prefix. Set with `scai data migrate generate-config --export-data-gcs-bucket <BUCKET>`. |
@@ -82,7 +82,7 @@ tables:
 |----------|------|----------|-------------|
 | `source` | `SourceTargetIdentifier` | Yes | Source table location |
 | `target` | `TargetIdentifier` | Yes | Target table location in Snowflake |
-| `columnNamesToPartitionBy` | `String[]` | No | Ordered columns used to partition data during extraction. When omitted or empty, the orchestrator extracts the table as a single unit, or infers a key at preprocessing when the table is large enough. **Not used for Iceberg loading** (see Iceberg section below). |
+| `columnNamesToPartitionBy` | `String[]` | No | Ordered columns used to partition data during extraction. When omitted, the orchestrator extracts the table as a single unit if it fits in one partition, and otherwise infers a key at preprocessing; with no key to infer, a table that needs more than one partition fails. An explicit `[]` turns partitioning off (no inference, one unit whatever the size): never write it unless the user explicitly asks for a single partition — see [Never write `[]`](../SKILL.md#never-write-columnnamestopartitionby-). **Not used for Iceberg loading** (see Iceberg section below). |
 | `extraction` | `ExtractionStrategy` | No | How data is extracted from source |
 | `synchronization` | `SynchronizationStrategy` | No | Incremental sync settings. **Does not apply to Iceberg migrations.** |
 | `columnTypeMappings` | `ColumnTypeMapping[]` | No | Type conversions during migration |
@@ -109,6 +109,8 @@ tables:
 | `tableName` | String | Yes | Table name. Case-sensitive names must be quoted: `"\"MyCaseSensitiveTable\""` |
 
 \* For **Teradata** sources, omit `source.schemaName` — Teradata is `database.table` (no schema layer). Align `databaseName` with `[connections.source.teradata].database` in worker TOML. Snowflake **target** still requires `schemaName`.
+
+`scai data migrate generate-config` fails with **DMG0072**, naming the tables, when a Teradata table has no source database because it was created unqualified (`CREATE TABLE TABLE1`). Qualify each table with its database in the source code (`database.table`) and convert again, or leave those tables out with `--where`.
 
 ## TargetIdentifier
 
@@ -137,7 +139,7 @@ Configuration for Iceberg table targets. Required when `tableType` is `"iceberg"
 |----------|------|----------|-------------|
 | `catalog` | String | Yes | Must be `"SNOWFLAKE"` — Snowflake-managed catalog is the only released shape. |
 | `icebergSpec` | String | Yes | Iceberg format version. `"v2"` or `"v3"`. `scai data migrate generate-config --iceberg` writes `<ICEBERG_SPEC>`. |
-| `storageMode` | String | Yes | `"compatible"` with spec `v2` or `v3`, or `"native"` with spec `v3` only. generate-config writes `<STORAGE_MODE>`. Both the orchestrator and `scai data migrate create-workflow` accept `native` + `v3`. `native` with `v2` is rejected. |
+| `storageMode` | String | Yes | `"compatible"` with spec `v2` or `v3`, or `"native"` with spec `v3` only. generate-config writes `<STORAGE_MODE>`. Both the orchestrator and `scai data migrate create-workflow` accept `native` + `v3`. `native` with `v2` is rejected. It sets `STORAGE_SERIALIZATION_POLICY` (`COMPATIBLE` or `OPTIMIZED`). Under `FULL_INGEST` it changes no column type; under `ADD_FILES_COPY`, `native` keeps more temporals native. See [Iceberg Data Type Mapping Reference](#iceberg-data-type-mapping-reference). |
 | `loadMode` | String | Yes | `"ADD_FILES_COPY"` or `"FULL_INGEST"`. generate-config writes `<LOAD_MODE>`. |
 | `externalVolume` | String | Yes | Name of the Snowflake external volume. Use `"SNOWFLAKE_MANAGED"` for Snowflake-managed storage. |
 | `baseLocationPrefix` | String | Required unless `externalVolume` is `"SNOWFLAKE_MANAGED"` | Prefix for the table's `BASE_LOCATION` path. **Must be omitted** when `externalVolume` is `"SNOWFLAKE_MANAGED"`. |
@@ -404,7 +406,7 @@ See also: `dmvf/docs/data-migration-orchestrator/features/QueryModifiersAntiLock
 
 - **Auto mode:** omit both `targetPartitionSizeMb` and `targetPartitionSizeRows`. The orchestrator picks platform-appropriate defaults.
 - **Explicit sizing:** set exactly one of `targetPartitionSizeMb` or `targetPartitionSizeRows`.
-- **`columnNamesToPartitionBy`:** optional. Prefer a column (or ordered list) the source can prune on for large tables. When omitted or empty, the orchestrator extracts the table as a single unit, or infers a key at preprocessing when the table is large enough — review `partition_key_findings` from setup. `[]` is not "skip the table"; data still moves as one slice.
+- **`columnNamesToPartitionBy`:** optional. Prefer a column (or ordered list) the source can prune on for large tables. When omitted, the orchestrator extracts the table as a single unit if it fits in one partition, and otherwise infers a key at preprocessing — review `partition_key_findings` from setup. A table that needs more than one partition and has no key to infer fails with an error naming `columnNamesToPartitionBy`. An explicit `[]` turns partitioning off: no key is inferred and the whole table moves as one slice, however large. Never write `[]` unless the user explicitly asks for a single partition and accepts the performance cost.
 - **`executionTimeoutMinutes`:** optional wall-clock limit for **Analyze boundaries** only (default 20). Raise it when NTILE/boundary analysis on large tables exceeds 20 minutes; prefer a cheaper partition key when possible.
 - **Deprecated:** do not use legacy `partitionSize: auto` — use the flat `targetPartitionSizeMb` / `targetPartitionSizeRows` fields instead.
 
@@ -413,7 +415,7 @@ See also: `dmvf/docs/data-migration-orchestrator/features/QueryModifiersAntiLock
 `columnNamesToPartitionBy` is an **ordered list**. The orchestrator sorts and splits on the tuple (lexicographic NTILE), so order matters.
 
 - When the leading prune column (sort key, clustered index, partition key, clustering key, …) has too few distinct values for balanced slices, **keep it first** and append the remaining columns of that physical key in catalog order (for example the rest of a Redshift compound sort key, or further Oracle partition-key columns).
-- If cardinality is still too low, append a high-cardinality column such as the primary key: `[sale_date, id]`. On Teradata, prefer `[<RANGE_N column>, <PI column>]` when a daily/monthly partitioning column collapses NTILE buckets. On PostgreSQL, prefer `[<partition column>, <pk column>]` when a daily/monthly partition key collapses NTILE buckets.
+- If cardinality is still too low, append a high-cardinality column such as the primary key: `[sale_date, id]`. On Teradata, prefer `[<RANGE_N column>, <PI column>]` when a daily/monthly partitioning column collapses NTILE buckets. On PostgreSQL, prefer `[<partition column>, <pk column>]` when a daily/monthly partition key collapses NTILE buckets. On BigQuery, prefer `[<partition column or _PARTITIONTIME>, <clustering columns>]` (or append the PK when there is no clustering) so a daily partition does not collapse NTILE.
 - Present the candidates to the user before writing the key.
 - The Doctor measures cardinality on the **leading** column only, so a low-cardinality warning on that column is expected for a composite key and does not mean the composite is wrong.
 
@@ -428,6 +430,10 @@ Prefer, in order: the level-1 `RANGE_N(<bare column> BETWEEN ...)` column from `
 ### PostgreSQL
 
 Prefer, in order: the declared partition key (`pg_partitioned_table.partattrs`, bare columns only — skip expression keys), then a valid non-partial minmax/minmax-multi BRIN column whose `pg_stats` shows `abs(correlation) >= 0.9`, `null_frac = 0`, and fresh stats (`n_mod_since_analyze` within 20% of live rows), then the leading column of the `indisclustered` index, then the primary key / unique index. Leave the field empty to let the orchestrator infer. Avoid `ctid`. When BRIN is skipped for missing or weak stats, running `ANALYZE <table>` on the source can re-enable it on the next inference. Verify with `query_source` against `pg_partitioned_table`, `pg_index` / `pg_am`, and `pg_stats`. On a low-cardinality partition date, use a composite `[partition column, pk column]`.
+
+### BigQuery
+
+Prefer, in order: the partition column (`INFORMATION_SCHEMA.COLUMNS.is_partitioning_column = 'YES'`, via a `Partition prune:` finding or inference), then `_PARTITIONTIME` for ingestion-time tables (when `INFORMATION_SCHEMA.PARTITIONS` has rows and there is no partition column), then the clustering columns (`clustering_ordinal_position`). Leave the field empty to let the orchestrator infer. For an ingestion-time table, write `["_PARTITIONTIME", <high-cardinality column>]` and use sync `none` — `_PARTITIONTIME` is source-only (no checksum, full-replace, or trackDeletions). Put clustering columns after the partition column, never instead of it; clustering allows up to four columns and cluster pruning is not guaranteed. When `require_partition_filter` is true (`INFORMATION_SCHEMA.TABLE_OPTIONS`), a leading key that is not the partition column or `_PARTITIONTIME` fails extraction — Doctor reports that as a Fail. Verify with `query_source` against `INFORMATION_SCHEMA.COLUMNS`, `PARTITIONS`, and `TABLE_OPTIONS`. On a low-cardinality partition date, use a composite `[partition column or _PARTITIONTIME, clustering columns]` (or append the PK when there is no clustering).
 
 ## ColumnTypeMapping
 
@@ -647,39 +653,59 @@ tables:
 DMVF picks the Iceberg column types itself from the effective `icebergConfig`
 (`TypeMappingLoader` → `build_iceberg_mappings` in
 `dmvf/data-migration-orchestrator/src/data_migration_orchestrator/data_migration_core/type_mappings/iceberg_mappings.py`).
-The mapping depends on the **profile**, `(icebergSpec, loadMode)`; `storageMode` is always `compatible`:
+The mapping depends on the **profile**, `(icebergSpec, storageMode, loadMode)`.
 
-- **VARCHAR-temporal profiles**: `ADD_FILES_COPY` (v2 or v3), and `FULL_INGEST` on `v2`. DMVF maps
-  temporal and geospatial columns to `VARCHAR`, matching the string footers the extractor writes.
-  How the files are loaded still follows the load mode: `ADD_FILES_COPY` registers the staged
-  Parquet unchanged, while `FULL_INGEST` (on either spec) loads through the transform COPY and
-  rewrites it into new files; on v2 that rewrite keeps the `VARCHAR` targets.
-- **`icebergSpec: v3` + `loadMode: FULL_INGEST`**: the transform COPY casts the staged values
-  (`TO_TIMESTAMP_*`, `TO_TIME`, `TO_GEOGRAPHY`, `TO_GEOMETRY`), so temporal and geospatial columns keep
-  native Iceberg types. FULL_INGEST is accepted only for Redshift `unload`, SQL Server `cet_as` /
-  `cloud_direct` / `regular`, and Teradata `write_nos` (or a `sourceDataStage` table on those sources).
+`loadMode` decides the column types first. Under `FULL_INGEST`, `storageMode` changes no column type:
+it sets only `STORAGE_SERIALIZATION_POLICY` (`COMPATIBLE` or `OPTIMIZED`). Under `ADD_FILES_COPY` on
+v3, `storageMode: native` does change types.
+
+- **`ADD_FILES_COPY` + `storageMode: compatible`** (v2 or v3): `ADD_FILES_COPY` registers the staged
+  Parquet unchanged and cannot retype a footer, so DMVF maps `TIME`, `TIMESTAMP` and geospatial
+  columns to `VARCHAR`, matching the string footers the extractor writes. `DATE` stays `DATE`, except
+  Redshift `DATE`, which lands as `VARCHAR` on every profile. The exception is SQL Server
+  `cloud_direct` and `regular` extracts, whose Parquet is already typed: `TIME` stays `TIME`, and
+  `DATETIME`, `DATETIME2` and `SMALLDATETIME` land as `TIMESTAMP_NTZ(6)` (`DATETIMEOFFSET` stays
+  `VARCHAR`).
+- **`ADD_FILES_COPY` + `storageMode: native`** (v3 only): timestamps land as `TIMESTAMP_NTZ(6)` and
+  `TIME` as `TIME` where the extractor writes native Parquet temporals (SQL Server, for example).
+  Redshift and Teradata temporals (`TIME`, `TIMETZ`, `TIMESTAMP`, `TIMESTAMPTZ`, and their
+  `WITH TIME ZONE` forms) stay `VARCHAR`: `UNLOAD` and `WRITE_NOS` write them as UTF8 string footers,
+  and footer reconciliation (`reconcile_footer` in `iceberg_mappings.py`) keeps the DDL on `VARCHAR`.
+  `ARRAY` lands as `ARRAY(VARCHAR)`; geospatial and the other semi-structured columns stay `VARCHAR`.
+- **`FULL_INGEST`** (v2 or v3, either storage mode): the transform COPY casts the staged values, but a
+  temporal is promoted only when every value the source type can hold fits the Iceberg type
+  (`_FULL_INGEST_LOSSLESS_TEMPORALS_BY_DIALECT` in `iceberg_mappings.py`). Every other `TIME` and
+  `TIMESTAMP` type stays `VARCHAR`; `DATE` stays `DATE`, except Redshift `DATE`. Geospatial columns keep native types on v3 only. FULL_INGEST is accepted only for Redshift
+  `unload`, SQL Server `cet_as` / `cloud_direct` / `regular` (without BCP), and Teradata `write_nos` (or
+  a `sourceDataStage` table on those sources).
+
+| Source | Promoted under `FULL_INGEST` (v2 and v3) | Stays `VARCHAR`, and why |
+|---|---|---|
+| SQL Server | `DATETIME`, `SMALLDATETIME` → `TIMESTAMP_NTZ(6)`; `DATE` stays `DATE` | `DATETIME2`, `TIME`: FULL_INGEST truncates the 7th fractional digit. `DATETIMEOFFSET`: Iceberg has no `TIMESTAMP_TZ`, and `TIMESTAMP_LTZ` drops the offset |
+| Redshift | `TIME` → `TIME(6)` | `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`: they hold years before 1 AD (and `DATE` reaches 5874897 AD), so the extract stages signed-year ISO text. `TIMETZ`: Iceberg has no zoned time |
+| Teradata | none; `DATE` stays `DATE` | `TIME`, `TIMESTAMP`, with or without zone: Teradata stores seconds 60 and 61, which Snowflake cannot hold |
 
 ### Default Iceberg Target Types by Profile
 
-| Source type family (examples) | VARCHAR-temporal profiles | v3 + `FULL_INGEST` |
-|---|---|---|
-| Small integers (`SMALLINT`, `INT`, `INTEGER`, `TINYINT`) | `INTEGER` | `INTEGER` |
-| Big integers (`BIGINT`, `INT8`) | `BIGINT` | `BIGINT` |
-| Floats (Redshift `REAL` / `FLOAT4` / `FLOAT8`, SQL Server `FLOAT` / `REAL`, Teradata `FLOAT`) | `DOUBLE` | `DOUBLE` |
-| `DECIMAL(p,s)`, `NUMERIC`, `MONEY` | Native `NUMBER(p,s)` | Native `NUMBER(p,s)` |
-| `CHAR` / `VARCHAR` / `NVARCHAR` | `VARCHAR` | `VARCHAR` |
-| `BOOLEAN`, `DATE` | Unchanged | Unchanged |
-| Redshift / Teradata `TIMESTAMP`, SQL Server `DATETIME` / `DATETIME2` / `SMALLDATETIME` | `VARCHAR` | `TIMESTAMP_NTZ(6)` |
-| `TIMESTAMPTZ`, `DATETIMEOFFSET`, `TIMESTAMP WITH TIME ZONE`, Redshift `TIMETZ`, Teradata `TIME WITH TIME ZONE` | `VARCHAR` | `TIMESTAMP_LTZ(6)` (Iceberg has no `TIMESTAMP_TZ`; LTZ keeps the instant) |
-| `TIME` | `VARCHAR` | `TIME(6)` |
-| `GEOGRAPHY` (Teradata `ST_GEOMETRY` maps here) | `VARCHAR` | `GEOGRAPHY` |
-| `GEOMETRY` | `VARCHAR` | `GEOMETRY(4326)`, or `GEOMETRY(n)` for an explicit non-zero SRID |
-| Redshift `VARBYTE` / `VARBINARY` | `VARCHAR` | `VARCHAR` |
-| SQL Server `BINARY` / `VARBINARY` / `IMAGE`, and `TIMESTAMP` / `ROWVERSION` (a binary row version, not a date) | `BINARY` | `BINARY` |
-| Semi-structured (`SUPER`, `VARIANT`, `SQL_VARIANT`, `XML`, `JSON`, `ARRAY`, `OBJECT`), `INTERVAL*` | `VARCHAR` | `VARCHAR` |
+| Source type family (examples) | `ADD_FILES_COPY` + `compatible` | `FULL_INGEST` v2 | `FULL_INGEST` v3 |
+|---|---|---|---|
+| Small integers (`SMALLINT`, `INT`, `INTEGER`, `TINYINT`) | `INTEGER` | `INTEGER` | `INTEGER` |
+| Big integers (`BIGINT`, `INT8`) | `BIGINT` | `BIGINT` | `BIGINT` |
+| Floats (Redshift `REAL` / `FLOAT4` / `FLOAT8`, SQL Server `FLOAT` / `REAL`, Teradata `FLOAT`) | `DOUBLE` | `DOUBLE` | `DOUBLE` |
+| `DECIMAL(p,s)`, `NUMERIC`, `MONEY` | Native `NUMBER(p,s)` | Native `NUMBER(p,s)` | Native `NUMBER(p,s)` |
+| `CHAR` / `VARCHAR` / `NVARCHAR` | `VARCHAR` | `VARCHAR` | `VARCHAR` |
+| `BOOLEAN`, `DATE` (Redshift `DATE` is `VARCHAR` on every profile) | Unchanged | Unchanged | Unchanged |
+| SQL Server `DATETIME`, `SMALLDATETIME` | `VARCHAR` (`TIMESTAMP_NTZ(6)` for `cloud_direct` / `regular`) | `TIMESTAMP_NTZ(6)` | `TIMESTAMP_NTZ(6)` |
+| SQL Server `DATETIME2`, `TIME` | `VARCHAR` (`TIMESTAMP_NTZ(6)` / `TIME` for `cloud_direct` / `regular`) | `VARCHAR` | `VARCHAR` |
+| Redshift `TIME` | `VARCHAR` | `TIME(6)` | `TIME(6)` |
+| `DATETIMEOFFSET`, `TIMESTAMPTZ`, `TIMESTAMP WITH TIME ZONE`, Redshift `TIMETZ`, Redshift / Teradata `TIMESTAMP`, Teradata `TIME` | `VARCHAR` | `VARCHAR` | `VARCHAR` |
+| `GEOGRAPHY` (Teradata `ST_GEOMETRY` maps here) | `VARCHAR` | `VARCHAR` | `GEOGRAPHY` |
+| `GEOMETRY` | `VARCHAR` | `VARCHAR` | `GEOMETRY(4326)`, or `GEOMETRY(n)` for an explicit non-zero SRID |
+| Redshift `VARBYTE` / `VARBINARY` | `VARCHAR` | `VARCHAR` | `VARCHAR` |
+| SQL Server `BINARY` / `VARBINARY` / `IMAGE`, and `TIMESTAMP` / `ROWVERSION` (a binary row version, not a date) | `BINARY` | `BINARY` | `BINARY` |
+| Semi-structured (`SUPER`, `VARIANT`, `SQL_VARIANT`, `XML`, `JSON`, `ARRAY`, `OBJECT`), `INTERVAL*` | `VARCHAR` | `VARCHAR` | `VARCHAR` |
 
-Timestamps use scale 6 under v3 `FULL_INGEST`: it covers the full date range (`NTZ(9)` cannot hold years
-before 1677).
+Promoted timestamps use scale 6: it covers the full date range (`NTZ(9)` cannot hold years before 1677).
 
 **Do not add `columnTypeMappings` to flatten temporal or geospatial columns.** A `columnTypeMappings`
 entry replaces DMVF's profile default for that source type, so `GEOMETRY → VARCHAR` on a v3

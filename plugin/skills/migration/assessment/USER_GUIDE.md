@@ -298,7 +298,7 @@ the tab.
 | **Optimization Opportunities** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |
 | **Dynamic SQL** | Patterns found with complexity scores |
 | **SSIS** | Package classifications and migration effort |
-| **Effort Estimates** | Hours for code conversion and testing, priced per object by complexity, plus workload tier and phase budgets. Editable — change an hours-per-object rate and every total updates (SQL Server and Redshift) |
+| **Effort Estimates** | Hours for code conversion and testing, priced per object by complexity, plus workload tier and phase budgets. Editable — change an hours-per-object rate and every total updates (SQL Server, Redshift, Teradata, and Oracle; Informatica mappings are a row on those projects, the same as SSIS packages) |
 | **Data Migration & Validation** | Data type coverage for your source platform, per-table readiness, topology and validation guidance, plus reviewed inventory SQL (SQL Server and Redshift) |
 | **Testing** | Procedure/function and ETL readiness ladders — what is testable now, and what each object still needs first |
 

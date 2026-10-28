@@ -9,7 +9,17 @@ realistic values queried from the source database.
 
 > You are NOT writing a YAML file. The stub YAML already exists (created by `scai test seed`). Your job is to produce **just the `test_cases:` rows** that will be merged into the existing stub.
 >
-> See [`../skills/migration/migrate-objects/references/step-based-yaml.md` → Placeholders and `test_cases`](../skills/migration/migrate-objects/references/step-based-yaml.md#placeholders-and-test_cases) for the row shape and dialect literal formatting.
+> Each row is an array of literals in the object's parameter order. The step SQL's `{0}`, `{1}`, ... are filled from it, one case at a time, as dialect-correct SQL literals; you write plain YAML values and never escape them:
+>
+> | YAML value | SQL Server | Snowflake | Redshift |
+> |---|---|---|---|
+> | `null` | `NULL` | `NULL` | `NULL` |
+> | `true` / `false` | `1` / `0` | `TRUE` / `FALSE` | `TRUE` / `FALSE` |
+> | `42` | `42` | `42` | `42` |
+> | `"hello"` | `'hello'` | `'hello'` | `'hello'` |
+> | `"it's"` | `'it''s'` | `'it''s'` | `'it''s'` |
+>
+> A zero-argument object takes `[]`.
 
 ## Inputs
 
@@ -53,3 +63,12 @@ test_cases:
 ```
 
 Each row is a JSON-ish array of literals: `null` for SQL NULL, unquoted numbers, strings in double-quotes if they contain colons / special chars (otherwise unquoted is fine in YAML).
+
+## Shell commands on Windows
+
+On Windows your shell tool runs PowerShell, usually Windows PowerShell 5.1, not
+bash or cmd. Never chain with `&&` or `||`, which 5.1 rejects: use `;`, or
+`cmd1; if ($?) { cmd2 }` when the second must wait for the first to succeed. No
+cmd syntax (`if not exist`, `set VAR=x`, `%VAR%`): use `Test-Path`,
+`New-Item -ItemType Directory -Force <dir> | Out-Null` and `$env:VAR`. No bash
+syntax (heredocs, `export`, `2>/dev/null`): use `2>$null`.

@@ -17,14 +17,17 @@ and "extras are already recorded" reads as the opposite of `migration_extras=non
 (which means there is no ETL, Power BI, or Tableau to include). Read the values
 you need and act; mention one only when it changes what you are about to do.
 
-## Step 0: Extras belong to the setup card
+## Step 0: Extras belong to setup's prompt
 
 Read `migration_extras` (or `has_etl_code` / `has_power_bi` / `has_tableau`)
 from `configure()`. If extras are **already set**, skip to Step 1.
 
-If they are **not set**, do **not** ask. Do not invent a yes/no for ETL,
+If they are **not set**, do **not** ask here. Do not invent a yes/no for ETL,
 Power BI, or Tableau, and do not ask about conversion settings. Those are
-the setup card. Call `progress_setup()` with no answers and end the turn.
+setup's prompt. Call `progress_setup()` with no answers. If the reply has
+`shown_on_card: true`, AIM shows that prompt on its card: end the turn.
+Otherwise ask it as setup/SKILL.md step 3 says (one `ask_user_question`
+call) and submit the answers with `progress_setup(answers={...})`.
 Continue only after a later `progress_setup` shows this step has moved on.
 
 ## Step 1: Ask How to Register

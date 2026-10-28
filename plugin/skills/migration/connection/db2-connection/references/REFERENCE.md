@@ -112,7 +112,7 @@ DB2 has no portable system row identifier suitable for partitioning. Use:
 
 - A monotonic integer primary key (e.g. `ID BIGINT`) — most common and reliable
 - A timestamp column with a narrow range — for time-partitioned loads
-- No partition column — omit `columnNamesToPartitionBy` for a single-partition full extract
+- No partition column — omit `columnNamesToPartitionBy`. A table that fits in one partition is extracted as a single unit; for a larger one the orchestrator infers a key at preprocessing, and if it cannot, the table fails with an error naming `columnNamesToPartitionBy`: set a key then. Never write `[]` to get around it: `[]` turns partitioning off (one long serial unit however large the table) and is only for a user who explicitly asked for a single partition after hearing that cost — see [Never write `[]`](../../../migrate-objects/actions/data-migration/SKILL.md#never-write-columnnamestopartitionby-)
 
 ## Troubleshooting
 

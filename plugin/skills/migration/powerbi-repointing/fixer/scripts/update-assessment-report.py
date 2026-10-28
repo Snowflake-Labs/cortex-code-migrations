@@ -65,7 +65,7 @@ def update_assessment_report(assessment_csv, translated_queries_json, output_fol
             row['Status'] = 'AI Repointed'
             row['ContainsSQL'] = 'Yes'
             row['PendingWork'] = 'No'
-            row['Pending Work Description'] = 'Query successfully translated to Snowflake by SCAI PowerBI Fixer.'
+            row['Pending Work Description'] = 'Query successfully translated to Snowflake by the Power BI fixer.'
             updated_count += 1
             print(f"  {OK} Updated: {query_name} -> AI Repointed")
     

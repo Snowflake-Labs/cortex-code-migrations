@@ -233,3 +233,12 @@ Include every hash you were given.
 | Edit converted SQL or the YAML | You decide; the walker writes. |
 | Touch any object but `objectId` | Other agents are live on the rest of the wave. |
 | Spawn a subagent | The read is yours. One spawn reviews every remaining hash. |
+
+## Shell commands on Windows
+
+On Windows your shell tool runs PowerShell, usually Windows PowerShell 5.1, not
+bash or cmd. Never chain with `&&` or `||`, which 5.1 rejects: use `;`, or
+`cmd1; if ($?) { cmd2 }` when the second must wait for the first to succeed. No
+cmd syntax (`if not exist`, `set VAR=x`, `%VAR%`): use `Test-Path`,
+`New-Item -ItemType Directory -Force <dir> | Out-Null` and `$env:VAR`. No bash
+syntax (heredocs, `export`, `2>/dev/null`): use `2>$null`.

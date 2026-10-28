@@ -22,8 +22,11 @@ name="${1:-}"
 }
 
 # First session (and any host without scai on PATH): do not fail the Cortex
-# hook. SessionStart installs scai; later turns find it.
+# hook. SessionStart installs scai; later turns find it. Say on stderr which
+# hook did not run: an install with no migration-mcp-server beside scai
+# otherwise runs no hook at all without a trace (SNOW-4342644).
 skip() {
+  echo "mcp-hook: migration-mcp-server not found; hook $name skipped" >&2
   exit 0
 }
 
@@ -52,9 +55,9 @@ ensure_exec() {
 
 sibling_of() {
   dir=$(dirname "$1")
-  for name in migration-mcp-server.exe migration-mcp-server; do
-    if ensure_exec "$dir/$name"; then
-      printf '%s\n' "$dir/$name"
+  for candidate in migration-mcp-server.exe migration-mcp-server; do
+    if ensure_exec "$dir/$candidate"; then
+      printf '%s\n' "$dir/$candidate"
       return 0
     fi
   done

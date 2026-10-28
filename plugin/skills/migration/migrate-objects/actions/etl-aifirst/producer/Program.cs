@@ -910,7 +910,7 @@ internal static class Program
       header.AppendLine("--                  from the source document by a deterministic rule.");
       header.AppendLine($"-- Source element : {nodeId}");
       header.AppendLine(
-        "-- Tier           : 2 -- SnowConvert's own translators rendered this model. A model supplied");
+        "-- Tier           : 2 -- the conversion translators rendered this model. A model supplied");
       header.AppendLine(
         "--                  the payload listed below because the source dialect has no engine");
       header.AppendLine("--                  translator.");

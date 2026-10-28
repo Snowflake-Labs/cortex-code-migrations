@@ -13,11 +13,12 @@ and password. A registered `scai` connection supplies them once, instead of re-e
 
 ## Which connection the run will use
 
-**First, work out which connection name the run will select.** There is no flag for it —
-`scai test etl-validate` has **no** `--informatica-connection` option, because the flag lives on the
-underlying `test-runner` CLI and the CSnakes bridge `scai` runs through does not forward it. The name
-comes from configuration, in the two tiers the runner reads:
+**First, work out which connection name the run will select.** It comes from three tiers, the
+first that names one wins:
 
+- **Per run** — `scai test etl-validate --etl-connection <CONNECTION_NAME>` (the old
+  `--informatica-connection` spelling is a hidden, deprecated alias). Use it for a one-off run
+  against a connection the project does not normally select.
 - **Per project** — `informatica_connection: <CONNECTION_NAME>` in `.scai/config/project.yml`.
   Reach for this when the right connection differs per repository; it is committed with the project.
   `project.local.yml` is read first where it exists, so a developer can point at their own
@@ -25,7 +26,11 @@ comes from configuration, in the two tiers the runner reads:
 - **Per machine** — `default_connection_name` in `informatica.toml`, written by
   `scai connection set-default -l informatica -s <CONNECTION_NAME>`.
 
-`.scai/config/project.yml` wins over `default_connection_name` when both are present.
+Connections are registered with `scai connection add-etl --platform informatica`, which prompts
+for the fields the Informatica plugin declares (`pmcmd_path`, `user`, `password`, `service`,
+`domain`, and the optional `infa_domains_file`); `add-informatica-pmcmd` remains as its alias.
+
+`--etl-connection` wins over `.scai/config/project.yml`, which wins over `default_connection_name`.
 
 **Then check whether that name is registered:**
 
@@ -50,11 +55,14 @@ environment into a cleartext file on disk for no gain.
 
 ### Where the values end up coming from
 
-At run time the runner resolves the connection by name (`resolve_informatica_connection` in
-`testing-infrastructure/test-runner/src/test_runner/common/config.py`) and merges it over the
-`informatica:` section of `.scai/settings/test_config.yaml` **per field, connection wins**. So the
-connection supplies whatever it carries — credentials plus `service` / `domain` — and anything it
-does not carry still falls back to that section. Registering never invalidates an existing one.
+At run time the runner resolves the connection by name (`resolve_etl_connection` in
+`testing-infrastructure/test-runner/src/test_runner/common/etl_connections.py`), and the Informatica
+plugin combines it with the `informatica:` section of `.scai/settings/test_config.yaml`
+(`etl/platforms/informatica/config.py`). A connection carrying `pmcmd_path`, `user` and `password`
+**replaces the section wholesale**: a `service` / `domain` present only in the section is then not
+used, so register those on the connection too. A connection missing one of those three, reached as
+the default, is merged over the section **per field, connection wins**. One named explicitly (by
+`--etl-connection` or `.scai/config`) that is incomplete is an error rather than a fallback.
 
 ### When `--service` / `--domain` rule a connection out
 

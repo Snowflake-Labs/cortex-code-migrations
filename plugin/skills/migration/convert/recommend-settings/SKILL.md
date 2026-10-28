@@ -27,6 +27,7 @@ This returns `{ "sourceLanguage": "<Dialect>", "settings": [ { "longName", "shor
 - `sourceLanguage` is the project's dialect — remember it as `<DIALECT>`.
 - Treat `settings[]` as the ONLY valid options. Never propose a flag whose `longName` is not in this list.
 - `currentValue` (when present) is what the project already has persisted — do not re-recommend a setting already at the value you'd suggest.
+- `default` is what the engine uses when the flag is not passed — do not recommend a setting whose `currentValue` is unset and whose `default` already equals the value you'd suggest (e.g. `--pltargetlanguage SnowScript`).
 
 If the command fails, tell the user you couldn't load the catalog and skip recommendations (return no flags to the caller); do not block the conversion.
 
@@ -48,7 +49,7 @@ For each catalog setting a signal supports, record:
 - `currentValue` (from Step 1) if set.
 - A one-line rationale grounded in what you found (e.g. "found `PERIOD(` in 3 files → split into begin/end").
 
-Skip any setting whose `currentValue` already equals your proposal.
+Skip any setting whose `currentValue`, or `default` when `currentValue` is unset, already equals your proposal.
 
 If the user named a setting they want ("I need `--<flag>`"), propose it even when no signal supports it, with their ask as the rationale. If it is not in the catalog, say so, and offer the closest settings that are; never pass a flag the catalog lacks.
 

@@ -220,7 +220,6 @@ def render_html(assessment: Dict, mermaid_str: str = "") -> str:
     high_cx = p["complexity_distribution"].get("HIGH", 0)
 
     snowflake_logo = _load_logo("snowflake_logo.svg")
-    snowconvert_logo = _load_logo("snowconvert_ai_logo.svg")
 
     kpis = "".join([
         _kpi(total, "SAS files"),
@@ -336,8 +335,6 @@ body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica
 .side {{ width:230px; flex:0 0 230px; background:#fff; color:#334155; display:flex; flex-direction:column; border-right:1px solid var(--border); }}
 .brand {{ padding:22px 20px 16px; border-bottom:1px solid var(--border); }}
 .brand .sf svg {{ width:132px; height:auto; display:block; }}
-.brand .sc {{ margin-top:14px; }}
-.brand .sc svg {{ width:132px; height:auto; display:block; }}
 .brand .tagline {{ margin-top:14px; font-size:12px; color:{MUTED}; line-height:1.5; }}
 .badge {{ display:inline-block; background:#EAF6FD; color:{PRIMARY_DARK}; font-weight:700; font-size:10px; letter-spacing:.4px; padding:3px 9px; border-radius:10px; margin-top:12px; }}
 .side nav {{ padding:10px 10px; display:flex; flex-direction:column; gap:2px; }}
@@ -390,7 +387,6 @@ footer {{ color:var(--muted); font-size:12px; padding:22px 0 0; border-top:1px s
   <aside class="side">
     <div class="brand">
       <div class="sf">{snowflake_logo}</div>
-      <div class="sc">{snowconvert_logo}</div>
       <div class="tagline">SAS → Snowflake migration assessment</div>
       <span class="badge">PREVIEW</span>
     </div>
@@ -401,7 +397,7 @@ footer {{ color:var(--muted); font-size:12px; padding:22px 0 0; border-top:1px s
   <main class="main">
     <div class="pagehead">
       <h1>SAS → Snowflake Migration Assessment</h1>
-      <div class="meta">{total} SAS files · {p['total_lines']:,} lines<br>Not SnowConvert / AIM registry</div>
+      <div class="meta">{total} SAS files · {p['total_lines']:,} lines<br>Not tracked in the AIM registry</div>
     </div>
     <div class="content">
       <div class="kpis">{kpis}</div>

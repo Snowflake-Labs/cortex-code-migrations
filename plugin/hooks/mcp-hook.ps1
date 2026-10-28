@@ -9,8 +9,12 @@ param(
     [string]$Name
 )
 
-# First session (and any host without scai on PATH): do not fail the Cortex hook.
-function Skip { exit 0 }
+# First session (and any host without scai on PATH): do not fail the Cortex hook,
+# but say on stderr which hook did not run (SNOW-4342644).
+function Skip {
+    [Console]::Error.WriteLine("mcp-hook: migration-mcp-server not found; hook $Name skipped")
+    exit 0
+}
 
 $Cache = Join-Path (Get-Location) ".scai/tmp/mcp-server-bin"
 

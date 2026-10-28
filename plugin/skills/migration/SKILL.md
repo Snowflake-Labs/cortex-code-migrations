@@ -139,7 +139,7 @@ assets the user *doesn't* want converted (Airflow DAGs, Fivetran connectors, SSA
 custom scripts). Never route a convert-my-ETL ask to `discover-extras` and never register
 those ETL jobs as `customKind` cookbooks.
 
-- **Informatica PowerCenter** (on-prem repo XML export) → native SnowConvert via the normal
+- **Informatica PowerCenter** (on-prem repo XML export) → converted natively via the normal
   convert path.
 - **Informatica Cloud / IICS** → AI-First via convert Step 4.5. Do not confuse the two.
 - Local `.dtsx`, PowerCenter XML repo export, or any unsupported ETL platform is **not**
@@ -175,17 +175,19 @@ those ETL jobs as `customKind` cookbooks.
 - **register-code-units** — router for getting source code into the project → `./register-code-units/SKILL.md`
   - **extract-code-units** — extract DDL/code from a connected source database → `./register-code-units/extract-code-units/SKILL.md`
   - **add-code-units** — import local SQL files into the project → `./register-code-units/add-code-units/SKILL.md`
-- **convert** — convert source → Snowflake SQL via SnowConvert (incl. optional Power BI `.pbit` and Tableau `.twb`/`.tds` repointing) → `./convert/SKILL.md`
+- **convert** — convert source → Snowflake SQL (incl. optional Power BI `.pbit` and Tableau `.twb`/`.tds` repointing) → `./convert/SKILL.md`
   - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
   - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
   - **tableau-repointing** — collect `.twb`/`.tds` folder path and `--tableauRepointing` flag for Tableau repointing. Triggers: tableau, tableau migration, tableau repointing, migrate tableau, repoint tableau → `./tableau-repointing/SKILL.md`
-  - **dbt-consolidation** — before SSIS or Informatica dbt conversion, ask one question about consolidating projects and models by package/folder or retaining the per-Data-Flow/per-mapping layout; use only `--consolidate-dbt-projects` → `./dbt-consolidation/SKILL.md`
+  - **dbt-consolidation** — before SSIS or Informatica dbt conversion, ask one question about consolidating projects and models by package/folder, consolidating SSIS into one dbt project, or retaining the per-Data-Flow/per-mapping layout; use `--consolidate-dbt-projects`, or `--consolidate-as-single-dbt-project` for the SSIS-only single-project choice → `./dbt-consolidation/SKILL.md`
 - **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
 
 ### Migration & validation
 - **migrate-objects** — deploy tables, views, functions, procedures wave-by-wave → `./migrate-objects/SKILL.md`
   - **sandbox** — private `AIMSBX_*` catalogs for procedure tests (`createIsolatedSandbox`) and shared source-catalog setup (`deployCommonSandbox`). Not common-catalog `deploy`. → `./migrate-objects/sandbox/SKILL.md`
   - **migrate-etl** — claim an ETL code unit, then stabilize it. Entry point for "fix ETL package", "fix SSIS/Informatica conversion", "proceed with stabilization", "resume ETL fixing" — it claims the unit (so it appears in `my_objects_summary` with the current user as owner) before delegating to the phase-based etl-stabilization engine. → `./migrate-objects/migrate-etl/SKILL.md`
+  - **etl-file-ingestion** — hand over the landing contract (Openflow flow, direct-upload script, or mover table). Triggers: "land my files", "set up file ingestion", "set up Openflow", "upload files to the stage", "where do my CSVs go" → `./migrate-objects/migrate-etl/etl-file-ingestion/SKILL.md`
+  - **etl-database-ingestion** — hand over database landing (generated JDBC Openflow JSON, their own loader, or a SQL Server Change Tracking / CDC connector). Triggers: "land my database tables", "database landing", "change tracking landing", "CDC landing", "JDBC Openflow" → `./migrate-objects/migrate-etl/etl-database-ingestion/SKILL.md`
   - **data-migration-setup** — choose approach, generate workflow YAML, create target database for `migrate_data` → `./migrate-objects/actions/data-migration/SKILL.md`
   - **testbed-generator** — bootstrap coupling state (`generateTestbed`); generate one table's CSV (`INCREMENTAL.md`); or mine/validate/enrich/compile/generate the whole workload (`WHOLE-WORKLOAD.md`). Triggers: generate testbed, mine testbed, validate testbed, compile testbed, enrich testbed, testbed data source → `./migrate-objects/baseline-capture/testbed-generator/SKILL.md`
 - **validate-objects** — validate data between a source and Snowflake, including project-based Snowflake-to-Snowflake validation. Triggers: "validate Snowflake to Snowflake", "compare Snowflake tables/databases", "run SF-to-SF DV" → `./validate-objects/SKILL.md`
@@ -214,3 +216,5 @@ If no skill matches, say so explicitly, then help with your own knowledge.
 1. **Configure returns status** — `configure(project_dir=...)` includes the `## Migration status` block; route from it. No separate `migration_status` call on the continue path.
 2. **Follow sub-skill instructions** — Complete each sub-skill fully before returning
 3. **Confirm transitions through the machine** — stage gates arrive as MCP prompts (`continueToMigration`, `chooseRunMode`); ask those when they come rather than adding a confirmation turn between sub-skills, and ask before loading migrate-objects after setup completes
+4. **Diagnose against the source before retrying or touching shared infrastructure** — when a step fails, reproduce it first: run the failing statement (from the error, or the task's `statement` in the worker's `data_exchange_agent.log` under scai's `logs/data/`) with `query_source`, and check any theory (a version mismatch, a missing file) against what the tools report before acting on it. Never re-dispatch an unchanged workflow to see whether it fails again, and never update, recreate or restart the orchestrator, worker or compute pool to test a guess: they are shared by every project on the account. Change them only with evidence that they are the cause, after the user agrees with who else it affects named. Until the cause is found, say what you checked and that you don't know yet; never "not your setup" when the setup is what you haven't ruled out.
+5. **Say what the product can't do** — when no supported setting does what the user asked, say so plainly before acting and offer what is possible. Never build the nearest thing and report the request as done.

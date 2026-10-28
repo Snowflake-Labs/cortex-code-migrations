@@ -234,11 +234,11 @@ def main(argv: list[str]) -> int:
             # it, and what has not been checked. Whether it compiles is stage 4's
             # question and stage 4 answers it separately, with a parser.
             header = (
-                f"-- {MARKER}: this model was written by a MODEL, not by SnowConvert's translators.\n"
+                f"-- {MARKER}: this model was written by a MODEL, not by the conversion translators.\n"
                 f"-- Source element : {el_name}\n"
                 f"-- Reason         : {reason}\n"
                 f"-- Provenance     : model-authored SQL. NOT read from the source document and NOT\n"
-                f"--                  produced by a SnowConvert translator.\n"
+                f"--                  produced by a conversion translator.\n"
                 f"-- Verification   : NONE. Not compiled, not executed, and not compared against\n"
                 f"--                  source behaviour by this stage. Review before use.\n"
                 f"-- Replaced       : an engine model carrying {signal}.\n")

@@ -68,6 +68,7 @@ failures stay `other` — do not guess a family.
 |---|---|
 | Fixture cell vs live FK / self-FK / equality CHECK / `VARCHAR(n)` / insert order | Overlay that class (below). Follow `next_invocation`. Isolated / `torn_down` → overlay CSV, return `done` |
 | `failure_class=missing_object` / 42S02 / unknown function or procedure | Code dependency (below) |
+| `failure_class=cannot_open_database` / 4060 "Cannot open database … The login failed" | Catalog missing, inaccessible to the login, or unavailable. **escalate** with the tool's `hint`; never call it a bad password |
 | Setup `failure_class=sql` | Peer Snowflake CREATE, not this object's body. Code dependency (below) — not **needs_sql_fix** for this id |
 | Converted SQL of **this** object (confirmed from files; bindable pin + converted also broken) | **needs_sql_fix** — do not edit converted SQL |
 | Bindable source SQL has a **clear mechanical** compile defect; `files.source` is valid | Pin the bindable file (below) |
@@ -231,3 +232,12 @@ Then **exit**.
 | Guess an unmapped `failure_class` | Same rule as the classifier — unmapped stays `other`. |
 | Mint a sandbox for a table | Tables stay shared. |
 | Return `done` as if an AIMSBX pair is live after `torn_down: true` | Setup discarded it. Overlay / pin, then the walker remints. |
+
+## Shell commands on Windows
+
+On Windows your shell tool runs PowerShell, usually Windows PowerShell 5.1, not
+bash or cmd. Never chain with `&&` or `||`, which 5.1 rejects: use `;`, or
+`cmd1; if ($?) { cmd2 }` when the second must wait for the first to succeed. No
+cmd syntax (`if not exist`, `set VAR=x`, `%VAR%`): use `Test-Path`,
+`New-Item -ItemType Directory -Force <dir> | Out-Null` and `$env:VAR`. No bash
+syntax (heredocs, `export`, `2>/dev/null`): use `2>$null`.

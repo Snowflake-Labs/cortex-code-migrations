@@ -61,6 +61,7 @@ qualified names before running.
 | `maxFailedRowsNumber` | Integer | No | Stop L3 after N mismatch rows per partition / early-stop threshold |
 | `excludeMetrics` | Boolean | No | `true` drops the `avg` / `sum` / `stddev` L2 metrics on both source and target (the orchestrator's default is `false`) |
 | `includeCountDistinct` | Boolean | No | `true` adds the `count_distinct` L2 metric on both source and target (default `false`; the most expensive L2 metric on large tables). See [L2 `count_distinct`](#l2-count_distinct-opt-in-includecountdistinct) |
+| `includeLobColumnsInRowValidation` | Boolean | `false` | `true` makes L3 hash and compare source LOB columns (Oracle `CLOB` / `NCLOB` / `BLOB`, SQL Server `TEXT` / `NTEXT` / `IMAGE`, …). L3 leaves them out by default; L1 and L2 still check them. See [L3 LOB columns](#l3-lob-columns-opt-in-includelobcolumnsinrowvalidation) |
 | `applyMetricColumnModifier` | Boolean | No | Toggles the `% 2097143` overflow guard on L2 `avg` / `sum` / `stddev`, on both source and target (the orchestrator's default is `true`). `false` aggregates full values, which can overflow on large `BIGINT` / `DECIMAL` sums |
 | `maxColumnsPerMetricsBatch` | Integer | No | Split L2 metrics queries by column count |
 | `maxColumnsPerCellBatch` | Integer | No | Per-table: split L3 cell drill-down batch size |
@@ -78,7 +79,7 @@ qualified names before running.
 
 For user-facing explanations of each level, see [Validation levels reference](../../../validate-objects/actions/references/validation-levels-reference.md).
 
-The four bool toggles can be set via setup-mode params (`schema_validation=true` only, `metrics_validation=`, `row_validation=`, `continue_on_failure=`) and persist as session defaults under `data_validation_*` in `plugin.yml`. Incremental mode uses `validation_type=` / `sync_strategy=` (also persisted) and patches `defaultTableConfiguration.synchronization.strategy`. Other fields (`watermarkColumn`, `checksumExpression`, `maxFailedRowsNumber`, …) require an in-place YAML edit.
+The four bool toggles can be set via setup-mode params (`schema_validation=true` only, `metrics_validation=`, `row_validation=`, `continue_on_failure=`). They apply to that call's workflow only and are never saved: pass them again on each setup that needs them. Incremental mode uses `validation_type=` / `sync_strategy=` (persisted as the project's defaults in `plugin.yml`) and patches `defaultTableConfiguration.synchronization.strategy`. Other fields (`watermarkColumn`, `checksumExpression`, `maxFailedRowsNumber`, …) require an in-place YAML edit.
 
 ## L2 `count_distinct` (opt-in, `includeCountDistinct`)
 
@@ -147,6 +148,52 @@ To avoid the last case, set the flag in `validationConfiguration` blocks only.
 - `metricsValidation: false` turns off all of L2, so `includeCountDistinct` has no effect.
 - snake_case `include_count_distinct` is accepted everywhere camelCase is.
 
+## L3 LOB columns (opt-in, `includeLobColumnsInRowValidation`)
+
+L3 (the row hash and the cell drill-down) leaves source LOB columns out unless `includeLobColumnsInRowValidation` is `true`. Hashing a LOB in every row is slow, and on some sources it is not possible (DB2 `HEX(BLOB)`). L1 still compares these columns' definitions and L2 their metrics. scai `generate-config` leaves the key out, which means `false`: add it as `true` to opt in.
+
+**Which columns count as LOBs** (by the source column's base type):
+
+| `sourcePlatform` | Left out of L3 by default |
+|---|---|
+| Oracle | `CLOB`, `NCLOB`, `BLOB` |
+| SQL Server | `TEXT`, `NTEXT`, `IMAGE` (not `VARCHAR(MAX)`, `NVARCHAR(MAX)` or `VARBINARY(MAX)`, which L3 compares) |
+| Teradata | `CLOB`, `BLOB` |
+| DB2 | `CLOB`, `DBCLOB`, `NCLOB`, `BLOB` |
+| Other sources, Snowflake included | none: the key has no effect |
+
+- A LOB column named in the table's `indexColumnList` is never left out, since L3 needs it to align rows.
+- A left-out column is dropped on both sides, the way a `columnSelectionList` exclusion drops a column. L3 records no result for it, so it can neither pass nor fail L3. The worker logs `skips source LOB columns <names>; set include_lob_columns_in_row_validation to hash them` for each table it applies to.
+- **Oracle:** L3 hashes LOBs with `DBMS_CRYPTO`. Opting a table's LOBs in needs `GRANT EXECUTE ON DBMS_CRYPTO` to the validation user. `scai data doctor` checks the grant when a table in the workflow needs it.
+
+**Where it goes.** As for `includeCountDistinct`: in the workflow file, read when the workflow is created. Change it and create a new workflow; a running or finished workflow keeps the value it was created with.
+
+**Compare LOBs on every table:**
+
+```yaml
+validationConfiguration:
+  rowValidation: true
+  includeLobColumnsInRowValidation: true
+```
+
+**Compare LOBs on one table only:**
+
+```yaml
+tables:
+  - fullyQualifiedName: db.app.documents
+    validationConfiguration:
+      includeLobColumnsInRowValidation: true
+```
+
+**Precedence (most specific wins):**
+
+1. `tables[].validationConfiguration.includeLobColumnsInRowValidation`.
+2. `defaultTableConfiguration.validationConfiguration.includeLobColumnsInRowValidation`.
+3. Global `validationConfiguration.includeLobColumnsInRowValidation`.
+4. Default: `false`.
+
+Unlike `includeCountDistinct`, the key goes only in a `validationConfiguration` block. It is not a key of a table entry or of `defaultTableConfiguration` itself, and the orchestrator rejects an unknown key on a table entry. `rowValidation: false` turns off all of L3, so the key then has no effect. snake_case `include_lob_columns_in_row_validation` is accepted everywhere camelCase is.
+
 ## `comparisonConfiguration`
 
 | Field | Type | Description |
@@ -178,7 +225,7 @@ To avoid the last case, set the flag in `validationConfiguration` blocks only.
 | `columnMappings` | `{"source_col": "TARGET_COL"}` for renamed columns |
 | `indexColumnList` | Row-identity columns for L3. Snake_case alias: `index_column_list`. |
 | `targetIndexColumnList` | Target-side index columns when different. Snake_case alias: `target_index_column_list`. |
-| `columnNamesToPartitionBy` | Partition columns for large-table validation. The first column should be one the source can prune on (sort key, clustered index, Teradata level-1 RANGE_N column, partition key, Oracle IOT primary key, or clustering key). A Teradata primary index does not prune range scans — prefer the RANGE_N column when present, or a composite `[partitioning column, PI column]` when the date is low-cardinality. |
+| `columnNamesToPartitionBy` | Partition columns for large-table validation. The first column should be one the source can prune on (sort key, clustered index, Teradata level-1 RANGE_N column, partition key, Oracle IOT primary key, Snowflake / BigQuery clustering key, or BigQuery partition column / `_PARTITIONTIME`). A Teradata primary index does not prune range scans — prefer the RANGE_N column when present, or a composite `[partitioning column, PI column]` when the date is low-cardinality. BigQuery `_PARTITIONTIME` needs `columnMappings` in DV (it is not in the target schema). When omitted, a key is inferred for tables (never for views); an object that needs more than one partition with no key fails with an error naming `columnNamesToPartitionBy`. An explicit `[]` turns partitioning off (no inference, one partition whatever the size): never write it, here or in `defaultTableConfiguration`, unless the user explicitly asks for a single partition and accepts the performance cost. |
 | `targetPartitionSizeRows` / `targetPartitionSizeMb` | Per-table partition sizing (mutually exclusive) |
 | `validationConfiguration` | Per-object override of validation toggles |
 | `synchronization` | Opt into **incremental validation** (or override `defaultTableConfiguration`) |
@@ -268,7 +315,7 @@ Advanced **Data Validation** feature — SQL applied before L3 row-hash and cell
 
 | Field | Level | Purpose |
 |-------|-------|---------|
-| `validationCustomNormalizationRules` | root / `validationConfiguration` / per-table | **Preferred** — `column`, `columnPattern`, `dataType`/`sourceDataType`, or `targetDataType` + `sourceExpression` / `targetExpression` (`{{ col_name }}` placeholder). Each expression matches that side's own catalog type. `targetDataType: "*"` applies `targetExpression` to the type the datatype mapping produces for `sourceDataType`. Quote the star in YAML. |
+| `validationCustomNormalizationRules` | root / `validationConfiguration` / per-table | **Preferred** — `column`, `columnPattern`, `dataType`/`sourceDataType`, or `targetDataType` + `sourceExpression` / `targetExpression` (`{{ col_name }}` placeholder). Each expression matches that side's own catalog type. `targetDataType: "*"` applies `targetExpression` to the type the datatype mapping produces for `sourceDataType`. A `dataType` rule with both expressions and no `targetDataType` is that star. Quote the star in YAML. |
 | `validationCustomNormalizations` | root / per-table | Legacy datatype-keyed normalization lists |
 | `validationCustomTypes` | root / per-table | L1 source datatype → target type mappings |
 | `validationCustomTypeRules` | root / per-table | Per-column L1 cross-type overrides |
@@ -362,11 +409,50 @@ Apply these edits **before** `validate_data(mode="run")` when the user asks to s
 | Field | Level | Description |
 |-------|-------|-------------|
 | `defaultTableConfiguration` | top-level | Shared defaults for every `tables[]` / `views[]` entry (DM parity); nested objects merge key by key, lists and scalars are replaced |
-| `affinity` | top-level | Affinity group — orchestrator only picks up matching workflows |
+| `affinity` | top-level | Routes the workflow's tasks to workers with a matching label; the orchestrator stays without an affinity and claims every workflow. See [Affinity Reference](../../../data-infrastructure/references/affinity-reference.md) |
 | `cleanUpTransientResources` | top-level | Delete intermediate DV stage files after the workflow finishes (`never` / `on-success` / `always`; default `on-success`) |
 | `views` | top-level | Array of view validation entries (same schema as `tables`) |
 
 > View validation is handled separately from table validation — see the migrate-objects view validation flow.
+
+## How `defaultTableConfiguration` is resolved
+
+`scai data validate create-workflow` and `scai data doctor --config` copy `defaultTableConfiguration` into each `tables[]` / `views[]` / `objects[]` entry by the orchestrator's rules. The workflow scai submits and the configuration doctor checks (for example, whether an entry runs row validation) match the configuration the run uses.
+
+- **Nested objects merge key by key:** `synchronization`, `queryModifiers`, `validationConfiguration` (and its `extraction`), `icebergConfig`. The entry's keys win and the default's other keys are kept.
+- **Lists, maps and scalars are replaced whole.** A key the entry leaves out, or sets to `null`, inherits the default.
+- **Partition size is one setting.** An entry that sets `targetPartitionSizeRows` or `targetPartitionSizeMb` takes neither from the defaults. `earlyStopCheckIntervalMinutes` / `earlyStopCheckIntervalSeconds` inside `validationConfiguration` follow the same rule.
+- **Column selection is one setting.** An entry that sets `columnSelectionList` or `useColumnSelectionAsExcludeList`, even to `null`, takes neither from the defaults. A key it leaves out or sets to `null` reads as `[]` (no selection, every column) or `false` (the list is an include list).
+- **`tableType: native`**, on the entry or inherited, drops an inherited `icebergConfig`.
+
+```yaml
+defaultTableConfiguration:
+  useColumnSelectionAsExcludeList: true
+  columnSelectionList: [AUDIT_TS]
+  validationConfiguration:
+    rowValidation: true
+tables:
+  - fullyQualifiedName: db.dbo.orders       # excludes AUDIT_TS; row validation on
+  - fullyQualifiedName: db.dbo.customers
+    columnSelectionList: [ID, NAME]         # validates only ID and NAME (include list)
+    validationConfiguration:
+      metricsValidation: false              # row validation still on
+  - fullyQualifiedName: db.dbo.events
+    useColumnSelectionAsExcludeList: true
+    columnSelectionList: [PAYLOAD]          # excludes PAYLOAD only, not AUDIT_TS
+```
+
+**Changes from earlier scai releases.** No key was added, renamed or removed, and scai rejects nothing it accepted before. Earlier releases resolved these cases differently:
+
+- **Column selection.** Earlier releases resolved `columnSelectionList` and `useColumnSelectionAsExcludeList` each on its own, and a `null` on the entry inherited the default. Three cases now validate different columns; under the default above (`[AUDIT_TS]`, exclude):
+  - An entry that sets only `columnSelectionList` (or sets `useColumnSelectionAsExcludeList: null` beside it) kept the default's `true`, so its list was an exclude list. It is now an include list (`customers` above).
+  - An entry that sets only `useColumnSelectionAsExcludeList` kept the default's list: with `false` it validated only `AUDIT_TS`. Its list is now `[]`, so it validates every column.
+  - An entry that sets one key to `null` and leaves the other out inherited both of the default's values. It now reads as `[]` / `false` and validates every column.
+
+  To keep a selection, set both keys on the entry, as `events` does above.
+- **An entry that sets part of `queryModifiers`, `validationConfiguration` or `icebergConfig`** replaced the default's block whole, so the entry lost the default's other keys: under an entry that sets only `metricsValidation`, a default `rowValidation: true` was dropped, and doctor did not check row validation. Such an entry now also inherits the default's early-stop interval when it sets neither. One that sets one interval still takes neither of the default's: that was already so, because the whole block was replaced, and the pair rule keeps it so under the key-by-key merge.
+- **An entry that sets one partition size** (`targetPartitionSizeRows` or `targetPartitionSizeMb`) also carried the default's other one. Now only the entry's own value applies. This changes partition sizes, not which rows pass.
+- **`partitionByDate`** under `defaultTableConfiguration` was dropped from every entry. It is now inherited.
 
 ## Source platform
 
@@ -380,7 +466,7 @@ Generated validation workflows include `sourcePlatform` from the project dialect
 | Teradata | `teradata` |
 | PostgreSQL | `postgresql` |
 
-Optional top-level `affinity: <dialect>` routes work to workers with matching affinity.
+Setup stamps the top-level `affinity` with the project-default label; it routes work to workers carrying the same label.
 
 ## Oracle identifiers
 
