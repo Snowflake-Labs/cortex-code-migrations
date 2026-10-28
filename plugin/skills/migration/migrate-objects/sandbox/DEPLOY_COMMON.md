@@ -72,9 +72,11 @@ Do not write `source_ready` by hand. Do not
 
 | What the JSON says | Do |
 |---|---|
+| `failure_class=testbed_not_generated` (the table's CSV is not in the manifest yet; nothing ran) | Not a failure: do not park, do not spawn `sandbox_specialist`. Run §Table-only data generation for this table, then retry `setup_sandbox` once. |
 | Converted compile (`failure_class=sql`, no `missing_objects`) that is not an unknown function / tokenless catalog | sqlFixLoop (`error=sql`). Do not spawn. |
 | `failure_class=missing_object` (or 42S02 / unknown function), a named id has `onDependsOn` false, `id` is null, **or** that object's SQL/CUR has no bindable catalog (`PUBLIC.X`, tokenless CREATE, empty `target.database`) | Spawn **one** foreground `cur_reconciler` (`run_in_background=false`, `subagent_type="cur_reconciler"`). Then `next_task`. Do not retry from `next_invocation`. Do not sqlFixLoop. |
 | `failure_class=missing_object`, every named id has `onDependsOn` true **and** that SQL/CUR is already bindable | The edge exists. `next_task`. `blockedOn` → `partial`. Do not spawn. Do not stamp. |
+| `failure_class=cannot_open_database` (SQL Server 4060) | The source catalog is missing, the login cannot access it, or it is unavailable; 4060 alone does not say which. Do not spawn. Testbed project: `configure` once (it binds unedited `source:` entries to empty `AIMSBX_TB_*` catalogs), then retry this call once. Still failing → park with one ask naming `cannot_open_database` and the tool's `hint`: check it exists and is online, and that the login can open it; create it, grant access, or rebind `source:`. Do not call it a bad password. |
 | Any other `failure_class` | Spawn **one** foreground `sandbox_specialist` (`run_in_background=false`, `subagent_type="sandbox_specialist"`). Do not call `next_task` first. |
 
 Hand the child's listed fields. `cur_reconciler`: `objectIds` (this object

@@ -1,15 +1,15 @@
 ---
 name: effort-estimate
-description: Generates migration effort estimates by running `scai assessment effort-estimate`, which writes JSON for the assessment multi-report. Supports SQL Server and Redshift.
+description: Generates migration effort estimates by running `scai assessment effort-estimate`, which writes JSON for the assessment multi-report. Supports SQL Server, Redshift, Teradata, and Oracle. Informatica mappings are a row on those projects, the same as SSIS packages.
 parent_skill: assessment
 license: Proprietary. See License-Skills for complete terms
 ---
 
 # Effort Estimates
 
-Thin wrapper over `scai assessment effort-estimate`. SCAI reads SnowConvert reports, bands every object by complexity, prices each band against the dialect's rate card, and writes one timestamped JSON the parent assessment multi-report consumes.
+Thin wrapper over `scai assessment effort-estimate`. SCAI reads the code-unit registry, bands every object by complexity, prices each band against the dialect's rate card, and writes one timestamped JSON the parent assessment multi-report consumes.
 
-- **Supported dialects:** SQL Server, Redshift. Any other dialect aborts with `ASM0031` — report `skipped`, not an error.
+- **Supported dialects:** SQL Server, Redshift, Teradata, Oracle. They price tables, views, procedures, functions, SSIS packages, and Informatica mappings. Any other dialect aborts with `ASM0031` — report `skipped`, not an error.
 
 ## Run
 

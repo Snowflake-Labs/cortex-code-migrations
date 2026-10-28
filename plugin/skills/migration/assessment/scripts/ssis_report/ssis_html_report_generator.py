@@ -634,7 +634,7 @@ class HTMLReportGenerator:
             <div class="info-box" style="background-color: #fff3cd; border-left: 4px solid #ffc107;">
                 Showing assessment detail for {assessed_count:,} of {total:,} SSIS packages.
                 {len(self.unassessed_packages):,} package{'s' if len(self.unassessed_packages) != 1 else ''}
-                ({breakdown}) have no rows in the SnowConvert ETL reports, usually because they
+                ({breakdown}) have no rows in the ETL conversion reports, usually because they
                 were not part of the last conversion run or contain no components, so they
                 are listed here with their conversion status and left out of the metrics below.
             </div>

@@ -11,7 +11,7 @@ Every analysis **MUST** contain these four sections, each as a separate paragrap
 1. **Classification:** - Category + evidence-based reasoning
 2. **Sources & Destinations:** - Connection analysis (INTERNAL vs EXTERNAL)
 3. **Purpose:** - What the package does and why
-4. **Conversion:** - SnowConvert suitability assessment
+4. **Conversion:** - automated-conversion suitability
 
 **Critical:** Sections must be separated by blank lines (paragraph breaks).
 
@@ -94,7 +94,7 @@ Conversion: Package converts with connector solution needed for SharePoint sourc
 ### Bad: Missing Section Headers
 
 ```
-This package loads customer data. It reads from the ODS database and writes to the DDS database. The transformations include derived columns and lookups. It's a good candidate for SnowConvert and should take about 10 hours.
+This package loads customer data. It reads from the ODS database and writes to the DDS database. The transformations include derived columns and lookups. It's a good candidate for automated conversion and should take about 10 hours.
 ```
 
 **Problem:** No clear section headers. Missing Classification, Sources & Destinations, Purpose, Conversion labels.
@@ -104,7 +104,7 @@ This package loads customer data. It reads from the ODS database and writes to t
 ### Bad: No Paragraph Separation
 
 ```
-Classification: Data Transformation. This package loads dimension data. Sources & Destinations: All internal connections to DWHPRODLSTN. Purpose: Loads DimCustomer incrementally. Conversion: Good candidate for SnowConvert.
+Classification: Data Transformation. This package loads dimension data. Sources & Destinations: All internal connections to DWHPRODLSTN. Purpose: Loads DimCustomer incrementally. Conversion: Good candidate for automated conversion.
 ```
 
 **Problem:** All sections on one line. Must have paragraph breaks between sections.

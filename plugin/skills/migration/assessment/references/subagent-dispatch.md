@@ -83,7 +83,7 @@ ASM0031 is skipped, not error.
 
 ### Anti-patterns
 
-Dispatch only for SQL Server.
+Dispatch only for SQL Server and Redshift.
 
 ```text
 Read and follow plugin/skills/migration/assessment/anti-patterns/SKILL.md.
@@ -163,6 +163,8 @@ You are a non-interactive sub-agent. Do not ask questions.
 Context: project_dir, output_dir=<project_dir>/assessment/informatica,
 informatica_target=dbt|scripting, review_mode=auto-review-all (required).
 Call configure(project_dir, etl_informatica_target=<informatica_target>).
+Run the analyzer only through the child's scripts/run-analyzer launcher. If it
+exits non-zero, return error with its message and write no HTML.
 Locate ETL CSVs and follow the child skill to generate JSON and analyze every
 workflow in the selected target mode. Run its summary command, read the AI
 summary guide, write <output_dir>/ai_informatica_summary.html, and register it

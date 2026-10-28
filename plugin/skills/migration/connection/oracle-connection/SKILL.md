@@ -59,16 +59,19 @@ Ask the user:
 > How would you like to provide these? For security, enter the password only in the masked terminal prompt; do not send it in chat."
 
 Options:
-1. **Enter manually** - Provide values interactively
+1. **1Password** - Credentials stored in 1Password vault
+2. **Enter manually** - Provide values directly
+
+Route on the answer:
+
+| User says | Action |
+|-----------|--------|
+| "1Password" | Follow `../1PASSWORD.md` (Oracle section) |
+| "Enter manually" | Proceed to Step 3 |
+| Other credential manager | Check if `../references/<NAME>.md` exists; if not, ask user to explain their setup. Prefer managers that resolve the value inside the same command (`op run`); a store `scai` cannot read is not a path. |
 
 ### Step 3: Add the Connection (Manual Entry)
 
-**Interactive mode (recommended):**
-```bash
-scai connection add-oracle
-```
-
-**Inline mode:**
 ```bash
 scai connection add-oracle \
   -s <CONNECTION_NAME> \
@@ -78,7 +81,10 @@ scai connection add-oracle \
   --service-name <SERVICE_NAME> \
   --user <USERNAME>
 ```
-Password will be prompted securely.
+
+- Omit `--port` if the listener uses the default (`1521`).
+- The CLI prompts for the password securely. Never include it in the command line.
+- When your `bash` has no terminal (the desktop app), that prompt cannot be answered. Get the password with the app's `request_secret` tool and follow the app's rule for filling it into the command; never ask for it in chat.
 
 ### Step 4: Save and Test Source Connection
 
@@ -131,9 +137,9 @@ Then return to the calling skill.
 
 ## Security Rules
 
-- **NEVER** log or display passwords in plain text
-- **NEVER** include passwords in command-line arguments that might be logged
-- Omit `--password`; the CLI prompts for it securely in an interactive terminal
+- **NEVER** log or display secrets (passwords) in plain text.
+- **NEVER** include secrets in command-line arguments that might be logged. Omit `--password`; the CLI prompts for it securely in an interactive terminal.
+- A credential manager helps only when it resolves the value inside the same command (1Password `op run`). Storing the password elsewhere first does not, because `scai` reads credentials only from its own files under `~/.snowflake/scai/connections/`.
 
 ## Quick Reference
 
@@ -143,7 +149,6 @@ Then return to the calling skill.
 | Use existing local driver | `scai project defaults set -s <CONNECTION_NAME> --driver-path <PATH_TO_NUPKG>` |
 | Download driver (macOS/Linux) | `curl -L -o Oracle.ManagedDataAccess.Core.nupkg https://www.nuget.org/api/v2/package/Oracle.ManagedDataAccess.Core` |
 | Download driver (Windows PowerShell) | `curl.exe -L -o Oracle.ManagedDataAccess.Core.nupkg https://www.nuget.org/api/v2/package/Oracle.ManagedDataAccess.Core` |
-| Add connection (interactive) | `scai connection add-oracle` |
 | Add connection (inline) | `scai connection add-oracle -s NAME --auth standard --host HOST --service-name SVC --user USER` |
 | Test connection (first time) | `configure(source_connection=NAME, driver_path=<PATH_TO_NUPKG>)` |
 | Test connection (driver cached) | `configure(source_connection=NAME)` |

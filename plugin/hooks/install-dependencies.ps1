@@ -227,9 +227,35 @@ function Install-UvStandalone {
     return $false
 }
 
+. (Join-Path $ScriptDir "lib/resolve-real-python.ps1")
+
 # pipx (isolated, astral-recommended). Bootstrap pipx via pip --user if absent.
+# The Microsoft Store python stub cannot bootstrap pipx, so it is never invoked.
 function Install-UvPipx {
-    if (-not (Get-Command python -ErrorAction SilentlyContinue)) { return $false }
+    if (Get-Command pipx -ErrorAction SilentlyContinue) {
+        $prevEAP = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            pipx ensurepath *>> $LogFile
+            pipx install uv *>> $LogFile
+            Add-UserPath $uvLocalBin
+            if (Get-Command "uv" -ErrorAction SilentlyContinue) { Log "Installed uv (pipx)"; return $true }
+            Log "pipx install uv did not make uv callable"
+        } catch {
+            Log "pipx install uv failed: $_"
+        } finally {
+            $ErrorActionPreference = $prevEAP
+        }
+        return $false
+    }
+    $bootstrap = Get-UvBootstrapPython
+    if (-not $bootstrap) {
+        Log "No real Python for pipx. The Windows Store python stub cannot install uv."
+        return $false
+    }
+    $pythonExe = $bootstrap.Exe
+    $pythonPrefix = @()
+    if ($bootstrap.Prefix) { $pythonPrefix = @($bootstrap.Prefix) }
     # pip/pipx output goes to the log FILE (*>>), not the console, to keep
     # SessionStart quiet. 'Continue' stops pip stderr from becoming a
     # terminating error while $ErrorActionPreference is 'Stop'.
@@ -246,13 +272,13 @@ function Install-UvPipx {
                 "--trusted-host", "files.pythonhosted.org"
             )
             Log "Installing pip-system-certs (trusted-host bootstrap)..."
-            python -m pip install --user pip -U @pipTrusted --quiet *>> $LogFile
-            python -m pip install --user pip_system_certs -U @pipTrusted --quiet *>> $LogFile
+            & $pythonExe @pythonPrefix -m pip install --user pip -U @pipTrusted --quiet *>> $LogFile
+            & $pythonExe @pythonPrefix -m pip install --user pip_system_certs -U @pipTrusted --quiet *>> $LogFile
             Log "Bootstrapping pipx (pip install --user pipx)..."
-            python -m pip install --user pipx --quiet *>> $LogFile
+            & $pythonExe @pythonPrefix -m pip install --user pipx --quiet *>> $LogFile
         }
-        python -m pipx ensurepath *>> $LogFile
-        python -m pipx install uv *>> $LogFile
+        & $pythonExe @pythonPrefix -m pipx ensurepath *>> $LogFile
+        & $pythonExe @pythonPrefix -m pipx install uv *>> $LogFile
         Add-UserPath $uvLocalBin
         if (Get-Command "uv" -ErrorAction SilentlyContinue) { Log "Installed uv (pipx)"; return $true }
         Log "pipx install uv did not make uv callable"
@@ -359,7 +385,97 @@ function Set-ScaiShim {
     $exe = Join-Path (Join-Path $scaiRoot $Version) "orchestrator\scai.exe"
     New-Item -ItemType Directory -Path $scaiBinDir -Force | Out-Null
     "@echo off`r`n`"$exe`" %*" | Set-Content -Path $scaiShim -Encoding ASCII
+    Set-ScaiActivatedNow $Version
     Add-UserPath $scaiBinDir
+}
+
+function Set-ScaiActivatedNow {
+    # Mark a version activated now: the 14-day rule of Remove-ScaiOldVersions reads
+    # the version dir's mtime, as scai's own activation does.
+    param([string]$Version)
+    if (-not $Version) { return }
+    try {
+        (Get-Item -LiteralPath (Join-Path $scaiRoot $Version) -ErrorAction Stop).LastWriteTimeUtc = [DateTime]::UtcNow
+    } catch {
+        Log "Could not mark scai v$Version activated: $_"
+    }
+}
+
+function ConvertTo-ScaiSemVer {
+    # A version as scai's VersionUtils parses it: a [Version] base (2 to 4 parts) and
+    # its prerelease identifiers; build metadata dropped. $null when it does not parse.
+    param([string]$Text)
+    $v = "$Text".TrimStart('v', 'V')
+    $pre = @()
+    $dash = $v.IndexOf('-')
+    if ($dash -gt 0) {
+        $baseText = $v.Substring(0, $dash)
+        $preText = $v.Substring($dash + 1)
+        $plus = $preText.IndexOf('+')
+        if ($plus -ge 0) { $preText = $preText.Substring(0, $plus) }
+        $pre = $preText.Split('.')
+    } else {
+        $plus = $v.IndexOf('+')
+        $baseText = if ($plus -ge 0) { $v.Substring(0, $plus) } else { $v }
+    }
+    $base = $null
+    if (-not [Version]::TryParse($baseText, [ref]$base)) { return $null }
+    [pscustomobject]@{ Base = $base; Pre = [string[]]$pre }
+}
+
+function Test-ScaiVersionOlder {
+    # True if $Version has lower precedence than $Than, as scai orders versions:
+    # the base, then prerelease identifiers (numeric ones as numbers, below
+    # alphanumeric ones; a release above its prereleases). False if either fails to parse.
+    param([string]$Version, [string]$Than)
+    $a = ConvertTo-ScaiSemVer $Version
+    $b = ConvertTo-ScaiSemVer $Than
+    if (-not $a -or -not $b) { return $false }
+    $c = $a.Base.CompareTo($b.Base)
+    if ($c -ne 0) { return $c -lt 0 }
+    $ap = @($a.Pre); $bp = @($b.Pre)
+    if ($ap.Count -eq 0) { return $false }
+    if ($bp.Count -eq 0) { return $true }
+    for ($i = 0; $i -lt [math]::Min($ap.Count, $bp.Count); $i++) {
+        $x = 0; $y = 0
+        $xNum = [int]::TryParse($ap[$i], [ref]$x)
+        $yNum = [int]::TryParse($bp[$i], [ref]$y)
+        if ($xNum -and $yNum) {
+            if ($x -ne $y) { return $x -lt $y }
+        } elseif ($xNum) {
+            return $true
+        } elseif ($yNum) {
+            return $false
+        } else {
+            $s = [string]::CompareOrdinal($ap[$i], $bp[$i])
+            if ($s -ne 0) { return $s -lt 0 }
+        }
+    }
+    return $ap.Count -lt $bp.Count
+}
+
+function Remove-ScaiOldVersions {
+    # scai's own old-version cleanup (CleanupOldVersions, ApplicationUpdateService.cs)
+    # runs only in its self-update, which SCAI_AUTO_UPDATE=false turns off, so the hook
+    # applies the same rule: remove a version dir under $Root that is older than the
+    # active version and was last activated (its mtime) 14 or more days ago. Never the
+    # active one; nothing when no installed version is active. A failed removal (a
+    # running scai.exe) is retried next session.
+    param([string]$Root, [string]$Active)
+    if (-not $Active -or -not (Test-Path -LiteralPath (Join-Path (Join-Path $Root $Active) "orchestrator\scai.exe"))) { return }
+    $cutoff = [DateTime]::UtcNow.AddDays(-14)
+    $dirs = @(Get-ChildItem -LiteralPath $Root -Directory -ErrorAction SilentlyContinue |
+        Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) })
+    foreach ($dir in $dirs) {
+        if ($dir.Name -eq $Active -or $dir.LastWriteTimeUtc -gt $cutoff) { continue }
+        if (-not (Test-ScaiVersionOlder $dir.Name $Active)) { continue }
+        try {
+            Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction Stop
+            Log "Removed old scai v$($dir.Name) (older than active v$Active, not activated in 14 days)"
+        } catch {
+            Log "WARNING: could not remove old scai v$($dir.Name) ($($dir.FullName)): $_ - retrying next session"
+        }
+    }
 }
 
 function Test-ScaiReachedTarget {
@@ -368,6 +484,20 @@ function Test-ScaiReachedTarget {
     param([string]$Target)
     if (-not $Target) { return $false }
     return (Get-ScaiActiveVersion) -eq $Target
+}
+
+function Get-ScaiInstallAction {
+    # What to do with scai: 'current' (active == target), 'relink' (target on
+    # disk, shim stale), 'keep' (no target because the version check failed,
+    # e.g. a proxy 407, but the active version is installed), or 'install'.
+    param([string]$Target, [string]$Active)
+    if ($Target) {
+        if ($Active -eq $Target) { return 'current' }
+        if (Test-ScaiVersionInstalled $Target) { return 'relink' }
+        return 'install'
+    }
+    if (Test-ScaiVersionInstalled $Active) { return 'keep' }
+    return 'install'
 }
 
 $start         = Get-Date
@@ -392,14 +522,21 @@ $activeVersion = Get-ScaiActiveVersion
 # Target version: an explicit config pin wins over the channel's latest.
 $scaiTarget = if ($ScaiVersionPin) { $ScaiVersionPin } else { $latest }
 
-if ($scaiTarget -and ($activeVersion -eq $scaiTarget)) {
+$scaiAction = Get-ScaiInstallAction -Target $scaiTarget -Active $activeVersion
+
+if ($scaiAction -eq 'current') {
     # Already on the target version -- ensure PATH only, no download.
     Add-UserPath $scaiBinDir
     Log "scai up to date (channel=$($env:SCAI_CHANNEL), v$scaiTarget) ($([math]::Round(((Get-Date) - $start).TotalSeconds))s)"
-} elseif ($scaiTarget -and (Test-ScaiVersionInstalled $scaiTarget)) {
+} elseif ($scaiAction -eq 'relink') {
     # Target already on disk but launcher stale/missing -- re-point only, no download.
     Set-ScaiShim $scaiTarget
     Log "scai relinked to v$scaiTarget (channel=$($env:SCAI_CHANNEL)) ($([math]::Round(((Get-Date) - $start).TotalSeconds))s)"
+} elseif ($scaiAction -eq 'keep') {
+    # The latest version is unknown, but a working scai is active: keep it
+    # rather than reinstall it on every session behind a blocking proxy.
+    Add-UserPath $scaiBinDir
+    Log "scai version check skipped (metadata unreachable); keeping active v$activeVersion ($([math]::Round(((Get-Date) - $start).TotalSeconds))s)"
 } else {
     # Install/update needed: official channel-aware installer first, then manual fallback.
     if ($ScaiVersionPin) {
@@ -503,6 +640,7 @@ if ($scaiTarget -and ($activeVersion -eq $scaiTarget)) {
         }
     }
 
+    if ($scaiInstalled) { Set-ScaiActivatedNow (Get-ScaiActiveVersion) }
     $elapsed = [math]::Round(((Get-Date) - $start).TotalSeconds)
     if ($scaiInstalled) {
         Log "Installed scai CLI (${elapsed}s)"
@@ -511,7 +649,13 @@ if ($scaiTarget -and ($activeVersion -eq $scaiTarget)) {
     }
 }
 
-# Auto-update disabled via the session-scoped SCAI_AUTO_UPDATE env var set above.
+# Auto-update disabled via the session-scoped SCAI_AUTO_UPDATE env var set above,
+# so prune old versions here, as scai's update would (see Remove-ScaiOldVersions).
+try {
+    Remove-ScaiOldVersions -Root $scaiRoot -Active (Get-ScaiActiveVersion)
+} catch {
+    Log "WARNING: old scai version cleanup failed: $_"
+}
 
 # Stop-ProcessTree PROCESS: kill a process and its children (an installer's own
 # setup process, which Kill() alone leaves running).

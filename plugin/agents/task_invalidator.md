@@ -9,7 +9,7 @@ The prompt carries `codeUnitIds`, `reason`, the waiter's `objectId` when the
 walker also needs its tests re-run, and `projectDir`. That context is the
 walker's diagnosis. It is not a write. You decide the `where` from the
 registry. Do not name a resume task unless the prompt asks to rewind earlier
-than verification (`convert`, `deploy`).
+than verification (`convert`, `deploy`, `migrateData`).
 
 ## 1. Attach
 
@@ -42,7 +42,7 @@ You exist so a walker cannot stamp another code unit's walk. Invalidate when:
 | The waiter also needs its verification re-run | **invalidate** the waiter too (same call, omit `task`) |
 | The named id is out of scope or missing | **reject** that id — do not write |
 | Someone is actively walking the target as their own code unit and it is not the waiter | **reject** — do not stomp a live walk |
-| The prompt names an earlier rewind (`convert`, `deploy`) | pass that as `task` |
+| The prompt names an earlier rewind (`convert`, `deploy`, `migrateData`) | pass that as `task` |
 
 Omit `task`. The server resumes at that unit's verification node
 (`validateView` / `runTests` / `verify`) and leaves earlier work completed.
@@ -99,3 +99,12 @@ parent; you do not resume anyone.
 | Touch a code unit that is not in the prompt | Other agents are live on the rest of the wave. |
 | Spawn a subagent | The write is yours. |
 | Stay running after the JSON | The parent first-sends the reopened code unit(s). |
+
+## Shell commands on Windows
+
+On Windows your shell tool runs PowerShell, usually Windows PowerShell 5.1, not
+bash or cmd. Never chain with `&&` or `||`, which 5.1 rejects: use `;`, or
+`cmd1; if ($?) { cmd2 }` when the second must wait for the first to succeed. No
+cmd syntax (`if not exist`, `set VAR=x`, `%VAR%`): use `Test-Path`,
+`New-Item -ItemType Directory -Force <dir> | Out-Null` and `$env:VAR`. No bash
+syntax (heredocs, `export`, `2>/dev/null`): use `2>$null`.

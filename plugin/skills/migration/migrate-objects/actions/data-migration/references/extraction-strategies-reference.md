@@ -26,14 +26,14 @@ projects configured earlier keep their behavior. Prefer `odbc` when the user act
 | **`cet_as`** (recommended) | SQL Server CETAS → Azure Blob → Snowflake external stage | SQL Server 2022+ / compatible SKU with CETAS objects ready |
 | **`cloud_direct`** | Worker streams Parquet to object storage → Snowflake external stage | Azure SQL Database, or SQL Server Iceberg when CETAS is unavailable; write credentials + matching stage ready |
 | **`bcp`** (worker method; workflow `regular`) | Worker runs **BCP** for **bulk** extraction → Snowflake internal stage | `bcp` on worker PATH + `use_bcp = true` |
-| **`odbc`** | Data Exchange Worker reads via **Microsoft ODBC Driver** → Snowflake internal stage | Fallback |
+| **`odbc`** | Data Exchange Worker reads via Microsoft's native **`mssql-python`** driver (**Microsoft ODBC Driver** on macOS 14 and earlier, or when `extra_options` holds a keyword `mssql-python` does not accept) → Snowflake internal stage | Fallback |
 
 **Setup required**
 
-- [worker-local-setup/SKILL.md](../../../../data-infrastructure/worker-local-setup/SKILL.md) — ODBC driver pre-flight (`odbcinst -q -d`)
+- [worker-local-setup/SKILL.md](../../../../data-infrastructure/worker-local-setup/SKILL.md) — SQL Server driver: `scai` installs `mssql-python` with the worker, so the ODBC driver pre-flight (`odbcinst -q -d`) applies only on macOS 14 and earlier, with BCP or CETAS, and when the worker TOML's `extra_options` holds a keyword `mssql-python` does not accept (the worker then falls back to `pyodbc`; the doctor's *SQLServer driver* row still passes)
 - Worker TOML `[connections.source.sqlserver]` — standard host/port/database/credentials from `scai data worker generate-config`
 - CETAS: external data source + Parquet format + matching Snowflake external stage
-- BCP: Worker TOML `use_bcp = true`; workflow `extraction.strategy: regular`. There is no fallback when `bcp` is missing—the task fails. BCP always uses the worker's field/row terminators and UTF-8. It covers **bulk `data_movement` only**; other task types read over ODBC regardless, so the driver still has to be present.
+- BCP: Worker TOML `use_bcp = true`; workflow `extraction.strategy: regular`. There is no fallback when `bcp` is missing—the task fails. BCP always uses the worker's field/row terminators and UTF-8. It covers **bulk `data_movement` only**; other task types read through the worker's SQL Server driver. The `bcp` utility itself needs the Microsoft ODBC Driver, so with BCP the driver has to be present on every host.
 - ODBC: Worker TOML `use_bcp = false`; workflow `extraction.strategy: regular`
 
 Azure SQL Database does not support CETAS: use `cloud_direct` when its object-store prerequisites are
@@ -129,7 +129,7 @@ available for **every supported source dialect**, with one hard rule.
 > Iceberg.
 >
 > **Supported flavor: a Snowflake-managed Iceberg table (spec v2 or v3) on an external volume** with
-> `storageMode: compatible` and load mode `ADD_FILES_COPY` or `FULL_INGEST`. External / AWS-Glue / other
+> `storageMode: compatible` (or `native` on v3) and load mode `ADD_FILES_COPY` or `FULL_INGEST`. External / AWS-Glue / other
 > catalogs are out of scope. If that is not what the user wants, migrate to **native** tables instead.
 
 Supported path:

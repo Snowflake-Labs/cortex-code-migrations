@@ -103,7 +103,7 @@ Found M PBIT files with unsupported queries:
    - Query "Y"
 
 Total: N unsupported queries in M files
-Note: All other queries already converted by SnowConvert will not be modified.
+Note: All other queries that were already converted will not be modified.
 ```
 
 Ask for confirmation before proceeding.
@@ -312,10 +312,10 @@ When translating PowerQuery expressions:
 
 ## Output
 
-**Updated** SnowConvert-processed PBIT files where:
+**Updated** converted PBIT files where:
 - "Unsupported" queries in DataModelSchema have been converted to Snowflake connector
 - "Unsupported" queries in UnappliedChanges have been converted (if file exists)
 - Parameter definitions remain unchanged in both files
-- All other queries remain exactly as SnowConvert converted them
-- Original SnowConvert output backed up to `.backup` files
+- All other queries remain exactly as converted
+- Original conversion output backed up to `.backup` files
 - Assessment report CSV updated with new status

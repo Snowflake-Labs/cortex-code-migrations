@@ -26,7 +26,7 @@ Snowflake AIM for Data Warehouses processes Informatica PowerCenter workflows an
 
 ### Critical Understanding
 
-**SnowConvert will process all workflows**, but the analysis must identify external connectivity requirements.
+**Every workflow will be converted**, but the analysis must identify external connectivity requirements.
 
 **dbt mode:** dbt projects on Snowflake cannot directly connect to external sources — data must already exist in Snowflake.
 
@@ -126,7 +126,7 @@ This classification applies when you observe in the workflow analysis (mapping l
 
 4. **No external connection indicators:** All sources/targets reference the same database platform or known internal schemas.
 
-**SnowConvert Outcome:**
+**Conversion outcome:**
 - Workflow → Snowflake Tasks
 - Mappings → dbt models (dbt mode) / Stored procedures (scripting mode)
 - **Excellent conversion candidate** in both modes
@@ -153,7 +153,7 @@ This classification applies when you observe in the workflow analysis (mapping l
 
 4. **HTTP Transformations or Stored Procedure calls to external systems.**
 
-**SnowConvert Outcome:**
+**Conversion outcome:**
 - Workflow → Snowflake Tasks
 - Mappings → dbt projects (dbt mode) / Stored procedures (scripting mode) — but external sources need connector alternatives
 - **Requires external connector solution** — identify source type and recommend approach
@@ -183,7 +183,7 @@ This classification applies when you observe in the workflow analysis (workflow 
 
 5. **Email tasks:** Notification workflows.
 
-**SnowConvert Outcome:**
+**Conversion outcome:**
 - Workflow → Snowflake Tasks with procedural Snowflake Scripting
 - Command tasks → Stored procedures or external orchestration
 - **May require Airflow** for complex orchestration patterns
@@ -208,7 +208,7 @@ This classification applies when you observe in the workflow analysis (mapping l
 
 3. **Sessions that load then transform:** The workflow loads data from external source to staging, then subsequent sessions perform significant transformation logic on that staged data.
 
-**SnowConvert Outcome:**
+**Conversion outcome:**
 - **Partial candidate** — transformation portions can convert, ingestion cannot
 - **dbt mode:** Recommend architectural separation: ingestion via Fivetran/Airflow, transformation via dbt models
 - **scripting mode:** Recommend architectural separation: ingestion via Fivetran/Airflow, transformation via stored procedures
@@ -297,9 +297,19 @@ Before submitting analysis, verify:
 
 After completing analysis:
 
+Windows (PowerShell):
+
+```powershell
+& "<SKILL_DIR>\scripts\run-analyzer.ps1" informatica <JSON_PATH> update "<WORKFLOW_PATH>" --ai-status DONE --ai-analysis "..." --classification "Data Transformation"
+```
+
+macOS and Linux:
+
 ```bash
-uv run python -m informatica_assessment_analyzer informatica <JSON_PATH> update '<WORKFLOW_PATH>' \
+"<SKILL_DIR>/scripts/run-analyzer.sh" informatica <JSON_PATH> update '<WORKFLOW_PATH>' \
   --ai-status DONE \
   --ai-analysis "..." \
   --classification "Ingestion|Data Transformation|Configuration & Control|Mixed: Ingestion + Transformation"
 ```
+
+If the launcher exits non-zero, stop. Do not write a substitute HTML file.

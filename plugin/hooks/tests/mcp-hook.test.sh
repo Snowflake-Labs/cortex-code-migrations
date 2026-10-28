@@ -158,4 +158,14 @@ out=$(
 [ -z "$out" ] || fail "missing scai must be silent, got: $out"
 [ ! -f "$cache" ] || fail "skip must not write a cache"
 
+# SNOW-4342644: a skip still exits 0, but says on stderr which hook did not run,
+# so a bundle with no migration-mcp-server shows up in the Cortex log.
+err=$(
+  env -u MIGRATION_MCP_SERVER_BIN -u SCAI_CLI PATH="/usr/bin:/bin" \
+    sh "$hook" stamp-agent-id </dev/null 2>&1 >/dev/null
+) || fail "skip must exit 0"
+[ "$(printf '%s\n' "$err" | wc -l | tr -d ' ')" = "1" ] || fail "skip must print one stderr line, got: $err"
+printf '%s\n' "$err" | grep -Fq "migration-mcp-server not found" || fail "skip stderr: $err"
+printf '%s\n' "$err" | grep -Fq "stamp-agent-id" || fail "skip stderr must name the hook: $err"
+
 echo "mcp-hook.sh tests passed"

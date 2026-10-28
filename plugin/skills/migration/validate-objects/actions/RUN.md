@@ -34,7 +34,23 @@ or invalid identifier / compilation error in generated validation SQL is
 deterministic: park it with the exact evidence and required repair instead of
 dispatching the same workflow again.
 
+Under `subagent_mode`, a row-count mismatch that is a bad load of a table this
+project loaded itself ([data-migration](../../migrate-objects/actions/data-migration/SKILL.md),
+*Clearing a bad load*) is no park: spawn one foreground `task_invalidator` with this
+table's id as `codeUnitIds` and `waiterId`, resume task `migrateData`, and the source
+and target counts as `reason`. Then `migration_status(mode="next_task")` and run
+`migrateData` again; its reload replaces the rows. Any other mismatch parks as above.
+
 ## Interactive (not a walker)
+
+When `.scai/config/plugin.yml` records `data_orchestrator_placement: direct`
+(a small SQL Server source, chosen in data-infrastructure Step 0.a), the direct
+path is the normal one: `validate_data(mode="run", workflow_path=<path>)` runs
+`--direct` synchronously with no `direct` argument and no infrastructure. Do not
+call `data_infrastructure` and do not arm Monitor; the response `status` is the
+result, stamped as in §2. Do not pass `direct=false`: it is refused, since no
+orchestrator runs for this project. Re-validation needs an orchestrator too: on `direct`,
+re-run `validate_data(mode="run")` on the failed tables instead of `revalidate`.
 
 If the response has `status="started"` and a `monitor` block, you are on the
 orchestrated path: infrastructure must already be up via `data_infrastructure(mode="up")`.
@@ -42,3 +58,16 @@ Arm the `monitor.watch_command` (or return `waiting` if you are a walker on a
 sibling blocker). When its terminal event's `detail.completion` arrives, stamp the
 outcome as in §2. Use `validate_data(mode="revalidate", workflow_name=<finished parent>)`
 to retry only failed partitions of a finished orchestrated run.
+
+If the orchestrated run keeps failing on a SQL Server project, run the reviewed
+workflow with `validate_data(mode="run", workflow_path=<path>, direct=true)`
+(synchronous `--direct`, metrics validation off, recorded as this task's
+attempt). Never run `scai data validate start --direct` from a shell: that run
+is not recorded.
+
+If a shell `--direct` run already validated the tables, record it with
+`validate_data(mode="record", workflow_name=<its WORKFLOW.NAME>,
+workflow_path=<the YAML it ran>)` instead of running it again. It works on every
+dialect, and records the run only if the workflow finished, passed every table,
+and is newer than the table's last attempt. A `status="refused"` names the table
+and the check it failed.

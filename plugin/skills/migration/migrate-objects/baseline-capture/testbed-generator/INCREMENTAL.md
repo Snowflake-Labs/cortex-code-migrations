@@ -23,9 +23,9 @@ Never open `testbed/mine/unsolved-view.json`, `testbed/validate/readiness-view.j
 uses affected-table semantics and exact CodeUnitId matching.
 
 Pass `objectId` only on every `testbed` call. Do not pass a name. The driver
-turns that id into `--where "id = '<objectId>'"` for `init` and `generate`
-(CUR filters). `list-unsolved` / `validate` / `propose-enrichments` still take
-the object as a positional.
+turns that id into a `--where` CUR filter for `init` and `generate`.
+`list-unsolved` / `validate` / `propose-enrichments` still take the object as a
+positional.
 
 ## Lease
 
@@ -36,6 +36,8 @@ a lock. If you get `table pipeline busy` after that wait, retry.
 
 1. Call `testbed(phase="mine", objectId=<id>)` to initialize
    the table and write a fresh `<object-artifacts>/testbed/unsolved-view.json`.
+   The first table of a wave to mine initializes every converted table of that
+   wave, so a later table's first mine may run no `init`.
    If the message still says `table pipeline busy`, retry.
 2. Read the fresh scoped unsolved view. Do not reopen a constraint that is not listed.
    Call `testbed(phase="validate", objectId=<id>)` and read
