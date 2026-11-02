@@ -15,9 +15,19 @@ Set up and run the Data Exchange Worker on whatever machine will execute it: a l
 
 Prerequisites depend on the **source dialect** and the **extraction strategy** chosen in data migration setup. Load [extraction-strategies-reference.md](../../migrate-objects/actions/data-migration/references/extraction-strategies-reference.md) for the full matrix; complete the matching section below before Step 1.
 
-### SQL Server — `regular` (ODBC)
+### SQL Server — `regular` (`odbc` method)
 
-The Data Exchange Worker connects to SQL Server via the Microsoft ODBC Driver. Before starting the worker, verify it is installed.
+`scai` installs the Data Exchange Worker with Microsoft's native `mssql-python` driver (the worker's `sqlserver` extra), which bundles its own ODBC binaries. On Windows, Linux and macOS 15 or later the worker then reads SQL Server with no ODBC driver installed on the host. Skip the ODBC pre-flight below and continue to Step 1 only when none of the cases below applies.
+
+The Microsoft ODBC Driver for SQL Server (`msodbcsql18`, with unixODBC on Linux and macOS) is still required, so run the pre-flight below, when:
+
+- the host is **macOS 14 or earlier** (`sw_vers -productVersion`): `mssql-python` publishes no build for it, so `scai` leaves it out and the worker connects through `pyodbc` and the ODBC driver;
+- the selected method is **`bcp`** (below): the `bcp` utility itself needs the ODBC driver;
+- the extraction strategy is **`cet_as`**: the worker issues the CETAS export through `pyodbc`;
+- the worker TOML's `[connections.source.sqlserver.extra_options]` holds a keyword `mssql-python` does not accept: the worker then connects through `pyodbc` for that connection (it logs "extra_option … is not supported by the native SQL Server driver; using the ODBC fallback"). The doctor's *SQLServer driver* row still passes in this case, since it only checks that `mssql-python` is installed;
+- `scai data worker start` fails its doctor on the *SQLServer driver* row (a passing row reads "SQL Server native driver (mssql-python) available"): the installed worker has no `mssql-python` and fell back to `pyodbc`.
+
+The pre-flight checks that the ODBC driver is installed.
 
 **On Linux**, run, with the absolute directory of this `SKILL.md` and the migration project directory:
 
@@ -90,9 +100,16 @@ extraction strategy.
 
 ### SQL Server — `bcp`
 
-`use_bcp = true`; verify `bcp` is on the worker `PATH`, because there is no fallback. BCP covers bulk
-`data_movement` only, so the ODBC pre-flight above still applies. Workflow strategy remains `regular`.
-For selected method `odbc`, `use_bcp = false` and only the ODBC pre-flight matters.
+`use_bcp = true`; verify `bcp` is on the worker `PATH`, because there is no fallback. The `bcp` utility
+needs the Microsoft ODBC Driver for SQL Server on every host, so run the ODBC pre-flight above too. BCP
+covers bulk `data_movement` only; other task types read through the worker's SQL Server driver.
+Workflow strategy remains `regular`. For selected method `odbc`, `use_bcp = false` and only the
+`regular` section above applies.
+
+### SQL Server — `cet_as`
+
+The worker issues the CETAS export through `pyodbc`, so run the ODBC pre-flight in the `regular`
+section above on every host.
 
 ### Oracle — `regular` (ODP.NET)
 
@@ -156,17 +173,23 @@ See [`../references/worker-config-reference.md`](../references/worker-config-ref
 
 ## Step 2 — Start the Worker
 
-Run:
+**On this machine** (the one AIM runs on), start the worker with:
 
-```bash
-scai data worker start --local
+```
+data_infrastructure(mode="up", start_worker=true)
 ```
 
-This command installs the worker if it is not already present, then starts it using the project-default configuration at `.scai/config/dew_configuration.toml`.
+Never run `scai data worker start --local` here through Bash: it runs the worker in the foreground and does not exit, so the call never returns. `up` installs the worker if it is not already present, applies the project-default `.scai/config/dew_configuration.toml`, runs the Level 1 Data Doctor gate, and returns once the worker reports ready. It keeps the orchestrator placement recorded in `.scai/config/plugin.yml` and resumes an orchestrator that is already up, so pass no `compute_pool`. `start_worker=true` is needed when an earlier `up` ran with `start_worker=false` (for example while ODBC was missing), because that recorded no local worker. `data_infrastructure(mode="down")` stops the worker later.
 
-Use the status printed by this command. **Never add a Bash `sleep` or shell
-polling loop after startup**; if startup does not report a healthy worker,
-diagnose that result directly.
+**On another host** (a VM or server AIM does not run on, or one host per worker when scaling out), the user runs this there:
+
+```bash
+scai data worker start --local --detach
+```
+
+It installs the worker if needed, starts it in the background on the project-default config and returns once every worker thread reports ready, or exits non-zero with the end of the worker log. `scai data worker stop --local` stops it. Without `--detach` the worker stays in that terminal until `Ctrl+C`.
+
+**Never add a Bash `sleep` or shell polling loop after startup**; if startup does not report a ready worker, diagnose that result directly.
 
 Tell the user:
 
@@ -174,10 +197,10 @@ Tell the user:
 
 ## Step 3 — Verify the Worker Is Running
 
-The CLI prints worker status on startup. Confirm the output shows the worker has connected to the orchestrator and is polling for tasks.
+On this machine, read the `up` response: `status` is `ready`, `worker` is `started` and `worker_placement` is `local`. Relay its `cost_reminder`. Any other `status` carries a `message` and `remediation`: follow them. On another host, `--detach` exiting 0 means the worker is polling for tasks.
 
 If the worker fails to start, check:
-- **SQL Server only:** ODBC driver installed (`odbcinst -q -d | grep -i "ODBC Driver"`, or `install_odbc_user.py --check` after a user-level install) — if missing, follow the pre-flight instructions in the Prerequisites section above
+- **SQL Server only:** the doctor's *SQLServer driver* row. It passes whenever `mssql-python` is installed, which is not enough on its own: when it fails, or on macOS 14 or earlier, with `bcp` or `cet_as`, or with an `extra_options` keyword `mssql-python` does not accept, the ODBC driver must be installed (`odbcinst -q -d | grep -i "ODBC Driver"`, or `install_odbc_user.py --check` after a user-level install) — if missing, follow the pre-flight instructions in the Prerequisites section above
 - Source database credentials in the TOML config
 - Network connectivity to the source database from the host
 - Snowflake connection details in `~/.snowflake/config.toml` (or `%USERPROFILE%\.snowflake\config.toml` on Windows)

@@ -4714,7 +4714,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
                         <div style="color: #856404; font-size: 0.95em; text-align: left; padding: 10px; background: rgba(255,193,7,0.1); border-radius: 4px;">
                             <p style="margin: 0 0 10px 0;"><strong>What happened:</strong> ${missingDepsWarning}</p>
                             <p style="margin: 0 0 10px 0;"><strong>What this means:</strong> The report could not find either ObjectReferences.csv (with Referenced_Element_Type='MISSING' filtering) or the legacy MissingObjectReferences.csv file in the reports directory.</p>
-                            <p style="margin: 0;"><strong>Next steps:</strong> Please verify your SnowConvert reports directory contains the necessary CSV files. This does NOT mean there are no missing dependencies - the data source is simply unavailable for analysis.</p>
+                            <p style="margin: 0;"><strong>Next steps:</strong> Please verify your conversion reports directory contains the necessary CSV files. This does NOT mean there are no missing dependencies - the data source is simply unavailable for analysis.</p>
                         </div>
                     </div>
                 `;

@@ -30,8 +30,8 @@ card, so never ask a standalone ETL yes/no. Ask which platform via `ask_user_que
 
 > "Which ETL platform is it?"
 >
-> 1. **SSIS** — `.dtsx` packages (native SnowConvert)
-> 2. **Informatica Power Center** — XML repo export (native SnowConvert)
+> 1. **SSIS** — `.dtsx` packages (converted natively)
+> 2. **Informatica Power Center** — XML repo export (converted natively)
 > 3. **Another ETL platform** — Talend, Alteryx, Informatica Cloud / IICS, DataStage,
 >    Pentaho, Azure Data Factory, or something else (routes through AI-First)
 

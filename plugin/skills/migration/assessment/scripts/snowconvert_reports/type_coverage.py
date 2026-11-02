@@ -107,15 +107,15 @@ _SUB_MICROSECOND = (
 _INTERVAL = "Compared as a native INTERVAL by default; the handling is configurable."
 _ORACLE_CHAR_ANTI_CASE = (
     "Snowflake stores CHAR internally as VARCHAR/TEXT; DM aligns the dict "
-    "target with runtime rather than SCAI's DDL literal."
+    "target with runtime rather than the converted DDL literal."
 )
 _ORACLE_RAW_ANTI_CASE = (
-    "SCAI drops the size when converting RAW; DM keeps catalog "
+    "The size is dropped when RAW is converted; DM keeps catalog "
     "<code>char_length</code> and emits BINARY(n) because it is strictly more "
-    "informative than SCAI's bare BINARY."
+    "informative than the converted bare BINARY."
 )
 _ORACLE_BARE_NUMBER = (
-    "SCAI emits NUMBER(38,18) for bare NUMBER; DM cannot distinguish bare "
+    "Converted code uses NUMBER(38,18) for bare NUMBER; DM cannot distinguish bare "
     "NUMBER from NUMBER(*) via catalog and keeps the default helper. Per-column "
     "<code>validationCustomTypeRules</code> is the escape hatch."
 )
@@ -124,10 +124,10 @@ _ORACLE_DATE_AS_TIMESTAMP = (
     "DATE drops the time component, so migrations preserve it as TIMESTAMP_NTZ."
 )
 _ORACLE_FIXED_ROWID_SIZE = (
-    "Emits as VARCHAR(18) per SCAI OraSimpleDataTypeReplacer fixed size."
+    "Converted as VARCHAR(18) (fixed size)."
 )
 _ORACLE_FIXED_UROWID_SIZE = (
-    "Emits as VARCHAR(4000) per SCAI (Oracle SQL Reference default width)."
+    "Converted as VARCHAR(4000) (Oracle SQL Reference default width)."
 )
 
 

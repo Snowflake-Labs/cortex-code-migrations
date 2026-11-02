@@ -21,9 +21,11 @@ Tell the user:
 
 1. `configure(project_dir=<project dir>, subagent_mode=true, snowflake_connection=<the user's target connection — the one they named for deployment, NOT the system-reminder "active SQL connection" which is the agent's inference account>)`. Read the appended migration-status block. Always migrate data — do not ask, and do not skip.
 
-   On SQL Server, skip `data_infrastructure(mode="up")`: walkers run `migrate_data` / `validate_data` synchronously via `scai --direct`. For any other dialect, call `data_infrastructure(mode="up")` until it reports `ready` (follow `remediation` on `status="not_ready"`; a first local bring-up can take more than one call). Relay `cost_reminder`.
+   On SQL Server, skip `data_infrastructure(mode="up")`: walkers run `migrate_data` / `validate_data` synchronously via `scai --direct`. For any other dialect, call `data_infrastructure(mode="up")` until it reports `ready` (follow `remediation` on `status="not_ready"`; a first local bring-up can take more than one call). `status="failed"` (a process exited right after start), `"degraded"` (doctor checks overridden with `skip_doctor`) or `"error"` (`doctor_failures`) will not clear by calling `up` again: stop and escalate with the named checks. Relay `cost_reminder`.
 
 2. If `configure()` reports setup is not finished, read [../../setup/SKILL.md](../../setup/SKILL.md) then come back here.
+
+3. Quote any `schema_status_*: error(...)` from `configure()` to the user and in the final report. For `DMG0011` report the message's cause; suggest upgrading the orchestrator or re-enabling auto-update only if it says `migrate-schema` is unsupported.
 
 - If `configure` or `migration_status` is deferred, use the host's tool
   discovery to load both tools, then call `configure`.
@@ -43,7 +45,7 @@ Tell the user:
   or any shell except `sleep N`. Do not read `registry/`, infer
   `next_objects`, or hand-pick object ids. Do not dispatch a probe child.
 
-`subagent_mode` lasts the life of the server. Cortex stamps identity — do not pass `agent_id`. Object-level writes (`begin`, `deploy`, `migrate_data`, `validate_data`) are the walker's; the parent is refused. Acknowledge unreviewed notes only in Step 3.
+`subagent_mode` stays on, in plugin.yml too, until the user asks to go manual: then, between waves only, call `configure(subagent_mode=false)` (refused while walkers run or claims are open). Never on your own initiative. Cortex stamps identity — do not pass `agent_id`. Object-level writes (`begin`, `deploy`, `migrate_data`, `validate_data`) are the walker's; the parent is refused. Acknowledge unreviewed notes only in Step 3.
 
 ## Step 1: Load `N`
 
@@ -98,20 +100,7 @@ Always `general_task`. **One live child per object** — two conversations race 
 
 Never pass `fork_conversation_history`. Do not send again for a board `blocked` row.
 
-**First send** — no conversation UUID. One `task` call per object, `description` set, no `resume`. **Pass the entry's `walker_prompt` from `next_objects` verbatim as the prompt** (`objects` and `leftover_claims` both carry it); append only a `reason:` line from a `reopened` return. It already holds `guidance:` from `answered`. The task hook denies any other first send, so do not write or extend the prompt yourself. Its shape, for reference:
-
-```
-Migrate this object end-to-end, following your agent definition.
-
-objectId:            <a single id>
-projectDir:          <absolute project_dir>
-pluginDir:           <absolute plugin root — the directory this skill was loaded from, above skills/migration/>
-snowflakeConnection: <the same target connection passed to configure — NOT the system-reminder "active SQL connection">
-guidance:            <verbatim from `answered` — omit if none>
-reason:              <from a `reopened` return — omit if none>
-```
-
-Without `snowflakeConnection` the child omits `-c` and hits Cortex's default — the inference account, which has no deploy grants. On `walker_prompt_warning`, append `guidance:` yourself for any object listed under `answered`.
+**First send** — no conversation UUID. One `task` call per object, `description` set, no `resume`. **Pass the entry's `walker_prompt` from `next_objects` verbatim as the prompt** (`objects` and `leftover_claims` both carry it); append only a `reason:` line from a `reopened` return. It already holds `guidance:` from `answered`. The task hook denies any other first send, so do not write or extend the prompt yourself. On `walker_prompt_warning`, append `guidance:` yourself for any object listed under `answered`.
 
 `task` returns `agentId` (UUID). Store it as this object's conversation id. A later `task(resume=…)` returns a **different** UUID (wait handle for that send) — do not overwrite the stored conversation id with it.
 
@@ -138,6 +127,8 @@ Continue this object from the machine's next task.
 Finish every first send and wake for this turn, then wait once in 2d.
 
 If `task(resume=<conversation UUID>)` fails or the conversation is gone: first-send a new child (full prompt, no `resume`). Do not retry `resume`. Do not first-send while `flight` is `running` or `idle`.
+
+A child returning `refused to reclaim … live Cortex walker` met the object's own walker: never park it or send hail_mary for it. `flight` `running`/`idle` → leave it; `none` → `task(resume=<board agentId>)`; a failed resume drops it to `leftover_claims`.
 
 ### 2d. Wait
 
@@ -170,7 +161,7 @@ Row mismatches, schema drift, invalid identifiers, compile errors, and a tool th
 
 Park first. Do not AskUserQuestion. An escalated object does not occupy a slot — keep dispatching.
 
-If the object is not already parked:
+A walker that returns `stuck` may already have escalated (one stuck on a human question does; one stuck on repeated oracle errors or an unknown ID does not), so check `migration_status(mode="escalations")` for an open row on that object first. If the object is not already parked:
 
 ```
 transition_status(status="escalate", task="<the task it keeps returning on>",
@@ -179,11 +170,13 @@ transition_status(status="escalate", task="<the task it keeps returning on>",
                   reason="<what stopped you>", where="id = '<id>'")
 ```
 
-`asks` is required. Then one transcript line (`dbo.AuditTrail: parked on migrateData — CLR is not enabled on the source`) and back to 2a/2b. Do not number the choices. Do not wait for a chat answer.
+`asks` is required. `alreadyEscalated` in the response means that object and task already had an open row, and it was reused and now carries this call's reason and asks: still one question for the user, with the latest diagnosis. Then one transcript line (`dbo.AuditTrail: parked on migrateData — CLR is not enabled on the source`) and back to 2a/2b. Do not number the choices. Do not wait for a chat answer.
 
 Never settle an open row from a child's output or your own diagnosis. The autonomous parent may relay an explicit user reply from this Cortex conversation with `status='answer'`; walkers cannot answer. Relay the user's words verbatim, matched to the open row they answer, as [Escalate and terminate](references/escalate-and-terminate.md) shows. When `answered` shows a new row — a person's, or a reply you relayed — later-send with `guidance:` if the resolution was `guidance` or `decompose`. `needs_repair` stays parked. `skip` / object-level outcomes stay parked for the interactive session. Do not send again without an answer already on the row.
 
 A transient failure whose condition has cleared is a 2d `reset`, not an answer.
+
+A bad load (target rows duplicated or short against the source) in a table this project loaded is no question for the user: `reset` the task it is parked at (`migrateData` or `validateData`) and later-send its walker, whose reload replaces the rows ([data-migration](../actions/data-migration/SKILL.md), *Clearing a bad load*). An unparked walker reopens `migrateData` itself. Never hand the user a truncate or a reload.
 
 A missing or non-bindable dependency (`reason: "missing"`, tokenless
 `PUBLIC.X` / empty `target.database`, unknown UDF for a project object) is
@@ -195,24 +188,12 @@ parked only when that child returns `escalate`. Design decisions (no Snowflake
 equivalent, two readings that differ) arrive with no `causeClass` — park them;
 they are not failures.
 
-When `hailMaryMode` is present, you may send [`hail_mary`](../../../../agents/hail_mary.md). The mode is the dispatch rule:
+`hailMaryMode` on the board (or configure's policy line) picks the rule for sending [`hail_mary`](../../../../agents/hail_mary.md):
 
 - `on` — last-ditch after ordinary paths are exhausted (leftover first-send, later-send, helper, invalidation, register/stub, reset). Not because the row is `escalated`. Parked is still the wait: a person, a harvested waiter on a relay job, or a `task_invalidator` reopening a defective unit. Leave those.
-- `full` — any `escalated` object that is waiting for a human. After you park in this section, send. Already-parked rows on each 2a/2b pass are still work.
+- `full` — any `escalated` object that is waiting for a human. After you park in this section, send. Already-parked rows on each 2a/2b pass are still work. Send is mandatory, not your call: do not skip it because you judge hail_mary cannot help (a missing source database, an infra or credential decision, a project-wide bypass). hail_mary decides that itself and returns `needs_repair` / `refused`; only then does the row stay with the person.
 
-Never while `flight` is `running`/`idle`, the object is `waiting`, a helper for it (or a unit it is blocked on) is in flight, `hailMaryAgentId` is set, or `answered` already has a human row. A hail_mary send occupies a walker slot (`walkerRunning` counts it against `N`). One live hail_mary per object. One send per parked row — after `needs_repair` / `refused`, leave parked. First-send (no `resume`):
-
-```
-Unstick this parked object, following your agent definition.
-
-objectId:            <id>
-projectDir:          <absolute project_dir>
-pluginDir:           <absolute plugin root>
-snowflakeConnection: <the same target connection passed to configure>
-task:                <the parked task if you already have it from the escalate call>
-```
-
-Do not put `asks` in the prompt — that child reads `mode="escalations"` with `details=true`. When it returns: `guidance` / `decompose` in `answered` → first-send a **new** `general_task` with `guidance:` (the old walker conversation is done). `forced` / `skip` / `mark_done` → re-read the board. `needs_repair` / `refused` → leave parked. Do not `status='answer'` for a hail_mary return; you relay only an explicit user reply (2e).
+Never while `flight` is `running`/`idle`, the object is `waiting`, a helper for it (or a unit it is blocked on) is in flight, `hailMaryAgentId` is set, or `answered` already has a human row. A hail_mary send occupies a walker slot (`walkerRunning` counts it against `N`). One live hail_mary per object. One send per parked row — after `needs_repair` / `refused`, leave parked. Its first-send prompt and what to do with its return are in [hail_mary](references/hail-mary.md); read it before the first send.
 
 ### 2f. Stop
 
@@ -228,6 +209,8 @@ Do not send hail_mary in order to satisfy 2f when `hailMaryMode` is `on`. When `
 Credential / OAuth expiry is not a human question — the run cannot continue until the owner refreshes auth.
 
 A `ready` object with nothing in flight: dispatch it or park it, never report around it. An object that returns `ready` again with empty `tasksCompleted` must not be dispatched again until the board changes; if there is no remediation, park it (2e).
+
+A refused `finish` parks the object like any other (2e); it never stops the wave. Never ask the user to switch to interactive mode to close it, and once they say to keep going, do not ask again.
 
 Then Step 3. If `escalated` rows remain or `openCount` is non-zero, say so — the run finished, the wave did not.
 
@@ -245,7 +228,9 @@ the active wave, so when the status payload carries a `wave`, name it and
 
 Build every line the board can confirm from the board. If you cannot tell how many resets there were, say what you saw instead of a number.
 
-Then `data_infrastructure(mode="down")`, or [../../data-infrastructure/teardown/SKILL.md](../../data-infrastructure/teardown/SKILL.md) when the project configured a `compute_pool` and data work ran.
+After the wave, call `migration_status(mode="next_objects")` (the summary lacks the wave hint). On a `next_pending_wave`, call bare `configure()` to move there (`Wave <N> is finished; moved to wave <M>.`) and continue from Step 1; `configure(wave=<M>)` picks another wave.
+
+With no wave pending, call `data_infrastructure(mode="down")`, or [../../data-infrastructure/teardown/SKILL.md](../../data-infrastructure/teardown/SKILL.md) when the project configured a `compute_pool` and data work ran.
 
 ## Interrupted run
 

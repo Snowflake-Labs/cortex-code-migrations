@@ -54,6 +54,6 @@ for deeper failure diagnostics; do not substitute `migration_status()`.
 
 After `validate_tables.md` completes, optionally call `migration_status()` for wave-level context only:
 
-- If the wave is complete, the next `configure()` call will auto-advance to the next wave.
+- If the wave is complete, the next `configure()` call moves the session to the next pending wave and says so; pass `configure(wave=<N>)` to pick one.
 - A per-object subagent does not tear down shared infrastructure. The main
   agent owns end-of-wave/session teardown after all active slots finish.

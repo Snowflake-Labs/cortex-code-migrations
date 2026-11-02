@@ -31,6 +31,7 @@ dev = [
 
 [tool.uv]
 constraint-dependencies = [
+    "certifi>=2026.10.23,<2026.11",
     "pyjwt>=2.15.0",
     "snowflake-connector-python>=4.7.3,<4.8",
 ]

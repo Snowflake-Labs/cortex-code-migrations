@@ -453,6 +453,68 @@ scai_is_user_managed() {
   esac
 }
 
+# scai_version_older A B: true if version A has lower precedence than B, as scai's
+# VersionUtils orders them: a dotted numeric base (2 to 4 parts), then the
+# prerelease identifiers (numeric ones as numbers, below alphanumeric ones; a
+# release above its prereleases); build metadata ignored. False if either fails to parse.
+scai_version_older() {
+  LC_ALL=C awk -v a="$1" -v b="$2" '
+    function parse(v, base, pre,   dash, plus, bs, ps) {
+      sub(/^[vV]+/, "", v)
+      dash = index(v, "-"); ps = ""; HASPRE = 0
+      if (dash > 1) { bs = substr(v, 1, dash - 1); ps = substr(v, dash + 1); HASPRE = 1 }
+      else bs = v
+      plus = index(HASPRE ? ps : bs, "+")
+      if (plus) { if (HASPRE) ps = substr(ps, 1, plus - 1); else bs = substr(bs, 1, plus - 1) }
+      if (bs !~ /^[0-9]+\.[0-9]+(\.[0-9]+)?(\.[0-9]+)?$/) return -1
+      NBASE = split(bs, base, ".")
+      return HASPRE ? split(ps, pre, ".") : 0
+    }
+    BEGIN {
+      np = parse(a, x, xp); nx = NBASE; if (np < 0) exit 1
+      nq = parse(b, y, yp); ny = NBASE; if (nq < 0) exit 1
+      for (i = 1; i <= 4; i++) {
+        u = (i <= nx) ? x[i] + 0 : -1; w = (i <= ny) ? y[i] + 0 : -1
+        if (u < w) exit 0
+        if (u > w) exit 1
+      }
+      if (np == 0) exit 1
+      if (nq == 0) exit 0
+      for (i = 1; i <= np && i <= nq; i++) {
+        un = (xp[i] ~ /^[0-9]+$/); wn = (yp[i] ~ /^[0-9]+$/)
+        if (un && wn) { if (xp[i] + 0 != yp[i] + 0) exit (xp[i] + 0 < yp[i] + 0) ? 0 : 1 }
+        else if (un) exit 0
+        else if (wn) exit 1
+        else if (xp[i] "" != yp[i] "") exit (xp[i] "" < yp[i] "") ? 0 : 1
+      }
+      exit (np < nq) ? 0 : 1
+    }'
+}
+# scai's own old-version cleanup (CleanupOldVersions, ApplicationUpdateService.cs)
+# runs only in its self-update, which SCAI_AUTO_UPDATE=false turns off, so the hook
+# applies the same rule: remove a version dir under SCAI_ROOT that is older than the
+# active version and was last activated (its mtime) 14 or more days ago. Never the
+# active one; nothing when no managed version is active. A failed removal is retried
+# next session.
+scai_prune_old_versions() {
+  local active="$1" dir name
+  if [ -z "$active" ] || [ ! -x "$SCAI_ROOT/$active/orchestrator/scai" ]; then return 0; fi
+  # -mtime +13: modified 14 whole days ago or more. -type d skips symlinks.
+  find "$SCAI_ROOT" -mindepth 1 -maxdepth 1 -type d -mtime +13 2>/dev/null | while IFS= read -r dir; do
+    name="$(basename "$dir")"
+    if [ "$name" = "$active" ] || ! scai_version_older "$name" "$active"; then continue; fi
+    if rm -rf "$dir" 2>/dev/null; then
+      log "Removed old scai v$name (older than active v$active, not activated in 14 days)"
+    else
+      log "WARNING: could not remove old scai v$name ($dir); retrying next session"
+    fi
+  done
+}
+# Mark a version activated now: the 14-day rule reads the dir's mtime, as scai's activation does.
+scai_mark_activated() {
+  if [ -n "$1" ] && [ -d "$SCAI_ROOT/$1" ]; then touch "$SCAI_ROOT/$1" 2>/dev/null || true; fi
+}
+
 # Install/update WITHOUT `scai update` (its update URL is broken on some platforms
 # in the shipped build). The official install.sh is itself a full updater; we
 # drive it behind an active-pointer (symlink) check so we only download when the
@@ -489,8 +551,14 @@ elif [ -n "$scai_target" ] && [ -x "$SCAI_ROOT/$scai_target/orchestrator/scai" ]
   # Target already on disk but symlink stale/missing -- relink only, no download.
   mkdir -p "$SCAI_BIN_DIR"
   ln -sf "$SCAI_ROOT/$scai_target/orchestrator/scai" "$SCAI_LINK"
+  scai_mark_activated "$scai_target"
   add_user_path "$SCAI_BIN_DIR"
   log "scai relinked to v$scai_target (channel=$SCAI_CHANNEL) ($(( SECONDS - start ))s)"
+elif [ -z "$scai_target" ] && [ -n "$scai_active" ] && [ -x "$SCAI_ROOT/$scai_active/orchestrator/scai" ]; then
+  # The latest version is unknown (metadata unreachable, e.g. a proxy 407), but
+  # a working scai is active: keep it rather than reinstall it every session.
+  add_user_path "$SCAI_BIN_DIR"
+  log "scai version check skipped (metadata unreachable); keeping active v$scai_active ($(( SECONDS - start ))s)"
 else
   if [ -n "$SCAI_VERSION_PIN" ]; then
     log "Installing scai CLI (pinned v$SCAI_VERSION_PIN, channel=$SCAI_CHANNEL)..."
@@ -510,6 +578,7 @@ else
   fi
   add_user_path "$SCAI_BIN_DIR"
   scai_active="$(scai_read_active)"
+  if $install_ok; then scai_mark_activated "$scai_active"; fi
   # Only claim success when the installer succeeded AND the symlink points at
   # the target (or, with no target, at some newly-linked version). A leftover
   # scai on PATH must not count.
@@ -522,7 +591,9 @@ else
   fi
 fi
 
-# Auto-update disabled via the session-scoped SCAI_AUTO_UPDATE env var set above.
+# Auto-update disabled via the session-scoped SCAI_AUTO_UPDATE env var set above,
+# so prune old versions here, as scai's update would (see scai_prune_old_versions).
+if ! scai_is_user_managed; then scai_prune_old_versions "$(scai_read_active)"; fi
 
 # The MCP server is launched by the app as bare `scai`, which resolves against the
 # PATH the app inherited at launch. If the scai bin dir is missing there, the MCP

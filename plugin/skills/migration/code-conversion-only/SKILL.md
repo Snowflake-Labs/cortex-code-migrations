@@ -14,7 +14,7 @@ export, Talend jobs, Alteryx `.yxmd`, Informatica Cloud / IICS mappings, DataSta
 `.dsx`, Pentaho `.ktr` / `.kjb`, Azure Data Factory pipelines, or any other ETL
 platform — this is **not** the skill to run. `code-conversion-only` is for the SQL
 dialects listed in the table below (Sybase, Spark, Databricks, Greenplum, Netezza,
-Vertica, Hive, DB2, and legacy PostgreSQL / BigQuery / Azure Synapse projects).
+Vertica, Hive, and legacy PostgreSQL / DB2 / BigQuery / Azure Synapse projects).
 Do not set `project_type: code_conversion_only` for an ETL migration; the CLI's `code_conversion_only` project type has no ETL step and would silently drop those files.
 Leave this skill and follow **setup → register local ETL → convert** — the convert
 skill's Step 4 handles native SSIS / Informatica PowerCenter and Step 4.5 handles
@@ -26,7 +26,7 @@ the SQL dialects in the table below.
 Tell the user:
 > **Code Conversion Only** — I'll walk you through adding local source files, converting them to Snowflake SQL, and choosing what to do next with the converted output.
 
-Guide users through SnowConvert's code-conversion-only path. This path uses local source files, not live source extraction.
+Guide users through the code-conversion-only path. This path uses local source files, not live source extraction.
 
 ## Supported Sources
 
@@ -137,11 +137,14 @@ scai code convert --json
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 3 (Informatica target is Snowflake Scripting) |
 | `--ssis-to-snowflake-scripting` | `SSIS_SCRIPTING_MODE` was set in Step 3 (SSIS target is Snowflake Scripting) |
 | `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt, or Informatica dbt) |
+| `--consolidate-as-single-dbt-project` | `CONSOLIDATE_AS_SINGLE_DBT_PROJECT` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt only, single-project choice) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 4 |
 
-The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. The SSIS scripting flag and the SSIS dbt-consolidation flags come from the SSIS answer, so a scripting SSIS convert does not also pass a consolidation flag. Either platform's choice combines with `--powerbi-repointing` and with the other platform's choice. If none of the conditions hold, run the base command as-is.
+The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. The SSIS scripting flag and the SSIS dbt-consolidation flags come from the SSIS answer, so a scripting SSIS convert does not also pass a consolidation flag. `--consolidate-as-single-dbt-project` is exclusive with `--consolidate-dbt-projects` and with `--ssis-to-snowflake-scripting`: pass it only when the SSIS-only answer set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT`. Either platform's choice combines with `--powerbi-repointing` and with the other platform's choice. If none of the conditions hold, run the base command as-is.
 
 Substitute `<PBIT_PATH>` with the actual folder path you stored. Do not emit literal placeholder tokens to the shell.
+
+If convert fails with `CVT0036`, follow `../convert/SKILL.md` → "Registry Not Updated (CVT0036)": surface it verbatim and stop, and do not re-run convert to fix it.
 
 Per-EWI details (code, description, severity) are in the latest `Issues.*.csv`. Find that file in `<project_dir>/.scai/reports/SnowConvert/` first; if it is not there, use `<project_dir>/reports/SnowConvert/` then `<project_dir>/Reports/SnowConvert/`. Do not use a leftover older folder when `.scai` already has the file. Read those CSVs in Step 6 for **Review EWIs** or **Resolve EWIs with Cortex Code**; do not send the user to browse them.
 

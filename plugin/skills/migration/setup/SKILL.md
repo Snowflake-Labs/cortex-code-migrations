@@ -45,21 +45,27 @@ the next step automatically. The flow:
    - `planned_steps` — remaining task ids in order
    - `completed: true` — only when the machine reached its terminal
      state; absence means "not done, keep looping"
+   - `memory_warning` — this machine likely has too little RAM for the
+     long step ahead, or for the autonomous run setup is about to launch
+     (see step 4 and **On Completion**)
+   - `privilege_warning` — with autonomous on, the project's Snowflake role
+     can change account-wide settings an autonomous run could use (see
+     step 4 and **On Completion**)
    - `blocked: true` (+ `blocked_on`), `errored: true` (+
      `error_reason`), `committed: [...]`, `project_initialized: false`
      — emitted only when actionable
 2. If `completed` is `true`, jump to **On Completion** below.
-3. If `next_prompt` is non-null, AIM is already showing that question as a
-   card (and every `then_ask` entry on the same card). **Do not call
-   `ask_user_question`.** Do not split the card into separate yes/no
-   questions, and do not reword it. A second question is the user being
-   asked twice for a decision they already made or can see. End the turn.
-   The card submits `progress_setup` itself. On your next turn, call
-   `progress_setup()` and continue from the step it names. If it is still
-   this prompt, the user has not answered — wait again, and still do not ask.
+3. If `next_prompt` is non-null:
+   - **`shown_on_card: true`** — AIM already shows it, with every
+     `then_ask` entry, on a card that submits the answers itself. Do not
+     ask or reword it; end the turn, then call `progress_setup()` next turn.
+   - **Otherwise** (e.g. Cortex Code CLI) — ask `next_prompt`, then each
+     `then_ask` entry in order, in **one** `ask_user_question` call, never
+     as prose. Show each option's `label`, never its `value`. Then submit
+     the answers as below.
 
    When the user has **already** said the answer in conversation, record it
-   instead of waiting. Do not ask them to say it again.
+   instead of waiting or asking. Do not ask them to say it again.
    - Submit the option's `value`, never its label. If they picked
      **Something else**, submit what they typed — not `other`.
    - If they picked **Snowflake** for the dialect, omit `code_source`.
@@ -120,7 +126,10 @@ the next step automatically. The flow:
 4. Otherwise (no prompt): if `next_skill_md` is set, **execute its
    instructions directly in this same turn** — no Read needed.
    Otherwise **load the skill at `next_skill` immediately** (Read it,
-   then execute in the same turn). The sub-skill is responsible for
+   then execute in the same turn). When `memory_warning` or
+   `privilege_warning` is set, tell the user its text in one sentence
+   first, then start the sub-skill; skip it when you already told them
+   that same text. The sub-skill is responsible for
    asking the user any question it needs. Do not surface "Next step
    pending: X — let me know" prose and wait — that's a wasted
    round-trip; the user already said "continue" upstream. When the
@@ -150,13 +159,13 @@ means `migration/dbt/setup.md`, a sibling of `setup/`.
 | `detectDbt`                      | router — auto-routes a detected dbt workload to `dbtSetup`, else the normal flow |
 | `dbtSetup`                       | sub-skill: `dbt/setup.md` (dbt path only — resolves dialect from profiles.yml, inits) |
 | `recommendSafeTools`             | inline prompt — arrives with the next two queued in `then_ask`     |
-| `chooseSourceDialect`            | inline prompt — first card; `then_ask` queues extract, extras, and conversion settings (`askWith`). Snowflake omits `code_source`. AIM renders this card from `progress_setup` without waiting for the model. |
+| `chooseSourceDialect`            | inline prompt — first card; `then_ask` queues extract, extras, and conversion settings (`askWith`). Snowflake omits `code_source`. In AIM (`shown_on_card`), the app renders this card from `progress_setup` without waiting for the model. |
 | Snowflake branch                 | after dialect: `configureSnowflakeTarget` → `setupDataInfrastructure` → `dataStrategy` (validation-only; skips conversion) |
 | `chooseEntryMode`                | inline prompt (queued; nothing queues after it — it routes by dialect) |
 | `midwayEntry`                    | sub-skill: `setup/midway-entry.md`                                |
 | `chooseCodeSource`               | inline prompt — extract vs. local files; asked on the same card as `chooseSourceDialect` when that is the current prompt. Each answer carries its `then` |
 | `configureExtractionSource`      | inline `next_prompt` listing existing connections when scai has any (extract all objects from the picked database). Otherwise sub-skill: `setup/configure-source-connection.md` |
-| `chooseMigrationExtras`          | inline prompt — **multi-select** extras (ETL / Power BI / Tableau / None). Arrives with `chooseConversionSettings` queued in `then_ask`. AIM shows both on one card. Do not ask them yourself, and do not turn them into yes/no questions. Stores `migration_extras` (and derived `has_etl_code` / `has_power_bi` / `has_tableau`). |
+| `chooseMigrationExtras`          | inline prompt — **multi-select** extras (ETL / Power BI / Tableau / None). Arrives with `chooseConversionSettings` queued in `then_ask`. Both are asked as in step 3, never as yes/no questions. Stores `migration_extras` (and derived `has_etl_code` / `has_power_bi` / `has_tableau`). |
 | `chooseConversionSettings`       | inline prompt (queued in `then_ask` from `chooseMigrationExtras`). Stores `tailor_conversion_settings` for the `convert` skill. |
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
@@ -255,7 +264,9 @@ pending — do not invent completion from chat history.
 
 When the setup machine reaches `setupComplete`, close out in the
 interactive migration path. Do not mention autonomous mode or a sub-agent
-limit.
+limit, except that when the payload carries `memory_warning` or
+`privilege_warning`, tell the user its text in one sentence before the
+close-out, even if you said it before: the autonomous run starts right after.
 
 **If setup ended early** (e.g. `chooseRunMode` permanently excluded via
 `configure(tasks=…)`) — close without nudging toward migration.

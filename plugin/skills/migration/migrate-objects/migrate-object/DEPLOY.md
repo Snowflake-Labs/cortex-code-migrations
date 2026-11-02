@@ -75,6 +75,9 @@ Workflow:
 
 ## After deployment
 
+A response with `nothingDeployed: true` created nothing, even with `failed: 0`:
+tell the user its `reason` and `errors`, and never report it as deployed.
+
 Confirm the deploy oracle (`remoteDeploymentInfo` / `cloudStatus.deployment` as
 appropriate), then stamp so `TASK_EVENTS` get an `advanced` row:
 

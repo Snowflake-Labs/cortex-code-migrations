@@ -235,6 +235,8 @@ account_name = "<ACCOUNT_NAME>"
 use_default_credential = true  # or account_key / sas_token with account_name, or connection_string
 ```
 
+**Azure on an SPCS worker:** SPCS has no Azure managed identity, so `use_default_credential` on its own fails there. Set `sas_token` or `account_key` with `account_name`, or `connection_string`. `scai data worker setup` stores that value in a GENERIC_STRING Snowflake secret next to the source secret (`<SOURCE>_CLOUD_DIRECT_SAS_TOKEN_SECRET`, `_ACCOUNT_KEY_SECRET` or `_CONNECTION_STRING_SECRET`), mounts it into the service, and adds `<account>.blob.<suffix>:443` and `<account>.dfs.<suffix>:443` to the worker's network rule. With `--skip-egress`, those secrets and hosts must already exist. S3 and GCS `cloud_direct` on SPCS do not get credentials or egress yet.
+
 Workflow YAML: `extraction.strategy: cloud_direct` plus `externalStage` on that same path. Full L3 decision tree: [l3-pushdown-extraction.md](../../setup/data-validation/references/l3-pushdown-extraction.md).
 
 ## Advanced: Secrets management

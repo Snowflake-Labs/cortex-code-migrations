@@ -1,8 +1,8 @@
 # Affinity Reference — routing workers to workflows
 
 Affinity is a **routing label** that binds a workflow's tasks to the worker(s) allowed to run them.
-It is the mechanism that makes **multiple workers** (or multiple source databases/servers) run
-**concurrently** without stealing each other's work.
+It is the mechanism that lets **several workers for one source** share the load without one of them
+sitting idle on a label the others don't carry.
 
 ## How the orchestrator matches (the claim rule)
 
@@ -12,9 +12,13 @@ When a worker (or the orchestrator itself) pulls tasks, the queue matches on aff
 ```
 consumer IS NULL            → claims tasks of EVERY affinity
 task affinity IS NULL       → claimable by ANY consumer
-consumer == task            → exact match
+consumer == task            → exact, case-sensitive match
 consumer contains '*'       → glob match (e.g. "team-*" matches "team-sales")
 ```
+
+Only the consumer value is a pattern; the task value is literal. In a consumer value that contains `*`,
+`%` and `_` also act as wildcards in the claim SQL, so keep labels to letters, digits and `-`.
+`RATE_LIMIT.AFFINITY` is different: it matches a task's affinity exactly, never as a glob.
 
 Two consequences drive everything below:
 
@@ -23,11 +27,9 @@ Two consequences drive everything below:
    own workflow's affinity so the right worker picks it up. If you gave the orchestrator an affinity it
    would partition itself, and workflows of other affinities would sit at "0 pending" forever. **The
    plugin never sets the orchestrator's affinity.** Isolation happens at the *worker* layer.
-2. **Isolation requires BOTH the workflow and the worker to carry the same non-null label.** A
-   null worker cross-claims other sources' tasks (wrong-server writes); a null workflow is claimed by
-   any worker. So the working multi-source recipe is:
-
-   > **null orchestrator + affinity-tagged workflow + affinity-tagged worker**, one label per source/DB.
+2. **A worker and its workflow must carry the same label when you set one.** A null worker claims
+   every task. A null workflow is claimed by any worker. For one source, leave both on the project
+   default and don't set an override.
 
 ## The two carriers that must agree
 
@@ -41,13 +43,19 @@ Affinity lives in **two** files that must carry the same value:
 
 ## Project default vs explicit override
 
-scai gives each project a stable default affinity such as `northwind-3f9a1c2b`. When the plugin does
-not pass `--affinity`, scai applies that default to both newly generated workflow and local-worker
-configuration. This is the normal path for one project/source and requires no user-selected label.
+scai gives each project a stable default affinity, `<project-name-slug>-<first 8 hex of project id>`
+such as `northwind-3f9a1c2b` (`default_affinity` in `.scai/config/project.yml`). When no `--affinity`
+is passed, `scai data migrate|validate generate-config`, `scai data worker setup` and
+`scai data worker generate-config` all apply it. This is the normal path for one source server and
+requires no user-selected label.
 
-Use `configure(affinity="<label>")` only when you need an explicit routing group, typically one label
-per source database/server in a multi-source project. The override persists to project-relative
-`.scai/config/plugin.yml` and is forwarded to both generators:
+A worker labelled by hand does not claim workflows stamped with the project default, and a
+default-labelled worker does not claim a workflow you generated with a different `--affinity`. Set
+both sides from the same label.
+
+`configure(affinity="<label>")` persists one override to project-relative `.scai/config/plugin.yml`
+and forwards it to both generators. It holds one label at a time. Don't use it to split one project
+across source servers: the plugin doesn't drive that.
 
 - **Local worker:** `data_infrastructure(mode="up")` generates the DEW config with the same override.
   If an existing generated config carries a different affinity, the plugin regenerates it.
@@ -60,9 +68,11 @@ The plugin never passes affinity to the orchestrator.
 
 Bare `create-workflow` performs an advisory affinity-aware readiness check. It warns when no running
 orchestrator or worker can claim the workflow affinity; the workflow is still created. A separate
-warning can say an explicit workflow override differs from the project's default affinity. That second
-warning is expected for a deliberate multi-source override; verify that the worker carries the same
-override.
+warning can say an explicit workflow override differs from the project's default affinity. Verify
+that the worker carries the same override.
+
+`migrate_data` / `validate_data` `run` refuse instead of warning when no running servicer claims the
+workflow's affinity.
 
 ## When affinity is the cause of a stall
 

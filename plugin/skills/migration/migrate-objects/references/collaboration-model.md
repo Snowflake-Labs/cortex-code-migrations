@@ -46,8 +46,8 @@ Each user can work in a separate git worktree. The plugin never switches branche
 When the same user runs multiple sessions (e.g., separate worktrees or terminals), each session has its own MCP session ID (`AGENT_ID` in the claims table). The plugin surfaces this transparently:
 
 - **`my_objects_summary`** reports how many open claims belong to other sessions. If all claims are from a previous session, a note suggests resuming by claiming objects.
-- **`transition_begin`** always allows re-claiming. If objects were held by a different session, the response includes `reclaimed_from_other_sessions` listing which objects were taken over (with the previous session ID and timestamp).
-- **No hard locks.** The user decides whether to proceed — the plugin informs but never blocks.
+- **`transition_begin`** re-claims objects held by a different session, and the response includes `reclaimed_from_other_sessions` listing which objects were taken over (with the previous session ID and timestamp). The one exception is an object whose Cortex walker the relay ledger still holds: `begin` refuses it ("live Cortex walker"), so that walker is resumed, not replaced.
+- **No hard locks** beyond that live walker. The user decides whether to proceed — the plugin informs but never blocks.
 
 This handles both concurrent sessions (two terminals at once) and sequential sessions (resuming work from yesterday in a new session).
 

@@ -4,12 +4,16 @@ description: Unstick a parked object with full authority — answer the escalati
 license: Proprietary. See License-Skills for complete terms
 ---
 
-The parent sent you on **one parked object**. You have full capacity
-to do whatever you need to do to get this object done. Do not share
-learnings with siblings as they do not have your powers. With great
-power, comes great responsibility. You must trace all your steps as
-outlined below. The only hard stop: do not interfere with another
-object's live walker.
+The parent sent you on **one parked object**. Do not share learnings
+with siblings as they do not have your powers. You must trace all your
+steps as outlined below. Hard stops:
+
+- Do not interfere with another object's live walker.
+- Never write the app's metadata (`ORCHESTRATION`, `DATA_MIGRATION`,
+  `DATA_VALIDATION`, `RULE_ENGINE`, `COMMON`, `TEMP` in the metadata
+  database) with SQL or a script. Those rows change only through the MCP
+  tools.
+- A privileged call refused means return `refused`, not a workaround.
 
 If this object is waiting for some other work and will be unstuck eventually
 without your help, e.g. it still has `flight=running`/`idle`, is `waiting` on a
@@ -81,13 +85,15 @@ cannot observe the work.
 | Missing dependency with a live walker | Bypass this object's unmet precondition or park `needs_repair` |
 | `runTests` cannot run but the object is faithful | `override_accept_case` for named hashes, or `bypass` / `advance(completed)` the task with `reason` |
 | Oracle / DMV does not confirm done after you verified | `advance(outcome="completed")` — your type is allowed to override a disagreeing source. `reason` on the hail_mary_step |
-| `migrateData` / `validateData` failed and scai cannot finish it | Write a Python/SQL script under `<files.artifacts.path>/hail_mary/`, run it, verify, then override-advance or `bypass` that task |
+| `migrateData` / `validateData` failed and scai cannot finish it | Write a Python/SQL script under `<files.artifacts.path>/hail_mary/` that moves data only, run it, verify, then override-advance or `bypass` that task |
 | Tests / a step are permanently inapplicable | `bypass` (preconditions) or `answer(skip)` (out of scope) or `answer(mark_done)` + `finish(force=true)` |
 | Design fork in `asks` | Pick, edit, `answer(resolution="guidance", reason="<the pick>")` so a new walker continues |
 | You still must not choose | `answer(resolution="needs_repair", reason="…")` — stays parked |
 
 `finish(force=true)` is allowed. Use it when the remaining tasks are
-ceremonial and you have evidence the object belongs on the clone.
+ceremonial and you have evidence the object belongs on the clone. It also
+closes any escalation still open on the object as `mark_done` under your id
+(`escalations_closed` on the response), so the user is not left a stale card.
 
 Do not `status='answer'` as a person — your `ANSWERED_BY_AGENT` must
 stay set. Do not wait for chat.
@@ -110,4 +116,14 @@ One JSON object, nothing else:
 `unstuck` — machine can continue (guidance / decompose / reset / a
 real completed stamp). `forced` — `force=true` or an oracle override.
 `skipped` — out of scope. `needs_repair` — still parked. `refused` —
-env off, wrong type, or a live walker blocked the only fix.
+env off, wrong type, a privileged call refused, or a live walker
+blocked the only fix.
+
+## Shell commands on Windows
+
+On Windows your shell tool runs PowerShell, usually Windows PowerShell 5.1, not
+bash or cmd. Never chain with `&&` or `||`, which 5.1 rejects: use `;`, or
+`cmd1; if ($?) { cmd2 }` when the second must wait for the first to succeed. No
+cmd syntax (`if not exist`, `set VAR=x`, `%VAR%`): use `Test-Path`,
+`New-Item -ItemType Directory -Force <dir> | Out-Null` and `$env:VAR`. No bash
+syntax (heredocs, `export`, `2>/dev/null`): use `2>$null`.

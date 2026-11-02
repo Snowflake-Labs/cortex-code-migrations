@@ -57,7 +57,7 @@ The outcome and error vocabulary is defined once in [../extensibility/TASKS.md](
 
 ## Autonomous mode
 
-**Autonomous runs only in the SnowConvert desktop app.** The MCP server refuses
+**Autonomous mode runs only in the AIM desktop app.** The MCP server refuses
 the sub-agent latch for every other caller, so outside the app the answer is
 that autonomous is not available here and the wave runs interactively — say so
 and continue with the loop below rather than starting a run that cannot finish.
@@ -209,4 +209,4 @@ If all waves are done:
 
 When all waves are done **and** any wave used data migration or data validation (i.e. SPCS infrastructure was provisioned), unconditionally load [../data-infrastructure/teardown/SKILL.md](../data-infrastructure/teardown/SKILL.md) to suspend the orchestrator + compute pool and prompt the user to stop the local worker. Skip this if the project never configured a `compute_pool` (no SPCS infrastructure was used).
 
-If the wave is complete, the next `configure()` call will auto-advance to the next wave.
+If the wave is complete, the next `configure()` call moves the session to the next pending wave and says so; pass `configure(wave=<N>)` to pick one.

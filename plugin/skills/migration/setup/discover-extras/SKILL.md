@@ -65,7 +65,7 @@ Use `ask_user_question` (multi-select) with these top categories. Keep the list 
 The Orchestration category is for ingest and orchestration that will keep running
 against Snowflake, not for ETL you want to convert. Do not list an ETL platform the
 migration is going to convert as an orchestration extra — SSIS, Informatica PowerCenter
-(both native SnowConvert) and Talend, Alteryx, Informatica Cloud / IICS, DataStage,
+(both converted natively) and Talend, Alteryx, Informatica Cloud / IICS, DataStage,
 Pentaho, Azure Data Factory (AI-First) all belong in register-and-convert. If the user
 picks orchestration and then names one of those, refuse the cookbook path in one
 sentence and hand those files to the ETL register path as `kind: etl` (setup → register local ETL → convert). Do not draft a cookbook,
