@@ -119,18 +119,16 @@ GRANT MONITOR, OPERATE ON SERVICE <metadata_database>.DATA_MIGRATION.DATA_EXCHAN
 ### Local orchestrator started outside MCP (the tool can't reap it)
 
 `data_infrastructure(mode="down")` reaps the local orchestrator/worker **this MCP session** spawned. A
-local orchestrator the user launched **in their own terminal** (`scai data orchestrator start --local`) is
-a foreground process the tool did not spawn and cannot kill (`scai data orchestrator stop --local` is
-advisory only). Tell the user:
+local orchestrator the user launched themselves is not the tool's to kill. Tell the user:
 
 > Stop the local orchestrator so it stops polling Snowflake:
-> - Find the terminal running `scai data orchestrator start --local` and press `Ctrl+C`.
-> - If it was launched in the background, end that process (`pkill -f "scai data orchestrator.*start"`, or
->   Task Manager on Windows).
+> - Started with `scai data orchestrator start --local --detach`: run `scai data orchestrator stop --local`
+>   with the same connection.
+> - Running in a terminal (`scai data orchestrator start --local`): press `Ctrl+C` there.
 
-The same applies to a local **worker** started outside MCP (`scai data worker start --local`): the
-MCP-managed worker stops on session exit, but a manually-launched one needs a `Ctrl+C` /
-`pkill -f "scai data.*worker.*start"`.
+The same applies to a local **worker** started outside MCP: `scai data worker stop --local [CONFIG_FILE]`
+stops one started with `scai data worker start --local` (foreground or `--detach`) on that config, and
+`Ctrl+C` stops a foreground one in its terminal.
 
 ---
 
@@ -169,19 +167,23 @@ ALTER COMPUTE POOL <COMPUTE_POOL> SET MIN_NODES = 1 MAX_NODES = 3 AUTO_SUSPEND_S
 
 Sizing reasoning is in [Sizing a pool that also runs SPCS workers](../compute-pool-setup/SKILL.md#sizing-a-pool-that-also-runs-spcs-workers).
 
-**Make idle shutdown suspend SPCS, not just exit:** the orchestrator exits after 60 idle minutes
+**Make idle shutdown suspend SPCS, not just exit:** the processes exit after 60 idle minutes
 (`DM_IDLE_SHUTDOWN_MINUTES`), but SPCS restarts a container whose service has `MIN_INSTANCES >= 1`, so the pool
-stays up. The orchestrator suspends the services itself only when its container has:
+stays up unless the service is suspended.
 
-- `DM_SPCS_SUSPEND_AGENT_SERVICE`: the fully qualified worker service
-- `DM_SPCS_SUSPEND_ORCHESTRATOR_SERVICE`: the fully qualified orchestrator service (falls back to the
-  `SNOWFLAKE_SERVICE_NAME` SPCS sets)
+- **Worker (DEA):** when running in SPCS it suspends its own service after inserting `WORKER_SHUTDOWN`, using
+  `SNOWFLAKE_SERVICE_NAME` / `SNOWFLAKE_DATABASE` / `SNOWFLAKE_SCHEMA`. The service owner role must be able to
+  `ALTER SERVICE … SUSPEND`. If suspend fails, the worker stays up and retries (it does not exit into a restart
+  loop). Confirm with a `WORKER_SHUTDOWN` row and, on failure, a `SPCS_IDLE_SUSPEND` row with
+  `SOURCE_COMPONENT = 'dea'`.
+- **Orchestrator:** also suspends services when its container has
+  `DM_SPCS_SUSPEND_AGENT_SERVICE` (worker FQN) and/or `DM_SPCS_SUSPEND_ORCHESTRATOR_SERVICE` (falls back to
+  `SNOWFLAKE_SERVICE_NAME`). `scai` sets the worker name on the orchestrator spec. For older specs missing those
+  vars: `DESCRIBE SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE`, copy the spec, add the
+  env vars under the container's `env:`, and apply with `ALTER SERVICE … FROM SPECIFICATION $$ … $$` while the
+  service is suspended — show the edited spec and wait for confirmation first.
 
-`scai` does not set these in the specs it creates today, so the worker service is never suspended on idle. To add
-them: `DESCRIBE SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE`, copy its full spec, add the two
-variables under the container's `env:` without changing any other key, and apply it with
-`ALTER SERVICE … FROM SPECIFICATION $$ … $$` while the service is suspended. Show the edited spec and wait for
-the user's confirmation before running it. After the next idle hour, confirm it worked:
+After the next idle hour, confirm it worked:
 
 ```sql
 SELECT EVENT_TYPE, SOURCE_COMPONENT, CREATION_TIME, PAYLOAD

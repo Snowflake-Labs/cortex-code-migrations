@@ -773,6 +773,51 @@ def flatten_dynamic_sql_json(data: Dict) -> List[Dict]:
     return flattened
 
 
+def _is_pending_dynamic_sql_status(status: Any) -> bool:
+    normalized = str(status or '').strip().upper()
+    return normalized == '' or normalized == 'PENDING'
+
+
+def dynamic_sql_pattern_chart_steps(flattened: List[Dict]) -> List[Dict]:
+    """Aggregate reviewed occurrences into Pattern Categories chart steps.
+
+    Matches the Vue ``sortedPatterns`` computed: count each category tag across
+    analyzed rows, sort by occurrence count then code-unit count, and report
+    percentage of analyzed occurrences (multi-tag rows can sum above 100%).
+    """
+    analyzed = [
+        row for row in (flattened or [])
+        if isinstance(row, dict) and not _is_pending_dynamic_sql_status(row.get('status'))
+    ]
+    analyzed_count = len(analyzed)
+    totals: Dict[str, int] = {}
+    units: Dict[str, set] = {}
+    for row in analyzed:
+        code_unit_id = str(row.get('code_unit_id') or 'unknown')
+        categories = row.get('category') or []
+        if not isinstance(categories, list):
+            continue
+        for cat in categories:
+            name = str(cat).strip() if cat is not None else ''
+            if not name:
+                continue
+            totals[name] = totals.get(name, 0) + 1
+            units.setdefault(name, set()).add(code_unit_id)
+
+    steps = []
+    for name, count in totals.items():
+        code_unit_count = len(units.get(name, set()))
+        percentage = round((count / analyzed_count) * 1000) / 10 if analyzed_count else 0.0
+        steps.append({
+            'label': name,
+            'count': count,
+            'code_unit_count': code_unit_count,
+            'percentage': percentage,
+        })
+    steps.sort(key=lambda step: (-step['count'], -step['code_unit_count'], step['label']))
+    return steps
+
+
 def load_waves_data(waves_json: Path, reports_dir: Path = None, registry_dir: Path = None):
     """Load waves/dependency analysis data and generate HTML content for the waves report tab."""
     if not WAVES_SUPPORT:
@@ -1572,10 +1617,8 @@ def generate_html_template(
 
     # Load SVG logos as text
     snowflake_logo_svg = ""
-    snowconvert_ai_logo_svg = ""
 
     snowflake_logo_path = resources_dir / "svg" / "snowflake-logo.svg"
-    snowconvert_ai_logo_path = resources_dir / "svg" / "snowconvert-ai-logo.svg"
 
     try:
         if snowflake_logo_path.exists():
@@ -1583,13 +1626,6 @@ def generate_html_template(
                 snowflake_logo_svg = f.read()
     except Exception as e:
         print(f"Warning: Could not load snowflake-logo.svg: {e}", file=sys.stderr)
-
-    try:
-        if snowconvert_ai_logo_path.exists():
-            with open(snowconvert_ai_logo_path, 'r', encoding='utf-8') as f:
-                snowconvert_ai_logo_svg = f.read()
-    except Exception as e:
-        print(f"Warning: Could not load snowconvert-ai-logo.svg: {e}", file=sys.stderr)
     
     # Default overview stats if not provided
     if overview_stats is None:
@@ -1938,7 +1974,7 @@ def generate_html_template(
                     <h3 style="margin: 0 0 8px 0; color: #102E46; font-size: 1.1rem;">Dynamic SQL Report</h3>
                     <p style="color: #64748B; font-size: 0.9rem; line-height: 1.5; margin-bottom: 16px;">
                         <strong>Goal:</strong> Fix runtime issues. <br>
-                        Deep dive into complex code patterns (Dynamic SQL, Linked Servers) that SnowConvert cannot statically analyze.
+                        Deep dive into complex code patterns (Dynamic SQL, Linked Servers) that can't be statically analyzed.
                     </p>
                     <div style="background: #F8FAFC; padding: 10px; border-radius: 6px; font-size: 0.85rem; color: #475569;">
                         <strong>Key Insight:</strong> Review dynamic SQL patterns that require manual attention.
@@ -2603,8 +2639,144 @@ def generate_html_template(
                     }})();
         """
 
+    pattern_chart_palette = [
+        '#5B98FF', '#F4BE5D', '#E95240', '#6FD8B7', '#9F88FF', '#6FD3FC', '#DA8FEB',
+    ]
+    try:
+        flattened_for_chart = json.loads(json_data_dynamic) if has_dynamic_sql and json_data_dynamic else []
+    except (TypeError, json.JSONDecodeError):
+        flattened_for_chart = []
+    if not isinstance(flattened_for_chart, list):
+        flattened_for_chart = []
+    pattern_chart_steps = dynamic_sql_pattern_chart_steps(flattened_for_chart)
+    pattern_chart_height = max(160, 40 * len(pattern_chart_steps) + 48) if pattern_chart_steps else 160
+
+    dynamic_sql_pattern_js = ""
+    if has_dynamic_sql and pattern_chart_steps:
+        steps_json = json.dumps(pattern_chart_steps, ensure_ascii=False)
+        colors_json = json.dumps(pattern_chart_palette, ensure_ascii=False)
+        dynamic_sql_pattern_js = f"""
+                    (function() {{
+                        var steps = {steps_json};
+                        var palette = {colors_json};
+                        var labels = steps.map(function(s) {{ return s.label; }});
+                        var colors = steps.map(function(_s, i) {{ return palette[i % palette.length]; }});
+                        var mode = 'objects';
+                        var inst = null;
+
+                        function values(asPercent) {{
+                            return steps.map(function(step) {{
+                                return asPercent ? (Number(step.percentage) || 0) : (Number(step.count) || 0);
+                            }});
+                        }}
+                        function formatValue(n) {{
+                            return mode === 'percent' ? Number(n).toFixed(1) + '%' : Math.round(n).toLocaleString();
+                        }}
+
+                        window.toggleDynamicSqlPatternView = function(m) {{
+                            mode = m;
+                            ['dsql-pat-obj', 'dsql-pat-pct'].forEach(function(id) {{
+                                var btn = document.getElementById(id);
+                                if (!btn) return;
+                                var active = (id === 'dsql-pat-obj') ? (m === 'objects') : (m === 'percent');
+                                btn.style.background = active ? '#29B5E8' : 'white';
+                                btn.style.color = active ? 'white' : '#64748B';
+                                btn.style.borderColor = active ? '#29B5E8' : '#E2E8F0';
+                            }});
+                            if (inst) {{
+                                inst.data.datasets[0].data = values(m === 'percent');
+                                inst.update();
+                            }}
+                        }};
+
+                        function init() {{
+                            if (typeof Chart === 'undefined') {{ setTimeout(init, 200); return; }}
+                            var canvas = document.getElementById('dynamicSqlPatternChart');
+                            if (!canvas || inst || Chart.getChart(canvas)) return;
+                            if (canvas.offsetParent === null) {{
+                                var observer = new ResizeObserver(function() {{
+                                    if (canvas.offsetParent === null) return;
+                                    observer.disconnect();
+                                    init();
+                                }});
+                                observer.observe(canvas.parentElement || canvas);
+                                return;
+                            }}
+                            inst = new Chart(canvas, {{
+                                type: 'bar',
+                                plugins: typeof ChartDataLabels !== 'undefined' ? [ChartDataLabels] : [],
+                                data: {{
+                                    labels: labels,
+                                    datasets: [{{
+                                        data: values(false),
+                                        backgroundColor: colors,
+                                        borderRadius: 4,
+                                        barPercentage: 0.72
+                                    }}]
+                                }},
+                                options: {{
+                                    indexAxis: 'y',
+                                    responsive: true,
+                                    maintainAspectRatio: false,
+                                    layout: {{ padding: {{ right: 36 }} }},
+                                    plugins: {{
+                                        legend: {{ display: false }},
+                                        tooltip: {{ callbacks: {{ label: function(c) {{
+                                            var text = formatValue(Number(c.raw) || 0);
+                                            return mode === 'percent' ? text : text + ' occurrences';
+                                        }} }} }},
+                                        datalabels: {{
+                                            display: true,
+                                            anchor: 'end',
+                                            align: 'right',
+                                            clamp: true,
+                                            color: '#374151',
+                                            font: {{ weight: '600', size: 11 }},
+                                            formatter: function(v) {{ return formatValue(Number(v) || 0); }}
+                                        }}
+                                    }},
+                                    scales: {{
+                                        x: {{
+                                            beginAtZero: true,
+                                            grace: '8%',
+                                            ticks: {{ callback: function(v) {{
+                                                return mode === 'percent'
+                                                    ? Number(v).toFixed(0) + '%'
+                                                    : Number(v).toLocaleString();
+                                            }} }}
+                                        }},
+                                        y: {{ grid: {{ display: false }} }}
+                                    }}
+                                }}
+                            }});
+                        }}
+                        init();
+                    }})();
+        """
+
     dynamic_sql_html = ""
     if has_dynamic_sql:
+        pattern_chart_card = ""
+        if pattern_chart_steps:
+            pattern_chart_card = f"""
+                    <div style="background:white;border-radius:12px;border:1px solid #E2E8F0;padding:24px;margin-bottom:16px;">
+                        <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+                            <button type="button" id="dsql-pat-obj" onclick="toggleDynamicSqlPatternView('objects')"
+                                    style="padding:4px 12px;border-radius:6px;border:1px solid #29B5E8;
+                                           background:#29B5E8;color:white;font-size:0.82rem;cursor:pointer;">
+                                Occurrence Count
+                            </button>
+                            <button type="button" id="dsql-pat-pct" onclick="toggleDynamicSqlPatternView('percent')"
+                                    style="padding:4px 12px;border-radius:6px;border:1px solid #E2E8F0;
+                                           background:white;color:#64748B;font-size:0.82rem;cursor:pointer;">
+                                Percentage
+                            </button>
+                        </div>
+                        <div style="position:relative;height:{pattern_chart_height}px;">
+                            <canvas id="dynamicSqlPatternChart" aria-label="Dynamic SQL pattern categories"></canvas>
+                        </div>
+                    </div>
+            """
         dynamic_sql_html = """
             <!-- Dynamic SQL Report Tab -->
             <div class="tab-content" :class="{active: activeTab === 'dynamic-sql'}">
@@ -2647,6 +2819,7 @@ def generate_html_template(
                     </div>
 
                     <h3 class="text-xl font-semibold text-sf-dark-blue mb-4">Pattern Categories</h3>
+""" + pattern_chart_card + """
                     <table class="w-full border-collapse" style="border: 1px solid #8A999E;">
                         <thead class="bg-sf-blue text-white">
                             <tr>
@@ -3133,6 +3306,10 @@ def generate_html_template(
         .effort-table.compact th, .effort-table.compact td {{ padding: 0.5rem 0.6rem; font-size: 0.8rem; }}
         .effort-table.sticky thead th {{ position: sticky; top: 0; z-index: 1; }}
         .effort-table tr.effort-total td {{ background: #F8FAFC; font-weight: 700; color: #1E252F; }}
+        /* The grouping note is a full sentence. Cap the column so it wraps
+           instead of stretching the calculator across the page. */
+        .effort-table td.effort-comments {{ color: #64748B; font-size: 0.85rem; }}
+        .effort-comments-body {{ width: 56ch; max-width: 56ch; overflow-wrap: break-word; }}
         /* Interactive effort calculator: editable per-band rates and their paired
            Snowflake values. */
         .effort-band-legend {{ display: flex; flex-wrap: wrap; gap: 4px 18px; margin-bottom: 12px; color: #5D6A85; font-size: 0.8rem; line-height: 1.5; }}
@@ -3177,6 +3354,45 @@ def generate_html_template(
         .effort-input-error {{ border-color: #DC2626; background: #FEF2F2; }}
         .effort-error {{ display: block; color: #B91C1C; font-size: 0.72rem; margin-top: 2px; }}
         .effort-sf-note {{ display: block; color: #64748B; font-size: 0.72rem; font-weight: 400; margin-top: 2px; white-space: nowrap; }}
+        .effort-ewi-link {{
+            display: block; margin-top: 4px; padding: 0; border: 0; background: transparent;
+            color: #0284C7; font: inherit; font-size: 0.78rem; font-weight: 600; cursor: pointer;
+            text-align: left;
+        }}
+        .effort-ewi-link:hover {{ text-decoration: underline; }}
+        .effort-ewi-modal-overlay {{
+            position: fixed; inset: 0; background: rgba(0, 0, 0, 0.35); z-index: 2000;
+            display: flex; align-items: center; justify-content: center; padding: 24px;
+            overflow: auto;
+        }}
+        .effort-ewi-modal {{
+            width: 100%; max-width: 720px; height: 36rem; max-height: 90vh;
+            display: flex; flex-direction: column;
+            background: #FFFFFF; border-radius: 14px;
+            border: 1px solid rgba(227, 232, 238, 0.95); box-shadow: 0 18px 60px rgba(0, 0, 0, 0.25);
+            overflow: hidden;
+        }}
+        .effort-ewi-modal-bar {{
+            flex: 0 0 56px; height: 56px; padding: 0 14px; display: flex; align-items: center;
+            justify-content: space-between; border-bottom: 1px solid #E3E8EE; background: #F8FAFC;
+        }}
+        .effort-ewi-modal-title {{
+            font-weight: 800; color: #11567F; font-size: 0.95rem; overflow: hidden;
+            text-overflow: ellipsis; white-space: nowrap; max-width: 80%;
+        }}
+        .effort-ewi-modal-close {{
+            border: 1px solid #E3E8EE; background: #FFFFFF; color: #11567F; font-weight: 800;
+            padding: 8px 12px; border-radius: 10px; cursor: pointer;
+        }}
+        .effort-ewi-modal-close:hover {{
+            background: rgba(41, 181, 232, 0.06); border-color: rgba(41, 181, 232, 0.35);
+        }}
+        .effort-ewi-modal-body {{
+            flex: 1 1 auto; min-height: 0; overflow: auto; padding: 16px;
+        }}
+        .effort-ewi-modal .effort-table th.effort-ewi-tip {{
+            cursor: help; text-decoration: underline dotted; text-underline-offset: 3px;
+        }}
         .effort-table tr.effort-row-overridden td {{ background: #FFFDF5; }}
         .effort-table tr.effort-row-overridden:hover td {{ background: #FEF9E7; }}
         /* The rate row belongs to the count row above it, so the border between
@@ -5988,9 +6204,6 @@ def generate_html_template(
                 <div style="margin-bottom: 8px;">
                     {snowflake_logo_svg}
                 </div>
-                <div style="margin-bottom: 8px;">
-                    {snowconvert_ai_logo_svg}
-                </div>
                 <div style="border-bottom: 1px solid #D5DAE4; padding-bottom: 0.75rem; margin-bottom: 0.75rem;">
                 </div>
                 <p style="font-size: 1rem; color: #5D6A85; margin: 0; font-weight: 500;">Assessment</p>
@@ -6410,7 +6623,12 @@ def generate_html_template(
 
                     return patterns.sort((a, b) => {{
                         if (b.count !== a.count) return b.count - a.count;
-                        return b.codeUnitCount - a.codeUnitCount;
+                        if (b.codeUnitCount !== a.codeUnitCount) return b.codeUnitCount - a.codeUnitCount;
+                        const left = String((a && a.name) || '');
+                        const right = String((b && b.name) || '');
+                        if (left < right) return -1;
+                        if (left > right) return 1;
+                        return 0;
                     }});
                 }},
                 sortedSqlClassifications() {{
@@ -7247,6 +7465,11 @@ def generate_html_template(
     <!-- Exclusion chart boots after Vue mounts; a script inside the tab is dropped. -->
     <script>
         {exclusion_category_js}
+    </script>
+
+    <!-- Dynamic SQL pattern chart boots after Vue mounts; a script inside the tab is dropped. -->
+    <script>
+        {dynamic_sql_pattern_js}
     </script>
 
     <!-- Workload Insights charts are defined after Vue has compiled and mounted the tab. -->

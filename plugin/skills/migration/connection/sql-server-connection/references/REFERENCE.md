@@ -247,6 +247,28 @@ See [`./wsl-windows-auth.md`](./wsl-windows-auth.md) for the full walkthrough of
 2. Install the server's CA certificate on your machine
 3. Verify the server URL matches the certificate's CN/SAN
 
+### macOS: ODBC Driver 18 can't load OpenSSL
+
+**Symptoms** (from `scai data doctor`'s *Source connection* row, `scai test capture`, or anything else that connects through ODBC Driver 18):
+- `SSL Provider: [OpenSSL library could not be loaded, make sure OpenSSL 1.0, 1.1, or 3.0 is installed]`
+
+**Cause:** ODBC Driver 18 for SQL Server (`msodbcsql18`) loads OpenSSL itself when it connects, and only OpenSSL 1.0, 1.1 or 3.0. It does not find Homebrew's current `openssl@3` under `/opt/homebrew`. The server, the credentials and the driver version are not the problem.
+
+**Do not** upgrade `msodbcsql18` or re-link or uninstall Homebrew's `openssl@3`: neither fixes it, and other tools depend on that OpenSSL.
+
+**Solution:** install OpenSSL 3.0 and link its libraries into `/usr/local/lib`, where the driver looks. These commands change system libraries and need `sudo`, so show them to the user and let the user run them:
+
+```bash
+brew install openssl@3.0
+sudo mkdir -p /usr/local/lib
+sudo ln -sf "$(brew --prefix openssl@3.0)/lib/libssl.3.dylib" /usr/local/lib/libssl.3.dylib
+sudo ln -sf "$(brew --prefix openssl@3.0)/lib/libcrypto.3.dylib" /usr/local/lib/libcrypto.3.dylib
+sudo ln -sf "$(brew --prefix openssl@3.0)/lib/libssl.dylib" /usr/local/lib/libssl.dylib
+sudo ln -sf "$(brew --prefix openssl@3.0)/lib/libcrypto.dylib" /usr/local/lib/libcrypto.dylib
+```
+
+Then re-run what failed (`scai data doctor`, the test capture, or `configure(source_connection=<NAME>)`). `scai data doctor` and the `scai test` commands print this same repair when they see the error.
+
 ### Named Instance Not Found
 
 **Symptoms:**

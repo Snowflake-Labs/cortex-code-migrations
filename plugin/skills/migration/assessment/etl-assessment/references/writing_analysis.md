@@ -27,7 +27,7 @@ Zero dbt references in scripting mode.
 
 ### Critical Understanding
 
-**SnowConvert will process all packages**, but the analysis must identify external connectivity requirements.
+**Every package will be converted**, but the analysis must identify external connectivity requirements.
 
 **dbt mode:** dbt projects on Snowflake cannot directly connect to external sources - data must already exist in Snowflake.
 
@@ -95,7 +95,7 @@ This classification applies when you observe in the package analysis (SQL logic,
 
 4. **No external connection managers:** All OLE DB or ADO.NET connections point to internal SQL Server databases within the same environment. No file paths, FTP servers, API endpoints, CSV or Excel files, or external database servers.
 
-**SnowConvert Outcome:**
+**Conversion outcome:**
 - Control Flow → Snowflake Tasks
 - Data Flow → dbt models (dbt mode) / stored procedures (scripting mode)
 - **Excellent conversion candidate**
@@ -120,7 +120,7 @@ This classification applies when you observe in the package analysis (SQL logic,
 
 3. **File System or FTP Tasks in Control Flow:** Presence of tasks that download files, move files between directories, or interact with external file systems indicates ingestion patterns.
 
-**SnowConvert Outcome:**
+**Conversion outcome:**
 - Control Flow → Snowflake Tasks
 - Data Flow → dbt projects (dbt mode) / stored procedures (scripting mode)
 - **Requires external connector solution** - identify source type and recommend appropriate approach
@@ -152,7 +152,7 @@ This classification applies when you observe in the package analysis (Control Fl
 
 6. **Script-heavy logic:** Script Tasks with C#/VB.NET code for complex orchestration logic, error handling, or integration with external systems.
 
-**SnowConvert Outcome:**
+**Conversion outcome:**
 - Control Flow → Snowflake Tasks with procedural Snowflake Scripting
 - May require Snowflake stored procedures for complex conditional logic
 - Script Tasks need manual rewrite (Python UDFs or external orchestration)
@@ -178,7 +178,7 @@ This classification applies when you observe in the package analysis (SQL logic,
 
 3. **SQL Tasks that transform after external load:** The package loads data from external source to staging, then SQL Tasks perform significant transformation logic on that staged data.
 
-**SnowConvert Outcome:**
+**Conversion outcome:**
 - **Partial candidate** - transformation portions can convert, ingestion cannot
 - Recommend architectural separation: ingestion via Fivetran/Airflow, transformation via dbt (dbt mode) or stored procedures (scripting mode)
 - Analysis should clearly identify which components are convertible vs. which need alternatives

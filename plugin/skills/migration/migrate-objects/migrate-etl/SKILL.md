@@ -99,7 +99,7 @@ Once `etlStabilization` is `completed`, the unit sits at the `deploy` task. Depl
 
 **Do NOT hand-roll the deployment, and do NOT run the pipeline by hand.** No manual `snow dbt deploy`; no executing the orchestration SQL or helper DDL by hand; no building or recreating the task graph yourself (`CREATE OR REPLACE TASK`); no seeding tables or running models (`EXECUTE DBT PROJECT`); no `EXECUTE TASK`. Deploy only **creates** the objects (the task graph is left suspended) - running it is a separate, later step (see Activation), and only when the user asks. `scai code deploy` already does the deploy, in order:
 
-- **Supporting helpers first:** the `control_variables` transient table and any shared `etl_configuration` functions/procedures and `file_formats` the packages depend on.
+- **Supporting artifacts first:** stages, file formats, the `control_variables` transient table, and shared `etl_configuration` functions/procedures the packages depend on. `etl_configuration/tables/landing_tables.sql` is in that set only when this conversion has `database-ingestion-config.json` and `database-manifest.json` shows that config applied to at least one snapshot table. A skipped config, a rejected config, and Change Tracking or CDC with no snapshot table leave that file out. A missing file does not fail deploy.
 - **The dbt project(s):** each converted data flow registered as a dbt project.
 - **The orchestration task graph:** created **suspended**, so nothing runs until you choose to activate it. These are Snowflake Task Graphs (Snowflake owns the scheduling); the converted SQL only defines the tasks.
 - **Telemetry:** a `COMMENT` is set on each deployed object to record that it came from this tool.
@@ -115,7 +115,11 @@ After a successful deploy with the graph left suspended, the tool reports the su
 
 The task graph is suspended, so this link is for inspecting the created objects, not a running pipeline.
 
-**Activation (only when the user asks to run or activate the tasks).** Pass `snowflake_task_activate = true` to the `deploy` tool. It resumes each task graph's child tasks. The converted root tasks have no SCHEDULE or AFTER clause, so Snowflake will not resume the root itself; that is expected and is reported as a note, not an error. Run a suspended-root graph on demand with `EXECUTE TASK`.
+**Flat-file packages become data-ready once files start landing.** Deploy creates `public.landing_stage` and the generated file formats; moving files into them is a separate hop on the host that owns them. When the conversion's ingestion manifest (`artifacts/ingestion/<conversion-run>/ingestion-manifest.json`) exists and lists sources, name the packages that read from the stage and offer [etl-file-ingestion](./etl-file-ingestion/SKILL.md) before activation. That skill hands over the landing contract and returns here to advance `deploy`.
+
+**Database packages become data-ready once classified sources start landing.** When `artifacts/database-ingestion/<conversion-run>/database-manifest.json` exists and lists objects with `ingestion.state` of `ingestion`, offer [etl-database-ingestion](./etl-database-ingestion/SKILL.md) before activation. That skill hands over the landing contract and returns here to advance `deploy`. No manifest, or nothing classified, and deploy continues.
+
+**Activation (only when the user asks to run or activate the tasks).** For a flat-file package, confirm files are landing first (above) — activating a graph over empty stage prefixes produces empty loads, not errors. Pass `snowflake_task_activate = true` to the `deploy` tool. It resumes each task graph's child tasks. The converted root tasks have no SCHEDULE or AFTER clause, so Snowflake will not resume the root itself; that is expected and is reported as a note, not an error. Run a suspended-root graph on demand with `EXECUTE TASK`.
 
 When the deploy returns success, advance the machine:
 

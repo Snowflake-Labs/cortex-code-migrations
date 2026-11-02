@@ -153,6 +153,10 @@ into the project.
 
 If neither root has ETL, proceed to Step 3 with no ETL to convert.
 
+### Step 2.5: Optional database-ingestion config
+
+Skip this step unless Step 2 found SSIS or Informatica. Load [./etl-database-ingestion-config/SKILL.md](./etl-database-ingestion-config/SKILL.md) and return here when it finishes. That skill returns only after the user skips or the on-disk config validates, so Step 3 starts from a file conversion can read.
+
 ### Step 3: Check for Power BI Reports
 
 Read `source_language` and `has_power_bi` from `configure()` (set upfront by the `chooseMigrationExtras` multi-select). Snowflake is validation-only, so skip this step for a Snowflake source and leave `PBIT_PATH` unset.
@@ -169,7 +173,7 @@ If it **is** Oracle or SqlServer, read `has_tableau` from `configure()`:
 
 - If `has_tableau` is **`false`** (explicitly): skip to Step 3.6. `TABLEAU_PATH` stays unset.
 - If `has_tableau` is **`true`** (explicitly): user confirmed they have Tableau workbooks — load `../tableau-repointing/SKILL.md` in path-only mode. It collects `TABLEAU_PATH` and tells you to append `--tableauRepointing <TABLEAU_PATH>` to the convert command in Step 4. Return here when complete.
-- If `has_tableau` is **not set** (re-entry or legacy session): **do not ask.** Step 3.6 stops so the setup card can ask. Do not ask here either.
+- If `has_tableau` is **not set** (re-entry or legacy session): **do not ask here.** Step 3.6 hands it to setup's prompt.
 
 ### Step 3.6: Offer Custom Conversion Settings (+ batch any unasked extras)
 
@@ -177,7 +181,7 @@ Read `tailor_conversion_settings` from `configure()` (set upfront by the `choose
 
 - If `tailor_conversion_settings` is **`false`** (explicitly) **and** both `has_power_bi` and `has_tableau` are already set: `<SETTINGS_FLAGS>` stays empty; proceed to Step 4. Do not ask, unless the user has asked in this conversation for custom settings or a specific conversion flag: then follow [Changing Conversion Settings Later](#changing-conversion-settings-later) before Step 4.
 - If `tailor_conversion_settings` is **`true`** (explicitly) **and** both extras flags are already set: skip the settings question and load `./recommend-settings/SKILL.md` immediately. Store the returned flag string as `<SETTINGS_FLAGS>` for Step 4. If the user declines all suggestions, the catalog can't be loaded, or `source/` is empty (Tableau-only), leave `<SETTINGS_FLAGS>` empty. Return here when complete.
-- If **any** of `has_power_bi`, `has_tableau`, or `tailor_conversion_settings` is **not set**, do **not** ask. Do not compose an `ask_user_question` for extras or conversion settings, and do not split them into yes/no questions. Call `progress_setup()` with no answers and end the turn. The setup card is the only place those questions are asked. On the next turn, re-read the flags and continue this step.
+- If **any** of `has_power_bi`, `has_tableau`, or `tailor_conversion_settings` is **not set**, do **not** ask. Do not compose an `ask_user_question` for extras or conversion settings, and do not split them into yes/no questions. Call `progress_setup()` with no answers and let setup's prompt ask them. If the reply has `shown_on_card: true`, AIM shows them on its card: end the turn. Otherwise ask that prompt as setup/SKILL.md step 3 says (one `ask_user_question` call) and submit the answers with `progress_setup(answers={...})`. Then re-read the flags and continue this step.
 
 After the user answers:
 - If Power BI (or extras multi-select includes Power BI) is **Yes**: load `../powerbi-repointing/SKILL.md` to collect `PBIT_PATH`.
@@ -214,10 +218,11 @@ Only SQL Server's conversion settings define the bindable-format flags today; on
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 2 (Informatica target is Snowflake Scripting) |
 | `--ssis-to-snowflake-scripting` | `SSIS_SCRIPTING_MODE` was set in Step 2 (SSIS target is Snowflake Scripting) |
 | `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt, or Informatica dbt) |
+| `--consolidate-as-single-dbt-project` | `CONSOLIDATE_AS_SINGLE_DBT_PROJECT` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt only, single-project choice) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 3 |
 | `--tableauRepointing <TABLEAU_PATH>` | `TABLEAU_PATH` was set in Step 3.5 |
 
-The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. The SSIS scripting flag and the SSIS dbt-consolidation flags come from the SSIS answer, so a scripting SSIS convert does not also pass a consolidation flag. Either platform's choice combines with `--powerbi-repointing` and/or `--tableauRepointing`, and with the other platform's choice. If none of the conditions hold, run the base command as-is.
+The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. The SSIS scripting flag and the SSIS dbt-consolidation flags come from the SSIS answer, so a scripting SSIS convert does not also pass a consolidation flag. `--consolidate-as-single-dbt-project` is exclusive with `--consolidate-dbt-projects` and with `--ssis-to-snowflake-scripting`: pass it only when the SSIS-only answer set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT`. Either platform's choice combines with `--powerbi-repointing` and/or `--tableauRepointing`, and with the other platform's choice. If none of the conditions hold, run the base command as-is.
 
 Substitute `<PBIT_PATH>` and `<TABLEAU_PATH>` with the actual paths you stored. Do not emit literal placeholder tokens to the shell.
 
@@ -250,6 +255,19 @@ Conversion writes:
 
 Name the converted-code and log locations. Direct users to Assessment for reports.
 Do not present `.scai/reports/` as a place for users to browse.
+
+#### Registry Not Updated (CVT0036)
+
+`CVT0036` means the engine finished and the converted SQL in `snowflake/` and the
+reports exist, but the registry was not written: the units it names still show
+`conversion: pending`. Surface the error and its suggestion verbatim, then stop.
+Do not go on to the assessment.
+
+- Do not re-run `scai code convert`, with or without `--overwrite-working-directory`,
+  to fix it. A re-run hits the same engine failure and leaves the registry as it is.
+- Never call units left `conversion: pending` after convert, or an empty conversion
+  issues panel, expected. Only `scai code convert` writes a converted unit's
+  conversion status; no later phase (assessment, migrate-objects, deploy) fills it in.
 
 ### Conversion Options
 
@@ -370,7 +388,8 @@ The envelope's own status is the check — don't go looking for corroboration.
 - [ ] If Power BI reports were included, follow the CHECKPOINT addendum in `../powerbi-repointing/SKILL.md`
 - [ ] If Tableau workbooks were included, follow the CHECKPOINT addendum in `../tableau-repointing/SKILL.md`
 
-If the envelope reports errors, surface them verbatim and stop. Otherwise move on
+If the envelope reports errors, surface them verbatim and stop. For `CVT0036`, follow
+"Registry Not Updated (CVT0036)" in Step 5. Otherwise move on
 — don't ask the user to review EWI counts or confirm that files landed.
 
 ## On Completion

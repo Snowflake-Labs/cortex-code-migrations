@@ -62,7 +62,7 @@ validate_data(
   schema_validation=true,            # optional; false is refused — L1 is always required
   metrics_validation=true | false,   # optional; scai default is false — pass true only if user wants metrics
   row_validation=true | false,       # optional; scai default is true
-  continue_on_failure=true | false,  # optional; persisted as a session default
+  continue_on_failure=true | false,  # optional; this call only, never saved
 )
 ```
 
@@ -80,7 +80,7 @@ The setup response contains:
 
 - `workflow_path` — `artifacts/data_validation/workflows/<hash>.yaml`. Same `where` always maps to the same file; distinct filters produce distinct files.
 - `regenerated` — `false` means scai re-used an existing file.
-- `defaults` — the merged session defaults applied to this call (includes `validation_type` / `sync_strategy`).
+- `defaults` — what this call applied: the project's `validation_type` / `sync_strategy` plus the toggles and `target_schema` passed to this call (toggles and `target_schema` are never saved; pass them again on the next setup that needs them).
 - `applied_overrides` — toggle values that were patched into `validationConfiguration`.
 - `applied_synchronization` — sync strategy patched into `defaultTableConfiguration.synchronization` when known.
 - `edit_hints` — use as a guide when the user is unsure what can be changed.
@@ -109,6 +109,7 @@ The setup response contains:
    | Limit compared rows | `sourceWhereClause` + `targetWhereClause` (both required; set matching predicates on each side) |
    | Skip L2 on wide tables | Disable `metricsValidation`, split it with `maxColumnsPerMetricsBatch`, or drop the `avg` / `sum` / `stddev` aggregates with `excludeMetrics: true` |
    | Skip L2 metrics on one column (VARCHAR/text PK, useless `avg`, etc.) while keeping L1/L3 on that key | Top-level `validationCustomMetrics.source`: `column: {table.fullyQualifiedName}.{columnName}` + metric `name` entries with **no** `metricQuery` (removes those metrics). See [workflow-config-reference — Custom L2 metrics](../../setup/data-validation/references/workflow-config-reference.md#custom-l2-metrics-validationcustommetrics). Never exclude an index/PK via `columnSelectionList` for this |
+   | Compare LOB contents in L3 (Oracle `CLOB` / `NCLOB` / `BLOB`, SQL Server `TEXT` / `NTEXT` / `IMAGE`, …), which L3 leaves out by default | `validationConfiguration.includeLobColumnsInRowValidation: true`, globally or per table. Oracle then needs `EXECUTE` on `DBMS_CRYPTO`. See [L3 LOB columns](../../setup/data-validation/references/workflow-config-reference.md#l3-lob-columns-opt-in-includelobcolumnsinrowvalidation) |
    | Whitelist known diffs | `acceptedTransformations` |
    | Rename / remap columns | `columnMappings`, `indexColumnList`, `targetIndexColumnList` |
    | Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber`, and a leading `columnNamesToPartitionBy` the source can prune on |
@@ -135,6 +136,10 @@ The setup response contains:
    names or source/target type pairs. Validate the configured columns and
    report mismatches. Any deterministic normalization or exclusion belongs in
    product configuration, not agent guesswork.
+   One such exclusion is built in: L3 leaves source LOB columns out unless
+   `includeLobColumnsInRowValidation` is `true`. If the user asks why a LOB
+   column has no L3 result, say so, and offer the key; do not turn it on
+   unasked.
 10. **Pre-run verification (hard gate).** Before calling `validate_data(mode="run")`, **re-read `workflow_path`** and confirm every user-requested edit from steps 5/8 is actually written to the file, `metricsValidation` matches the agreed value, and (for non-Snowflake L3) object-store strategies include `extraction.externalStage`. If a requested edit is missing, apply it now; do not run until the on-disk YAML matches what the user asked for. Then get **explicit confirmation** to run with the final workflow and continue to Step 3.
 
 **Optional — explain validation levels:** After the “update any fields?” question (or while the user is reviewing), offer a brief explanation unless they are clearly repeating a prior run or only asked to execute:
@@ -214,7 +219,7 @@ job_status(job_id="<JOB_ID>", details=true)   # + full progress and failure repo
 1. **Phase A — Monitor:** Start the **Monitor** tool (`persistent: true`) with `monitor.watch_command` from the run response, verbatim, from the project root. No wait for a workflow name, and no hand-built command — the cursor baked into it is what prevents replays and gaps.
 2. **Phase B — Monitor fire:** Branch on the event's `phase`. `failure` / `relay_error` are warnings — surface them and keep watching. `stalled` triggers the infrastructure diagnosis in the health section below, then keep watching. On `terminal`, read `detail.completion` (`verdict`, `terminal`, `failed`, `summary`, `report_row_counts`, optional `failures` / `stale_reports`) → Step 4.B if failed → **Step 5**. Do not call `job_status` merely to confirm the terminal event.
 
-**No progress loop.** Do not start `/loop` or a cron to poll for progress. The relay emits a `stalled` event once a job has gone **30 minutes** without changing, or **2 minutes** with its `WORKFLOW` row still `pending` — no orchestrator has claimed it (`detail.stall_reason: "unclaimed"`), so a quiet job reports itself. A healthy run is silent by design — progress lands in the log, and `job_status(job_id, details=true)` names the tables in flight whenever the user asks (see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths)).
+**No progress loop.** Do not start `/loop` or a cron to poll for progress. The relay emits a `stalled` event once a job has gone **30 minutes** without changing, or **2 minutes** with its `WORKFLOW` row still `pending` — no orchestrator has claimed it (`detail.stall_reason: "unclaimed"`), so a quiet job reports itself. It emits one at once, within about 30 seconds, when the orchestrator or worker the job needs reads down, local or SPCS (`"infrastructure_down"`). A healthy run is silent by design — progress lands in the log, and `job_status(job_id, details=true)` names the tables in flight whenever the user asks (see [Per-table progress narration](./references/background-monitoring.md#per-table-progress-narration-all-paths)).
 
 The watch fires only on terminal, first failure, a stall (2 minutes unclaimed or 30 minutes unchanged), or relay error — not on ordinary progress. It exits by itself on its job's terminal record.
 
@@ -238,7 +243,8 @@ the warning, and keep the Monitor armed.
 
 | `detail.stall_reason` | Status shows | Meaning | Do |
 |---|---|---|---|
-| any | `spcs_orchestrator.state` / `spcs_worker.state` is `suspended` or `not_running`, or `local_orchestrator` / `local_worker` is `false` for a recorded `local` placement (`spcs_worker` is read only when the project runs one) | The service that must run the workflow is down | **Critical.** Tell the user which one; offer `data_infrastructure(mode="up")` (orchestrator) or `scai data worker start` (SPCS worker). The workflow resumes once it is claimed |
+| `infrastructure_down` | any | The orchestrator or worker the job needs is down, by the same check that refuses a dispatch. Sent at once, not after a deadline; `detail.infrastructure` names its `process` and `placement`, and for a local process this session started, its `exit_status`, `log_tail` and `log_path`. `detail.remediation` is the call that restarts it, absent when `up` would not (an SPCS worker, another metadata database) | **Critical.** Tell the user which process is down, with its last log line when there is one, and offer `detail.remediation` (else follow the `summary`: `scai data worker start` for an SPCS worker). Do not cancel or re-dispatch the job: keep watching, since it carries on once the process is back. If a local process exits again, read `log_path` and fix the cause before another `up` |
+| any | `spcs_orchestrator.state` / `spcs_worker.state` is `suspended` or `not_running`, or `local_orchestrator` / `local_worker` is `false` for a recorded `local` placement (`spcs_worker` is read only when the project runs one) | The service that must run the workflow is down | **Critical.** Tell the user which one; offer `data_infrastructure(mode="up")` (orchestrator) or `scai data worker start` (SPCS worker). Do not cancel or re-dispatch the job: keep watching, since the workflow resumes once it is claimed |
 | `unclaimed` | `spcs_orchestrator.state` is `starting` | The orchestrator is still coming up (a cold compute pool can take minutes) | **Warning.** Say so and keep watching; a second `unclaimed` stall is **Critical** |
 | `unclaimed` | every recorded service running | The workflow row is still `pending`: no orchestrator has claimed it yet | Any `spcs_orchestrator.deployed_affinity` is **Critical**: the orchestrator must carry none, or it only claims workflows with that label (see [Affinity reference](../../data-infrastructure/references/affinity-reference.md#when-affinity-is-the-cause-of-a-stall)). Otherwise the orchestrator initializes claimed workflows one at a time, so if another of this project's data jobs was launched shortly before and has not started a table yet, say this one is likely queued behind it (**Warning**). With neither, say the orchestrator is up but not claiming; it is **Critical** on the second `unclaimed` stall |
 | `no_change` | every recorded service running | Work is claimed but stopped moving | **Warning.** If no table has started, compare the workflow YAML's top-level `affinity` with the worker's — `spcs_worker.deployed_affinity`, or `[application].affinity` in `.scai/config/dew_configuration.toml` for a local worker (status does not report it); a mismatch is **Critical**. Otherwise read the stall `summary` for a workflow status, then [Troubleshooting Reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md) |

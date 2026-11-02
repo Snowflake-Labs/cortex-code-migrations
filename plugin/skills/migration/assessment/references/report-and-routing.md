@@ -18,7 +18,7 @@ end-to-end path is fully defined in `SKILL.md`.
 | Deployment waves, dependency order | `waves-generator/SKILL.md` |
 | Temporary/staging/deprecated exclusions | `object_exclusion_detection/SKILL.md` |
 | Migration effort/hours | `effort-estimate/SKILL.md` |
-| SQL Server migration risks/anti-patterns | `anti-patterns/SKILL.md` |
+| Migration risks/anti-patterns | `anti-patterns/SKILL.md` |
 | Dynamic SQL patterns | `analyzing-sql-dynamic-patterns/SKILL.md` |
 | Conversion issues, EWI report, Jira ZIP | Parent input collection, then `conversion-issues/SKILL.md` |
 | SQL Server Extended Events, Teradata DBQL, or Redshift SYS_QUERY_HISTORY discovery | Parent input collection, then `workload-insights/SKILL.md` |

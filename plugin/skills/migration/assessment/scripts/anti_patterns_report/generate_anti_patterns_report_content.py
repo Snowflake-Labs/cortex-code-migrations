@@ -88,7 +88,7 @@ def generate_anti_patterns_html_content(anti_patterns_json_path) -> Tuple[str, s
 
 _AP_PAGE_INTRO = (
     "Patterns that convert cleanly but may perform poorly or behave differently on Snowflake. "
-    "Findings are grouped by category and priority from SnowConvert issue codes already recorded on your code units."
+    "Findings are grouped by category and priority from the conversion issue codes already recorded on your code units."
 )
 
 _AP_H1 = (

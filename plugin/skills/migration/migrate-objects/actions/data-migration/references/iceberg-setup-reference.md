@@ -4,7 +4,7 @@
 > source object is a fully relational table** — if the source is itself an Iceberg / external / catalog-backed
 > table, **do not continue** (see the source gate in [SKILL.md](../SKILL.md) Step 3a.1). The supported
 > target is a **Snowflake-managed Iceberg table (spec v2 or v3) on an external volume** with
-> `storageMode: compatible` and load mode `ADD_FILES_COPY` or `FULL_INGEST` — external / AWS-Glue /
+> `storageMode: compatible` (or `native` on v3) and load mode `ADD_FILES_COPY` or `FULL_INGEST` — external / AWS-Glue /
 > other catalogs are out of scope. Use this reference
 > when `target_table_type=iceberg`. The AWS/Glue sections below apply to AWS-backed volumes (e.g. a Redshift
 > source on S3); for an Azure- or GCS-backed external volume, substitute the equivalent cloud setup. For
@@ -370,9 +370,19 @@ Confirm Parquet files are listed. If empty, check that the S3 URL is correct and
 
 ### Step E.1: Grant Iceberg table creation
 
+When `SHOW PROCEDURES LIKE 'GRANT_TARGET_PRIVILEGES' IN SCHEMA <metadata_database>.COMMON;` returns a row, use it: it grants `CREATE ICEBERG TABLE` along with everything else DMVF needs on the target schema ([grant procedures](../../../../data-infrastructure/SKILL.md#grant-procedures)).
+
+```sql
+CALL <metadata_database>.COMMON.GRANT_TARGET_PRIVILEGES('<MIGRATION_ROLE>', '<TARGET_DB>', '<TARGET_SCHEMA>');
+```
+
+Otherwise grant it directly:
+
 ```sql
 GRANT CREATE ICEBERG TABLE ON SCHEMA <TARGET_DB>.<TARGET_SCHEMA> TO ROLE <MIGRATION_ROLE>;
 ```
+
+The procedure does not cover the external volume or the catalog integration: Steps E.2 and E.3 still apply.
 
 ### Step E.2: Grant external volume usage
 

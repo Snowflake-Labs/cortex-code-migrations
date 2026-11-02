@@ -16,7 +16,10 @@ migration_status(mode="escalations")
 It is project-wide, so it also surfaces escalations raised by another person's
 agents and answers recorded in an earlier session — including one this session was
 killed in the middle of. Do not open `notes` or `overrideAcceptedCases`. If the
-object is not already parked, park it before reporting:
+object is not already parked, park it before reporting. A walker that returns
+`stuck` may already have escalated (one stuck on a human question does; one
+stuck on repeated oracle errors or an unknown ID does not), so check there for
+an open row on that object before you escalate:
 
 ```
 transition_status(status="escalate", task="<the task it keeps returning on>",
@@ -25,7 +28,10 @@ transition_status(status="escalate", task="<the task it keeps returning on>",
                   reason="<what stopped you>", where="id = '<id>'")
 ```
 
-`asks` is required. Report one concise line — for example
+`asks` is required. When the object and task already have an open row, the
+call reuses it, rewrites it with this call's reason and asks, and lists it
+under `alreadyEscalated`: the user still sees one question, with the latest
+diagnosis. Report one concise line — for example
 `dbo.AuditTrail: parked on migrateData — CLR is not enabled on the source` — and
 return to the board and pool. Do not number the choices, call AskUserQuestion, or
 wait for a chat answer. A parent that asks in chat instead of parking leaves
@@ -156,10 +162,14 @@ project configured a `compute_pool` and data work ran.
 ## Resume after interruption
 
 A killed session loses dispatch bookkeeping, not durable work. Claims,
-registry stamps, git merges, escalations, and answers survive. Re-enter the
-autonomous skill at preflight, then read the board and escalation queue. The
-board shows dead-session claims as leftovers that a new first send can reclaim.
+registry stamps, git merges, escalations, and answers survive, and Cortex
+children outlive the session. Re-enter the autonomous skill at preflight, then
+read the board and escalation queue. A row whose `flight` is `running` or
+`idle` has a live child: leave it. A harvested waiter (`flight` `none` with a
+full conversation UUID as `agentId`) is resumed with `task(resume=<that UUID>)`
+on a wake or a 2c continue, never first-sent. An 8-character `agentId` is a
+claim prefix, not a resume id. Only `leftover_claims`, open claims with no
+walker, take a new first send.
 
 Read `migration_status(mode="escalations")` before dispatch. Questions remain
-open and earlier answers still need to be delivered. Cortex `resume` ids died
-with the session, so every reclaimed object uses a first send.
+open and earlier answers still need to be delivered.

@@ -19,7 +19,7 @@ ImportError: dlopen(.../data-migration-orchestrator/lib/pythonX.Y/site-packages/
 
 (`_DTLS_get_data_mtu` is the same class of error.) `scai data doctor` reports it as a failing **DEW doctor** / **Orchestrator doctor** row, with the repair below as its suggestion, so `data_infrastructure(mode="up")` refuses with it in `doctor_failures` rather than letting the workflow die mid-run.
 
-**Cause:** The orchestrator/DEA run in bundled Python venvs under `~/.config/Snowflake Inc/SnowConvertDesktop/{data-migration-orchestrator,data-exchange-agent}/`, created by SnowConvert Desktop via `pip install`. `cryptography` is a transitive dependency. When pip installs it as a **source build (sdist)** instead of the self-contained binary wheel, `_rust.abi3.so` is linked to resolve OpenSSL symbols from an **external** OpenSSL at load time. If a different/older OpenSSL resolves first at runtime, the symbol lookup fails. The official `cryptography` wheels (maturin, e.g. `cp311-abi3-macosx_11_0_arm64`) instead **statically bundle** OpenSSL and link only `libSystem`/`libiconv` — those never hit this error. This is environment nondeterminism (Python version, available wheels), **not** an Apple-Silicon limitation: an arm64 machine that resolved the bundled wheel works fine.
+**Cause:** The orchestrator/DEA run in bundled Python venvs under `~/.config/Snowflake Inc/SnowConvertDesktop/{data-migration-orchestrator,data-exchange-agent}/`, created by the desktop app via `pip install`. `cryptography` is a transitive dependency. When pip installs it as a **source build (sdist)** instead of the self-contained binary wheel, `_rust.abi3.so` is linked to resolve OpenSSL symbols from an **external** OpenSSL at load time. If a different/older OpenSSL resolves first at runtime, the symbol lookup fails. The official `cryptography` wheels (maturin, e.g. `cp311-abi3-macosx_11_0_arm64`) instead **statically bundle** OpenSSL and link only `libSystem`/`libiconv` — those never hit this error. This is environment nondeterminism (Python version, available wheels), **not** an Apple-Silicon limitation: an arm64 machine that resolved the bundled wheel works fine.
 
 **Diagnose:**
 ```bash
@@ -39,9 +39,9 @@ for env in data-migration-orchestrator data-exchange-agent; do
     --only-binary=cryptography cryptography
 done
 ```
-Then re-run `scai data doctor` (or `migrate_data(mode="run")`). If pip reports no wheel is available for that platform/Python, that is the real problem — upgrade pip or use a Python version with a published `cryptography` wheel. Alternatively, delete the two venv directories and let SnowConvert Desktop recreate them, or reinstall SnowConvert Desktop.
+Then re-run `scai data doctor` (or `migrate_data(mode="run")`). If pip reports no wheel is available for that platform/Python, that is the real problem — upgrade pip or use a Python version with a published `cryptography` wheel. Alternatively, delete the two venv directories and let the desktop app recreate them, or reinstall the app.
 
-**Durable fix:** SnowConvert Desktop pins `--only-binary=cryptography` when bootstrapping these venvs (`PythonPackageEnvironmentManager.BuildInstallArgs`), so pip can no longer source-build cryptography.
+**Durable fix:** The desktop app pins `--only-binary=cryptography` when bootstrapping these venvs (`PythonPackageEnvironmentManager.BuildInstallArgs`), so pip can no longer source-build cryptography.
 
 ---
 
@@ -49,7 +49,7 @@ Then re-run `scai data doctor` (or `migrate_data(mode="run")`). If pip reports n
 
 **Symptom:** You submitted a workflow via `scai data migrate create-workflow`, but the orchestrator service logs (`CALL SYSTEM$GET_SERVICE_LOGS(...)`) repeatedly show `Found 0 pending workflows`.
 
-**Cause:** Affinity mismatch. The orchestrator service has a baked-in `affinity` value from when it was created, but the workflow was submitted without a matching affinity (or with `null`).
+**Cause:** The orchestrator was given an affinity. An orchestrator without one claims every pending workflow, and scai never gives it one (`scai data orchestrator setup` / `start` and `data_infrastructure(mode="up")` leave `DATA_MIGRATION_ORCHESTRATOR_AFFINITY` unset). Only a hand-written service spec or environment that sets `DATA_MIGRATION_ORCHESTRATOR_AFFINITY` pins it, and then workflows of any other affinity stay `pending`.
 
 **Diagnosis:**
 ```sql
@@ -57,7 +57,7 @@ Then re-run `scai data doctor` (or `migrate_data(mode="run")`). If pip reports n
 CALL SYSTEM$GET_SERVICE_LOGS(
   '<metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE', '0', 'orchestrator', 50
 );
--- Look for: "Orchestrator affinity: <value>"
+-- Look for: "Orchestrator affinity: <value>". "None" means unset, so the cause is elsewhere.
 
 -- Check the workflow's affinity
 SELECT ID, NAME, STATUS, AFFINITY
@@ -65,15 +65,9 @@ FROM <metadata_database>.DATA_MIGRATION.WORKFLOW
 ORDER BY ID DESC LIMIT 5;
 ```
 
-**Fix:**
-1. Update the workflow's `AFFINITY` column to match the orchestrator's value:
-   ```sql
-   UPDATE <metadata_database>.DATA_MIGRATION.WORKFLOW
-   SET AFFINITY = '<orchestrator_affinity>'
-   WHERE ID = <workflow_id>;
-   ```
-2. Or, set `affinity: <value>` in the workflow YAML before submitting.
-3. Also set `affinity = "<value>"` in the worker's `[application]` section in the project's `.scai/config/dew_configuration.toml` (path relative to the SCAI project root).
+**Fix:** remove `DATA_MIGRATION_ORCHESTRATOR_AFFINITY` from the orchestrator's spec or environment and restart. Confirm with the user first: `scai data orchestrator setup --compute-pool <pool> --yes` drops the Data Migration Service and rebuilds it from scai's spec, which cuts off any workflow that service is running and loses a hand-written image unless `--custom-image <image>` is passed again. Check that no workflow is `running`, and pass `--custom-image <image>` when the current spec used one. Do not rewrite the workflow's `AFFINITY` to the orchestrator's value: the workflow's affinity is what routes its tasks to the right worker, see the [Affinity Reference](../../../../data-infrastructure/references/affinity-reference.md).
+
+If the log shows `Orchestrator affinity: None` and the workflow is no longer `pending` but its tasks never start, the mismatch is on the worker side: no running worker carries the workflow's affinity. Compare the workflow's `AFFINITY` with each worker's (`scai data worker list`, `[application].affinity` in `.scai/config/dew_configuration.toml`, or `AGENT_AFFINITY` in an SPCS / Kubernetes spec). A worker set up by hand with its own label does not claim workflows stamped with the project-default affinity; regenerate the workflow under the worker's label (`configure(affinity="<label>")`, then `migrate_data(mode="setup", where=…, force_regenerate=true)`).
 
 ---
 
@@ -149,6 +143,24 @@ WHERE WORKFLOW_ID != <your_workflow_id>
 
 ---
 
+## No schema found at schema/ — Stage file not yet visible
+
+**Symptom:** tables fail at `Resolve vector metadata: <table>` with `ValueError: No schema found at @<metadata_database>.DATA_MIGRATION.TASK_RESULTS/task_results/workflows/<w>/tables/<t>/schema/. Stage file not yet visible — DEA write may still be in-flight.` The worker's schema task completed without error, and the stage holds the table's `metadata` and `object_type` files but no `schema`.
+
+**Cause:** the worker's schema query returned zero rows, and an empty result still completes the task. Despite the message, it is rarely a write still in flight. Zero rows says the query found nothing, not why. Check, in this order:
+- **What the statement reads.** Current orchestrator builds qualify every SQL Server catalog with the table's own database (`FROM [<db>].INFORMATION_SCHEMA.COLUMNS`), so one connection reads tables in several databases on the same server. A logged statement that reads an unqualified `INFORMATION_SCHEMA.COLUMNS` filtered by `TABLE_CATALOG = '<db>'` comes from an older orchestrator build: it reads the database the connection opens (often `master`) and finds no columns there.
+- **The names.** The database, schema or table in the workflow YAML doesn't match the source — the same family as [Table does not exist in the source database](#table-does-not-exist-in-the-source-database--empty-metadata).
+- **Permissions.** The connection's login can't see the table's columns in the catalog views.
+
+**Diagnose before any retry:**
+1. In the worker's `data_exchange_agent.log` (under scai's `logs/data/`), find the failing table's schema task and copy its `statement`.
+2. Run that statement with `query_source` on the same connection, and the same query with each catalog prefixed by the table's database (`[<db>].`). Rows from the second alone point at the statement; no rows from either point at the names or permissions.
+3. Compare the database the connection opens (`scai connection list -l <dialect> --json`) with each table's `source.databaseName` in the workflow YAML.
+
+**Fix:** show the user what you ran and what it returned. Wrong names or permissions: fix them, then delete the failed workflow and resubmit. An unqualified statement: say the worker is running older orchestrator code than the current build, with the statement as evidence, and that you haven't confirmed why; on SQL Server, `scai data migrate start --direct` runs the migration in-process with a locally installed orchestrator, without the shared service. Do **not** update, recreate or restart the shared orchestrator service to test the theory — it serves every project on the account — and do not re-run the unchanged workflow: it runs the same statement.
+
+---
+
 ## `whereClauseCriteria` syntax error during extraction
 
 **Symptom:** The extraction task fails with a SQL syntax error like `syntax error at or near "TOP"` (Redshift) or similar.
@@ -175,7 +187,15 @@ Using `TOP 1000 1=1` (SQL Server syntax) or `LIMIT 1000` (Redshift syntax) is in
 
 **Cause:** The SPCS service was created by a different role (often `ACCOUNTADMIN`), and the current role lacks OPERATE/MONITOR privileges.
 
-**Fix:** Have an admin grant the required privileges:
+**Fix:** Have an admin grant `OPERATE` and `MONITOR` on the service, plus the metadata privileges. When `SHOW PROCEDURES LIKE 'GRANT%PRIVILEGES%' IN SCHEMA <metadata_database>.COMMON;` returns rows, the metadata privileges come from the [grant procedures](../../../../data-infrastructure/SKILL.md#grant-procedures) (ask before the orchestrator call: it moves ownership of the metadata objects to `<your_role>`):
+```sql
+USE ROLE SYSADMIN; -- or whichever role owns the service and has MANAGE GRANTS
+
+GRANT OPERATE, MONITOR ON SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE TO ROLE <your_role>;
+CALL <metadata_database>.COMMON.GRANT_PRIVILEGES_TO_ORCHESTRATOR_ROLE('<your_role>', '<warehouse>');
+```
+
+With no rows (a metadata database deployed by an older orchestrator), grant them one by one:
 ```sql
 USE ROLE SYSADMIN; -- or whichever role owns the service
 
@@ -188,6 +208,16 @@ GRANT ALL PRIVILEGES ON ALL STAGES IN SCHEMA <metadata_database>.DATA_MIGRATION 
 GRANT ALL PRIVILEGES ON ALL FILE FORMATS IN SCHEMA <metadata_database>.DATA_MIGRATION TO ROLE <your_role>;
 GRANT ALL PRIVILEGES ON ALL VIEWS IN SCHEMA <metadata_database>.DATA_MIGRATION TO ROLE <your_role>;
 ```
+
+---
+
+## Insufficient privileges after a DMVF upgrade
+
+**Symptom:** after the orchestrator upgrades its metadata schema, the orchestrator or a worker fails with "insufficient privileges" on a metadata object, and the upgrade log has a warning that names a `CALL <metadata_database>.COMMON.GRANT_…` statement.
+
+**Cause:** the release changed grants that only a `MANAGE GRANTS` role can make (database, schema, warehouse, future, orchestrator or target grants). The upgrade re-grants recorded worker roles their object privileges itself, but it cannot run these, so it logs the call and finishes.
+
+**Fix:** have the admin who first called the [grant procedures](../../../../data-infrastructure/SKILL.md#grant-procedures) run the logged `CALL` as written, then retry the run.
 
 ---
 
@@ -284,8 +314,8 @@ If metadata/schema extraction completes with **zero rows** but no worker error, 
 **Remediation (careful — do not destroy legitimate data):**
 
 1. **Verify:** Compare source vs target row counts (and sample keys if available). Confirm whether extra rows came from a re-run vs pre-existing target data.
-2. **Confirm with the user** before any destructive action. The target may hold rows that are expected or unrelated to this migration.
-3. **Do not** blindly `TRUNCATE` or bulk-`DELETE` the target. If cleanup is required, scope it (for example delete rows loaded in a specific partition/window, or dedupe by primary key) only after explicit user approval.
+2. **A target this project loaded itself** (see *Clearing a bad load* in [SKILL.md](../SKILL.md)): in autonomous mode, clear and reload it without asking; interactive, propose the truncate and reload and run them once the user agrees.
+3. **Any other target:** confirm with the user before any destructive action. It may hold rows that are expected or unrelated to this migration. Do not blindly `TRUNCATE` or bulk-`DELETE` it; if cleanup is required, scope it (for example delete rows loaded in a specific partition/window, or dedupe by primary key) only after explicit user approval.
 4. **Going forward:** Add `synchronization.strategy: watermark` or `checksum` (with `watermarkColumn`, `checksumExpression`, and `primaryKeyColumns` as needed) so subsequent runs are incremental. See [workflow-config-reference.md](./workflow-config-reference.md#synchronizationstrategy).
 
 ---

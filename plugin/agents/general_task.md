@@ -182,8 +182,8 @@ this from being a silent mutation: if you cannot name the inverse, escalate
 instead. The object does not park.
 
 A first `runTests` FAIL that is not a dependency is `error="sql"` — enter
-the fix loop. Follow
-[DIAGNOSE_FIX.md](../skills/migration/migrate-objects/migrate-object/DIAGNOSE_FIX.md).
+the fix loop. Read and follow
+`<pluginDir>/skills/migration/migrate-objects/migrate-object/DIAGNOSE_FIX.md`.
 Do not spawn a verifier on first sight of GETDATE or a ±1 day drift.
 
 If the FAIL is a defect on **another in-scope code unit** that already
@@ -263,7 +263,8 @@ Act carefully as many agents are working in the same git worktree.
 If `finish` refuses and `refused[].reason` names a pending or blocked task,
 that task is next. Read the reason, use `next_task`, and `finish` again. If it's
 stuck and you can't finish, you can Escalate, but do not give up quickly. Retry
-the finish calls if you think they can be retried.
+the finish calls if you think they can be retried. Never ask for `force=true`
+(refused in `subagent_mode`) or a mode switch; escalate instead.
 
 An object that ended `blocked`, `stuck`, or capped is **not** terminal. Leave it
 claimed and return `stuck`. The orchestrator relays; it does not finish for you.
@@ -306,6 +307,7 @@ than an honest `stuck`.
 |---|---|
 | Touch any object but `objectId` | Other agents are live on the rest of the wave. |
 | `transition_status` with `bypass` / `reset` / `skip` | Overrides belong to the orchestrator, with the user. |
+| Spawn `hail_mary` | The orchestrator sends it to parked objects. Escalate (§4) instead. |
 | `data_infrastructure` up or down | Shared by every slot; the orchestrator owns its lifecycle. |
 | `configure(...)` with anything but `project_dir` | Everything else there is shared session config — one process serves the whole wave, so a database or a wave you set lands under every sibling. `subagent_mode` and `require_independent_override_accept` in particular are the orchestrator's alone. Do not pass `agent_id`. |
 | Impersonate another conversation | Cortex stamps identity. The parent Cortex session id is the orchestrator's. When `require_independent_override_accept` is on, `override_accept_case` under this walk is refused — spawn a `test_case_verifier`. `status='invalidate'` under this walk is refused — spawn a `task_invalidator`. A `setup_sandbox` / `deploy(sandbox=true)` tool failure is refused as walker improvisation — spawn from the task skill's `failure_class` table. A first reject does not block a second verifier after a later code change. |
@@ -315,4 +317,14 @@ than an honest `stuck`.
 | `update_registry(patch=...)` / `update_registry(unit=...)` | Those writes are `cur_reconciler` only. Spawn it for a missing or non-bindable dependency; do not patch, mint, or qualify SQL yourself. |
 | Paper over untestable fixture data by editing WAVE_SRC, SNAP, or a table CSV | That is `sandbox_specialist` make_testable, in this object's AIMSBX only. A numeric miss on this object's return is sqlFixLoop. |
 | Ask a question or wait for input | Nothing you write reaches a human mid-run. Decide and `note`, or escalate if §4 applies. |
+| Search the home folder for a config (`find ~`, `grep -r ~`, `ls -R ~/Library`) | Every protected folder it walks (Desktop, Documents, Downloads, Library) is a macOS permission prompt for the user, and the app blocks the call. Source connections are in `~/.snowflake/scai/connections/<dialect>.toml`, Snowflake connections in `~/.snowflake/connections.toml`, the project's settings in `.scai/config/`. Anything else: escalate. |
 | `git add` / `commit` / `push` / `rebase` / branch switching by hand | `transition_status` does the git work correctly and under a lock; a file you staged is one housekeeping commit away from permanent. |
+
+## Shell commands on Windows
+
+On Windows your shell tool runs PowerShell, usually Windows PowerShell 5.1, not
+bash or cmd. Never chain with `&&` or `||`, which 5.1 rejects: use `;`, or
+`cmd1; if ($?) { cmd2 }` when the second must wait for the first to succeed. No
+cmd syntax (`if not exist`, `set VAR=x`, `%VAR%`): use `Test-Path`,
+`New-Item -ItemType Directory -Force <dir> | Out-Null` and `$env:VAR`. No bash
+syntax (heredocs, `export`, `2>/dev/null`): use `2>$null`.

@@ -138,6 +138,23 @@ EFFORT_MIXIN_JS = r"""
    * v-html from a computed, so the markup is built here rather than in a template
    * attribute where its quotes would have to be escaped.
    */
+  function _groupingSingular(objectType) {
+    var known = {
+      "Functions": "function",
+      "Stored Procedures": "stored procedure",
+      "SSIS Packages": "package",
+      "Informatica PowerCenter Mappings": "mapping",
+    };
+    if (known[objectType]) return known[objectType];
+    var raw = String(objectType || "object").trim();
+    if (raw.length > 1 && raw.slice(-1).toLowerCase() === "s") raw = raw.slice(0, -1);
+    return raw.toLowerCase() || "object";
+  }
+
+  function _groupingPlural(singular) {
+    return singular === "stored procedure" ? "stored procedures" : singular + "s";
+  }
+
   function _svg(path) {
     return (
       '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" ' +
@@ -167,7 +184,23 @@ EFFORT_MIXIN_JS = r"""
         // so sections start open without having to enumerate them. Not persisted.
         effortCollapsed: {},
         effortMenuOpen: false,
+        // One open EWI breakdown at a time. Null when closed; a calculator row
+        // when open. Opening it only reads the groups already on the row.
+        effortEwiBreakdownRow: null,
       };
+    },
+    mounted() {
+      this._effortEwiOnKeyDown = (event) => {
+        if (event && event.key === "Escape" && this.effortEwiBreakdownRow) {
+          this.effortCloseEwiBreakdown();
+        }
+      };
+      window.addEventListener("keydown", this._effortEwiOnKeyDown);
+    },
+    beforeUnmount() {
+      if (this._effortEwiOnKeyDown) {
+        window.removeEventListener("keydown", this._effortEwiOnKeyDown);
+      }
     },
     computed: {
       effortChevronDown() {
@@ -237,9 +270,6 @@ EFFORT_MIXIN_JS = r"""
       effortSummary() {
         return baseline.summary || {};
       },
-      effortRepetition() {
-        return baseline.repetition || null;
-      },
     },
     methods: {
       effortHours(value) {
@@ -248,6 +278,19 @@ EFFORT_MIXIN_JS = r"""
           minimumFractionDigits: 1,
           maximumFractionDigits: 1,
         });
+      },
+      effortGroupingNote(row) {
+        var repetition = row && row.repetition;
+        if (!repetition) return "";
+        var count = Number(repetition.first_full_price_count);
+        if (!isFinite(count) || count < 1) count = 1;
+        var singular = _groupingSingular(row.object_type);
+        var factor = repetition.discount_factor;
+        var rest = " Each additional " + singular + " with that EWI is charged " + factor + "× that rate.";
+        if (count === 1) {
+          return "The first " + singular + " with a given EWI is charged the full rate for its complexity." + rest;
+        }
+        return "The first " + count + " " + _groupingPlural(singular) + " with a given EWI are charged the full rate for their complexity." + rest;
       },
       effortHoursOrNa(value) {
         return value === null || value === undefined ? "N/A" : this.effortHours(value);
@@ -469,6 +512,12 @@ EFFORT_MIXIN_JS = r"""
         reader.readAsText(file);
         event.target.value = "";
       },
+      effortOpenEwiBreakdown(row) {
+        this.effortEwiBreakdownRow = row;
+      },
+      effortCloseEwiBreakdown() {
+        this.effortEwiBreakdownRow = null;
+      },
     },
   };
 })();
@@ -566,8 +615,10 @@ _EFFORT_TOOLBAR_HTML = """
 # and testing, then the fixed budgets. Code conversion leads with its flat
 # budgets and then the counted object types. A banded object type occupies two
 # table rows — the band object counts, then the editable hours-per-object beneath
-# each count. Code Conversion rows print one line per EWI group; those published
-# hours are what add up to the row, after the repetition discount.
+# each count. Code Conversion rows open their EWI groups in a modal; those
+# published hours are what add up to the row. Code Conversion rows group objects
+# that share an EWI; the Comments cell says so, because count times the band
+# rate is a different number.
 #
 # The shared column names stay in one header over the table. Inside code
 # conversion, the flat budgets restate Migration Component, Line Item, Objects,
@@ -579,13 +630,6 @@ _EFFORT_TOOLBAR_HTML = """
 # testing, so the sections always add up even when the summary counts a flat
 # budget that no calculator row carries.
 _EFFORT_CALCULATOR_TABLE_HTML = """
-        <p v-if="effortRepetition" class="effort-lead">
-            Repetition discount (Preview): after the first {{ effortRepetition.first_full_price_count }}
-            object of an EWI, further objects of that EWI are charged
-            {{ effortRepetition.discount_factor }}× the band rate.
-            Full price: {{ (effortRepetition.non_repetitive_codes || []).join(', ') }}.
-            Group hours are printed on each Code Conversion row.
-        </p>
         <div class="effort-table-wrap">
             <table class="effort-table">
                 <thead>
@@ -666,14 +710,17 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                                      "Snowflake: N/A", which the input's own note already said better. -->
                                 <span v-if="row.is_overridden &amp;&amp; !row.is_unestimated" class="effort-sf-note">Snowflake: {{ effortHoursOrNa(row.estimated_hours) }}</span>
                             </td>
-                            <td style="color:#64748B;font-size:0.85rem;" :rowspan="row.band_counts ? 2 : 1">
-                                {{ row.comments }}
-                                <span v-if="row.automation_pct !== null" class="effort-sf-note">{{ effortPercent(row.automation_pct) }} auto-converted</span>
-                                <div v-if="row.repetition && row.repetition.groups && row.repetition.groups.length" class="effort-sf-note">
-                                    <div v-for="group in row.repetition.groups" :key="(group.code || 'none') + '-' + group.band">
-                                        {{ group.code || 'No EWI' }} · {{ group.band }} · {{ effortCount(group.count) }} objects · {{ effortHours(group.hours) }}h
-                                        <span v-if="group.full_price"> · full price</span>
-                                    </div>
+                            <td class="effort-comments" :rowspan="row.band_counts ? 2 : 1">
+                                <div class="effort-comments-body">
+                                    {{ row.comments }}
+                                    <span v-if="row.repetition" style="display:block;margin-top:4px;">{{ effortGroupingNote(row) }}</span>
+                                    <span v-if="row.automation_pct !== null" class="effort-sf-note">{{ effortPercent(row.automation_pct) }} auto-converted</span>
+                                    <button
+                                        v-if="row.repetition && row.repetition.groups && row.repetition.groups.length"
+                                        type="button"
+                                        class="effort-ewi-link"
+                                        @click="effortOpenEwiBreakdown(row)"
+                                    >View EWI Breakdown</button>
                                 </div>
                             </td>
                         </tr>
@@ -720,6 +767,42 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                     </tr>
                 </tbody>
             </table>
+        </div>
+        <div
+            v-if="effortEwiBreakdownRow"
+            class="effort-ewi-modal-overlay"
+            role="dialog"
+            aria-modal="true"
+            :aria-label="'EWI breakdown for ' + effortEwiBreakdownRow.object_type"
+            @click="effortCloseEwiBreakdown"
+        >
+            <div class="effort-ewi-modal" @click.stop>
+                <div class="effort-ewi-modal-bar">
+                    <div class="effort-ewi-modal-title">{{ effortEwiBreakdownRow.object_type }}</div>
+                    <button type="button" class="effort-ewi-modal-close" @click="effortCloseEwiBreakdown">Close</button>
+                </div>
+                <div class="effort-ewi-modal-body">
+                    <table class="effort-table">
+                        <thead>
+                            <tr>
+                                <th class="effort-ewi-tip" title="Error Warning Issues generated during code conversion">EWI code</th>
+                                <th>Complexity</th>
+                                <th class="num">Objects</th>
+                                <th class="num">Hours</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="group in effortEwiBreakdownRow.repetition.groups"
+                                :key="(group.code || 'none') + '-' + group.band">
+                                <td>{{ group.code || 'No EWI' }}</td>
+                                <td>{{ group.band }}</td>
+                                <td class="num">{{ effortCount(group.count) }}</td>
+                                <td class="num">{{ effortHours(group.hours) }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
 """
 
@@ -1137,6 +1220,26 @@ def _render_top_issues_section(top_issues: List[Dict[str, Any]]) -> str:
         </div>"""
 
 
+def _repeated_ewi_legend(repetition: Dict[str, Any]) -> str:
+    """Legend sentence for rows that price repeated EWIs. The count and factor are the artifact's."""
+    factor = _esc(repetition.get("discount_factor"))
+    try:
+        count = int(repetition.get("first_full_price_count"))
+    except (TypeError, ValueError):
+        count = 1
+    if count == 1:
+        lead = "the first object with a given EWI is charged the full rate for its complexity."
+    else:
+        lead = (
+            f"the first {_esc(count)} objects with a given EWI are charged "
+            "the full rate for their complexity."
+        )
+    return (
+        "<p><strong>Repeated EWIs:</strong> on a Code Conversion row, "
+        f"{lead} Each additional object with that EWI is charged {factor}× that rate.</p>"
+    )
+
+
 def _render_effort_formulas_legend(
     summary: Dict[str, Any],
     repetition: Optional[Dict[str, Any]] = None,
@@ -1155,14 +1258,7 @@ def _render_effort_formulas_legend(
         )
     repetition_note = ""
     if isinstance(repetition, dict):
-        codes = ", ".join(repetition.get("non_repetitive_codes") or []) or "none"
-        repetition_note = (
-            "<p><strong>Repetition discount (Preview):</strong> on a Code Conversion row, "
-            f"after the first {_esc(repetition.get('first_full_price_count'))} object of an EWI, "
-            f"further objects of that EWI are charged {_esc(repetition.get('discount_factor'))}× "
-            "the band rate. Full price: "
-            f"{_esc(codes)}. The group hours printed on the row are the ones that add up.</p>"
-        )
+        repetition_note = _repeated_ewi_legend(repetition)
     return f"""
         <details style="margin-bottom:32px;background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:16px;">
             <summary style="font-weight:700;color:#102E46;cursor:pointer;">How these hours are calculated</summary>
@@ -1173,7 +1269,7 @@ def _render_effort_formulas_legend(
                 </p>
                 <p>Every object is counted in exactly one band, so the band counts always add up to the
                 object total — which means you can reproduce any figure in the calculator with a
-                calculator. A Code Conversion row adds up the group hours printed on it.</p>
+                calculator. A Code Conversion row adds up the group hours listed in View EWI Breakdown.</p>
                 {repetition_note}
                 <p><strong>Bands:</strong> Critical = a critical finding.
                 High = a high-severity finding. Medium = a medium-severity finding.
@@ -1182,7 +1278,7 @@ def _render_effort_formulas_legend(
                 <p><strong>Fixed Budget:</strong> data migration setup and project-phase lines are left for you to fill in —
                 Snowflake publishes no figure for those yet. Workload size still labels the phase rows —
                 Small (≤{summary.get('workload_small_max', 500):,} objects), Medium ({summary.get('workload_small_max', 500) + 1:,}–{summary.get('workload_medium_max', 1500):,}), Large (&gt;{summary.get('workload_medium_max', 1500):,}).</p>
-                <p><strong>Sources:</strong> SnowConvert conversion statistics — per-object conversion status and issue severities.</p>
+                <p><strong>Sources:</strong> conversion statistics — per-object conversion status and issue severities.</p>
             </div>
         </details>"""
 
@@ -1204,15 +1300,11 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
                 {EFFORT_PREVIEW_BADGE_HTML}
             </h1>
             <p class="effort-lead">
-                A person-hours estimate for this migration, derived from SnowConvert's own conversion
-                results. Every object lands in exactly one complexity band — Critical, High, Medium or
-                Low — and each band carries an hours-per-object rate. The hours on each row are
-                printed beside the counts they came from, so you can check any of them by hand.
-            </p>
-            <p class="effort-lead">
-                Snowflake's rates are a starting point, not a verdict: real effort varies with project
-                scope, team experience, data quality and migration complexity. Adjust any rate to match
-                what your team knows.
+                This estimate reflects the total human-hours required for the migration. Using the
+                output of our deterministic conversion engine, we categorized each object into
+                Critical, High, Medium, or Low complexity based on flagged issues. Standard Snowflake
+                baseline effort estimates are automatically applied per object type, but these rates
+                are fully customizable to fit your team's specific baseline.
             </p>
         </div>
 

@@ -113,11 +113,15 @@ tables:
 
 ## Partition Column Guidance
 
-BigQuery has no portable system row identifier suitable for partitioning. Use:
+Prefer, in order:
 
-- The table's DATE/TIMESTAMP partitioning column — most reliable for partitioned tables
-- A monotonic integer key (e.g. `id INT64`) — for unpartitioned tables
-- No partition column — omit `columnNamesToPartitionBy` for a single-partition full extract
+- The table's partition column (`INFORMATION_SCHEMA.COLUMNS.is_partitioning_column = 'YES'`) — most reliable for column-partitioned tables
+- `_PARTITIONTIME` for ingestion-time tables (`PARTITION BY _PARTITIONDATE` / `_PARTITIONTIME`), as a composite `["_PARTITIONTIME", <high-cardinality column>]` with sync `none`
+- Clustering columns (`clustering_ordinal_position`), after the partition column when both exist
+- A monotonic integer key (e.g. `id INT64`) — for unpartitioned, unclustered tables
+- No partition column — omit `columnNamesToPartitionBy`. A table that fits in one partition is extracted as a single unit; for a larger one the orchestrator infers a key at preprocessing, and if it cannot, the table fails with an error naming `columnNamesToPartitionBy`: set a key then. Never write `[]` to get around it: `[]` turns partitioning off (one long serial unit however large the table) and is only for a user who explicitly asked for a single partition after hearing that cost — see [Never write `[]`](../../../migrate-objects/actions/data-migration/SKILL.md#never-write-columnnamestopartitionby-)
+
+When `require_partition_filter` is set, the leading key must be the partition column or `_PARTITIONTIME`, or extraction queries fail.
 
 ## Troubleshooting
 
