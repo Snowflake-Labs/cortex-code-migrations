@@ -20,6 +20,7 @@ SSIS Assessment HTML Report Generator
 Generates a standalone HTML report from ETL assessment analysis data.
 """
 
+import hashlib
 import html
 import json
 import os
@@ -84,6 +85,15 @@ def sanitize_filename(name: str) -> str:
     name = re.sub(r'_+', '_', name)
     name = name.strip('_')
     return name
+
+
+def package_detail_filename(package: dict[str, Any]) -> str:
+    """Name the detail page by package name plus a hash of its relative path.
+
+    Projects repeat names (``Package.dtsx``), so the name alone would share one page."""
+    path = unquote(package.get('path') or '').replace('\\', '/').strip('/')
+    digest = hashlib.sha1(path.encode('utf-8')).hexdigest()[:8]
+    return f"package_{sanitize_filename(package.get('name') or '')}_{digest}.html"
 
 
 def format_display_name(name: str) -> str:
@@ -853,7 +863,7 @@ class HTMLReportGenerator:
             # Create link to detail page if output folder provided
             display_name = format_display_name(package_name)
             if output_folder:
-                detail_filename = f"packages/package_{sanitize_filename(package_name)}.html"
+                detail_filename = f"packages/{package_detail_filename(package)}"
                 package_name_html = f'<a href="{detail_filename}" target="_blank" style="text-decoration: none;"><span style="display: inline-block; background: #f3f4f6; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500; color: #1f2937;">{display_name} ↗</span></a>'
             else:
                 package_name_html = f'<span style="display: inline-block; background: #f3f4f6; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500;">{display_name}</span>'
@@ -2043,7 +2053,6 @@ class HTMLReportGenerator:
             
             for package_csv_row in self.packages:
                 package_path = package_csv_row.get('path', '')
-                package_name = package_csv_row.get('name', '')
                 
                 # Get package data from JSON
                 package_json_data = self.get_package_data_from_json(package_path)
@@ -2055,8 +2064,7 @@ class HTMLReportGenerator:
                 package_html = self.generate_package_detail_page(package_csv_row, package_json_data, dag_base_path=dag_base_path)
                 
                 # Save package page in packages subfolder
-                package_filename = f"package_{sanitize_filename(package_name)}.html"
-                package_file_path = packages_dir / package_filename
+                package_file_path = packages_dir / package_detail_filename(package_csv_row)
                 
                 with open(package_file_path, 'w', encoding='utf-8') as f:
                     f.write(package_html)

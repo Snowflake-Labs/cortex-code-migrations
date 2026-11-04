@@ -4,7 +4,7 @@ The project-default `.scai/config/dew_configuration.toml` (path relative to the 
 
 > **Advanced options:** [Secrets management](#advanced-secrets-management) (external vaults, `$(...)` substitution), [query modifiers](#query-modifiers-toml), [custom extraction plugins](#custom-extraction-plugins), workflow-level [extraction strategies](../../migrate-objects/actions/data-migration/references/extraction-strategies-reference.md), and [advanced operations](./advanced-operations-reference.md) (rate limiting, preflight, incremental/revalidate DV).
 
-> **Prefer SCAI CLI setup:** Use `scai data worker generate-config` and `scai data worker setup` (SPCS) or `scai data worker start --local` instead of hand-authoring TOML. Manual SPCS worker setup is only needed when the CLI path is unavailable — see official docs for egress IP allowlisting and driver host requirements on the source firewall.
+> **Prefer SCAI CLI setup:** Use `scai data worker generate-config` and `scai data worker setup` (SPCS) or `scai data worker start --local` instead of hand-authoring TOML. Manual SPCS worker setup is only needed when the CLI path is unavailable — see [SPCS worker connectivity](#spcs-worker-connectivity) for connecting to sources using DCP.
 
 ## Configuration Sections
 
@@ -58,7 +58,7 @@ scai stores source connections in `~/.snowflake/scai/connections/<engine>.toml`.
 | scai `--auth` / `auth_method` | Worker TOML |
 |-------------------------------|-------------|
 | SQL Server `standard` | username + password (no `authentication` key; DEA default `sql_auth`) |
-| SQL Server `windows` | `authentication = "windows_auth"` (not `use_windows_auth`) |
+| SQL Server `windows` | `authentication = "windows_auth"` (not `use_windows_auth`). On SPCS, `scai data worker setup` writes this from a profile that has `kerberos_principal`; the keytab is a Snowflake secret, not a TOML field. Follow [`sqlserver-spcs-windows-auth.md`](./sqlserver-spcs-windows-auth.md) before that setup. |
 | SQL Server `service_principal` | `authentication = "service_principal"` + `client_id` / `client_secret` |
 | Teradata `standard` | username + password (DEA default logmech TD2) |
 | Teradata `ldap` | `authentication = "LDAP"` + username + password |
@@ -162,7 +162,13 @@ workflow strategy `regular`.
 
 ## SPCS worker connectivity
 
-When the worker runs on SPCS, allowlist the service **egress IP** on the source firewall and ensure ODBC/driver hostnames resolve from the container. `scai data worker setup` automates image build, service creation, and connectivity checks — use it instead of manual container wiring when possible.
+An SPCS worker runs on Snowflake compute, so the source must be reachable **from Snowflake**. For an
+on-premise or private source, that means a Data Connectivity Proxy tunnel — see
+[dcp-setup](../dcp-setup/SKILL.md). Do not ask the customer to open inbound access to the source.
+
+Also ensure ODBC/driver hostnames resolve from inside the container. `scai data worker setup`
+automates image build, service creation, and connectivity checks — use it instead of manual container
+wiring when possible.
 
 ## Advanced: Teradata extraction (workflow YAML)
 
@@ -219,14 +225,27 @@ extraction:
 
 Worker streams Parquet to object storage (no local disk PUT). Used for PostgreSQL/Db2 L3 pushdown and as a fallback when the source cannot natively UNLOAD/EXPORT to the user's bucket.
 
-`scai data worker generate-config --extraction-strategy cloud_direct --object-store s3|gcs|azure` writes this section outside `[connections.source.*]`, so hydration does not rebuild it. S3 and GCS get `bucket_name` and `prefix`. Azure gets `container_name`, an optional `prefix`, and credential fields. Path rules: [object-store path restrictions](./object-store-path-restrictions.md).
+`scai data worker generate-config --extraction-strategy cloud_direct --object-store s3|gcs|azure` writes this section outside `[connections.source.*]`, so hydration does not rebuild it. S3 gets `bucket_name`, `prefix`, `region_name`, and access-key placeholders. GCS gets `bucket_name`, `prefix`, `project_id`, and a service-account file path. Azure gets `container_name`, an optional `prefix`, and credential fields. Path rules: [object-store path restrictions](./object-store-path-restrictions.md).
+
+An SPCS container has no AWS profile and no GCP metadata server. `scai data worker setup` copies non-secret settings into the service spec (`region_name` → `CLOUD_DIRECT_REGION`, `request_timeout` / `connect_timeout`, GCS `project_id` and `anonymous`) and stores credentials in Snowflake secrets:
+
+| Store | Secret | Type | Mount |
+|-------|--------|------|-------|
+| S3 | `<prefix>CLOUD_DIRECT_S3_SECRET` | `PASSWORD` (username = access key id, password = secret key) | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
+| S3 session | `<prefix>CLOUD_DIRECT_S3_SESSION_SECRET` | `GENERIC_STRING` | `AWS_SESSION_TOKEN` |
+| GCS | `<prefix>CLOUD_DIRECT_GCS_SECRET` | `GENERIC_STRING` (service-account JSON) | file `credential_file_path` points at |
+
+`<prefix>` is empty for the default worker service and `<SERVICE>_` otherwise. Setup adds the secret to the external access integration `ALLOWED_AUTHENTICATION_SECRETS` and adds egress for `<bucket>.s3.<region>.amazonaws.com:443`, `s3.<region>.amazonaws.com:443`, or `storage.googleapis.com:443`. Re-running setup keeps hosts, rules, and spec entries it does not own. Without `region_name` the S3 client uses `us-east-1`. A concrete bucket without a region or credentials fails during `worker setup` and `scai data doctor`, before extraction.
 
 ```toml
 [connections.target.s3]
 bucket_name = "<BUCKET_NAME>"
 prefix = "<PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
+region_name = "<REGION>"  # required; omitted, the client uses us-east-1
+access_key_id = "<AWS_ACCESS_KEY_ID>"
+secret_access_key = "<AWS_SECRET_ACCESS_KEY>"  # SPCS has no AWS profile; locally, replace both key lines with profile_name
 
-# [connections.target.gcs] uses the same bucket_name and prefix keys.
+# [connections.target.gcs] uses bucket_name, prefix, project_id, and credential_file_path (or anonymous = true).
 
 [connections.target.blob]
 container_name = "<CONTAINER_NAME>"

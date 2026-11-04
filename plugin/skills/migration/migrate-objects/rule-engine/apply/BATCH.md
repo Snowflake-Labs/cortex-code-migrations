@@ -1,12 +1,10 @@
 # Batch Apply
 
-Apply one or more rules to multiple files (from propagation results).
+Apply one or more rules to several files the user names.
 
 ## Step 1: Accept Targets
 
-Receive the target list from [../propagate/SKILL.md](../propagate/SKILL.md) or from the user:
-- "Apply rule X to all matching code units" → apply to entire list
-- "Apply rule X to 3 of them" → let user pick 3 from the list
+Take the target list from the user:
 - "Apply rule X to dbo.ProcA, dbo.ProcB" → specific named targets
 
 ## Step 2: Batch Regex-Mode Rules
@@ -37,15 +35,9 @@ For rules where `replacement_mode = 'ai'`:
 2. After reviewing a few, offer "approve remaining":
    > Approved 3/8. Apply the same pattern to the remaining 5 without review? [Yes / Continue reviewing]
 
-## Step 4: Sync and Track
+## Step 4: Track
 
-After each successful application:
-1. Update the rule's application counter:
-   ```sql
-   UPDATE RULE_ENGINE.RULES SET rule_applications = rule_applications + 1 WHERE id = '<rule_id>';
-   ```
-2. After all files are processed, sync updated files:
-   Use the `sync_sql_files` tool with `directory` set to `<project_dir>/snowflake`.
+After each successful application, record it using the `record_rule_application` tool with `rule_id` set to the rule's ID, `outcome` set to `"applied"`, and the unit's `code_unit_name` and `file_path`. Do not update `RULE_ENGINE.RULES` with SQL: the tool writes to the rule store's database and logs the event.
 
 ## Step 5: Batch Summary
 
@@ -53,7 +45,7 @@ After each successful application:
 > - Applied to **N** of **M** code units
 > - Regex mode: K auto-applied
 > - AI mode: J applied (user approved), L skipped
-> - Updated `rule_applications` count in RULE_ENGINE.RULES
+> - Recorded each application with `record_rule_application`
 >
 > Test the modified objects?
 >
@@ -62,5 +54,5 @@ After each successful application:
 >   scai test validate -c <SNOWFLAKE_CONNECTION_NAME> \
 >     --where "source.canonicalName IN (<comma-separated-canonical-names>)"
 >   ```
->   Confirm in `<metadata_database>.VALIDATION.LATEST`; the state machine picks up testing status from that table via the `testValidationResults` oracle. Do not stamp `codeStatus.testing`.
+>   Confirm in `<metadata_database>.VALIDATION.LATEST`; the state machine picks up testing status from that table via the `testValidationResults` status source. Do not stamp `codeStatus.testing`.
 > - **For any failures, run the full diagnose/fix loop per object** → [../../migrate-object/SKILL.md](../../migrate-object/SKILL.md)

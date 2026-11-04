@@ -6,9 +6,12 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 from helpers import (
     SCRIPTS_DIR,
@@ -78,9 +81,10 @@ class TestPr1ListTestFiles(unittest.TestCase):
                 "validate-phase", str(status_path), "1", "--list-test-files"
             )
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-            self.assertIn("tests/orchestration/", result.stdout)
-            self.assertNotIn("phases/phase-1/", result.stdout)
-            self.assertGreaterEqual(result.stdout.count("el_fixed_a.sql"), 1)
+            stdout = result.stdout.replace("\\", "/")
+            self.assertIn("tests/orchestration/", stdout)
+            self.assertNotIn("phases/phase-1/", stdout)
+            self.assertGreaterEqual(stdout.count("el_fixed_a.sql"), 1)
 
     def test_list_test_files_finds_schema_short_name_layout(self) -> None:
         """Real agent output: tests/orchestration/<schema>/<last_dot_segment>.sql."""
@@ -407,6 +411,75 @@ class TestPr5ConcurrentUpdates(unittest.TestCase):
             self.assertEqual(nested["node_b"], "unverified")
 
 
+def _load_track_status():
+    sys.path.insert(0, str(SCRIPTS_DIR))
+    import track_status
+
+    return track_status
+
+
+class TestStatusFileLock(unittest.TestCase):
+    def test_locked_blocks_a_second_holder_until_release(self) -> None:
+        track_status = _load_track_status()
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "session_status.json"
+            status_path.write_text("{}\n", encoding="utf-8")
+            held = threading.Event()
+            second_entered = threading.Event()
+            errors: list[str] = []
+
+            def hold() -> None:
+                try:
+                    with track_status._locked(status_path):
+                        held.set()
+                        time.sleep(0.4)
+                        if second_entered.is_set():
+                            errors.append("second holder entered while the lock was held")
+                except Exception as exc:
+                    errors.append(repr(exc))
+
+            def wait_for_lock() -> None:
+                try:
+                    if not held.wait(5):
+                        errors.append("first holder did not acquire the lock")
+                        return
+                    with track_status._locked(status_path):
+                        second_entered.set()
+                except Exception as exc:
+                    errors.append(repr(exc))
+
+            holder = threading.Thread(target=hold)
+            waiter = threading.Thread(target=wait_for_lock)
+            holder.start()
+            self.assertTrue(held.wait(5), "first holder did not acquire the lock")
+            waiter.start()
+            holder.join(5)
+            waiter.join(5)
+            self.assertFalse(holder.is_alive())
+            self.assertFalse(waiter.is_alive())
+            self.assertEqual(errors, [])
+            self.assertTrue(second_entered.is_set())
+
+    def test_windows_lock_uses_msvcrt_locking(self) -> None:
+        track_status = _load_track_status()
+        calls: list[tuple[int, int]] = []
+
+        def locking(fd: int, mode: int, nbytes: int) -> None:
+            del fd
+            calls.append((mode, nbytes))
+
+        fake = type("Msvcrt", (), {"LK_LOCK": 42, "LK_UNLCK": 43, "locking": staticmethod(locking)})()
+        with tempfile.TemporaryDirectory() as tmp:
+            status_path = Path(tmp) / "session_status.json"
+            status_path.write_text("{}\n", encoding="utf-8")
+            with patch.object(track_status, "msvcrt", fake, create=True), patch.object(
+                sys, "platform", "win32"
+            ):
+                with track_status._locked(status_path):
+                    self.assertEqual(calls, [(fake.LK_LOCK, 1)])
+            self.assertEqual(calls, [(fake.LK_LOCK, 1), (fake.LK_UNLCK, 1)])
+
+
 def _write_dbt_complete_phase_artifacts(unit: Path, project: str) -> None:
     tests_root = unit / "stabilization" / "tests" / "dbt" / project
     (tests_root / "seeds").mkdir(parents=True)
@@ -534,6 +607,15 @@ class TestPr3DbtProjectYmlSanity(unittest.TestCase):
             self.assertIn("YOUR_PROJECT_NAME", result.stderr + result.stdout)
 
 
+def _orch_session(unit: Path) -> dict:
+    """An orchestration session whose orchestration file is clean, so the leak gate passes."""
+    orch_file = unit / "orchestration.sql"
+    orch_file.write_text("SELECT 1;\n", encoding="utf-8")
+    session = base_session(unit_path=str(unit))
+    session["orchestration_file"] = str(orch_file)
+    return session
+
+
 class TestCompletePhaseArtifactLayout(unittest.TestCase):
     def test_complete_phase_dbt_finds_learnings_under_underscore_phase_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -563,7 +645,7 @@ class TestCompletePhaseArtifactLayout(unittest.TestCase):
             tracking.mkdir(parents=True)
             (tracking / "fix-log.md").write_text("# fixes applied in main session\n", encoding="utf-8")
             status_path = Path(tmp) / "session_status.json"
-            write_json(status_path, base_session(unit_path=str(unit)))
+            write_json(status_path, _orch_session(unit))
 
             result = run_track_status("complete-phase", str(status_path), "1")
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
@@ -580,7 +662,7 @@ class TestCompletePhaseArtifactLayout(unittest.TestCase):
             (phase / "learnings_batch_1.md").write_text("# learnings\n", encoding="utf-8")
             (phase / "apply_report.md").write_text("# apply\n", encoding="utf-8")
             status_path = Path(tmp) / "session_status.json"
-            write_json(status_path, base_session(unit_path=str(unit)))
+            write_json(status_path, _orch_session(unit))
 
             result = run_track_status("complete-phase", str(status_path), "1")
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)

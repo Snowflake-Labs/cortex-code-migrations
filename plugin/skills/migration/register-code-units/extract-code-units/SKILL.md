@@ -229,6 +229,8 @@ yes/no — extras already collected that on the setup/register card.
   scai code add -i <ETL_PATH> --json
   ```
 
+  Launch it with `run_in_background=true`, or set the bash tool `timeout` to at least `900000` (15 minutes), then poll until the command finishes. The default 120 second timeout kills the process during the conversion engine's silent pause and a relaunch starts it over.
+
   This arranges the packages into `source/_etl/`, where `convert` finds them without an
   external path flag.
 
@@ -241,7 +243,9 @@ yes/no — extras already collected that on the setup/register card.
   the native `EtlFileClassifier` under `source/_etl/` only understands SSIS and
   Informatica PowerCenter. Instead:
   1. Ask which platform. Accept a free-form name if it is not in the list. Store the
-     lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `adf`, …).
+     lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `hop`, `adf`, …).
+     For Hop, `hop` and `apacheHop` are the same intake: the helper vendors under
+     `source/_etl_aifirst/hop/` and enumerates `units[].platform` as `apacheHop`.
   2. Ask for the folder path containing the platform's source documents.
   3. Copy losslessly into `source/_etl_aifirst/<platform>/` by invoking the
      enumeration helper — do **not** hand-copy files. The helper writes no parallel
@@ -261,14 +265,15 @@ yes/no — extras already collected that on the setup/register card.
   4. Query the deterministic `unit_id` values from the helper first. If an ID
      already exists, verify its platform, format, and `files.source.path` exactly
      match the helper output and do not recreate it; stop on a mismatch. For every
-     missing entry, call `create_registry_unit` — this is what `convert` Step 4.5
-     reads:
+     missing entry, call `create_registry_unit` with that unit's envelope
+     `platform` (`<UNIT_PLATFORM>`), not the asked slug — this is what
+     `convert` Step 4.5 reads. Hop enumerates `apacheHop`.
 
      ```
      create_registry_unit(
        unit_id="<UNIT_ID>",
        name="<NAME>",
-       platform="<PLATFORM_SLUG>",
+       platform="<UNIT_PLATFORM>",
        format="<FORMAT>",
        source_file="<PROJECT_RELATIVE_SOURCE_PATH>"
      )
@@ -282,10 +287,13 @@ yes/no — extras already collected that on the setup/register card.
      that would create a `kind: custom` unit without `files.source.path`, which the
      setup gate and Step 4.5 refuse.
 
-  5. Verify with `query_registry` that each unit exists with `kind = 'etl'`,
-     `source.objectType = 'workflow'`, and a `files.source.path` matching its
-     vendored source. If any is missing, stop and tell the user — the registry write
-     is the contract Step 4.5 reads at convert time.
+  5. Verify with `query_registry(where="id = '<UNIT_ID>'")` that each unit
+     exists with `kind = 'etl'`, `source.objectType = 'workflow'`, and a
+     `files.source.path` matching its vendored source, and
+     `extensions.sourcePlatform` equal to the envelope platform. A Hop unit may also
+     have `source.platform = apacheHop`; do not set or change either with
+     `update_registry`. If any is missing, stop and tell the user —
+     the registry write is the contract Step 4.5 reads at convert time.
 
   Repeat once per platform if there is more than one AI-First ETL source.
 

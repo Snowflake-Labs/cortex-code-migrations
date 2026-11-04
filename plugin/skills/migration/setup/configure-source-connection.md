@@ -19,12 +19,7 @@ A user importing local SQL files never reaches this skill from setup.
 
 ## Before connecting — tell the user
 
-Before proceeding to connection setup, show this **verbatim** on every entry path.
-
-> **What this connection is used for:** This source connection will be used
-> throughout the migration lifecycle for metadata extraction, DDL/code
-> extraction, schema introspection, data migration reads, and validation
-> queries.
+Before connection setup, on every entry path, tell the user in one sentence of your own that this source connection is used throughout the migration for metadata and DDL/code extraction, schema introspection, data migration reads and validation queries.
 
 **Never** show the non-production / heavy-read warning on
 `configureExtractionSource` — extraction reads metadata and DDL only. That
@@ -60,6 +55,17 @@ connections for the configured dialect. Safe to repeat — it only reads.
   - `db2` → `../connection/db2-connection/SKILL.md`
   - `bigquery` → `../connection/bigquery-connection/SKILL.md`
   - `synapse` / `azuresynapse` → `../connection/azure-synapse-connection/SKILL.md`
+
+## No-source project (AI-First ETL only)
+
+A project whose code came from files (`code_source` is not `extract`) and whose
+ETL is AI-First (Apache Hop, for example, run by an `external_command`
+launcher) never reads the source database. For that project only, offer
+**No source connection** and follow `no-source-project.md`
+(`configure(no_source_connection=true)`). Offer it to no other project. Before
+the ETL is registered, declare it in the same call:
+`configure(has_etl_code=true, no_source_connection=true)`. Never skip this step
+instead.
 
 ## If the user pushes back
 

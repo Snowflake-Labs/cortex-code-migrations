@@ -31,7 +31,7 @@ Otherwise, ask the user for the path to their source SQL files:
 
 ### Step 2: Annotate Multi-Object Files with sc-tags
 
-`scai code add` uses the arrange engine to split files into one object per code unit. For non-T-SQL dialects the engine splits on `/* <sc-...> */` boundary tags. Before importing, call the `split_code` MCP tool to detect files that need tags (more than one top-level object, or one object and no SC tag yet) and inject those tags automatically.
+`scai code add` uses the arrange engine to split files into one object per code unit. For non-T-SQL dialects the engine splits on `/* <sc-...> */` boundary tags. Before importing, call the `split_code` MCP tool to detect files that need tags (at least one top-level object and no SC tag yet) and inject those tags automatically. Files that already carry SC tags, such as Teradata extraction-script output, are copied unchanged.
 
 ```
 split_code(input_path="<INPUT_PATH>")
@@ -61,7 +61,9 @@ SELECT * FROM sales.public.customers WHERE active = 1;
 
 ### Step 3: Add Code to Project
 
-Use the path returned by `split_code` (or `<INPUT_PATH>` directly if no file needed tags):
+Use the path returned by `split_code` (or `<INPUT_PATH>` directly if no file needed tags).
+
+Launch this call as the next section says: `run_in_background=true`, or set the bash tool `timeout` to at least `900000` (15 minutes), then poll until the command finishes. The default 120 second timeout kills the process during the conversion engine's silent pause and a relaunch starts it over.
 
 ```bash
 scai code add -i <INPUT_PATH> --json
@@ -90,6 +92,8 @@ scai code add -i <INPUT_PATH> --overwrite --json
 
 This section covers every `scai code add` the register and conversion skills run: the SQL
 add here, ETL, dbt, Power BI and `code-conversion-only`.
+
+Launch the command with `run_in_background=true`, or set the bash tool `timeout` to at least `900000` (15 minutes), then poll until it finishes. The default 120 second timeout kills the process during the conversion engine's silent pause and a relaunch starts it over. `--help` and `--list-settings` can stay on the short timeout.
 
 A large source can keep `scai code add` running longer than one `bash` call allows. When
 the call times out, or returns `Command running in background with ID: <id>` or
@@ -133,6 +137,28 @@ or a job that ended with no envelope at all — find out why before you say anyt
    Rerunning the same command gives the same failure, so propose a change (the suggestion,
    a fix to the files it names) rather than a retry. Do not continue to the next step, and
    do not treat the import as done.
+
+**If the failure is `CVT0008` with a `Duplicate resolution` entry in `error.details`**, the input
+defines the same object in more than one file and nothing was added. The entry names, per object,
+the file `--dedup keep-first` would keep and the files it would leave out. Which definition to add
+is the user's call, never yours:
+
+1. Show the user each object with its kept and skipped files, in the entry's own words.
+2. Ask with `ask_user_question`: keep the listed file of each object, or fix the input themselves.
+3. Only when they choose to keep the listed files, rerun the same command with
+   `--dedup keep-first` added. Report each file in the envelope's `result.duplicatesSkipped`
+   (`path`, `inputPaths`, `keptPath`, `keptInputPath`) as left out.
+
+Never add `--dedup keep-first` on your own. When the entry says no file can be chosen (`ADD0019`
+or `ADD0021` with the flag), the user has to remove the extra copies; tell them which files.
+
+**If the failure is `ADD0007` after an earlier `scai code add` in this project failed**, and
+`migration_status` reports no registered code units, the files it lists are most likely what
+that failed run left in `source/`: a failed add rolls back, but it cannot always remove every
+file. Keep them. Rerun the same command with `--overwrite` added, which replaces them with this
+run's output, and tell the user in one line that you are doing so. Never delete files from
+`source/` or `artifacts/` yourself to clear the way. When the project already has registered
+units, the files may be code the user added before: ask before you add `--overwrite`.
 
 ### Step 4: Import ETL
 
@@ -229,11 +255,33 @@ about it.
 
 ## On Completion
 
+### Break down `Other` from the registry
+
+`byType` counts units by `objectType`. `Other` is the registry's catch-all, not a type: every
+type it knows (`trigger`, `index`, `joinIndex`, …) has its own row, so never say a type you
+expected "lands in" `Other`. Most of its units are missing references — objects the imported
+code uses but no imported file defines, registered with `isMissing = true`. They count in
+`codeUnitsAdded`, which is why the total can exceed the objects in the source files.
+
+When `byType` has an `Other` row, look up what is in it before you report, never guess:
+
+```
+query_registry(where="source.objectType = 'other' AND isMissing = true", fields="id,source.name,source.schema", limit=5)
+query_registry(where="source.objectType = 'other' AND NOT isMissing = true", fields="id,source.name,files.source.path", limit=5)
+```
+
+Each response's `total` is that group's count; its `results` give a few names to quote. If the
+two totals do not add up to the `Other` count, give the counts you have and say the rest are
+unexplained.
+
+### Report
+
 After the CHECKPOINT passes, tell the user — a statement, not a question. Fill placeholders from the JSON envelope returned by `scai code add --json`.
 Never report the import as complete, or as fine, without that envelope in hand: on a failure,
 report it as Step 3 says instead.
 
-> **Import complete.** `<filesCopied>` SQL files imported as `<codeUnitsAdded>` code units, broken down by type (filled from `byType`). Files in `source/`.
+> **Import complete.** `<filesCopied>` files imported as `<codeUnitsAdded>` code units, broken down by type (filled from `byType`). Files in `source/`.
+> *If `byType` has `Other`:* `<missing total>` are missing references: objects your code uses that the imported files do not define (e.g. `<names>`); add their DDL if they belong in the migration. *If the second total is not 0:* `<other total>` more are defined in your files with no type the registry knows (e.g. `<names>`).
 > *If `etlFilesAdded > 0`:* ETL: `<etlFilesAdded>` files added.
 > *If `etlFilesSkippedInvalidSchema > 0`:* `<etlFilesSkippedInvalidSchema>` ETL files skipped due to invalid schema.
 > *If Power BI files were added:* Power BI templates copied to `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` (not converted).

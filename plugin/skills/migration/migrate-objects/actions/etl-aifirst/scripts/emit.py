@@ -158,6 +158,19 @@ HYDRATOR_KIND_CONTRACT = {
     "ExpressionTransformation": (),
     "FilterTransformation": ("FilterConditions",),
     "TargetTransformation": ("TableName",),
+    # Keyed writes into a named table (Hop Insert/update, Update, Delete). KeyColumns is a
+    # list; the hydrator reads it with RequiredStringList.
+    "UpsertTargetTransformation": ("TableName", "KeyColumns"),
+    "UpdateTargetTransformation": ("TableName", "KeyColumns"),
+    "DeleteTargetTransformation": ("TableName", "KeyColumns"),
+    # Hop Synchronize after merge: a keyed write whose operation a stream field picks per row.
+    "SynchronizeTargetTransformation": ("TableName", "KeyColumns", "OperationField"),
+    # Hop Dimension lookup/update (SCD2) and Combination lookup/update: a table write that
+    # generates a technical key. The natural / combination key is the port map itself.
+    "DimensionTargetTransformation": ("TableName", "TechnicalKeyColumn"),
+    "CombinationTargetTransformation": ("TableName", "TechnicalKeyColumn"),
+    # Hop Merge rows (diff): a two-input compare on KeyFields that adds FlagField.
+    "MergeRowsDiffTransformation": ("KeyFields", "FlagField", "ReferenceTransform", "CompareTransform"),
     "UnsupportedTransformation": (),
 }
 
@@ -2416,6 +2429,37 @@ class Emitter:
         where = " + ".join(where_of[p] for p in cite_parts)
         return (raw.get("field"), where, value)
 
+    def resolve_fact_all(self, el, rule_id: str):
+        """Every hit of a CHILD_ATTR or CHILD_TEXT rule as (key, where, value), in document order.
+
+        The list counterpart of `resolve_fact`, for an element_fields entry declared
+        `"list": true`. Any other rule kind raises, for the reason resolve_fact gives."""
+        rule = self.rule_by_id(rule_id)
+        if rule is None:
+            raise ValueError(f"promoted fact '{rule_id}' is not a no_slot_facts rule")
+        if rule["from"] not in ("CHILD_ATTR", "CHILD_TEXT"):
+            raise ValueError(
+                f"list promotion of '{rule_id}' needs a CHILD_ATTR or CHILD_TEXT rule, not {rule['from']}")
+        nd = self.table["neutral_defaults"]
+        node = self.idn.node_of(el)
+        hits = []
+        if rule["from"] == "CHILD_TEXT":
+            # A repeated text-only child (Hop's <keys><key>a</key><key>b</key></keys>): the
+            # scalar lift keeps only the first on the parent, so each child is read itself.
+            for i, ch in enumerate(node.findall(rule["xpath"]), start=1):
+                v = (ch.text or "").strip()
+                key = ch.get("name") or ch.tag
+                if v and v != nd.get(rule.get("neutral_key") or key, object()):
+                    hits.append((key, f"{el.where}/{rule['xpath'].lstrip('./')}[{i}]/text()", v))
+            return hits
+        for i, ch in enumerate(node.findall(rule["xpath"]), start=1):
+            v = ch.get(rule["attr"])
+            if v and v != nd.get(rule["attr"]):
+                where = (f"{el.where}/{rule['xpath'].lstrip('./')}[{i}]"
+                         + self.idn.attr_ref(ch, rule["attr"]))
+                hits.append((ch.get(rule.get("key_attr") or rule["attr"]), where, v))
+        return hits
+
     def resolve_fact(self, el, rule_id: str):
         """Re-read a no_slot_facts rule as a POPULATED fact: (key, where, value).
 
@@ -2696,6 +2740,7 @@ class Emitter:
         pol.setdefault("mode", "NONE")
         pol.setdefault("stop_at_kinds", [])
         pol.setdefault("stop_at_roles", [])
+        pol.setdefault("accumulate_kinds", [])
         pol.setdefault("algorithm_id", "predecessor_column_propagation.v1")
         if pol["mode"] not in ("NONE", "ACCUMULATE", "FILL_WHEN_UNDECLARED"):
             raise ValueError(
@@ -2767,6 +2812,7 @@ class Emitter:
         by_id = {n["id"]: n for n in nodes}
         stop_kinds = set(pol["stop_at_kinds"])
         stop_roles = set(pol["stop_at_roles"])
+        accumulate_kinds = set(pol["accumulate_kinds"])
         preds: dict[str, list[str]] = {}
         for e in self.idn.element_edges():
             preds.setdefault(e["to"], []).append(e["from"])
@@ -2782,6 +2828,13 @@ class Emitter:
             el = self.idn.elements.get(nid)
             return el is not None and (el.kind_raw in stop_kinds
                                        or el.role in stop_roles)
+
+        def exhaustive(nid: str, own: list[dict]) -> bool:
+            """FILL_WHEN_UNDECLARED takes a declared list as the whole buffer, except on a
+            kind the table says declares only the columns it adds."""
+            el = self.idn.elements.get(nid)
+            return (mode == "FILL_WHEN_UNDECLARED" and bool(own)
+                    and not (el is not None and el.kind_raw in accumulate_kinds))
 
         memo: dict[str, list[dict]] = {}
 
@@ -2811,7 +2864,7 @@ class Emitter:
             own = declared(nid)
             if own is None:
                 return []                      # barrier
-            if stops(nid) or (mode == "FILL_WHEN_UNDECLARED" and own):
+            if stops(nid) or exhaustive(nid, own):
                 memo[nid] = own
                 return own
             out, taken = [], set()
@@ -2832,7 +2885,7 @@ class Emitter:
             own = declared(nid)
             if own is None or stops(nid):
                 continue
-            if mode == "FILL_WHEN_UNDECLARED" and own:
+            if exhaustive(nid, own):
                 continue
             eff = effective(nid, frozenset())
             added = [c for c in eff if c["Name"].lower()
@@ -2935,7 +2988,52 @@ class Emitter:
         # NOT a node and not an edge: it is a property of the DOCUMENT, so it sits beside them. The
         # C# hydrator reads `nodes` and `edges` by name and ignores unknown root keys, which is why
         # this addition does not change a single hydrated graph.
-        return {"platform": self.table["platform"], "nodes": nodes, "edges": edges}
+        ir = {"platform": self.table["platform"], "nodes": nodes, "edges": edges}
+        # The unit's run-time values, beside the graph like `platform`; each block is written only
+        # when non-empty, so the IR of a document that references none is unchanged.
+        resolved = self.idn.unit_variables()
+        for block in ("parameters", "variables", "unresolved"):
+            if resolved[block]:
+                ir[block] = resolved[block]
+        if resolved["parameter_file"]:
+            ir["parameter_file"] = resolved["parameter_file"]
+        return ir
+
+    def variable_field_expressions(self, name: str, el, spec: dict) -> tuple[dict, str | None]:
+        """Each field of a variable-reading transform (Hop Get Variables) as a SQL expression.
+
+        Returns ({column: (expression, where)}, refusal). A String is the text as a SQL string
+        literal ('${X}', quotes doubled), a number is the text itself when it is exactly one
+        ${X} or a numeric literal: quoting follows the declared type, as the engine's
+        CreateDbtVariableReference does. The ${X} references stay for params_postpass.py.
+        """
+        if not any(e["to"] == name for e in self.idn.element_edges()):
+            return {}, ("it has no inbound hop, so it generates its own row; no translator "
+                        "writes a model without a relation to read")
+        ref = re.compile(self.idn.struct["parameters"]["reference_pattern"])
+        out: dict[str, tuple[str, str]] = {}
+        node = self.idn.node_of(el)
+        for row in node.findall(spec["xpath"]):
+            col = row.get(spec["name_attr"]) or ""
+            text = row.get(spec["value_attr"]) or ""
+            typ = row.get(spec["type_attr"]) or ""
+            where = el.where + "/" + spec["xpath"].lstrip("./") + f"[{spec['name_attr']}='{col}']"
+            for attr, allowed in (spec.get("neutral_attrs") or {}).items():
+                if (row.get(attr) or "") not in allowed:
+                    return {}, f"field '{col}' sets {attr}={row.get(attr)!r}, which changes the value"
+            if any(m in text for m in spec.get("refused_markers") or []):
+                return {}, f"field '{col}' reads {text!r}, which Hop resolves with no ${{X}} variable"
+            if typ in spec["quoted_types"]:
+                out[col] = ("'" + text.replace("'", "''") + "'", where)
+            elif typ in spec["unquoted_types"]:
+                whole = ref.fullmatch(text.strip())
+                if not (whole or re.fullmatch(r"-?\d+(\.\d+)?", text.strip())):
+                    return {}, (f"{typ} field '{col}' reads {text!r}, which is not exactly one "
+                                f"${{X}} or a number")
+                out[col] = (text.strip(), where)
+            else:
+                return {}, f"field '{col}' is a {typ or 'untyped'} field, whose conversion has no translation"
+        return out, None
 
     def emit_node(self, name: str, el) -> dict:
         # FRAMEWORK CHANGE 65: WHERE THE MODEL'S FINGERPRINTS GO INTO THE IR.
@@ -3012,6 +3110,22 @@ class Emitter:
             # facts assembled by a template (`filter_simple_predicate`); a single
             # id cannot name both readings of the same IR field.
             rule_ids = fspec["rule"] if isinstance(fspec["rule"], list) else [fspec["rule"]]
+            if fspec.get("list"):
+                # A LIST field: every hit of one rule, in document order (a Hop keyed
+                # write states one <key> per key column). No transform applies.
+                if len(rule_ids) != 1 or fspec.get("transform"):
+                    raise ValueError(f"list element_field '{ir_field}' takes one rule and no transform")
+                hits = self.resolve_fact_all(el, rule_ids[0])
+                if not hits:
+                    if fspec.get("required"):
+                        payload_missing.append(f"{ir_field} (rule {fspec['rule']})")
+                    continue
+                values = [v for _k, _w, v in hits]
+                payload[ir_field] = values
+                promoted_fields.add(rule_ids[0])
+                for i, (_k, w, v) in enumerate(hits):
+                    self.slots.append(Slot(name, f"element.{ir_field}[{i}]", SOURCE, w, v))
+                continue
             hit = None
             fired_rule_id = None
             for rid in rule_ids:
@@ -3122,6 +3236,17 @@ class Emitter:
             # census must report every one of these facts again. Clearing this is the
             # difference between "the IR carries it" and "the IR was going to".
             promoted_fields.clear()
+
+        variable_columns: dict[str, tuple[str, str]] = {}
+        if ir_kind is not None and dispatch.get("variable_fields"):
+            variable_columns, refusal = self.variable_field_expressions(name, el, dispatch["variable_fields"])
+            if refusal:
+                self.slots.append(Slot(
+                    name, "element.$kind", MISSING, "kind_dispatch.variable_fields",
+                    f"'{el.kind_raw}' maps to {ir_kind}, but {refusal}. Degrading rather than "
+                    f"emitting a column whose value differs from the one the source computes."))
+                ir_kind = None
+                variable_columns = {}
 
         # FRAMEWORK CHANGE 61 (c): THE MODEL MAY SUPPLY A KIND THE TABLE HAS NONE FOR.
         #
@@ -3344,6 +3469,14 @@ class Emitter:
             "InputColumns": inputs,
             "OutputColumns": outputs,
         }
+        for oi, col in enumerate(outputs):
+            if col["Name"] in variable_columns:
+                expr, where = variable_columns[col["Name"]]
+                outputs[oi] = {"$kind": "ColumnExpression", "Expression": expr,
+                               **{k: v for k, v in col.items() if k not in ("$kind", "Expression")}}
+                self.slots.append(Slot(name, f"element.OutputColumns[{oi}].Expression", TABLE, where,
+                                       f"{col['Name']} = {expr!r} -- kind_dispatch.variable_fields; "
+                                       f"params_postpass.py rewrites each ${{X}} to var()"))
 
         # FRAMEWORK CHANGE 61 (d): MODEL-AUTHORED COLUMN EXPRESSIONS.
         #
@@ -3367,7 +3500,7 @@ class Emitter:
                 if sc.get("Expression"):
                     col["$kind"] = "ColumnExpression"
                     col["Expression"] = sc["Expression"]
-                for k in ("DataType", "Precision", "Scale"):
+                for k in ("DataType", "Precision", "Scale", "TableColumnReference"):
                     if sc.get(k) is not None:
                         col[k] = sc[k]
                 by_name[sc["Name"].lower()] = col
@@ -3403,6 +3536,24 @@ class Emitter:
                 f"a write stage declares no outbound port, so its projection is derived "
                 f"from its {len(inputs)} inbound column(s); without this every mart model "
                 f"emits a column-less SELECT"))
+        # A node declaring both an INPUT and an OUTPUT port (Hop TableOutput's field mapping) IS
+        # the stream->column map, paired by node identity, never list position; otherwise the
+        # engine projects `sd.<target column>`, which the upstream model does not have.
+        if ir_kind is not None and el.role == "TARGET":
+            in_by_node = {id(p.node): p for p in el.ports
+                          if p.node is not None and self.is_input(p) and not self.is_local(p)}
+            out_ports = {p.name: p for p in el.ports
+                         if p.node is not None and self.is_output(p)}
+            for i, col in enumerate(node["element"]["OutputColumns"]):
+                op = out_ports.get(col.get("Name"))
+                ip = in_by_node.get(id(op.node)) if op is not None else None
+                if ip is None or ip.name == op.name:
+                    continue
+                col["SourceColumn"] = ip.name
+                self.slots.append(Slot(
+                    name, f"element.OutputColumns[{i}].SourceColumn", SOURCE, ip.where,
+                    f"target column {op.name!r} is written from stream field {ip.name!r}; "
+                    f"both are stated on the same source node"))
         # FRAMEWORK CHANGE 60 (b): the table-declared scalar payload. Merged after the
         # base fields and never over them -- a rule that tried to supply $kind or Name
         # would be a table bug, and silently letting it win would hide that.

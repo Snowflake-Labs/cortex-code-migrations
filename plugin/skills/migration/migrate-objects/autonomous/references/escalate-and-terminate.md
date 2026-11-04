@@ -18,7 +18,7 @@ agents and answers recorded in an earlier session — including one this session
 killed in the middle of. Do not open `notes` or `overrideAcceptedCases`. If the
 object is not already parked, park it before reporting. A walker that returns
 `stuck` may already have escalated (one stuck on a human question does; one
-stuck on repeated oracle errors or an unknown ID does not), so check there for
+stuck on repeated status-source errors or an unknown ID does not), so check there for
 an open row on that object before you escalate:
 
 ```
@@ -52,6 +52,14 @@ the current parent identity, so do not pass `agent_id`. Never call
 `status="answer"` without an explicit user reply. Never infer a decision from
 child output or your own diagnosis. Never use an answer to bypass a precondition.
 Walkers cannot answer.
+
+Never pass `scope="project"`: it is refused from you, so no agent widens an answer.
+When the user says an answer applies to every object, do not relay it: leave the row
+open and ask them to answer it on its escalation card with "Apply this answer to
+every object in this project" ticked. Relaying it first closes the card and its box.
+Then later-send from `answered` as for any answer. An answer they applied that way reaches every walker you start
+afterwards as `standingGuidance:` in its `walker_prompt`; do not paste it into
+other objects' prompts yourself.
 
 When `answered` shows a new human row, later-send with
 `guidance: <their words>` for `guidance` or `decompose`.
@@ -138,8 +146,8 @@ Escalations survive the session; read them instead of remembering them.
 Call `migration_status()` and report as [the parent skill](../../SKILL.md) does,
 plus autonomous outcomes: objects finished without intervention, open
 escalations, and unreviewed notes as object plus task only. Do not pass
-`details=true` or quote SQL and choice text. Batch
-`transition_status(status="review", ...)`.
+`details=true` or quote SQL and choice text. Leave the notes for a person to
+review — never call `transition_status(status="review")`.
 
 Also report children dispatched, remediated tasks reset, and outcomes stamped by
 an agent because the machine could not observe them.
@@ -155,16 +163,18 @@ Build every confirmable line from the board. A child's `result` is a claim, not
 a finding. Attribute anything the board cannot confirm to the child. Do not
 turn a child's `completed` response into a completion report by itself.
 
-Finally call `data_infrastructure(mode="down")`, or use
+Finally call `speculative_sandbox(mode="down", object_id=<id>)` for every object
+you sent a `speculative_fixer`, then `data_infrastructure(mode="down")`, or use
 [the teardown skill](../../../data-infrastructure/teardown/SKILL.md) when the
 project configured a `compute_pool` and data work ran.
 
 ## Resume after interruption
 
 A killed session loses dispatch bookkeeping, not durable work. Claims,
-registry stamps, git merges, escalations, and answers survive, and Cortex
-children outlive the session. Re-enter the autonomous skill at preflight, then
-read the board and escalation queue. A row whose `flight` is `running` or
+registry stamps, git merges, escalations, and answers survive. Laptop-kill, MCP
+death, and flock drop are not child death: Cortex children outlive the
+session. Re-enter the autonomous skill at preflight, then read the board and
+escalation queue. A row whose `flight` is `running` or
 `idle` has a live child: leave it. A harvested waiter (`flight` `none` with a
 full conversation UUID as `agentId`) is resumed with `task(resume=<that UUID>)`
 on a wake or a 2c continue, never first-sent. An 8-character `agentId` is a

@@ -16,7 +16,7 @@ For a `join_edge`, take the parent table from its typed `right_table` field
 table.
 
 ## Negative constraint (the one rule)
-Emit **only the undeclared residual** — a `join_edge` where neither side is already a declared key. A column that already has a declared or inferred FK is skipped, not re-emitted. **Never** emit both directions of the same edge: a bidirectional pair closes a reference cycle and is rejected (`TBD0015`). Peer-attribute joins (e.g. `region_code = region_code` between two children) are *not* FKs — those go to `correlated_groups`.
+Emit **only the undeclared residual**: a `join_edge` with no declared or inferred FK whose parent column is a key of the parent table, meaning its primary key or a unique column. A column that already has a declared or inferred FK is skipped, not re-emitted. **Never** emit both directions of the same edge: a bidirectional pair closes a reference cycle and is rejected (`TBD0015`). Peer-attribute joins (e.g. `region_code = region_code` between two children, or a country code shared by two fact tables) are *not* FKs. Those go to `correlated_groups`. An FK onto a parent column outside the parent's key rejects the whole document (`TBD0014`). Set `implicit_pk` only when that column is genuinely unique in the source.
 
 ## Work it out before you emit
 Per candidate, name the `list-unsolved` row that backs it and why it
@@ -36,6 +36,13 @@ Do **not** reverse an existing edge. `SALES.ORDER_LINE.ORDER_ID` already referen
 <!-- example:reject TBD0015 -->
 ```json
 { "fk_chains": [ { "child_table": "SALES.ORDERS", "child_col": "ORDER_ID", "parent_table": "SALES.ORDER_LINE", "parent_col": "ORDER_ID", "hop_depth": 1, "confidence": 0.9 } ] }
+```
+
+Do **not** turn a peer join into an FK. `SALES.CUSTOMER.STATUS` is joined to `SALES.ORDERS.ORDER_STATUS`, a status code that many orders share. The key of `SALES.ORDERS` is `ORDER_ID`, so the edge is rejected. Emit it under `correlated_groups` instead:
+
+<!-- example:reject TBD0014 -->
+```json
+{ "fk_chains": [ { "child_table": "SALES.CUSTOMER", "child_col": "STATUS", "parent_table": "SALES.ORDERS", "parent_col": "ORDER_STATUS", "hop_depth": 1, "confidence": 0.8 } ] }
 ```
 
 Do **not** substitute an alias for the table it stands for. `MonthlySales` is a CTE name, so the workload has no such table and the whole document is rejected:

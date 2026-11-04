@@ -38,11 +38,14 @@ design and `_exclusion_nodes` for the kinds.
 """
 
 import json
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from string import Formatter, ascii_letters
 from typing import Any
 
 import docmodel
+import variable_sources
 
 
 # --------------------------------------------------------------------------
@@ -500,6 +503,155 @@ class Identification:
             "overlaps": self.census_overlaps,
             "unknown_objects": self.unknown_objects,
         }
+
+    def pipeline_parameters(self) -> list[dict]:
+        """The unit's NAMED PARAMETERS, read by `structure.parameters`. Empty when the table
+        declares no reader or the document declares none.
+
+        Each entry also lists the elements whose scalars reference it (`referenced_by`), and
+        whether that element substitutes references at run time (`substitution_flag_attr`).
+        A `${X}` that names no declared parameter is a Hop variable or environment value; see
+        `undeclared_parameter_references`.
+        """
+        spec = self.struct.get("parameters")
+        if not spec:
+            return []
+        pattern = re.compile(spec["reference_pattern"])
+        flag_attr = spec.get("substitution_flag_attr")
+        out: list[dict] = []
+        seen: set[str] = set()
+        for node in self.root.findall(spec["xpath"]):
+            name = (node.get(spec["name_attr"]) or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            out.append({
+                "name": name,
+                # Hop writes <default_value/> for both null and "", so an absent default is "".
+                "default": node.get(spec["default_attr"]) or "",
+                "description": node.get(spec.get("description_attr") or "") or "",
+                "type": spec.get("type") or "VARCHAR",
+                "scope": self.doc_name,
+                "where": self.at(node, self._projection_path(node)),
+                "referenced_by": [],
+            })
+        by_name = {p["name"]: p for p in out}
+        for key, attr, value, substituted in self._reference_scalars(spec):
+            for ref in pattern.findall(value):
+                if ref in by_name:
+                    by_name[ref]["referenced_by"].append(
+                        {"node": key, "attr": attr, "substituted": substituted})
+        return out
+
+    def _reference_scalars(self, spec: dict):
+        """(element key, attr, value, substituted) for every scalar a `${X}` can sit in.
+
+        An element's own scalars substitute only when its `substitution_flag_attr` is on. A
+        `reference_sites` entry names a child row of one kind whose attr the platform always
+        substitutes (Hop Get Variables `<fields>/<field>/<variable>`); its attr is reported as
+        `<xpath>/<attr>`.
+        """
+        flag_attr = spec.get("substitution_flag_attr")
+        sites = spec.get("reference_sites") or []
+        for key, el_node in self._node_of.items():
+            if el_node is None:
+                continue
+            on = flag_attr is None or el_node.get(flag_attr) == spec.get("substitution_flag_on")
+            for attr, value in sorted(el_node.attrib.items()):
+                yield key, attr, value or "", on
+            el = self.elements.get(key)
+            for site in sites:
+                if el is None or el.kind_raw != site["kind"]:
+                    continue
+                for row in el_node.findall(site["xpath"]):
+                    yield key, f"{site['xpath'].lstrip('./')}/{site['attr']}", row.get(site["attr"]) or "", True
+
+    def undeclared_parameter_references(self) -> list[dict]:
+        """`${X}` references in element scalars that name no declared parameter."""
+        spec = self.struct.get("parameters")
+        if not spec:
+            return []
+        pattern = re.compile(spec["reference_pattern"])
+        declared = {p["name"] for p in self.pipeline_parameters()}
+        out = []
+        for key, attr, value, substituted in self._reference_scalars(spec):
+            for ref in pattern.findall(value):
+                if ref not in declared:
+                    out.append({"node": key, "attr": attr, "name": ref, "substituted": substituted})
+        return out
+
+    def unit_variables(self) -> dict:
+        """Every run-time value the unit reads, resolved the way the platform resolves it.
+
+        Hop, measured on hop-run 2.19 (lowest to highest): the parameter's <default_value>, an
+        environment file, the project config, `-p`. Each referenced name lands in exactly one of:
+
+          parameters   declared pipeline parameters (is_parameter true). The default is the
+                       project's value when the project sets the same name.
+          variables    names the project config (section `project`) or an environment file
+                       (section `package`) sets (is_parameter false).
+          unresolved   built-ins (`builtin_patterns`) and names nothing sets; Hop leaves those
+                       as written.
+
+        `parameter_file` is set when an environment file sets a referenced name that the project
+        does not: the file is then the run's override source, as an Informatica parameter file.
+        `key` is the engine's ConstantReference with an empty namespace (spaces become `_`).
+        """
+        spec = self.struct.get("parameters")
+        empty = {"parameters": [], "variables": [], "unresolved": [], "parameter_file": None}
+        if not spec:
+            return empty
+        sources = variable_sources.discover(self.xml_path, spec)
+        project, environments = sources["project"], sources["environments"]
+        builtins = [re.compile(p) for p in spec.get("builtin_patterns") or []]
+
+        refs: dict[str, list[dict]] = {}
+        for ref in self.undeclared_parameter_references():
+            refs.setdefault(ref["name"], []).append(
+                {"node": ref["node"], "attr": ref["attr"], "substituted": ref["substituted"]})
+
+        def key(name: str) -> str:
+            return name.replace(" ", "_")
+
+        def env_value(name: str) -> tuple[str, str] | None:
+            for rel, values in environments:
+                if name in values:
+                    return rel, values[name]
+            return None
+
+        parameters = []
+        for p in self.pipeline_parameters():
+            entry = dict(p, key=key(p["name"]), is_parameter=True, section="package",
+                         default_from="parameter")
+            if p["name"] in project:
+                entry.update(default=project[p["name"]], default_from="project")
+            parameters.append(entry)
+
+        variables, unresolved = [], []
+        for name in sorted(refs):
+            base = {"name": name, "referenced_by": refs[name]}
+            if any(b.search(name) for b in builtins):
+                unresolved.append(dict(base, kind="builtin"))
+            elif name in project:
+                variables.append(dict(base, key=key(name), default=project[name], type=spec.get("type") or "VARCHAR",
+                                      is_parameter=False, section="project", default_from="project",
+                                      source_file=sources["project_file"].name))
+            elif (found := env_value(name)) is not None:
+                variables.append(dict(base, key=key(name), default=found[1], type=spec.get("type") or "VARCHAR",
+                                      is_parameter=False, section="package", default_from="environment",
+                                      source_file=found[0]))
+            else:
+                unresolved.append(dict(base, kind="unresolved"))
+
+        overridable = [p["name"] for p in parameters if p["default_from"] == "parameter"] + \
+                      [v["name"] for v in variables if v["section"] == "package"]
+        sets = sorted(n for n in overridable if env_value(n) is not None)
+        parameter_file = None
+        if sets:
+            files = [rel for rel, values in environments if set(values) & set(sets)]
+            parameter_file = {"name": Path(files[0]).name, "files": files, "sets": sets}
+        return {"parameters": parameters, "variables": variables, "unresolved": unresolved,
+                "parameter_file": parameter_file}
 
     def dispatch_for(self, el: Element) -> dict:
         """FRAMEWORK CHANGE 32: kind_dispatch mapped a native kind to exactly ONE
@@ -1385,6 +1537,8 @@ class Identification:
             hits = []
             for lv in self.struct.get("edge_levels", []):
                 hits.extend(self.root.findall(lv["xpath"]))
+            for rule in self.table["edge_policy"].get("edge_labels") or []:
+                hits.extend(self.root.findall(rule["xpath"]))
         elif kind == "DEFINITION_OF_ELEMENT":
             # ONLY where the definition is a DIFFERENT node than the element. A
             # `def_site` of "SELF" means the element carries its own payload, so its
@@ -1542,12 +1696,31 @@ class Identification:
                 return name
         return instance
 
+    def _stated_edge_labels(self) -> dict[tuple[str, str], str]:
+        """`(from, to) -> label` for each edge another record of the document labels.
+
+        `edge_policy.edge_labels` declares those records: an xpath, the attributes naming
+        both endpoints, an optional attribute that must say yes, and the label. A Hop hop
+        carries no label, but `<transform_error_handling>/<error>` names the hop that carries
+        a transform's error rows."""
+        out: dict[tuple[str, str], str] = {}
+        for rule in self.table["edge_policy"].get("edge_labels") or []:
+            for c in self.root.findall(rule["xpath"]):
+                flag = rule.get("enabled_attr")
+                if flag and str(c.get(flag) or "").strip().upper() not in ("Y", "YES", "TRUE", "1"):
+                    continue
+                a, b = c.get(rule["from_attr"]), c.get(rule["to_attr"])
+                if a and b:
+                    out[(self.resolved_instance(a), self.resolved_instance(b))] = rule["label"]
+        return out
+
     def element_edges(self) -> list[dict]:
         """FRAMEWORK CHANGE 18: element edges were ALWAYS derived by collapsing
         field-level connectors. SSIS states them explicitly as <path> elements,
         so the derivation is now one of two table-selected mechanisms."""
         mech = self.table["edge_policy"]["element_edges_from"]
         if mech == "EXPLICIT_EDGE_ELEMENTS":
+            labels = self._stated_edge_labels()
             out = []
             for rec in self.element_edge_records:
                 a, b = self.resolved_instance(rec["from"]), self.resolved_instance(rec["to"])
@@ -1557,7 +1730,7 @@ class Identification:
                        if self.resolved_instance(fe.from_instance) == a
                        and self.resolved_instance(fe.to_instance) == b]
                 out.append({"from": a, "to": b, "field_edges": fes,
-                            "label": rec["label"], "where": rec["where"]})
+                            "label": rec["label"] or labels.get((a, b)), "where": rec["where"]})
             return out
 
         seen: dict[tuple[str, str], dict] = {}

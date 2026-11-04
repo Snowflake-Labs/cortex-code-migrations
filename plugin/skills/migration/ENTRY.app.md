@@ -20,6 +20,8 @@ Call `migration_status`. It returns JSON with `project_exists`, `directory_empty
 - **Mid-migration:** "Setup is complete and assessment is done. You're in the migration phase: of the 47 objects in Wave 2, 12 are deployed so far."
 - **Near completion:** "Almost there — 45 of 47 objects are deployed and tested. 2 procedures are still failing tests."
 
+**Setup unfinished:** when `routing.setup_complete` is false, setup is still in progress even if `routing.assessed` is true: the Snowflake target, testing or data infrastructure can still be open, for example after a session died mid-setup. Call `progress_setup()` and name its `next_task` as what comes next. Never say setup is complete, and never suggest starting a wave or migrating objects.
+
 Then go to Step 2.
 
 Reading `by_type` correctly matters:
@@ -28,6 +30,7 @@ Reading `by_type` correctly matters:
 - **Type present but not in the current wave** (`total` > 0, wave-scoped counts absent or 0): acknowledge it anyway — e.g. "you also have 1 Informatica ETL workflow staged for a later wave." Don't let the current wave hide work that exists elsewhere in the project.
 - **A wave is active** (`wave` present): `in_scope`, `objects_done` and every `stage_totals` count are that wave only; `total_objects` and `by_type.<type>.total` are project-wide. Name the wave and `in_scope_all_waves` whenever you quote them — "69 objects in wave 1, of 1,110 in scope across all waves" — never report a wave's count as the project's.
 - Never describe a project as "<type>-only" (e.g. "table-only") when `by_type` lists any other type with `total` > 0.
+- `by_type` counts Snowflake types, as the Objects list does: an object SnowConvert converted to another type counts under its new one. When `type_conversions` is present, say so where you quote that type: "6 procedures (3 converted from functions)", from its `to`, `from` and `total` (`in_scope` under a wave).
 - Counts that never incremented are absent from the JSON — treat them as 0.
 - **BTEQ scripts have no deploy step.** They run their converted SQL inside the test itself, so report them only by `tested`, never "deployed"; `by_type.bteq` carries no `deployed` count.
 
@@ -55,7 +58,8 @@ Use `routing` from the status JSON to delegate to the next step:
 | `routing.data_validation_only` = true | Load `./validate-objects/SKILL.md` |
 | `routing.code_conversion_only` = true | Load `./code-conversion-only/SKILL.md` |
 | `routing.assessed` = false | Load `./setup/SKILL.md` |
-| `routing.assessed` = true | Load `./migrate-objects/SKILL.md` |
+| `routing.assessed` = true and `routing.setup_complete` = false | Load `./setup/SKILL.md` |
+| `routing.assessed` = true and `routing.setup_complete` = true | Load `./migrate-objects/SKILL.md` |
 
 Each sub-skill handles its own internal routing based on the full `routing` object.
 </prescribed-path>
@@ -68,7 +72,6 @@ These answer common questions about project state without loading a sub-skill:
 
 - **"What is the current state?"** — Call `migration_status(mode="summary")` and give the prose summary described in Step 1.
 - **"What should I work on next?"** — Call `migration_status(mode="my_objects_summary")` to get per-`(task, object_type)` counts plus `errored_count` and `done_count`. Present the list and **ask the user what they want to work on — do not pick for them**. When the user picks a group, drill down with `migration_status(mode="my_objects_details", group=<id>)`.
-- **"Show me objects that match rule X"** — Load `migrate-objects/rule-engine/propagate/SKILL.md`.
 - **"Can I change conversion settings?"** / **"I picked defaults but need a conversion flag"** — Load `convert/SKILL.md` → "Changing Conversion Settings Later". The same project keeps working: no new project or re-import.
 - **"How do I extend / customize the migration plugin?"** / **"How do I override task X?"** — Load `extensibility/TASKS.md` for the full reference: overridable task ids, per-task contracts, and the project-local + `$AIM_SKILL_EXT_DIR` paths. Optionally call `migration_status(mode='extensions')` to show which overrides are active.
 
@@ -108,7 +111,7 @@ Match the user's request to the most relevant skill and load it.
   - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
   - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
   - **tableau-repointing** — collect `.twb`/`.tds` folder path and `--tableauRepointing` flag for Tableau repointing. Triggers: tableau, tableau migration, tableau repointing, migrate tableau, repoint tableau → `./tableau-repointing/SKILL.md`
-  - **dbt-consolidation** — before SSIS or Informatica dbt conversion, ask one question about consolidating projects and models by package/folder, consolidating SSIS into one dbt project, or retaining the per-Data-Flow/per-mapping layout; use `--consolidate-dbt-projects`, or `--consolidate-as-single-dbt-project` for the SSIS-only single-project choice → `./dbt-consolidation/SKILL.md`
+  - **dbt-consolidation** — before SSIS or Informatica dbt conversion, ask one question about consolidating projects and models by package/folder, consolidating SSIS or Informatica into one dbt project, or retaining the per-Data-Flow/per-mapping layout; use `--consolidate-dbt-projects`, or `--consolidate-as-single-dbt-project` when SSIS-only or Informatica-only chose the single-project layout → `./dbt-consolidation/SKILL.md`
 - **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
 
 ### Migration & validation
@@ -125,7 +128,6 @@ Match the user's request to the most relevant skill and load it.
 ### Rules
 - **rule-engine** — search, apply, and manage migration rules → `./migrate-objects/rule-engine/SKILL.md`
   - **extract-rule** — extract a reusable rule from a code fix (interactive or git history) → `./migrate-objects/rule-engine/extract/SKILL.md`
-  - **propagate-rule** — find all code units matching a rule for batch application → `./migrate-objects/rule-engine/propagate/SKILL.md`
 
 ### Customization
 - **task-overrides** — replace the skill that runs for any built-in task with the user's own `SKILL.md`, scoped to the project or to a global directory via `$AIM_SKILL_EXT_DIR`. Triggers: "extend the plugin", "customize task X", "swap out the skill for Y", "override registerCode/convertCode/deploy/...". Reference: `./extensibility/TASKS.md`
@@ -143,3 +145,5 @@ If no skill matches, say so explicitly, then help with your own knowledge.
 4. **Diagnose against the source before retrying or touching shared infrastructure** — when a step fails, reproduce it first: run the failing statement (from the error, or the task's `statement` in the worker's `data_exchange_agent.log` under scai's `logs/data/`) with `query_source`, and check any theory (a version mismatch, a missing file) against what the tools report before acting on it. Never re-dispatch an unchanged workflow to see whether it fails again, and never update, recreate or restart the orchestrator, worker or compute pool to test a guess: they are shared by every project on the account. Change them only with evidence that they are the cause, after the user agrees with who else it affects named. Until the cause is found, say what you checked and that you don't know yet; never "not your setup" when the setup is what you haven't ruled out.
 5. **Say what the product can't do** — when no supported setting does what the user asked, say so plainly before acting and offer what is possible. Never build the nearest thing and report the request as done.
 6. **Switch to manual only when the user asks** — when the user asks to go manual, work interactively or stop running autonomously, confirm with them, then call `configure(subagent_mode=false)` from this session (never from a subagent). Between waves it switches the project back to manual for this and every later session. While walkers are running or objects are still claimed it is refused, naming them: tell the user, and offer to let the wave finish first. Never change the mode on your own initiative.
+7. **Read the whole error before naming a cause** — when a tool or command fails, tell the user what the error says (e.g. "the SQL Server driver fails to load") and what is not yet known. Read its details too, and test the cheapest explanation first (does the file exist on disk, is the install complete, when did it last change, is the host reachable). The same error on every connection points at something they share on this machine, not at every server being down. Name a cause only once a check confirms it. Never tell the user to reinstall, update, contact support or report a defect on a cause you have not confirmed.
+8. **State only what a check shows** — take counts, durations and commits from the output or log that holds them (`git rev-parse --short HEAD` for the current commit, the log's timestamps for how long a step took), never from memory. Call a fix certain only after it has run. Once a check disproves a claim, leave it out of every later answer, summaries included. A new cause for an earlier failure needs its own check, and must explain the error that failure gave. In a write-up for someone else (an escalation, a summary), mark each claim verified, with the check that showed it, or inferred, and keep the corrections the session made.

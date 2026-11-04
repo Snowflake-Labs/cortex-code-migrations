@@ -48,34 +48,48 @@
     <GenerateDependencyFile>false</GenerateDependencyFile>
   </PropertyGroup>
 
-  <!-- The engine is intentionally external to this source-only project. Callers must identify a
-       real, already-built engine output; no checkout layout or machine path is assumed. -->
+  <!-- The engine comes from the same NuGet packages, at the same version, as the SQL code
+       processor: EnginePackageVersion is read from the Mobilize.Snow.CodeProcessor reference in
+       Snowflake.SnowConvertDesktop.Sql.csproj, the line the migrations-snowconvert bump bot
+       rewrites. -p:EnginePackageVersion=<v> tries another release.
+
+       Developer override: AIFIRST_ENGINE_BIN (or -p:EngineBin) names a local engine build output
+       instead, referenced by path as before. Release builds never set it. -->
   <PropertyGroup>
     <EngineBin Condition="'$(EngineBin)' == ''">$(AIFIRST_ENGINE_BIN)</EngineBin>
     <EngineBin Condition="'$(EngineBin)' != ''">$([MSBuild]::EnsureTrailingSlash('$(EngineBin)'))</EngineBin>
+    <UseEnginePackages Condition="'$(EngineBin)' == ''">true</UseEnginePackages>
+    <_SqlProcessorCsproj>$(MSBuildThisFileDirectory)../../../../../../../../Snowflake.SnowConvertDesktop/Snowflake.SnowConvertDesktop.Sql/Snowflake.SnowConvertDesktop.Sql.csproj</_SqlProcessorCsproj>
+    <EnginePackageVersion Condition="'$(EnginePackageVersion)' == '' and Exists('$(_SqlProcessorCsproj)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(_SqlProcessorCsproj)')), 'Include="Mobilize\.Snow\.CodeProcessor" Version="([^"]+)"').Groups[1].Value)</EnginePackageVersion>
+    <RestoreConfigFile Condition="'$(UseEnginePackages)' == 'true' and '$(RestoreConfigFile)' == ''">$(MSBuildThisFileDirectory)../../../../../../../../Snowflake.SnowConvertDesktop/nuget.config</RestoreConfigFile>
   </PropertyGroup>
 
-  <Target Name="ValidateEngineBin" BeforeTargets="AddEngineReferences">
-    <Error Condition="'$(EngineBin)' == ''"
-           Text="Set AIFIRST_ENGINE_BIN to an existing SnowConvert engine bin directory (or pass -p:EngineBin=...)." />
-    <Error Condition="'$(EngineBin)' != '' and !Exists('$(EngineBin)')"
+  <Target Name="ValidateEngineVersion" BeforeTargets="CollectPackageReferences" Condition="'$(UseEnginePackages)' == 'true'">
+    <Error Condition="'$(EnginePackageVersion)' == ''"
+           Text="No engine version: Mobilize.Snow.CodeProcessor not found in $(_SqlProcessorCsproj). Pass -p:EnginePackageVersion=... or set AIFIRST_ENGINE_BIN." />
+  </Target>
+
+  <!-- The same four engine packages Snowflake.SnowConvertDesktop.Sql references. -->
+  <ItemGroup Condition="'$(UseEnginePackages)' == 'true'">
+    <PackageReference Include="Artinsoft.Common.CoreAST" Version="$(EnginePackageVersion)" />
+    <PackageReference Include="Mobilize.Common.Store.SqliteStorage" Version="$(EnginePackageVersion)" />
+    <PackageReference Include="Mobilize.Snow.CodeProcessor" Version="207.0.0" />
+    <PackageReference Include="Mobilize.Snow.CodeProcessor.Content" Version="207.0.0" />
+  </ItemGroup>
+
+  <Target Name="ValidateEngineBin" BeforeTargets="AddEngineReferences" Condition="'$(UseEnginePackages)' != 'true'">
+    <Error Condition="!Exists('$(EngineBin)')"
            Text="AIFIRST_ENGINE_BIN/EngineBin does not exist: $(EngineBin)" />
   </Target>
 
-  <!-- Reference every assembly in that directory EXCEPT the test host and the test project
-       itself. Excluding them is the point of the spike: if the chain still compiles and runs
-       with MSTest, Moq and UnitTests.dll absent, it is not coupled to the test host.
-
-       Injected as ReferencePath rather than Reference. A `Reference` item built from an item
-       TRANSFORM loses the per-item HintPath association, which silently produced 128 CS0246
-       "type not found" errors on the first attempt — the references appeared declared and
-       resolved to nothing. ReferencePath is what the compiler consumes directly, so there is
-       no resolution step to get wrong. -->
+  <!-- Override only: reference every assembly in that directory EXCEPT the test host and the test
+       project itself. Injected as ReferencePath rather than Reference: a `Reference` built from an
+       item transform loses the per-item HintPath and resolves to nothing (128 CS0246). -->
   <PropertyGroup>
     <_ExcludeDlls>$(EngineBin)UnitTests.dll;$(EngineBin)Moq.dll;$(EngineBin)Castle.Core.dll;$(EngineBin)Microsoft.VisualStudio.TestPlatform*.dll;$(EngineBin)Microsoft.TestPlatform*.dll;$(EngineBin)MSTest*.dll;$(EngineBin)testhost.dll</_ExcludeDlls>
   </PropertyGroup>
 
-  <Target Name="AddEngineReferences" BeforeTargets="ResolveReferences">
+  <Target Name="AddEngineReferences" BeforeTargets="ResolveReferences" Condition="'$(UseEnginePackages)' != 'true'">
     <ItemGroup>
       <ReferencePath Include="$(EngineBin)*.dll" Exclude="$(_ExcludeDlls)" />
     </ItemGroup>
@@ -83,7 +97,7 @@
   </Target>
 
   <!-- ReferencePath bypasses copy-local, so the runtime closure has to be staged explicitly. -->
-  <Target Name="StageEngineRuntime" AfterTargets="Build">
+  <Target Name="StageEngineRuntime" AfterTargets="Build" Condition="'$(UseEnginePackages)' != 'true'">
     <ItemGroup>
       <_Runtime Include="$(EngineBin)*.dll" Exclude="$(_ExcludeDlls);$(EngineBin)aifirst-migrate.dll;$(EngineBin)aifirst-migrate.pdb" />
       <!-- Data files read from disk at runtime, not references. EwiModelReader resolves
@@ -104,10 +118,20 @@
        the note there). Without deps.json the host only probes beside the executable, so the native
        library has to be copied flat. Everything else about the reports worked before this — the
        lineage report was the only one absent, which is precisely the shape that would have read as
-       "lineage is not drivable" if the exception had not been printed. -->
+       "lineage is not drivable" if the exception had not been printed.
+
+       A RID-specific `dotnet publish` of EngineBin (rather than a plain `dotnet build`) flattens
+       these same files to the publish root instead of nesting them under runtimes/<rid>/native/,
+       so flat .dylib/.so files are globbed too (libe_sqlite3, libscai_state). Flat Windows
+       natives are .dll and StageEngineRuntime already copies them. -->
   <Target Name="StageNativeRuntime" AfterTargets="Build">
-    <ItemGroup>
+    <ItemGroup Condition="'$(UseEnginePackages)' != 'true'">
       <_Native Include="$(EngineBin)runtimes/$(NETCoreSdkPortableRuntimeIdentifier)/native/*" />
+      <_Native Include="$(EngineBin)*.dylib;$(EngineBin)*.so" />
+    </ItemGroup>
+    <!-- Package build: copy-local puts the package natives under $(OutDir)runtimes/<rid>/native/. -->
+    <ItemGroup Condition="'$(UseEnginePackages)' == 'true'">
+      <_Native Include="$(OutDir)runtimes/$(NETCoreSdkPortableRuntimeIdentifier)/native/*" />
     </ItemGroup>
     <Copy SourceFiles="@(_Native)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
     <Message Importance="high" Text="spike: staged @(_Native->Count()) native asset(s) for $(NETCoreSdkPortableRuntimeIdentifier)" />

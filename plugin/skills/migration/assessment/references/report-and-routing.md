@@ -15,7 +15,8 @@ end-to-end path is fully defined in `SKILL.md`.
 
 | Intent | Skill or source |
 |---|---|
-| Deployment waves, dependency order | `waves-generator/SKILL.md` |
+| Business use cases, migration waves, a wave for an app, process, report or object | `business-use-cases/SKILL.md` |
+| Size-based waves on explicit request (a wave size, prioritization patterns, category order) | `waves-generator/SKILL.md` |
 | Temporary/staging/deprecated exclusions | `object_exclusion_detection/SKILL.md` |
 | Migration effort/hours | `effort-estimate/SKILL.md` |
 | Migration risks/anti-patterns | `anti-patterns/SKILL.md` |
@@ -72,6 +73,7 @@ The common path is:
 
 ```bash
 scai assessment report \
+  --plugin-version "<plugin_version>" \
   --project-dir "<project_dir>" \
   --output "<project_dir>/assessment/multi_report.html" \
   [--ssis-json "<path>" when SSIS succeeded] \
@@ -79,6 +81,9 @@ scai assessment report \
 ```
 
 The command also writes a PDF of every tab beside the HTML (`multi_report.pdf`, or the `-o` stem with a `.pdf` extension). It needs Google Chrome, Microsoft Edge, or Chromium on the machine.
+
+`<plugin_version>` is the trimmed text of the plugin's `VERSION` file. It names
+the build on the report when `AIM_APP_VERSION` is unset.
 
 Always pass `--project-dir`; its registry is required to enrich UUID-based
 waves with names, categories, paths, statuses, and dependencies. The command
@@ -95,6 +100,7 @@ Only use explicit source flags to select nonstandard locations:
 
 ```bash
 scai assessment report \
+  --plugin-version "<plugin_version>" \
   --project-dir "<project_dir>" \
   --waves-json "<path>" \
   --exclusion-json "<path>" \

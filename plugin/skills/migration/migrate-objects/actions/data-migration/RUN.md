@@ -17,7 +17,7 @@ the result is known (§2).
 
 Call `migrate_data(mode="run", where=<the batch's object filter>)`. Setup is folded in: `run` generates the one-table workflow if needed, pins `extraction=regular` / `sync=full-replace` / `native`, and blocks until the load finishes. Pass `workflow_path` only to reuse an edited YAML.
 
-`full-replace` deletes the rows already in the target before loading, so a re-run never duplicates them; it overrides a table-level strategy in an edited YAML too. An Iceberg target stays on `none`, which DMO requires, so a re-run appends: when one already holds rows and every one came from this project's earlier loads of it, whether complete or failed partway (so its count is at most the source count times those loads), `TRUNCATE TABLE <fqn>` before `run` and `note` it (`undo`: restore with Time Travel, `INSERT INTO <fqn> SELECT * FROM <fqn> BEFORE(STATEMENT => '<truncate query id>')`). A target holding rows anyone else loaded is an escalation.
+`full-replace` runs a `DELETE` on each target partition (every row of an unpartitioned table; no `TRUNCATE` or `DROP`) and commits it before the load, so a re-run never duplicates rows, but an interrupted run leaves that table empty or partial until a re-run completes; it overrides a table-level strategy in an edited YAML too. An Iceberg target stays on `none`, because the orchestrator rejects `full-replace`. A `none` run fails when that Iceberg target already exists, even if it is empty, so `TRUNCATE` does not let the re-run through. When the table exists and every row in it came from this project's earlier loads (including a create that loaded nothing, so its count is at most the source count times those loads), `DROP ICEBERG TABLE <fqn>` before `run` and `note` it (`undo`: `UNDROP ICEBERG TABLE <fqn>`). A target holding rows anyone else loaded, or an empty table this project did not create, is an escalation.
 
 Do not call `data_infrastructure`. Do not arm Monitor. Do not return `waiting`. The response `status` is the result (`completed` / `failed`).
 
@@ -25,8 +25,8 @@ Do not call `data_infrastructure`. Do not arm Monitor. Do not return `waiting`. 
 
 The machine reads live `DATA_MIGRATION.TABLE_PROGRESS` — there is no registry stamp.
 
-- **Completed** → `transition_status(status="advance", task="migrateData", outcome="completed", where=<batch filter>)` so `TASK_EVENTS` get an `advanced` row — do not leave completion to `next_task` alone. The server refuses it unless the job oracle confirms.
-- **Failed** → do not stamp (only a completed advance is oracle-confirmed for `migrateData`). Do not re-run the job and do not change Snowflake with `sql_execute`. A failed load is `error=sql` and the machine owns the next step.
+- **Completed** → `transition_status(status="advance", task="migrateData", outcome="completed", where=<batch filter>)` so `TASK_EVENTS` get an `advanced` row — do not leave completion to `next_task` alone. The server refuses it unless the job's status source confirms.
+- **Failed** → do not stamp (only a completed advance is confirmed by the status source for `migrateData`). Do not re-run the job and do not change Snowflake with `sql_execute`. A failed load is `error=sql` and the machine owns the next step.
 
 Then `migration_status(mode="next_task", object_ids=["<id>"])`.
 
@@ -42,6 +42,13 @@ path is the normal one: `migrate_data(mode="run", workflow_path=<path>)` runs
 call `data_infrastructure` and do not arm Monitor; the response `status` is the
 result, stamped as in §2. Do not pass `direct=false`: it is refused, since no
 orchestrator runs for this project.
+
+Before the first interactive `run`, show a pre-run summary and wait for the
+user's go-ahead: the source database, the target `DATABASE.SCHEMA`, the tables
+(from the reviewed YAML), the sync strategy and what it does to rows already in
+each target (the `DELETE` above for `full-replace`; `none` appends), and the
+target's current row count for every table that already exists. Afterwards,
+report the loaded row counts next to the source's.
 
 If the response has `status="started"` and a `monitor` block, you are on the
 orchestrated path: infrastructure must already be up via `data_infrastructure(mode="up")`.

@@ -238,6 +238,28 @@ Apply this to every PIVOT column reference (SELECT list, `NVL`, `CASE`, aliases,
    Headless/CI cannot complete this flow — switch to PAT or key-pair. Data
    validation and test generation do not support Authorization Code (`CNX0037`).
 
+## Cortex Code sql_execute: No Query ID
+
+**Symptoms:** Cortex Code's `sql_execute` fails with `SQL execution returned no
+query ID and result is unavailable`, often on every query in the session, even
+`SELECT 1`, while `snow sql` on the same connection still works. Any step that
+queries Snowflake through `sql_execute` can hit it: validateView, deploy
+checks, baseline capture, test runs, data validation.
+
+**Cause:** `sql_execute` got no query ID back from Snowflake and masked the
+underlying failure; the message alone does not say why. A stale or expired
+Cortex Code session for the connection is a likely cause, but a network or
+proxy failure gives the same message.
+
+**Fix:**
+1. Do not retry it in a loop: the same session usually keeps failing.
+2. Follow the step's own rule for a tool failure (validateView stamps `infra`
+   and never falls back to shell, `snow sql` or Python).
+3. Tell the user: "Cortex Code's `sql_execute` returned no query ID on
+   `<snowflake_connection>` and hid the underlying error; its Snowflake session
+   may be stale. Try reconnecting that connection in Cortex Code or starting a
+   new session, then retry the step."
+
 ## Test Runner Errors
 
 **Symptoms:** `scai test capture` or `scai test validate` fails.

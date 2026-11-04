@@ -133,6 +133,7 @@ from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from identify import CONTAINER_ROLES
 from source_sql import modelsql_has_verb
+import model_host  # Cortex is the supported host; claude is override-only.
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRAMEWORK = HERE  # remapped: identify modules live alongside gates in scripts/
@@ -742,6 +743,20 @@ def build_prompt(req, platform, sheet):
         "",
     ]
 
+    # OUTPUT CONTRACT, not a hint: params_postpass.py turns each ${NAME} into a dbt var() after
+    # this stage, so a value substituted here would freeze one run's default into the model.
+    run_time_refs = sorted(set(re.findall(r"\$\{([^{}$]+)\}", req["source_text"])))
+    if run_time_refs:
+        parts += [
+            "## Run-time references",
+            "",
+            "The fragment references %s, resolved by the source platform at run time. Keep each "
+            "one VERBATIM (`${NAME}`, same spelling and quoting) wherever it appears in the SQL "
+            "you write. Do not substitute a default or example value for it."
+            % ", ".join("`${%s}`" % n for n in run_time_refs),
+            "",
+        ]
+
     if sheet:
         parts += [
             "## What the platform table declares about this platform's expression semantics",
@@ -993,18 +1008,12 @@ def _schema_example(req):
 # than merely configurable -- `--model-cmd "cat /tmp/canned.json"` is a valid stub and the
 # negative tests use exactly that.
 #
-# The default is the Claude CLI in headless print mode, so no API key handling lives here.
-# `--tools ""` is NOT a cost measure: a model that can read files can read the hand-authored
-# baseline it is being measured against, and the whole point of a narrow per-element prompt is
-# that its inputs are known. `--system-prompt` replaces the CLI's own preamble for the same
-# reason -- a 60 kB agent system prompt is 60 kB of instructions nobody writing this measurement
-# chose.
+# The default is Cortex Code (`cortex exec`) in non-interactive mode, so no API key handling
+# lives here. A prompt with no argv message is read from stdin. `--model-cmd` remains the
+# override for convert-ctrl stubs (`cat /tmp/canned.json`).
 # ---------------------------------------------------------------------------------------------
 
-DEFAULT_MODEL_CMD = (
-    'claude -p --output-format json --tools "" --strict-mcp-config --disable-slash-commands '
-    '--no-session-persistence --system-prompt {system}'
-)
+DEFAULT_MODEL_CMD = model_host.DEFAULT_SIDECAR_MODEL_CMD
 
 
 def invoke(cmd, prompt, timeout=300):
@@ -1033,14 +1042,11 @@ def invoke(cmd, prompt, timeout=300):
         raise ProducerError("the model command exited 0 and wrote nothing. Exit 0 with no output "
                             "is the silent-success shape this project keeps finding, so it is a "
                             "hard failure here.")
+    # Claude prints one envelope, cortex exec --format json a JSONL stream ending in type=result,
+    # stubs the bare answer: unwrap_cli_stdout takes the last result event.
+    out, env = model_host.unwrap_cli_stdout(out)
     meta = {}
-    # The CLI's --output-format json envelope, when that is the command. Unwrapped rather than
-    # assumed: a stub command returns the bare answer and must keep working.
-    try:
-        env = json.loads(out)
-    except Exception:
-        env = None
-    if isinstance(env, dict) and "result" in env and "type" in env:
+    if env is not None:
         if env.get("is_error"):
             raise ProducerError("the model reported an error: %s"
                                % str(env.get("result"))[:400])
@@ -1051,8 +1057,7 @@ def invoke(cmd, prompt, timeout=300):
             "stop_reason": env.get("stop_reason"),
             "session_id": env.get("session_id"),
         }
-        out = env.get("result") or ""
-        if not out.strip():
+        if not (out or "").strip():
             raise ProducerError("the model returned an empty result inside a success envelope.")
     return out, meta
 

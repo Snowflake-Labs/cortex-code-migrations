@@ -80,7 +80,7 @@ If no source files are present, ask:
 
 > "Where are your source SQL/code files located? Please provide the full path to the directory or file."
 
-Then run from the project directory:
+Then run from the project directory. Launch it with `run_in_background=true`, or set the bash tool `timeout` to at least `900000` (15 minutes), then poll until the command finishes. The default 120 second timeout kills the process during the conversion engine's silent pause and a relaunch starts it over.
 
 ```bash
 scai code add -i <INPUT_PATH> --skip-split --json
@@ -98,14 +98,14 @@ Any ETL imported by `scai code add` lands in `source/_etl/`. That is where `conv
 Check whether `source/_etl/` exists and contains ETL files — `.dtsx` for SSIS, `.xml` for Informatica PowerCenter (use whichever portable form fits the host).
 
 - If it is **missing or empty**, there is no ETL to convert; proceed to Step 4.
-- If it contains **SSIS** (`.dtsx`), follow [../convert/references/ssis-target.md](../convert/references/ssis-target.md) before any dbt question. It asks dbt or Snowflake Scripting, sets `SSIS_SCRIPTING_MODE` for Step 5 when Snowflake Scripting is chosen, and loads `../dbt-consolidation/SKILL.md` for dbt; then proceed to Step 4.
+- If it contains **SSIS** (`.dtsx`), follow [../convert/references/ssis-target.md](../convert/references/ssis-target.md) before any dbt question. It asks dbt or Snowflake Scripting, sets `SSIS_SCRIPTING_MODE` for Step 5 when Snowflake Scripting is chosen, and for dbt loads `../dbt-consolidation/SKILL.md` and then [../convert/references/ssis-dynamic-tables.md](../convert/references/ssis-dynamic-tables.md); then proceed to Step 4.
 - If it contains **Informatica** PowerCenter XML, ask the remaining ETL questions up front, in one sequence, before running the conversion:
     1. Conversion target, via `ask_user_question` (`multiSelect = false`):
        > "How should Informatica mappings be converted?
        > 1. **dbt**: each mapping becomes a dbt model orchestrated by Snowflake Tasks.
-       > 2. **Snowflake Scripting** (Preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Stabilization and deploy are skipped for this preview flavor."
+       > 2. **Snowflake Scripting** (Preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls."
        Do not label either option recommended.
-    2. If the answer is **dbt** and SSIS is absent or chose Snowflake Scripting, load `../dbt-consolidation/SKILL.md`. For Informatica with no dbt SSIS it asks one question: consolidate dbt projects and models by folder, or generate 1 project per mapping. Return here when complete. When SSIS also chose dbt, the SSIS bullet above loads `dbt-consolidation` once after both answers.
+    2. If the answer is **dbt** and SSIS is absent or chose Snowflake Scripting, load `../dbt-consolidation/SKILL.md`. For Informatica with no dbt SSIS it asks one question: consolidate dbt projects and models by folder, generate 1 project per mapping, or consolidate into a single dbt project. Return here when complete. When SSIS also chose dbt, the SSIS bullet above loads `dbt-consolidation` once after both answers.
     3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 5. Do **not** load `dbt-consolidation`.
 
     Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`.
@@ -124,9 +124,9 @@ If **no**, proceed to Step 5. `PBIT_PATH` remains unset; do not pass `--powerbi-
 
 ### Step 5: Convert
 
-Before running, tell the user what the conversion will cover. If `PBIT_PATH` was set, mention Power BI repointing. If `SCRIPTING_MODE` or `SSIS_SCRIPTING_MODE` was set, mention the Snowflake Scripting target and that stabilization and deploy are not part of that preview. The generated procedures and Task graph are under `snowflake/_etl/`.
+Before running, tell the user what the conversion will cover. If `PBIT_PATH` was set, mention Power BI repointing. If `SCRIPTING_MODE` or `SSIS_SCRIPTING_MODE` was set, mention the Snowflake Scripting target. The generated procedures and Task graph are under `snowflake/_etl/`.
 
-Always include `--json` so the agent can parse the result envelope. Start from the base command and append one flag per decision already recorded in the steps above — nothing else:
+Always include `--json` so the agent can parse the result envelope. Start from the base command and append one flag per decision already recorded in the steps above — nothing else. Launch it with `run_in_background=true`, or set the bash tool `timeout` to at least `900000` (15 minutes), then poll until the command finishes. The default 120 second timeout kills the process during the conversion engine's silent pause and a relaunch starts it over. Poll the same way as [convert Step 4](../convert/SKILL.md#step-4-run-conversion).
 
 ```bash
 scai code convert --json
@@ -137,10 +137,11 @@ scai code convert --json
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 3 (Informatica target is Snowflake Scripting) |
 | `--ssis-to-snowflake-scripting` | `SSIS_SCRIPTING_MODE` was set in Step 3 (SSIS target is Snowflake Scripting) |
 | `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt, or Informatica dbt) |
-| `--consolidate-as-single-dbt-project` | `CONSOLIDATE_AS_SINGLE_DBT_PROJECT` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt only, single-project choice) |
+| `--consolidate-as-single-dbt-project` | `CONSOLIDATE_AS_SINGLE_DBT_PROJECT` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt only or Informatica dbt only, single-project choice) |
+| `--materialize-as-dynamic-table` | `MATERIALIZE_AS_DYNAMIC_TABLE` was set by `../convert/references/ssis-dynamic-tables.md` (SSIS dbt only) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 4 |
 
-The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. The SSIS scripting flag and the SSIS dbt-consolidation flags come from the SSIS answer, so a scripting SSIS convert does not also pass a consolidation flag. `--consolidate-as-single-dbt-project` is exclusive with `--consolidate-dbt-projects` and with `--ssis-to-snowflake-scripting`: pass it only when the SSIS-only answer set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT`. Either platform's choice combines with `--powerbi-repointing` and with the other platform's choice. If none of the conditions hold, run the base command as-is.
+The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. `--consolidate-as-single-dbt-project` is exclusive with `--consolidate-dbt-projects` and with the scripting flag of the platform that chose the single-project layout. It combines with the other platform's scripting flag: an Informatica dbt option 3 still appends `--consolidate-as-single-dbt-project` alongside `--ssis-to-snowflake-scripting`, and an SSIS dbt option 3 still appends it alongside `--informatica-to-snowflake-scripting`. A platform on Snowflake Scripting does not also pass that platform's consolidation flag. Pass `--consolidate-as-single-dbt-project` when the SSIS-only or Informatica-only answer set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT`. `--materialize-as-dynamic-table` combines with either consolidation flag but never with `--ssis-to-snowflake-scripting`. Either platform's choice combines with `--powerbi-repointing` and with the other platform's choice. If none of the conditions hold, run the base command as-is.
 
 Substitute `<PBIT_PATH>` with the actual folder path you stored. Do not emit literal placeholder tokens to the shell.
 
@@ -157,7 +158,8 @@ For Power BI output paths and the CHECKPOINT addendum, see `../powerbi-repointin
 | `-x, --show-ewis` | Show detailed EWI breakdown |
 | `--overwrite-working-directory` | Overwrite output files in `snowflake/` and registry |
 | `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor. |
-| `--ssis-to-snowflake-scripting` | Convert SSIS data flows to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; stabilization and deploy are not part of this flow. |
+| `--ssis-to-snowflake-scripting` | Convert SSIS data flows to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. |
+| `--materialize-as-dynamic-table` | SSIS dbt only. When enabled, materializes OLE DB Destination models that are fully replaced as Snowflake `dynamic_table` rather than `incremental` models, and removes target-clearing statements. Defaults to false; see `../convert/references/ssis-dynamic-tables.md`. |
 
 For dbt consolidation options, see `../dbt-consolidation/SKILL.md`.
 For Power BI options, see `../powerbi-repointing/SKILL.md`.

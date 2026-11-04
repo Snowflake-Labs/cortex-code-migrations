@@ -1,68 +1,71 @@
 ---
 name: data_driven
 description: Produce test_cases rows for an existing step-based YAML stub from realistic source-database values. Triggers: data_driven, data-driven tests, real data test cases, query source for test values.
+tools: read, write, grep, glob, mcp__snowflake-migration-mcp__query_source
 license: Proprietary. See License-Skills for complete terms
 ---
 
-You produce **`test_cases:` rows** for the object in your prompt, using
-realistic values queried from the source database.
-
-> You are NOT writing a YAML file. The stub YAML already exists (created by `scai test seed`). Your job is to produce **just the `test_cases:` rows** that will be merged into the existing stub.
->
-> Each row is an array of literals in the object's parameter order. The step SQL's `{0}`, `{1}`, ... are filled from it, one case at a time, as dialect-correct SQL literals; you write plain YAML values and never escape them:
->
-> | YAML value | SQL Server | Snowflake | Redshift |
-> |---|---|---|---|
-> | `null` | `NULL` | `NULL` | `NULL` |
-> | `true` / `false` | `1` / `0` | `TRUE` / `FALSE` | `TRUE` / `FALSE` |
-> | `42` | `42` | `42` | `42` |
-> | `"hello"` | `'hello'` | `'hello'` | `'hello'` |
-> | `"it's"` | `'it''s'` | `'it''s'` | `'it''s'` |
->
-> A zero-argument object takes `[]`.
+You write the `test_cases:` rows for one object from realistic values in its source data. The YAML
+stub already exists; you write rows only.
 
 ## Inputs
 
-The prompt carries `object_name`, `signature`, `source_code`,
-`referenced_tables`, `source_connection`, and `project_dir`. A `split`
-of `A` or `B` means this is one half of a pair — write the matching
-tmp file below.
+`object_name`, `signature` (parameters in order), `source_code` (a path, or the SQL inline),
+`project_dir`, `referenced_tables`, and usually `key_samples`: rows of real key values that already pass
+the object's own predicates. A `cover` list means cover mode.
 
-## Instructions
+## Rows
 
-1. Write SQL queries to find valid parameter values from the referenced tables.
-2. Run each query with the `query_source` MCP tool: `query_source(sql="<SQL>")`.
-3. Build positional arrays matching the proc's parameter order. Use literals (`null`, numbers, strings) — no quoting; the runner formats them per dialect.
-4. Include rows that should return data **and** rows that return empty results (real cases the proc must handle).
-5. Skip a queried value the source statement cannot execute. If an unguarded `RIGHT`, `LEFT`, or `SUBSTRING` length is `LEN(arg) - N` or `LENGTH(arg) - N`, skip non-null strings for `arg` shorter than N.
+- Typical lookups and common parameter values, from `key_samples` first.
+- A key that exists can still return nothing when the object's other predicates on the path drop it
+  (an active-status filter, a current flag, a required child row in a `JOIN` / `CROSS APPLY`). A
+  lookup applies those predicates — the object's own `WHERE` / `JOIN`s, not a bare `SELECT DISTINCT`.
+  A bare `dbo.Table` runs in the connection's default database; spell it `${token}.dbo.Table`. With
+  testbed CSVs, prefer `branch_values` in that table's `testbed/fragments/branch_values.json`: these
+  are the rows the test sandbox is loaded with.
+- Edge data that exists: the oldest / newest records, the smallest / largest keys, the first / last
+  dates present — never values just outside the data's range.
+- Rows return data. At most two rows may expect nothing (a real not-found the object handles). A row
+  the engine rejects (an overflow, a conversion) is vacuous: it tests nothing. If an unguarded
+  `RIGHT`, `LEFT`, or `SUBSTRING` length is `LEN(arg) - N` or `LENGTH(arg) - N`, give `arg` no
+  non-null string shorter than N.
 
-When `split` is `A`, focus on cases that return data (valid lookups, common
-params). When it is `B`, focus on edge data (oldest / newest records,
-boundary dates from the actual table contents).
+## Work: four turns
 
-### Testbed Fallback (No Live Source Connection)
+1. `read` `source_code` (skip when it is inline).
+2. Only when `key_samples` cannot fill a row you need: one message with at most two bounded
+   `query_source(sql=...)` calls (`TOP 20` / `LIMIT 20`, tables spelled as in `referenced_tables`,
+   `${token}.schema.table`). Only when a query returns an error: `grep` the table's testbed CSV
+   (`<project_dir>/artifacts/**/testbed/*.<table>.csv`) with a match limit, or `read` it with
+   `limit: 20`. Never read a whole testbed CSV into context.
+3. `write` the file (Output below).
+4. Reply with the same YAML and stop.
 
-When `query_source` is unavailable (e.g. Teradata migrations without a live connection):
+No todo list, no second round of lookups, no re-reading the file you wrote. Write 6–10 rows.
 
-1. Read testbed CSVs at `<project_dir>/testbed/<SCHEMA>/<TABLE>.csv` for each referenced table.
-2. Derive realistic parameter values from the CSV data (dates, IDs, codes that match the proc's input columns).
-3. Check `<project_dir>/specifications/data/<SCHEMA>/<TABLE>.yaml` for `branch_values` entries — these are curated values that exercise specific code branches. Prefer them over arbitrary CSV rows.
+## Cover mode
+
+`cover` lists rows of yours that came back vacuous, each with its `reason`; `count` says how many to
+write. Write exactly `count` new rows by the rules above that avoid the stated reason, never repeating a
+listed row, to `<project_dir>/.scai/tmp/<object_name>_data_driven_cover.yml`.
 
 ## Output
 
-Write your rows to `<project_dir>/.scai/tmp/<object_name>_data_driven.yml`,
-or `_data_driven_a.yml` / `_data_driven_b.yml` when `split` is set.
-
-The file must contain only valid YAML starting with `test_cases:`. Also print the rows to stdout as a backup.
+Write `<project_dir>/.scai/tmp/<object_name>_data_driven.yml` once, containing only YAML that starts with
+`test_cases:`, then reply with the same YAML and stop.
 
 ```yaml
 test_cases:
-  - [42, 19.99]           # valid customer, typical price
-  - [999, 0.01]           # valid customer, minimum price (boundary in real data)
-  - [12345, null]         # valid customer, NULL price (real edge from DB)
+  - [42, 19.99]           # expects rows: active customer 42, typical price
+  - [999, 0.01]           # expects rows: active customer 999, minimum price in the data
+  - [12345, null]         # expects rows: customer 12345 has a NULL price on file
 ```
 
-Each row is a JSON-ish array of literals: `null` for SQL NULL, unquoted numbers, strings in double-quotes if they contain colons / special chars (otherwise unquoted is fine in YAML).
+One literal per parameter, in signature order: `null`, bare numbers, `true` / `false`, strings and
+dates in double quotes. The step SQL's `{0}`, `{1}`, ... are filled from the row, one case at a time,
+as dialect-correct SQL literals (`true` becomes `1` on SQL Server, `"it's"` becomes `'it''s'`): write
+plain YAML values and never escape them. A zero-argument object takes `[]`. End each row with
+`# expects rows: <why>` or `# expects empty: <why>`.
 
 ## Shell commands on Windows
 

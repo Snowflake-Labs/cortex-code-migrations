@@ -29,15 +29,21 @@ positional.
 
 ## Lease
 
-Each mutating phase (`mine`, `enrich`, `compile`, `generate`) waits up to 30s for
-a lock. If you get `table pipeline busy` after that wait, retry.
+Each scoped phase holds this table for the call only, so other tables run at the
+same time. The testbed's own locks queue inside the call. `table pipeline busy`
+means another call holds this table or those locks stayed busy for the whole
+call; retry the phase.
 
 ## Steps
 
 1. Call `testbed(phase="mine", objectId=<id>)` to initialize
    the table and write a fresh `<object-artifacts>/testbed/unsolved-view.json`.
-   The first table of a wave to mine initializes every converted table of that
-   wave, so a later table's first mine may run no `init`.
+   The first table of a wave to mine initializes, lists and validates every
+   converted table of that wave at once, then generates, in the background, the
+   CSVs of the tables with nothing to enrich whose parents need nothing either.
+   A later table's first mine reads the views already written and runs nothing.
+   Each scoped enrich that ends ready does the same for the wave's tables whose
+   enrichment, and whose parents' CSVs, are now done.
    If the message still says `table pipeline busy`, retry.
 2. Read the fresh scoped unsolved view. Do not reopen a constraint that is not listed.
    Call `testbed(phase="validate", objectId=<id>)` and read
@@ -54,7 +60,7 @@ a lock. If you get `table pipeline busy` after that wait, retry.
    A blocker that needs a human or a code change is terminal: return `escalate`
    with concrete choices. Do not call `release`. `table pipeline busy` on
    enrich/compile/generate after the driver's wait is also `busy` — another
-   walker held the lease for the full wait budget.
+   call held this table, or the testbed's locks stayed busy for the whole call.
 4. After enrich returns ready — or enrich was skipped in step 2 — call scoped
    validate once more and require `ready: true`. Then call scoped compile:
 
@@ -71,19 +77,21 @@ a lock. If you get `table pipeline busy` after that wait, retry.
    Never set `ignore_readiness`. The first table establishes the default seed;
    later tables inherit the manifest seed and treat earlier CSVs as immutable
    FK parents.
-6. Read `testbed/generate/summary-view.json` and the manifest it names. Require
+6. Read `<object-artifacts>/testbed/generate-summary-view.json` and the manifest it names. Require
    this table to have a manifest CSV entry. A fresh run may write one CSV; a
    resumed run may write zero because the exact table CSV is already frozen.
-   More than one newly written table is an ownership violation: escalate rather
-   than loading another walker's data.
+   A view with `"source": "wave"` is from the wave's first mine and counts only
+   this table. More than one newly written table is an ownership violation:
+   escalate rather than loading another walker's data.
 
 A child is not offered until every parent has a
-loaded CSV. Independent roots may author fragments at the same time; they only
-queue on the lease during mine/enrich/compile/generate.
+loaded CSV. Independent roots run their phases at the same time; generates of
+tables in one cluster take turns inside scai.
 
 ## Files
 
 - `.scai/testbed/state.bin` — opaque CLI state. Never read or edit it.
-- `testbed/generate/summary-view.json` and the manifest it names — confirm
-  **this** table's CSV entry only.
-- `.scai/testbed/run.json` — derived progress ledger.
+- `<CUR files.artifacts.path>/testbed/generate-summary-view.json` and the manifest
+  it names — confirm **this** table's CSV entry only.
+- `<CUR files.artifacts.path>/testbed/run.json` — this table's derived progress
+  ledger (critic budgets, PENDING records). Other tables keep their own.

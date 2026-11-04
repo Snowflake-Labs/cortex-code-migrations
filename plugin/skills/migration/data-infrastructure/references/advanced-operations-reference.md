@@ -53,9 +53,11 @@ Remove with `DELETE FROM … RATE_LIMIT WHERE …` or disable with `ENABLED = FA
 
 ## Preflight workflows (bounded migration dry-run)
 
-**When the customer asks:** test connectivity and pipeline end-to-end on a small slice before a full migration; validate types/partitioning without writing to production target schemas.
+**When the customer asks:** test connectivity and pipeline end-to-end on a small slice before a full migration; check extraction and loads without writing to production target schemas.
 
-**What it is:** A **data migration** workflow flag — not validation, not `scai data doctor`. Each table runs as **one partition**; targets land in transient schema `PREFLIGHT_<workflowId>` instead of the configured target schema.
+**What it is:** A **data migration** workflow flag — not validation, not `scai data doctor`. Each table runs as **one partition**, loaded into a transient copy of its target, `<target_db>.PREFLIGHT_<workflowId>.<DB>_<SCHEMA>_<TABLE>` (uppercase, other characters become `_`). The copy is created with `CREATE TRANSIENT TABLE … LIKE <real target>`, so **the real native target table must already exist**: unlike a real load, a preflight cannot create a missing target from the source schema, and that table's `Create preflight schema/table` task fails.
+
+**What it does not prove:** full-load duration, throughput, cost, or source load; that the other partitions load; that writes to the real targets succeed; that the data is correct (that is data validation). A table that fits in one partition (most small tables under auto sizing) is loaded **in full**, so its result is not a sample. A multi-partition table runs one partition. A range-partitioned table takes the first real bucket by position, which can hold zero rows. A `partitionByDate` table takes the first bucket with rows, and falls back to that same positional bucket only when every bucket is empty. Partition planning still reads each whole source table.
 
 **Not the same as:**
 
@@ -67,16 +69,31 @@ Remove with `DELETE FROM … RATE_LIMIT WHERE …` or disable with `ENABLED = FA
 
 **Agent guidance:**
 
-1. Offer preflight when the user wants a **pipeline smoke test**, not when they only need row sampling to production (use **Preliminary** + `whereClauseCriteria` instead).
-2. Set in workflow YAML at top level (Step 2a edit after `migrate_data(mode="setup")`):
+1. Offer preflight when the user wants a **pipeline smoke test** before the **first** full load of these tables, not when they only need row sampling to production (use **Preliminary** + `whereClauseCriteria` instead). Do not offer it between a full load and later `checksum` / `watermark` runs of the same tables: a later incremental workflow reuses the most recent preprocessed metadata for each source table, which would be the preflight's single partition. If the user asks for one there, explain that before setting anything. **Wait for the user to decide.**
+2. Confirm every native target in the workflow is deployed. `migrate_data(mode="run")` refuses with `missing_target_tables` when it finds undeployed native targets (outside sandbox runs), but it skips the check when the probe cannot run. On a refusal, deploy those tables first or remove them from `tables`.
+3. Ask whether to keep the transient schema for inspection. **Wait for the user's answer.** Then set at the top level of the workflow YAML (Step 2a edit after `migrate_data(mode="setup")`):
 
 ```yaml
 preflight: true
 preflightKeepSchema: false   # true = leave PREFLIGHT_<id> for manual inspection
 ```
 
-3. Run with normal `migrate_data(mode="run", workflow_path=...)`. Inspect transient schema objects; production target schemas are not used.
-4. For a real migration, turn `preflight` off (or generate a new workflow without it) before production load.
+4. Run with normal `migrate_data(mode="run", workflow_path=...)` and track it with `job_status`. Production target tables are not written. A table that fails in `Create preflight schema/table` points at a missing or inaccessible real target.
+5. Report per table which completed and which failed, then tell the user:
+
+   > This preflight ran one partition per table into transient copies of your targets. It shows that path works; it doesn't show how long the full load takes or that the rest of the data loads. Small tables were loaded in full, and a table can complete with zero rows.
+
+6. With `preflightKeepSchema: true`, give the user the schema in each target database, an inspection query, and the drop to run when done, then tell the user:
+
+   > The `PREFLIGHT_<workflowId>` schema stays until you drop it, and its tables keep using storage.
+
+   ```sql
+   SHOW TABLES IN SCHEMA <target_db>.PREFLIGHT_<workflowId>;
+   DROP SCHEMA IF EXISTS <target_db>.PREFLIGHT_<workflowId> CASCADE;   -- once per target database
+   ```
+
+   Without it, the Orchestrator drops the schema in every target database after all other tasks finish, on success or failure. A leftover `PREFLIGHT_<workflowId>` schema (no Orchestrator ran the cleanup task) is the user's to drop. Staged files follow `cleanUpTransientResources`, not the schema drop.
+7. For the real migration, turn `preflight` off (or generate a new workflow without it) before the production load, and keep the first full load on `synchronization.strategy: none`.
 
 See [workflow-config-reference.md](../../migrate-objects/actions/data-migration/references/workflow-config-reference.md#preflight-bounded-dry-run).
 
@@ -123,7 +140,7 @@ validate_data(mode="revalidate", workflow_name="<parentWorkflowName>")
 validate_data(mode="revalidate", workflow_name="<parentWorkflowName>", recheck_schema=true)
 ```
 
-See [validate_tables.md](../../validate-objects/actions/validate_tables.md) Step 5.G and [background-monitoring.md](../../validate-objects/actions/references/background-monitoring.md).
+See [validation report reference, 5.G](../../validate-objects/actions/references/validation-report-reference.md#5g--offer-re-validation-when-data-mismatches-remain) and [background-monitoring.md](../../validate-objects/actions/references/background-monitoring.md).
 
 CLI equivalent: `scai data validate revalidate <WORKFLOW_NAME>` (add `--recheck-schema` to re-check schema for schema-failed tables).
 

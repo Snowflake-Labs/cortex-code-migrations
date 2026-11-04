@@ -49,7 +49,7 @@ an idle hour it only stops the services if the orchestrator spec has the suspend
 
 So, when the session stops on a question with no wave in flight, and always before an overnight or unattended gap:
 
-1. Run the in-flight check in Step 1. If a wave is still loading, leave it running (or abort it on purpose with
+1. Run the in-flight check in Step 1. If a wave is still loading, leave it running (or cancel it on purpose with
    `force=true`).
 2. Otherwise offer `data_infrastructure(mode="down")`, and resume with `data_infrastructure(mode="up")` when the
    user comes back.
@@ -81,7 +81,11 @@ If any rows return, **abort teardown** and report:
 > Teardown skipped — workflow `<id>` still has `<N>` `<status>` task(s). Wait for completion (or cancel via the troubleshooting reference) before suspending.
 
 If a job is running only on this machine and you intend to stop it anyway, pass
-`data_infrastructure(mode="down", force=true)`.
+`data_infrastructure(mode="down", force=true)`. It first cancels each running job's workflow in Snowflake and
+ends its attempt (the payload lists them in `cancelled_jobs`), so the next `migrate_data` / `validate_data` run
+starts a new job. When a cancel fails, or a job is still creating its workflow, it stops no process and
+returns `refused` (one reason per job left running) next to the `cancelled_jobs` it already ended, which stay
+ended. Tell the user both, then retry once the refused jobs are resolved.
 
 ---
 

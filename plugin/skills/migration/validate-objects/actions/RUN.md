@@ -23,8 +23,8 @@ Do not call `data_infrastructure`. Do not arm Monitor. Do not return `waiting`. 
 
 The machine reads live `DATA_VALIDATION.TABLE_PROGRESS_DETAIL` — there is no registry stamp.
 
-- **Completed** → `transition_status(status="advance", task="validateData", outcome="completed", where=<batch filter>)` so `TASK_EVENTS` get an `advanced` row — do not leave completion to `next_task` alone. The server refuses it unless the job oracle confirms.
-- **Failed** → do not stamp (only a completed advance is oracle-confirmed for `validateData`).
+- **Completed** → `transition_status(status="advance", task="validateData", outcome="completed", where=<batch filter>)` so `TASK_EVENTS` get an `advanced` row — do not leave completion to `next_task` alone. The server refuses it unless the job's status source confirms.
+- **Failed** → do not stamp (only a completed advance is confirmed by the status source for `validateData`).
 
 Then `migration_status(mode="next_task")`.
 
@@ -51,6 +51,11 @@ call `data_infrastructure` and do not arm Monitor; the response `status` is the
 result, stamped as in §2. Do not pass `direct=false`: it is refused, since no
 orchestrator runs for this project. Re-validation needs an orchestrator too: on `direct`,
 re-run `validate_data(mode="run")` on the failed tables instead of `revalidate`.
+
+A direct run of more than 25 tables returns `status="running"` with a `job_id`
+before `scai` finishes, so the call stays inside the client's timeout. Do not
+re-dispatch it, do not run `scai` from a shell and do not arm Monitor: poll
+`migration_status(mode="next_task")` until its tables leave `in_progress`.
 
 If the response has `status="started"` and a `monitor` block, you are on the
 orchestrated path: infrastructure must already be up via `data_infrastructure(mode="up")`.

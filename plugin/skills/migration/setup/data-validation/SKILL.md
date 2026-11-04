@@ -43,7 +43,7 @@ ALTER SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE RESUME;
 
 Wait 30-60s and re-check until status shows `READY`.
 
-This completes shared infrastructure. If **row validation (L3)** will run and the source is **not** Snowflake, load [./l3-pushdown/SKILL.md](./l3-pushdown/SKILL.md) next. If data migration already used object storage + an external stage, **reuse it and skip the bucket question**. Otherwise **say using a bucket is faster**, ask whether they have one, **wait** if they need time to get one, help create an external stage when they do, and continue without a bucket only if they choose that. Do not say that skipping a bucket is slow. Never say strategy enum names (`regular`, …) to the user. Snowflake→Snowflake skips that skill (in-warehouse L3).
+This completes shared infrastructure. If **row validation (L3)** will run and the source is **not** Snowflake, load [./l3-pushdown/SKILL.md](./l3-pushdown/SKILL.md) next. If data migration already used object storage + an external stage, **reuse it and skip the bucket question**. On a small default run (the user chose the defaults, or the placement is `direct`), continue without a bucket and skip the question too. Otherwise **say using a bucket is faster**, ask whether they have one, **wait** if they need time to get one, help create an external stage when they do, and continue without a bucket only if they choose that. Do not say that skipping a bucket is slow. Never say strategy enum names (`regular`, …) to the user. Snowflake→Snowflake skips that skill (in-warehouse L3).
 
 The actual validation is started later by the `validate-objects` skill via:
 

@@ -163,7 +163,7 @@ plugin_ref() {
 ref_channel() {
   case "$1" in
     ""|main) echo stable ;;
-    preview|v[0-9]*.[0-9]*.[0-9]*-Pr.*) echo preview ;;
+    preview|v[0-9]*.[0-9]*.[0-9]*-Pr|v[0-9]*.[0-9]*.[0-9]*-Pr.*) echo preview ;;
     v[0-9]*) if printf '%s\n' "$1" | grep -qxE 'v[0-9]+\.[0-9]+\.[0-9]+'; then echo stable; fi ;;
   esac
 }
@@ -206,7 +206,7 @@ fi
 # The plugin pin ({"plugin": {"version": "X"}}) and the scai `channel` (a top-level
 # string in the flat file scai writes) are read without python3. Only a version counts.
 PLUGIN_VERSION_PIN="$(tr -d '\r\n' 2>/dev/null < "$MIGRATION_CONFIG" | sed -n 's/.*"plugin"[[:space:]]*:[[:space:]]*{[^}]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
-if ! printf '%s\n' "$PLUGIN_VERSION_PIN" | grep -qxE '[0-9]+(\.[0-9]+)*(-Pr\.[0-9]+)?'; then PLUGIN_VERSION_PIN=""; fi
+if ! printf '%s\n' "$PLUGIN_VERSION_PIN" | grep -qxE '[0-9]+(\.[0-9]+)*(-Pr(\.[0-9]+)?)?'; then PLUGIN_VERSION_PIN=""; fi
 [ -n "$PLUGIN_VERSION_PIN" ] && log "Config pins plugin.version=$PLUGIN_VERSION_PIN"
 SETTINGS_CHANNEL="$(tr -d '\r\n' 2>/dev/null < "$SCAI_SETTINGS" | sed -n 's/.*"channel"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
 
@@ -704,20 +704,25 @@ else
   # An alpha branch (no channel) follows its own head. A pin installs its version tag.
   plugin_branch="$PLUGIN_REF"; pin=""
   if [ -n "$plugin_channel" ]; then plugin_branch="$(channel_branch "$SCAI_CHANNEL")"; pin="$PLUGIN_VERSION_PIN"; fi
-  why=""
+  why=""; rejected=""
   if [ -n "$pin" ]; then
     published="$pin"; install_ref="v$pin"; why="pinned"
   else
     published="$(curl -fsSL --max-time 15 "https://raw.githubusercontent.com/$PLUGIN_REPO/$plugin_branch/plugin/VERSION" 2>/dev/null | tr -d '[:space:]' || true)"
     # A proxy or captive portal can answer with a page of its own; only a
-    # version (X.Y.Z or X.Y.Z-Pr.N) counts.
-    if ! printf '%s\n' "$published" | grep -qxE '[0-9]+(\.[0-9]+)*(-Pr\.[0-9]+)?'; then published=""; fi
+    # version (X.Y.Z, X.Y.Z-Pr or X.Y.Z-Pr.N) counts.
+    if ! printf '%s\n' "$published" | grep -qxE '[0-9]+(\.[0-9]+)*(-Pr(\.[0-9]+)?)?'; then
+      [ -n "$published" ] && rejected="$(printf '%s' "$published" | cut -c1-60)"
+      published=""
+    fi
     install_ref="$plugin_branch"
     # A channel switch installs the new channel's latest, also a lower version (as scai).
     # Compare plugin branches: dev and preview share the preview branch.
     if [ -n "$plugin_channel" ] && [ "$(channel_branch "$plugin_channel")" != "$plugin_branch" ]; then why="channel $plugin_channel -> $SCAI_CHANNEL"; fi
   fi
-  if [ -z "$published" ]; then
+  if [ -n "$rejected" ]; then
+    log "WARNING: the published $PLUGIN_NAME VERSION '$rejected' (branch $plugin_branch) is not a plugin version; not updating"
+  elif [ -z "$published" ]; then
     log "Could not fetch the published $PLUGIN_NAME VERSION (branch $plugin_branch)"
   elif [ "$published" = "$installed" ] || { [ -z "$why" ] && ! version_gt "$published" "$installed"; }; then
     log "$PLUGIN_NAME plugin up to date (v$installed, branch $plugin_branch) ($(( SECONDS - start ))s)"

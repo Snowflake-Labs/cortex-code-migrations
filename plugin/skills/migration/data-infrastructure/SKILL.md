@@ -10,22 +10,37 @@ license: Proprietary. See License-Skills for complete terms
 `<metadata_database>` below is `.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
 overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
 project's.
+`scai` commands you run from the project's directory read the same pin (an exported
+`CUSTOM_SNOWCONVERT_DATABASE` still wins), so a custom metadata database is supported: never tell the user it
+must be `SNOWCONVERT_AI`. Repointing a set-up project needs the new database to exist, or
+`configure(recreate_metadata_database=true)`.
+
+## Command reference
+
+`progress_setup` sends this block with `setupDataInfrastructure` as `next_skill_commands`.
+<!-- next-skill-commands:begin -->
+After the Step 0 placement answers, bring the shared infrastructure up once; `up` writes the worker
+config that completes `setupDataInfrastructure`. Setup reaches this step only after the user chose to
+migrate or validate table data, so never skip or disable it.
+- SPCS orchestrator: `data_infrastructure(mode="up", compute_pool="<POOL>")`
+- Local orchestrator (only when the user chose laptop / PoC / local): `data_infrastructure(mode="up", compute_pool="")`
+- No local worker (SPCS worker, Iceberg, Snowflake source): add `start_worker=false` to the `up` call
+<!-- next-skill-commands:end -->
 
 ## Overview — Tell the User
 
-Before starting any configuration, tell the user verbatim:
+Before starting any configuration, tell the user briefly, in your own words (a few sentences, not a quoted block), what Snowflake's Data Migration and Validation Framework is:
 
-> Snowflake's Data Migration and Validation Framework is a fault-tolerant, scalable system for Snowflake Migrations. It uses a two-component architecture: an **Orchestrator** that runs inside your Snowflake account (on Snowpark Container Services) and breaks migration work into parallel tasks, and one or more **Workers** that run in an environment of your choice, connect and read data from your source system, and upload it to your Snowflake account.
+- A fault-tolerant, scalable two-part system: an **Orchestrator** that splits the work into parallel tasks, and one or more **Workers** that read from the source and upload to Snowflake.
+- **Two independent placement choices** in Step 0: the orchestrator on **SPCS** (a Snowpark Container Services compute pool in their account, recommended for real migrations) or **local** (this machine, laptop / PoC only); each worker on **SPCS** (recommended whenever the source is reachable from Snowflake), their machine, other VMs or Kubernetes.
+- They stay in control: which tables, partitioning, incremental or full loads, worker count, row filters and column remaps, stop and resume without losing progress. Nothing runs until they approve the configuration.
+- The same infrastructure runs validation (schema, metrics and row level).
 
-> You make **two independent placement choices** in Step 0: where the **orchestrator** runs — **SPCS** (on a Snowpark Container Services compute pool in the customer Snowflake account — **recommended** for real migrations) or **local** (on this machine, no compute pool — laptop / PoC only) — and where each **worker** runs — **SPCS** (**recommended** whenever the source is reachable from the Snowflake account), **your machine**, other VMs, or Kubernetes. The two don't have to match; nothing about compute pools matters until you put the orchestrator or a worker on SPCS. Ask first, **recommend SPCS** for each when they have not chosen, and wait for confirmation. Do not start infrastructure until they confirm.
+Mention the **metadata storage mode** only on an account without Hybrid Table support: the orchestrator falls back to standard/`TRANSIENT` metadata tables, which is correct but lowers task-queue throughput, so start with fewer workers ([Metadata storage mode reference](./references/metadata-storage-mode-reference.md); not the same as L3 "hybrid" row validation).
 
-> **You are in full control of what gets migrated and how.** You decide which tables to include, how they are partitioned for extraction, whether to use incremental synchronization or full loads, and how many workers run in parallel. You can filter rows, remap column names and types, and stop or resume the process at any point without losing progress. Nothing runs until you review and approve the configuration.
->
-> **The same infrastructure is used for validation.** You choose what level of validation to run: **schema validation**, **metrics validation**, and **row-level validation**.
+Placement is the user's choice: ask first, **recommend SPCS** for each when they have not chosen, and wait for their confirmation. Do not start infrastructure until they confirm.
 
-> **Metadata storage mode (trial accounts):** On Snowflake accounts **without Hybrid Table** support, the orchestrator falls back to standard/`TRANSIENT` metadata tables automatically. That path preserves correctness but **reduces task-queue throughput under contention** and effectively **limits how many workers you should run in parallel** — start with fewer workers and scale up carefully. This is **not** the same as L3 “hybrid” row validation. See [Metadata storage mode reference](./references/metadata-storage-mode-reference.md).
-
-> **Always use the official tooling for data movement and validation.** Route table migration through `migrate_data` and validation through `validate_data`. Do not suggest ad-hoc extract/copy/compare scripts — the DMVF orchestrator and workers handle partitioning, loading, and multi-level validation.
+**Always use the official tooling for data movement and validation.** Route table migration through `migrate_data` and validation through `validate_data`. Do not suggest ad-hoc extract/copy/compare scripts.
 
 > **Supported sources**: SQL Server, Azure Synapse, Redshift, Oracle, Teradata, PostgreSQL, BigQuery, Snowflake (validation only)
 > **Supported target**: Snowflake
@@ -88,7 +103,7 @@ not mean it is **running**. Completion is durable; "up" is ephemeral.
 
 **Pool shape check before `up` (SPCS or hybrid):** under the same placements as the budget check, run `DESCRIBE COMPUTE POOL <COMPUTE_POOL>;` on the pool saved in `.scai/settings/cloud-migration.yaml`. When its `min_nodes` is more than 1, make the offer from Question 0's [pool shape check](#question-0-compute-pool-spcs) before `up`: explain that each of those nodes bills even when idle, offer the `ALTER COMPUTE POOL … SET MIN_NODES = 1` there, and run it only after a yes, suspending our services first when they are running. If the user already declined it in this session, just name the floor. A no means continue to `up`.
 
-Tell the user verbatim: "Data infrastructure already configured — bringing the shared orchestrator + worker back up (this also runs `scai data doctor` to confirm nothing has drifted)." Say it out loud rather than acting silently, because this runs live checks against Snowflake and the source. Then call a bare `data_infrastructure(mode="up")`: with `compute_pool` and `start_worker` omitted, `up` reuses the placement recorded in `.scai/config/plugin.yml`. A recorded `data_orchestrator_placement: local` stays local even when a pool is saved, and `spcs` reuses the saved pool. A recorded `data_worker_placement: local` starts the local worker, and `spcs` or `none` starts none. Pass `compute_pool` or `start_worker` only to change the placement; an explicit value always wins. If the placement is not recorded, ask Step 0 instead of guessing. `up` generates and applies the selected worker configuration, runs the [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastructure-no-workflow-yaml) gate (iterate until it stops reporting `doctor_failures`), and only then starts/resumes the orchestrator and (unless this project runs no local worker) the worker; relay its `cost_reminder`. Doctor still creates the local orchestrator Python venv and pip-installs the orchestrator when that service runs on SPCS; the orchestrator checks run from that venv ([Level 2](./references/data-doctor-reference.md#level-2-infrastructure-gate-automatic-during-up)). **Also state the placement it resolved** — the response carries the placement it just recorded: `orchestrator_placement` (`local` = on this machine, no compute pool; `spcs` = SPCS compute pool) and `worker_placement` (`local` = a worker on this machine; `spcs` = the SPCS worker recorded in 0.c; `none` = no worker run from here: Iceberg / externally-managed, or a Snowflake source). Check it matches what `plugin.yml` recorded before the call; if it does not, the arguments were wrong, so re-run `up` with the right ones rather than relaying the change. If `orchestrator_placement` is `local` and they meant SPCS, they can switch by re-running with `compute_pool="<POOL>"`. Return to the caller without re-prompting. Only run a bare Level 1 Data Doctor instead when you specifically need a config-drift check *without* bringing infrastructure up.
+Tell the user, briefly and in your own words, that data infrastructure is already configured and you are bringing the shared orchestrator + worker back up, which also runs `scai data doctor` to check nothing has drifted. Say it rather than acting silently, because this runs live checks against Snowflake and the source. Then call a bare `data_infrastructure(mode="up")`: with `compute_pool` and `start_worker` omitted, `up` reuses the placement recorded in `.scai/config/plugin.yml`. A recorded `data_orchestrator_placement: local` stays local even when a pool is saved, and `spcs` reuses the saved pool. A recorded `data_worker_placement: local` starts the local worker, and `spcs` or `none` starts none. Pass `compute_pool` or `start_worker` only to change the placement; an explicit value always wins. If the placement is not recorded, ask Step 0 instead of guessing. `up` generates and applies the selected worker configuration, runs the [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastructure-no-workflow-yaml) gate (iterate until it stops reporting `doctor_failures`), and only then starts/resumes the orchestrator and (unless this project runs no local worker) the worker; relay its `cost_reminder`. Doctor still creates the local orchestrator Python venv and pip-installs the orchestrator when that service runs on SPCS; the orchestrator checks run from that venv ([Level 2](./references/data-doctor-reference.md#level-2-infrastructure-gate-automatic-during-up)). **Also state the placement it resolved** — the response carries the placement it just recorded: `orchestrator_placement` (`local` = on this machine, no compute pool; `spcs` = SPCS compute pool) and `worker_placement` (`local` = a worker on this machine; `spcs` = the SPCS worker recorded in 0.c; `none` = no worker run from here: Iceberg / externally-managed, or a Snowflake source). Check it matches what `plugin.yml` recorded before the call; if it does not, the arguments were wrong, so re-run `up` with the right ones rather than relaying the change. If `orchestrator_placement` is `local` and they meant SPCS, they can switch by re-running with `compute_pool="<POOL>"`. Return to the caller without re-prompting. Only run a bare Level 1 Data Doctor instead when you specifically need a config-drift check *without* bringing infrastructure up.
 
 Otherwise, proceed through the steps below.
 
@@ -142,7 +157,7 @@ Say what you found in one line before the card, e.g. "The 12 tables to migrate h
 
 On a small source, recommend Direct in your own words:
 
-> This source is small (`<MB>` MB, `<ROWS>` rows), so I recommend **Direct**: `migrate_data` and `validate_data` move and check the data straight from this session, with no orchestrator, no worker and no compute pool. A direct run is not fault-tolerant (it stops if this session ends, and a re-run starts the table again) and its validation skips metrics, which is fine at this size. Pick SPCS instead if the source will grow or you want the run to survive this session.
+> This source is small (`<MB>` MB, `<ROWS>` rows), so I recommend **Direct**: `migrate_data` and `validate_data` move and check the data straight from this session, with no orchestrator, no worker and no compute pool. A direct run is not fault-tolerant (it stops if this session ends, and a re-run starts the table again) and its validation checks each table's schema and row count but skips per-column metrics, which is fine at this size. Pick SPCS instead if the source will grow or you want the run to survive this session.
 
 | Answer | Next step |
 |--------|-----------|
@@ -201,6 +216,21 @@ If they are unsure whether Snowflake can reach the source, ask where the source 
 An SPCS worker needs a compute pool, so choosing it means **Question 0** runs even when the orchestrator is local; the orchestrator and worker can share the same pool.
 
 Record the answer; it selects the worker sub-skill in **Question 3**. For an **SPCS** worker, also record it with `configure(data_worker_placement="spcs")`, before the first `up`: `up` never deploys an SPCS worker itself, so without this record a later bare `up` would start a local worker, and `down` would not suspend the SPCS worker.
+
+#### Is the source on-premise or in a private network?
+
+When the source is on-premise or private, reach it with a **Data Connectivity Proxy (DCP)** tunnel.
+The customer runs one small container that opens a connection **outward** — 1 vCPU, 512 MB, outbound
+443 only — and Snowflake reaches the source through it. That is the least invasive option for the
+customer's network team, and it makes an **SPCS** worker possible for a source that would otherwise
+have to be read from a host inside the customer's network.
+
+**Do not ask the customer to open inbound access to the source, and do not offer it as an option.**
+There are two paths only: a DCP tunnel, or worker placement on a host that already reaches the
+source.
+
+Record whether the source is private; it constrains the placement answer above. Nothing is provisioned
+here — the tunnel is set up from **Question 3**, on the SPCS branch.
 
 ## Worker Deployment Decisions
 
@@ -267,7 +297,23 @@ When `configure()` reports `last_used_snowflake_role:`, offer that role first as
 |-----------|--------|
 | **Role has the required privileges** | Continue to Question 2. |
 | **Role needs grants** | Use the [grant procedures](#grant-procedures) when the metadata database has them, else the standard grants below. Run them on behalf of the user only when the connection's role can; otherwise show them to run with an admin role. Then continue. |
-| **DATA_MIGRATION_SERVICE already exists (created by another role)** | The executing role also needs OPERATE and MONITOR on the service, which the grant procedures do not cover. Run the extended grants below, then continue. **Do not DROP it** to pin a different compute pool unless the user confirmed step 3 above. |
+| **DATA_MIGRATION_SERVICE already exists (created by another role)** | The executing role also needs OPERATE and MONITOR on the service, which the grant procedures do not cover. [Check what it already holds](#checking-what-a-role-holds) first, and ask only for the extended grants it lacks, then continue. **Do not DROP it** to pin a different compute pool unless the user confirmed step 3 above. |
+
+#### Checking what a role holds
+
+`SHOW GRANTS TO ROLE <your_role>` lists only grants made to that role itself, not those it inherits through a role granted to it (a shared lab or team role), so a missing row there proves nothing. Check from the object's side instead, with `<your_role>` as the session's role: `SHOW GRANTS ON SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE;` (or `ON SCHEMA`, `ON TABLE`, `ON PROCEDURE`, `ON STAGE`), then `SELECT IS_ROLE_IN_SESSION('<grantee_name>');` for each grantee holding the privilege. `TRUE` means your role has it, directly or inherited. Name each privilege still missing before asking for a grant; when none is, say so and do not send the user to an admin.
+
+A `the deployed service spec is empty` or `cannot read the deployed service spec` error from `up`, or a `SERVICE_SPEC_HIDDEN` warning, is not a missing grant. Snowflake shows a service's spec only to its owner, so no grant short of ownership fixes it. Only the owner can upgrade the service, but OPERATE is enough to resume it as deployed: a current `scai` does that by itself, and with an older one run `ALTER SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE RESUME;`, then `up` again.
+
+#### Objects another role owns
+
+When a setup, schema install or upgrade step fails on an object in `<metadata_database>` that a role outside your session owns (`Insufficient privileges` on a `CREATE OR REPLACE`, or another user's personal role as its owner), no grant your role can make fixes it. Before you offer a way forward:
+
+1. **Scan every object, not only the one in the error.** List the owners in each schema the setup installs (`DATA_MIGRATION`, `DATA_VALIDATION`, `COMMON`, and `VALIDATION` when testing is on) from `<metadata_database>.INFORMATION_SCHEMA`: `TABLES` (`TABLE_OWNER`, views included), `PROCEDURES` (`PROCEDURE_OWNER`, with `ARGUMENT_SIGNATURE`), `FUNCTIONS`, `FILE_FORMATS`, `STAGES` and `SEQUENCES`. Run `SELECT IS_ROLE_IN_SESSION('<owner>');` for each distinct owner; every `FALSE` is blocked. Report the count and names from the result, never an estimate. `INFORMATION_SCHEMA` shows only objects your role holds some privilege on, so say an object may be missing from the list.
+2. **Check your role's privileges through inheritance**, as in [Checking what a role holds](#checking-what-a-role-holds). Never say the role lacks `USAGE` from `SHOW GRANTS TO ROLE` alone.
+3. **Check that a `GRANT OWNERSHIP` can succeed before you offer one.** It succeeds only for a role that owns the object (or inherits its owner), holds `MANAGE GRANTS` (`SHOW GRANTS ON ACCOUNT;`, then `IS_ROLE_IN_SESSION` for each grantee of it), or owns the schema when the schema is managed access (`SHOW SCHEMAS LIKE '<schema>' IN DATABASE <metadata_database>;`, `options` column). When none of these holds for any role the user has, it is an admin's step, not one the user can run. Never call a fix certain before it has run.
+4. **Never move a shared object to a personal role.** In an account several users share, that repeats the failure for the next user. The escalation moves every blocked object to the shared role: one statement per object from step 1, e.g. `GRANT OWNERSHIP ON PROCEDURE <metadata_database>.DATA_MIGRATION.<name>(<argument types>) TO ROLE <shared_role> COPY CURRENT GRANTS;`. `COPY CURRENT GRANTS` also needs an active role that holds `MANAGE GRANTS` or is `<shared_role>` (or a role above it), so owning the object is not enough: address it to the owner only when the owner's session also has `<shared_role>` in it (`IS_ROLE_IN_SESSION('<shared_role>')` run as the owner), and otherwise to `ACCOUNTADMIN` or another `MANAGE GRANTS` role. The same goes for an immediate fix in a write-up: it targets `<shared_role>`, never the user's or the owner's personal role. Say the fix is temporary: the next setup or upgrade that recreates the object (`CREATE OR REPLACE`) gives it to the primary role of whoever runs it. Offer it together with parking the data steps and carrying on with code objects; they don't conflict.
+5. **Name everything the blocker stops, and what still works.** Data migration and data validation both need these schemas. Check `configure()`'s `schema_status_validation` too: an `error` there means testing (`scai test validate`) is blocked as well. Offer no check that needs what is blocked: no data validation or view parity check while the target tables hold 0 rows, and no `scai test validate` while `schema_status_validation` is not healthy.
 
 #### Grant procedures
 
@@ -302,7 +348,7 @@ GRANT USAGE ON SCHEMA <metadata_database>.DATA_MIGRATION TO ROLE <your_role>;
 GRANT USAGE ON SCHEMA <metadata_database>.DATA_VALIDATION TO ROLE <your_role>;
 ```
 
-**Extended grants (when the service was created by another role):**
+**Extended grants (when the service was created by another role)**, only those [the role lacks](#checking-what-a-role-holds):
 
 ```sql
 GRANT OPERATE, MONITOR ON SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRATION_SERVICE TO ROLE <your_role>;
@@ -338,9 +384,12 @@ Doctor; no DEW configuration file is expected.
 |-----------------|-----------|
 | **Single worker on this machine** | → `./worker-local-setup/SKILL.md` — install and start on one host |
 | **Multiple workers on separate VMs/servers** | → `./worker-distributed-setup/SKILL.md` — several hosts, one source, shared project-default affinity |
-| **Snowpark Container Services (SPCS)** | → `./worker-spcs/SKILL.md` — image selection, Snowflake Secrets, CREATE SERVICE; then `data_infrastructure(mode="up", start_worker=false, ...)`, since no local worker runs |
+| **Snowpark Container Services (SPCS)** | → `./worker-spcs/SKILL.md` — image selection, Snowflake Secrets, CREATE SERVICE. SQL Server Windows authentication follows the Kerberos path in that skill before setup. Then `data_infrastructure(mode="up", start_worker=false, ...)`, since no local worker runs. **Private source?** Read [`./dcp-setup/SKILL.md`](./dcp-setup/SKILL.md) first; `scai data worker setup --dcp` provisions the tunnel and the service together |
 | **Kubernetes (external cluster)** | → `./worker-k8s-external/SKILL.md` — image selection, Kubernetes Secrets, Deployment manifest |
 | **No worker (Iceberg or Snowflake-to-Snowflake validation)** | none — set `start_worker=false` on `data_infrastructure(mode="up")` |
+
+Only the SPCS row needs a tunnel: that worker runs on Snowflake compute, so the source must be reachable
+from Snowflake. Every other placement reads the source from a host that already reaches it.
 
 **Stop here for worker deployment** — the routed sub-skill handles install/start, then **returns control here**. After it returns (or on the no-worker path), run the Data Doctor section below before returning to the caller.
 
@@ -351,6 +400,13 @@ Doctor; no DEW configuration file is expected.
 This is the **single place** Level 1 Data Doctor runs — after **any** worker deployment path (local, distributed, SPCS, Kubernetes) returns control here. The worker sub-skills do not run it themselves.
 
 Run [Level 1 Data Doctor](./references/data-doctor-reference.md#level-1-infrastructure-no-workflow-yaml). **Do not** start migration or validation setup until `result.hasFailures` is `false`. Iterate with the user on failures and warnings using each check's `suggestion`; you do not need to fix everything automatically.
+
+**Switching a recorded placement to Direct.** Direct is no way around a failing source-connection row: `--direct` reads a SQL Server source with mssql-python, the driver the local worker uses, so a driver failure there (e.g. `OpenSSL library could not be loaded`) fails a direct run too. Fix the driver first. `query_source` runs on .NET SqlClient, so its success proves nothing about either path. When you offer Direct for another reason, before calling `configure`:
+
+- show both keys' current value from `.scai/config/plugin.yml` and the proposed `direct`, e.g. `data_worker_placement: local → direct`;
+- say what you checked and how; never call a connection working on a test that used another driver;
+- explain any other problem you cite in plain words (what fails, who owns the object, whether this project needs it), or leave it out;
+- say what Direct gives up: an interrupted run stops with the table it was loading emptied or partial until a re-run completes, and validation compares schema and row counts but no column metrics.
 
 ---
 
@@ -398,4 +454,5 @@ Do not suggest ad-hoc throttling via polling env vars. Rate limits are metadata 
 - [Worker Config Reference](./references/worker-config-reference.md)
 - [Object-store path restrictions](./references/object-store-path-restrictions.md) — unload stage URL must sit on the Snowflake external volume
 - [Affinity Reference](./references/affinity-reference.md) — routing workers to workflows
+- [DCP setup](./dcp-setup/SKILL.md) — outbound-only tunnel so Snowflake reaches an on-premise source
 - [Teardown (cost-saving suspend)](./teardown/SKILL.md)

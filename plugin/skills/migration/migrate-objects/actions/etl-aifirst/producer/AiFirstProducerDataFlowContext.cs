@@ -179,6 +179,12 @@ internal sealed class AiFirstProducerDataFlowContext : IEtlIrToDbtContext
     ? IssueName.SSISExceptionConvertingComponent
     : IssueName.ExceptionThrownWhileConverting;
 
+  public IssueName IssueForUnsupportedPipelineElement => DialectPlatform.IsSsisNative(this.platformId)
+    ? IssueName.SSISTransformationNotSupported
+    : DialectPlatform.IsInformaticaNative(this.platformId)
+      ? IssueName.InformaticaPcTransformationNotSupported
+      : IssueName.ExceptionThrownWhileConverting;
+
   /// <summary>
   /// The shared target translator combines repeated writers with UNION ALL. Informatica retains
   /// its native diagnostic; every other producer platform uses the engine's General-dialect FDM.
@@ -337,7 +343,8 @@ internal sealed class AiFirstProducerDataFlowContext : IEtlIrToDbtContext
     IEnumerable<Column>? currentColumns = null,
     Dictionary<string, string>? idsToQualify = null,
     IEnumerable<EtlVariableReference>? variableReferences = null,
-    Dictionary<string, string>? idResolutions = null)
+    Dictionary<string, string>? idResolutions = null,
+    Column? targetColumn = null)
   {
     this.TranslateExpressionCalls.Add(expression);
     var parsed = new SqlParser().ParseExpr(expression, default)
@@ -393,6 +400,24 @@ internal sealed class AiFirstProducerDataFlowContext : IEtlIrToDbtContext
       this.AssessmentReportsServiceForContainer,
       issueElementId,
       args);
+  }
+
+  public T AddStackedIssuesToElement<T>(
+    T compound,
+    IReadOnlyList<(IssueName IssueName, object[] Args)> issues)
+    where T : class, ICompound
+  {
+    foreach (var (issueName, _) in issues)
+    {
+      this.AttachedIssues.Add(issueName);
+    }
+
+    return SqlUtils.AddStackedIssuesToElement(
+      compound,
+      issues,
+      this.ProjectGenerationContext.EwiService,
+      this.AssessmentReportsServiceForContainer,
+      this.CurrentElementId ?? this.CurrentContextName);
   }
 
   public void RegisterConversionLevelIssue(IssueName issueName, string componentFullName, params object[] args)
@@ -472,8 +497,17 @@ internal sealed class AiFirstProducerDataFlowContext : IEtlIrToDbtContext
       ?.Id;
   }
 
+  // A degraded source renders as an int_ model whatever its type, while an engine-translated target
+  // is a mart with no prefix (Unknown formats as the bare name); a transform downstream of a Hop
+  // stateful sink refs that mart, so it reads the table.
   private static ReferencedModelKind KindForNode(DagNode<Transformation> node)
-    => node.Type == SourceNodeType ? ReferencedModelKind.Staging : ReferencedModelKind.Intermediate;
+    => node.Element switch
+    {
+      UnsupportedTransformation => ReferencedModelKind.Intermediate,
+      TargetTransformation or OleDbCommandTransformation => ReferencedModelKind.Unknown,
+      _ when node.Type == SourceNodeType => ReferencedModelKind.Staging,
+      _ => ReferencedModelKind.Intermediate,
+    };
 
   /// <summary>
   /// Resolves the DAG node for an element, by reference first and then by <see cref="Transformation.Id"/>.

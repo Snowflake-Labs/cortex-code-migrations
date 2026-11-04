@@ -1,6 +1,6 @@
 {
   "name": "snowflake-migration",
-  "version": "2.52.5-Pr",
+  "version": "2.53.0-Pr",
   "description": "Snowflake AIM for Data Warehouses migrates a database to Snowflake. It does the assessment, conversion, validation, and deployment. When a session starts, this plugin and scai update to the latest version of the channel. The channels are stable, preview, and dev. With the dev channel, scai uses dev and this plugin uses preview. To change the channel, run `scai settings set channel=<channel>`. Then start a new session. You can also set the SCAI_CHANNEL environment variable to the channel before you start Cortex Code. SCAI_CHANNEL has priority over the scai setting. To pin a version, edit ~/.snowflake/migration-plugin/config.json. Add {\"plugin\": {\"version\": \"<version>\"}, \"scai\": {\"version\": \"<version>\"}}. Then start a new session. To use the latest version of the channel again, remove the pin.",
   "author": {
     "name": "db-eng-migrations"
@@ -16,6 +16,7 @@
         "mcp",
         "run"
       ],
+      "timeout": 3600000,
       "env": {
         "AIM_AUTONOMOUS": "${AIM_AUTONOMOUS:-}",
         "CUSTOM_SNOWCONVERT_COMMON_SCHEMA": "${CUSTOM_SNOWCONVERT_COMMON_SCHEMA:-}",
@@ -32,7 +33,8 @@
         "SCAI_CALLER": "${SCAI_CALLER:-}",
         "AIM_TESTBED_MAX_REJECTIONS_PER_TYPE": "${AIM_TESTBED_MAX_REJECTIONS_PER_TYPE:-}",
         "AIM_TESTBED_MAX_ITERATIONS": "${AIM_TESTBED_MAX_ITERATIONS:-}",
-        "AIM_HAIL_MARY": "${AIM_HAIL_MARY:-}"
+        "AIM_HAIL_MARY": "${AIM_HAIL_MARY:-}",
+        "TMPDIR": "${TMPDIR:-}"
       }
     }
   },
@@ -103,7 +105,25 @@
             "type": "command"
           }
         ],
-        "matcher": "^(mcp__mcp__)?(query_source|sql_execute|snowflake_sql_execute|[Bb]ash|[Ss]hell)$"
+        "matcher": "^(mcp__mcp__)?(query_source|sql_execute|snowflake_sql_execute|[Bb]ash|[Ss]hell|[Gg]rep|[Gg]lob)$"
+      },
+      {
+        "hooks": [
+          {
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mcp-hook.cmd deny-short-scai-code",
+            "type": "command"
+          }
+        ],
+        "matcher": "^(mcp__mcp__)?([Bb]ash|[Ss]hell)$"
+      },
+      {
+        "hooks": [
+          {
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/mcp-hook.cmd deny-agent-validation-html",
+            "type": "command"
+          }
+        ],
+        "matcher": "^(mcp__mcp__)?([Ww]rite|[Ee]dit|[Aa]pply[_-]?[Pp]atch|[Bb]ash|[Ss]hell)$"
       },
       {
         "hooks": [

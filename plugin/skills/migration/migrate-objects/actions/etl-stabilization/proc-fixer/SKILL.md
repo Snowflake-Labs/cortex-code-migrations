@@ -1,14 +1,14 @@
 ---
 name: proc-fixer
 parent_skill: etl-stabilization
-description: "Repair the defective blocks of ONE converted Informatica-to-Snowflake-Scripting mapping procedure by reconstructing each block's SQL from the source transformation node, block-scoped and minimal-change, then deploy+CALL and grade against the source-derived assertions until the procedure creates clean and passes. Use when the stabilization skill invokes fixing for a scripting-flavor mapping procedure."
+description: "Repair the defective blocks of ONE converted Snowflake Scripting mapping procedure (an Informatica mapping or an SSIS data flow) by reconstructing each block's SQL from the source transformation node, block-scoped and minimal-change, then deploy+CALL and grade against the source-derived assertions until the procedure creates clean and passes. Use when the stabilization skill invokes fixing for a scripting-flavor mapping procedure."
 license: Proprietary. See License-Skills for complete terms
 ---
 
 # Proc Fixer (scripting flavor)
 
-Repair a single converted **mapping procedure** — an Informatica mapping converted to a standalone Snowflake
-Scripting stored procedure — that still contains unsupported-transform stubs (`!!!RESOLVE EWI!!!`). Each
+Repair a single converted **mapping procedure** — an Informatica mapping or an SSIS data flow converted to a
+standalone Snowflake Scripting stored procedure — that still contains unsupported-transform stubs (`!!!RESOLVE EWI!!!`). Each
 materialized transformation is a **block** delimited by boundary markers; the fixer reconstructs each defective
 block's SQL **from the source transformation node it was converted from**, splices it back, then deploys, CALLs,
 and grades the procedure against the source-derived assertions until it creates clean and all assertions pass.
@@ -22,6 +22,12 @@ is graded against is computed by the test generator from the source — so the l
 > by dbt-fixer; in scripting mode a mapping becomes its own stored procedure repaired here. It consumes the
 > assertions authored by [proc-test-gen](../proc-test-gen/SKILL.md) — that pair owns the ARRANGE + ASSERT; this
 > skill owns the ACT (the fix) and drives the repair loop.
+
+> **Platform.** Informatica and SSIS both convert to mapping procedures, and this skill works the same
+> for both. Read `{PLATFORM_DIR}/platform-profile.md` for the source file and its guides. For SSIS (`.dtsx`)
+> also read `{PLATFORM_DIR}/scripting-proc-guide.md` first: an SSIS data-flow proc is named after the data
+> flow (`public.Data_Flow_Task`), holds one CTE per component and has **no block markers**, so you locate,
+> edit and check it by CTE (not block-locate / block-replace / task-error-locate), and its Lookup, Conditional Split and Sort semantics differ from Informatica's.
 
 > **Autonomous mode:** When spawned as a team agent, skip all interactive stopping points, make reasonable
 > defaults, and document assumptions in the completion report. When done, `send_message` to `main` with your
@@ -56,7 +62,7 @@ from proc-test-gen and are treated as fixed inputs the fix must satisfy — neve
 - `session_status.json` — with `source_file_path`, the mapping proc unit, and `migration_object_path`
 - The converted proc `.sql` file (a mapping unit's converted output, with boundary markers + `!!!RESOLVE EWI!!!`
   stubs) — this is the file the fixer edits in place, via block-replace
-- The source mapping definition (Informatica `.xml`) at `source_file_path`
+- The source definition at `source_file_path` (Informatica `.xml`, SSIS `.dtsx`)
 - The proc-test-gen artifacts under `<UNIT>/stabilization/tests/proc/<proc_name>/`:
   `<proc_name>.seed.sql`, `<proc_name>.assert.sql`, `test_report.md` (the baseline result + which assertions
   failed) — **required.** If they are absent, tests have not been generated yet: STOP and return to the parent
@@ -109,15 +115,17 @@ non-negotiable; the per-transform recipes are in
   never a valid fix.
 - Read the source transformation node behind the block. The broken stub embeds the source `<TRANSFORMATION>` /
   `<CONNECTOR>` XML as comments; use it, and the source `.xml`, to recover ports, expressions, join/lookup
-  conditions, and group-by keys. See `{PLATFORM_DIR}/{transformation_guide}` (Informatica: `mapping-guide.md`)
-  and `{PLATFORM_DIR}/element-types.md`.
+  conditions, and group-by keys. See `{PLATFORM_DIR}/{transformation_guide}` (Informatica: `mapping-guide.md`,
+  SSIS: `dataflow-guide.md`) and `{PLATFORM_DIR}/element-types.md`. An SSIS stub embeds the `<component>`
+  XML and its incoming `<path>` instead.
 
 **Preserve the block's role and output shape.**
 - Same INSERT target and column list; same final SELECT column set and order; same block boundary markers.
 - Minimal change — keep the surrounding statement, sensible CTE/temp-table names, and any code not related to
   the defect. Do NOT reformat or rename beyond what the fix requires.
 
-**Faithful Informatica semantics** (recipes + worked examples in the patterns file):
+**Faithful source semantics.** For SSIS, use the component semantics and the expression table in
+`{PLATFORM_DIR}/scripting-proc-guide.md`. For Informatica (recipes + worked examples in the patterns file):
 - **Lookup** (connected) → `LEFT OUTER JOIN` to the lookup table; no-match → NULL outputs; no fan-out when the
   lookup key is unique; honor the multiple-match policy only when the key can duplicate.
 - **Filter** → `WHERE <condition>`; a NULL predicate is not TRUE, so that row is **dropped** — do NOT rewrite
@@ -222,7 +230,8 @@ Then return to the parent skill.
 |------|-------------|
 | [block-reconstruction-patterns.md](block-reconstruction-patterns.md) | Step 2 — per-transform source→block reconstruction recipes + the minimal-change / semantic-preservation rules |
 | [../proc-test-gen/proc-assertion-patterns.md](../proc-test-gen/proc-assertion-patterns.md) | Step 4 — to read a failing assertion's intent (the assertion shape proc-test-gen emits) |
-| `{PLATFORM_DIR}/{transformation_guide}` (Informatica: `mapping-guide.md`) | Step 2 — reading the source transformation node (ports, expressions, join/lookup conditions) |
+| `{PLATFORM_DIR}/{transformation_guide}` (Informatica: `mapping-guide.md`, SSIS: `dataflow-guide.md`) | Step 2 — reading the source transformation node (ports, expressions, join/lookup conditions) |
+| `{PLATFORM_DIR}/scripting-proc-guide.md` (SSIS) | Steps 1–3 — locating, editing and checking a component by CTE; SSIS semantics and expressions |
 | `{PLATFORM_DIR}/element-types.md` | Step 2 — what each transform type does (active/passive, row-count, cache/aggregator modes) |
 | `{PLATFORM_DIR}/ewi/<CODE>.md` | when a block carries a specific EWI marker (resolve via `stabilization_tools.py ewi-guide-resolve`) |
 
@@ -232,7 +241,7 @@ Then return to the parent skill.
 
 ### Input (provided at spawn time)
 - Unit name + converted proc `.sql` path (edited in place via block-replace)
-- Source mapping `.xml` path (READ-ONLY)
+- Source definition path, `.xml` or `.dtsx` (READ-ONLY)
 - The proc-test-gen artifacts (seed / assert / test_report) for this proc
 - The defective block FullName(s) to repair
 - Test schema (`TEST_SCHEMA`), database (`DATABASE`), connection (`CONNECTION`)

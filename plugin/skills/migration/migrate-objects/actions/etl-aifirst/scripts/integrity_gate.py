@@ -74,8 +74,12 @@ THE SIX CLASSES, and what a real loss looks like in each:
             `etl_instrumentation/configuration/procedures/ssis_read_baseline_data.sql` and three
             siblings, because the producer called the engine's SSIS-specific configuration writer
             unconditionally. The producer now gates that call, and this class is the tripwire that
-            fails if it ever regresses -- gate B cannot be that tripwire, because it EXCLUDES these
+            fails if it ever regresses --             gate B cannot be that tripwire, because it EXCLUDES these
             directories from what the verifier sees, by design and for a good reason.
+  SINKS     (Hop, with --source) a table the DOCUMENT writes that no model writes, or writes with
+            another write mode: append / replace / replace-if-rows / merge on the key with the
+            updated columns / insert-only / update-only / delete. The one class that reads the
+            source document, see check_sinks for why. Raised only when the document declares a sink.
 
 WHAT IS DELIBERATELY OUT OF SCOPE, stated rather than left to be discovered:
 
@@ -807,9 +811,10 @@ def report(ir_path, out_root, platform, ir, models, projects, led, empty_nodes, 
       % (_clip(ir_path, 72), len(ir.get("nodes") or []), len(ir.get("edges") or [])))
     p(" emitted models: %d file(s) under %s" % (len(models), _clip(out_root, 60)))
     p(" dbt projects  : %d directory(ies) carrying dbt_project.yml" % len(projects))
-    p(" INPUTS        : the IR and the tree. THIS GATE NEVER READS THE SOURCE DOCUMENT, so no")
-    p("                 identification rule can decide its denominator — which is the failure")
-    p("                 every gate upstream of it shares.")
+    p(" INPUTS        : the IR and the tree. Classes 1-6 NEVER READ THE SOURCE DOCUMENT, so no")
+    p("                 identification rule can decide their denominator — which is the failure")
+    p("                 every gate upstream of it shares. SINKS (Hop, with --source) reads the")
+    p("                 document's table sinks, because a degraded sink is gone from the IR.")
     p(" MATCH RULE    : a model belongs to a node when its stem is the node's modelName,")
     p("                 optionally behind a `<prefix>_` the emitter added. A node with no model")
     p("                 is CONTAINER-realised when a dbt project directory is named for it.")
@@ -860,7 +865,7 @@ def report(ir_path, out_root, platform, ir, models, projects, led, empty_nodes, 
     # two files. A caveat only a machine can see is a caveat nobody acts on.
     caveats = [(L.name, s, h, e) for L in led for s, h, e in L.discharged
                if h not in ("MODEL", "CONTAINER", "IR NODE", "PROJECTED", "REF", "VALUE PRESENT",
-                            "WELL-FORMED")]
+                            "WELL-FORMED", "WRITTEN")]
     if caveats:
         p(" DISCHARGED, WITH A CAVEAT — counted as carried on WEAKER evidence than the primary rule:")
         for name, subject, how, ev in caveats:
@@ -901,7 +906,8 @@ def report(ir_path, out_root, platform, ir, models, projects, led, empty_nodes, 
 
 # ==================================================================================================
 
-USAGE = ("usage: integrity_gate.py <ir.json> <output-root> [--platform NAME] [--json PATH]\n"
+USAGE = ("usage: integrity_gate.py <ir.json> <output-root> [--platform NAME] [--json PATH]"
+         " [--source DOC]\n"
          "  exit 0 clean / 3 information lost / 1 could not run / 2 usage\n")
 
 
@@ -964,9 +970,163 @@ def check_scaffold(out_root, platform):
     return led
 
 
+# ==================================================================================================
+# CLASS 7 — SINKS.  Is every table the document writes written by some model, the way it is written?
+# ==================================================================================================
+# The one class that reads the source document: a sink the producer could not represent degrades
+# to a placeholder that no longer carries its table, so no IR-driven class can see it is unwritten.
+
+_CONFIG = re.compile(r"\{\{\s*config\((.*?)\)\s*\}\}", re.S)
+_CONFIG_ITEM = re.compile(r"(\w+)\s*=\s*('(?:[^']*)'|\"(?:[^\"]*)\"|\[[^\]]*\]|[A-Za-z_][\w.]*)")
+_STRING = re.compile(r"'([^']*)'|\"([^\"]*)\"")
+
+
+def _config_of(model):
+    """The model's `config(...)` keyword arguments: strings, string lists, or bare words."""
+    cfg = {}
+    m = _CONFIG.search(model.text)
+    if not m:
+        return cfg
+    for key, raw in _CONFIG_ITEM.findall(m.group(1)):
+        if raw.startswith("["):
+            cfg[key] = [a or b for a, b in _STRING.findall(raw)]
+        elif raw[:1] in "'\"":
+            cfg[key] = raw[1:-1]
+        else:
+            cfg[key] = raw
+    return cfg
+
+
+def _folder_materializations(project_dir):
+    """`+materialized` per top-level models/ folder, read from dbt_project.yml line by line."""
+    out = {}
+    try:
+        lines = open(os.path.join(project_dir, "dbt_project.yml"), encoding="utf-8").read().splitlines()
+    except OSError:
+        return out
+    last_key = None
+    for line in lines:
+        km = re.match(r"^\s*([A-Za-z_][\w-]*):\s*$", line)
+        if km:
+            last_key = km.group(1)
+            continue
+        mm = re.match(r"^\s*\+materialized:\s*['\"]?(\w+)", line)
+        if mm and last_key:
+            out[last_key] = mm.group(1)
+    return out
+
+
+def _model_write(model, out_root):
+    """(relation, mode, keys, columns) the model writes, or None for a model that writes no table."""
+    cfg = _config_of(model)
+    parts = model.rel.split(os.sep)
+    folder = parts[parts.index("models") + 1] if "models" in parts[:-1] else ""
+    project = os.path.join(out_root, *parts[:parts.index("models")]) if "models" in parts else out_root
+    materialized = cfg.get("materialized") or _folder_materializations(project).get(folder)
+    relation = (cfg.get("alias") or model.stem).casefold()
+    key = cfg.get("unique_key")
+    keys = [key] if isinstance(key, str) else list(key or [])
+    strategy = cfg.get("incremental_strategy")
+    columns = cfg.get("merge_update_columns")
+    if materialized == "table":
+        return relation, "replace", [], []
+    if materialized != "incremental":
+        return (relation, materialized or "unknown", [], []) if cfg.get("alias") else None
+    pre_hook = str(cfg.get("pre_hook") or "")
+    if strategy == "insert_overwrite":
+        return relation, "replace", [], []
+    if strategy in (None, "append") or (strategy == "merge" and not keys):
+        return relation, "append", [], []
+    if strategy == "merge" and re.search(r"\bdelete\b", pre_hook, re.I):
+        return relation, "merge+delete", keys, columns
+    mode = {"merge": "merge", "insert_only": "insert_only", "update_only": "update_only",
+            "delete_only": "delete", "replace_if_rows": "replace_if_rows",
+            "hop_synchronize": "synchronize", "hop_scd2": "scd2",
+            "hop_combination": "combination"}.get(strategy, strategy)
+    return relation, mode, keys, columns
+
+
+# Write modes whose strategy macro the producer ships, and which read their settings from a
+# config(<strategy>={...}) call in the model.
+_PRODUCER_STRATEGIES = {"synchronize": "hop_synchronize", "scd2": "hop_scd2", "combination": "hop_combination"}
+
+
+def _same_names(a, b):
+    return {x.casefold() for x in a} == {x.casefold() for x in b}
+
+
+def check_sinks(source, models, out_root):
+    """One obligation per sink transform: some model writes its table with its write mode."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import hop_write_deps  # noqa: E402  (sibling script; only Hop states sinks this way)
+
+    led = Ledger("SINKS", "declared table sink -> a model writing it that way")
+    writes = {}
+    for m in models:
+        w = _model_write(m, out_root)
+        if w is not None:
+            writes.setdefault(w[0], []).append((m, w))
+    for sink in hop_write_deps.sink_writes(source):
+        table, mode = sink["table"], sink["mode"]
+        subject = "%s  [%s %s -> %s]" % (sink["transform"], sink["kind"], mode, table)
+        found = writes.get(table.casefold()) or writes.get(_sanitized_identifier_candidate(table)) or []
+        if not found:
+            led.lost(subject, "NOT WRITTEN",
+                     "no table or incremental model is named or aliased %r" % table)
+            continue
+        wrong = []
+        for m, (_rel, got, keys, columns) in found:
+            why = None
+            if got != mode:
+                why = "writes it as %s" % got
+            elif sink["keys"] and not _same_names(keys, sink["keys"]):
+                why = "matches on %s, the document on %s" % (keys or "no key", sink["keys"])
+            elif mode in ("merge", "update_only") and columns is not None \
+                    and not _same_names(columns, sink["columns"]):
+                why = "updates %s, the document %s" % (columns, sink["columns"])
+            elif mode in _PRODUCER_STRATEGIES \
+                    and not re.search(r"\bconfig\(\s*%s\s*=\s*\{" % _PRODUCER_STRATEGIES[mode], m.text):
+                why = "names the %s strategy without its settings" % _PRODUCER_STRATEGIES[mode]
+            if why is None:
+                how = "WRITTEN" if columns is not None or mode not in ("merge", "update_only") \
+                    else "WRITTEN (UPDATE COLUMNS UNSTATED)"
+                led.ok(subject, how, m.rel)
+                break
+            wrong.append("%s %s" % (m.rel, why))
+        else:
+            led.lost(subject, "WRONG WRITE MODE",
+                     "the document %s; %s" % (_describe(sink), "; ".join(wrong)))
+    return led
+
+
+def _describe(sink):
+    mode = sink["mode"]
+    text = {"append": "appends every row",
+            "replace": "replaces the table's rows",
+            "replace_if_rows": "replaces the table's rows only when the run has a row",
+            "merge": "merges on the key",
+            "insert_only": "inserts the keys not found",
+            "update_only": "updates on the key",
+            "delete": "deletes on the key",
+            "synchronize": "inserts, updates or deletes per row by a flag field",
+            "scd2": "keeps versioned dimension rows",
+            "combination": "inserts a technical key per new combination"}.get(mode, mode)
+    if sink["keys"]:
+        text += " %s" % sink["keys"]
+    if sink["columns"]:
+        text += ", updating %s" % sink["columns"]
+    return text
+
+
+def _declares_sinks(source, platform):
+    return bool(source) and (norm(platform or "") in ("hop", "apachehop")
+                             or str(source).casefold().endswith(".hpl"))
+
+
 def main(argv):
     platform = None
     json_out = None
+    source = None
     rest = []
     i = 0
     while i < len(argv):
@@ -975,6 +1135,9 @@ def main(argv):
             i += 2
         elif argv[i] == "--json" and i + 1 < len(argv):
             json_out = argv[i + 1]
+            i += 2
+        elif argv[i] == "--source" and i + 1 < len(argv):
+            source = argv[i + 1]
             i += 2
         else:
             rest.append(argv[i])
@@ -1022,9 +1185,26 @@ def main(argv):
     scaffold_led = check_scaffold(out_root, platform)
     led = [nodes_led, models_led, cols_led, edges_led, pay_led, syntax_led, scaffold_led]
 
+    # SINKS joins the ledger only when the document declares a sink: a pipeline that writes no
+    # table has nothing to check, and a 0/0 there would degrade every such run for no finding.
+    sinks_note = None
+    if _declares_sinks(source, platform):
+        try:
+            sinks_led = check_sinks(source, models, out_root)
+        except Exception as exc:                                # noqa: BLE001
+            sinks_led = None
+            sinks_note = (" sinks         : UNMEASURED -- the source document at %s could not be "
+                          "read for its sinks: %s" % (_clip(source, 50), exc))
+        if sinks_led is not None and sinks_led.raised:
+            led.append(sinks_led)
+        elif sinks_led is not None:
+            sinks_note = " sinks         : the source document declares no table sink"
+
     out = []
     total_out, total_un = report(ir_path, out_root, platform, ir, models, projects, led,
                                  empty_nodes, via_source, out)
+    if sinks_note:
+        out.append(sinks_note)
 
     # ---- THE BALANCE ASSERTION, CHECKED AND PRINTED AND ABLE TO FAIL. If a class does not balance,
     # its numbers are describing different questions and the verdict line is withheld.
@@ -1059,7 +1239,7 @@ def main(argv):
     if json_out:
         with open(json_out, "w", encoding="utf-8") as fh:
             json.dump({
-                "ir": ir_path, "out_root": out_root, "platform": platform,
+                "ir": ir_path, "out_root": out_root, "platform": platform, "source": source,
                 "models": [m.rel for m in models],
                 "projects": [os.path.relpath(p, out_root) for p in projects],
                 "classes": [L.as_dict() for L in led],

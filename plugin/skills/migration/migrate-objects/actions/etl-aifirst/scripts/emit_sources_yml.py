@@ -21,11 +21,13 @@ IR instead would let the two disagree, which is the failure this whole project k
 two artifacts that each look right and do not match. Scanning the emitted `source()` calls
 makes disagreement structurally impossible.
 
-Deliberately NOT invented here: database and schema. dbt resolves an undeclared source schema
-to the source's `name`, and asserting a database would state a destination the migration has
-not chosen -- the same reasoning that keeps `dbo` out of a target's SchemaName.
+Schema and database are NOT invented. The schema is written only when the source document
+itself qualifies the table (`FROM dbo.Tasks`) and every qualified mention agrees; otherwise it
+is omitted and dbt falls back to the source's `name`. When the schema is known, the database is
+the `YOUR_DB` placeholder the native ETL output also writes: `scai code deploy` rewrites it to
+the deploy target, so no destination is asserted here.
 
-Usage:  emit_sources_yml.py <project-root>
+Usage:  emit_sources_yml.py <project-root> [<source-document>]
 Exit:   0 wrote or nothing to do; 1 could not write
 """
 
@@ -42,11 +44,31 @@ SOURCE_CALL = re.compile(
 )
 
 
+PLACEHOLDER_DATABASE = "YOUR_DB"
+
+
+def stated_schema(document_text: str, table: str) -> str | None:
+    """The schema the document qualifies `table` with, or None when absent or ambiguous."""
+    qualified = re.compile(
+        r"(?<![\w.\[\"])\[?\"?(?P<schema>[A-Za-z_][\w$]*)\"?\]?\s*\.\s*\[?\"?"
+        + re.escape(table)
+        + r"\"?\]?(?![\w$])",
+        re.IGNORECASE,
+    )
+    schemas = {m.group("schema").casefold() for m in qualified.finditer(document_text)}
+    if len(schemas) != 1:
+        return None
+    return schemas.pop()
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: emit_sources_yml.py <project-root>", file=sys.stderr)
+    if len(argv) not in (2, 3):
+        print("usage: emit_sources_yml.py <project-root> [<source-document>]", file=sys.stderr)
         return 1
     root = Path(argv[1])
+    document_text = ""
+    if len(argv) == 3 and Path(argv[2]).is_file():
+        document_text = Path(argv[2]).read_text(encoding="utf-8", errors="replace")
     models = root / "models"
     if not models.is_dir():
         print(f"   sources.yml: no models/ under {root} — nothing to do")
@@ -71,16 +93,21 @@ def main(argv: list[str]) -> int:
     lines = [
         "# SSC-AI-FIRST-GENERATED — declares the sources the emitted models actually reference.",
         "# Derived by scanning source() calls in models/, so it cannot disagree with the SQL.",
-        "# database/schema are deliberately omitted: dbt defaults an undeclared source schema to",
-        "# the source name, and naming a database here would assert a destination the migration",
-        "# has not chosen.",
+        "# schema is written only when the source document qualifies every table of a source",
+        "# the same way; database is then the YOUR_DB placeholder scai code deploy rewrites.",
         "version: 2",
         "sources:",
     ]
     for src in sorted(found):
+        tables = sorted(found[src])
+        schemas = {stated_schema(document_text, t) for t in tables}
+        schema = schemas.pop() if len(schemas) == 1 else None
         lines.append(f"  - name: {src}")
+        if schema:
+            lines.append(f"    schema: {schema.upper()}")
+            lines.append(f"    database: {PLACEHOLDER_DATABASE}")
         lines.append("    tables:")
-        for tbl in sorted(found[src]):
+        for tbl in tables:
             lines.append(f"      - name: {tbl}")
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 

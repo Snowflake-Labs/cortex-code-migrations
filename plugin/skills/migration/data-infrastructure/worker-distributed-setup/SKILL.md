@@ -16,8 +16,8 @@ every generated worker config, and the orchestrator hands each free worker the n
 The plugin does not drive several source servers in one project. A worker connects to one source.
 Setting up a worker group per server is not supported here.
 
-> **Read first:** [Affinity Reference](../references/affinity-reference.md) — the claim rule and why
-> the orchestrator stays null-affinity.
+> **Read first:** [Affinity Reference](../references/affinity-reference.md) — the claim rule and which
+> affinity each orchestrator serves.
 
 ## Per host
 

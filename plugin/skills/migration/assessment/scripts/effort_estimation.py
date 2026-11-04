@@ -95,6 +95,11 @@ class CalculatorRow:
     # when band counts are present and flat otherwise; the shared JS module decides.
     pricing: str = "banded"
     unit_hours: Optional[float] = None
+    # Functions and Stored Procedures only: objects with a dynamic SQL finding,
+    # priced on their own column and not in ``band_counts``, and the hours each.
+    # Absent on every other row, which renders an em dash in that column.
+    dynamic_sql_count: Optional[int] = None
+    dynamic_sql_unit_hours: Optional[float] = None
     # Present on a Code Conversion row. Absent on v1 artifacts and on every other row.
     repetition: Optional[Dict[str, Any]] = None
 
@@ -247,10 +252,15 @@ EFFORT_MIXIN_JS = r"""
               || section.extraRows.length;
           });
       },
-      // Component, object type, quantity, one per band, hours, comments. Derived so
-      // a new band cannot leave a spanning cell one column short.
+      // Columns between Objects and Est. Hours: Dynamic SQL, then one per band.
+      // A flat row's single budget spans all of them.
+      effortRateColumns() {
+        return this.effortBands.length + 1;
+      },
+      // Component, object type, quantity, the rate columns, hours, comments.
+      // Derived so a new band cannot leave a spanning cell one column short.
       effortColumnCount() {
-        return 5 + this.effortBands.length;
+        return 5 + this.effortRateColumns;
       },
       effortHasOverrides() {
         return this.effortRollup.overridden_count > 0;
@@ -279,6 +289,11 @@ EFFORT_MIXIN_JS = r"""
           maximumFractionDigits: 1,
         });
       },
+      // The * points at the Comments sentence below: a rate typed on a
+      // discounted row is still discounted the way that sentence says.
+      effortRateLabel(row) {
+        return row && row.repetition ? "h / object*" : "h / object";
+      },
       effortGroupingNote(row) {
         var repetition = row && row.repetition;
         if (!repetition) return "";
@@ -288,9 +303,9 @@ EFFORT_MIXIN_JS = r"""
         var factor = repetition.discount_factor;
         var rest = " Each additional " + singular + " with that EWI is charged " + factor + "× that rate.";
         if (count === 1) {
-          return "The first " + singular + " with a given EWI is charged the full rate for its complexity." + rest;
+          return "* The first " + singular + " with a given EWI is charged the full rate for its complexity." + rest;
         }
-        return "The first " + count + " " + _groupingPlural(singular) + " with a given EWI are charged the full rate for their complexity." + rest;
+        return "* The first " + count + " " + _groupingPlural(singular) + " with a given EWI are charged the full rate for their complexity." + rest;
       },
       effortHoursOrNa(value) {
         return value === null || value === undefined ? "N/A" : this.effortHours(value);
@@ -367,8 +382,16 @@ EFFORT_MIXIN_JS = r"""
         if (draft !== undefined) {
           return draft;
         }
-        const value = band ? this.effortBandRate(row, band) : row.custom_flat_hours;
+        const value = band
+          ? this.effortBandRate(row, band)
+          : (row.band_counts ? row.custom_dynamic_sql_unit_hours : row.custom_flat_hours);
         return value === null || value === undefined ? "" : String(value);
+      },
+      effortHasDynamicSql(row) {
+        return shared.hasDynamicSqlColumn(row);
+      },
+      effortDynamicSqlCount(row) {
+        return typeof row.dynamic_sql_count === "number" ? row.dynamic_sql_count : 0;
       },
       effortOnInput(row, band, raw) {
         // The draft is exactly what the user typed, so re-rendering never moves
@@ -518,6 +541,12 @@ EFFORT_MIXIN_JS = r"""
       effortCloseEwiBreakdown() {
         this.effortEwiBreakdownRow = null;
       },
+      // The report's own Discovery tab, Optimization Opportunities panel: the
+      // effort table and Discovery are one page, so this switches tabs, no popup.
+      effortOpenOptimizationOpportunities() {
+        this.activeTab = "discovery";
+        this.discoveryTab = "optimization";
+      },
     },
   };
 })();
@@ -562,7 +591,7 @@ _EFFORT_BAND_LEGEND_HTML = """
 """
 
 _EFFORT_TOOLBAR_HTML = """
-        <div class="effort-toolbar">
+        <div class="effort-toolbar print-omit">
             <div class="effort-menu-wrap">
                 <button type="button" class="effort-btn effort-menu-btn"
                         :aria-expanded="effortMenuOpen ? 'true' : 'false'"
@@ -637,7 +666,7 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                         <th>Migration Component</th>
                         <th>Object Type</th>
                         <th class="num">Objects</th>
-                        <th :colspan="effortBands.length"></th>
+                        <th :colspan="effortRateColumns"></th>
                         <th class="num">Est. Hours</th>
                         <th>Comments</th>
                     </tr>
@@ -665,6 +694,7 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                     <template v-for="group in section.groups" :key="group.shape">
                     <tr v-if="effortSectionOpen(section) &amp;&amp; group.shape === 'banded'">
                         <th class="effort-subhead" colspan="3"></th>
+                        <th class="effort-subhead ctr" rowspan="2">Dynamic SQL</th>
                         <th class="effort-subhead ctr" :colspan="effortBands.length">Objects by complexity · hours per object</th>
                         <th class="effort-subhead" colspan="2"></th>
                     </tr>
@@ -677,7 +707,7 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                         <th class="effort-subhead">Migration Component</th>
                         <th class="effort-subhead">Line Item</th>
                         <th class="effort-subhead num">{{ group.shape === 'flat' ? 'Basis' : 'Objects' }}</th>
-                        <th class="effort-subhead num" :colspan="effortBands.length">{{ group.shape === 'per_object' ? 'Hours per object' : (group.shape === 'flat_total' ? 'Base effort (h)' : 'Budget (hours)') }}</th>
+                        <th class="effort-subhead num" :colspan="effortRateColumns">{{ group.shape === 'per_object' ? 'Hours per object' : (group.shape === 'flat_total' ? 'Base effort (h)' : 'Budget (hours)') }}</th>
                         <th class="effort-subhead num">Est. Hours</th>
                         <th class="effort-subhead">Comments</th>
                     </tr>
@@ -687,11 +717,13 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                             <td :rowspan="row.band_counts ? 2 : 1">{{ row.object_type }}</td>
                             <td class="num">{{ effortQuantity(row.quantity) }}</td>
                             <template v-if="row.band_counts">
+                                <td v-if="effortHasDynamicSql(row)" class="num">{{ effortCount(effortDynamicSqlCount(row)) }}</td>
+                                <td v-else class="num effort-muted">—</td>
                                 <td class="num" v-for="band in effortBands" :key="band">
                                     {{ effortCount(effortBandCount(row, band)) }}
                                 </td>
                             </template>
-                            <td v-else class="num" :colspan="effortBands.length">
+                            <td v-else class="num" :colspan="effortRateColumns">
                                 <input type="text" inputmode="decimal" class="effort-input"
                                        :class="{'effort-input-error': effortCellError(row, null)}"
                                        :value="effortInputValue(row, null)"
@@ -721,12 +753,31 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                                         class="effort-ewi-link"
                                         @click="effortOpenEwiBreakdown(row)"
                                     >View EWI Breakdown</button>
+                                    <button
+                                        v-if="row.key === 'optimization'"
+                                        type="button"
+                                        class="effort-ewi-link"
+                                        @click="effortOpenOptimizationOpportunities"
+                                    >View Optimization Opportunities</button>
                                 </div>
                             </td>
                         </tr>
                         <tr v-if="effortSectionOpen(section) &amp;&amp; row.band_counts" class="effort-rate-row"
                             :class="{'effort-row-overridden': row.is_overridden}">
-                            <td class="num effort-rate-lbl">h / object</td>
+                            <td class="num effort-rate-lbl">{{ effortRateLabel(row) }}</td>
+                            <td v-if="effortHasDynamicSql(row)" class="num">
+                                <input type="text" inputmode="decimal" class="effort-input"
+                                       :class="{'effort-input-error': effortCellError(row, null)}"
+                                       :value="effortInputValue(row, null)"
+                                       :disabled="!row.is_editable"
+                                       :aria-label="'Hours per dynamic SQL ' + row.object_type"
+                                       :title="row.is_editable ? 'Hours to migrate one object with dynamic SQL, charged instead of its complexity band' : 'No objects of this type in this workload'"
+                                       @input="effortOnInput(row, null, $event.target.value)"
+                                       @blur="effortOnBlur(row, null)">
+                                <span v-if="effortCellError(row, null)" class="effort-error">{{ effortCellError(row, null) }}</span>
+                                <span v-else-if="row.is_dynamic_sql_overridden" class="effort-sf-note">Snowflake: {{ effortCompact(row.dynamic_sql_unit_hours) }}</span>
+                            </td>
+                            <td v-else class="num effort-muted">—</td>
                             <td class="num" v-for="band in effortBands" :key="band">
                                 <input type="text" inputmode="decimal" class="effort-input"
                                        :class="{'effort-input-error': effortCellError(row, band)}"
@@ -746,7 +797,7 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                         <tr v-for="extra in section.extraRows" :key="extra.label">
                             <td colspan="2">{{ extra.label }}</td>
                             <td class="num effort-muted">Flat budget</td>
-                            <td class="num effort-muted" :colspan="effortBands.length">N/A</td>
+                            <td class="num effort-muted" :colspan="effortRateColumns">N/A</td>
                             <td class="num" style="font-weight:600;">{{ effortHours(extra.hours) }}</td>
                             <td class="effort-muted">Priced as a flat budget; not editable</td>
                         </tr>
@@ -1119,23 +1170,49 @@ def _ddl_effort_cell(obj_type: str) -> str:
     )
 
 
+def _dynamic_sql_splits(rows: List[CalculatorRow]) -> Dict[str, CalculatorRow]:
+    """Code Conversion rows with a Dynamic SQL column, keyed by the DDL type they price."""
+    return {
+        row.ddl_type: row
+        for row in rows
+        if row.bucket == "conversion"
+        and row.ddl_type
+        and row.dynamic_sql_count is not None
+        and row.band_counts is not None
+    }
+
+
 def _render_ddl_assessment_table(
     ddl_summary: Dict[str, Dict[str, Any]],
+    calculator_rows: Optional[List[CalculatorRow]] = None,
 ) -> str:
     """Per-object-type conversion detail: inventory, bands, findings, and hours.
 
     The band columns count *objects* and the issue columns count *occurrences*,
     which is why the two do not agree: one object carrying three critical findings
     is a single critical object. Only the band columns feed the estimate.
+
+    A type whose calculator row has a Dynamic SQL column shows that row's split:
+    its dynamic SQL objects on their own column and out of the bands, so the
+    row's counts are the ones its Effort was priced from. Every other type shows
+    an em dash there and ``ddl_summary``'s plain classification.
     """
+    splits = _dynamic_sql_splits(calculator_rows or [])
     rows_html = ""
     displayed_types: List[str] = []
     totals = _new_ddl_row()
+    dynamic_sql_total: Optional[int] = None
     for obj_type in sorted(ddl_summary.keys()):
         if obj_type in _DDL_EXCLUDED_DISPLAY_TYPES:
             continue
         st = ddl_summary[obj_type]
-        bands = st.get("bands") or {}
+        split = splits.get(obj_type)
+        bands = (split.band_counts if split else st.get("bands")) or {}
+        if split:
+            dynamic_sql_total = (dynamic_sql_total or 0) + split.dynamic_sql_count
+            dynamic_sql_cell = f"{split.dynamic_sql_count:,}"
+        else:
+            dynamic_sql_cell = "\u2014"
         for column in totals:
             totals[column] += bands.get(column, 0) if column in _BANDS else st.get(column, 0)
         pct = f"{st['pct_auto'] * 100:.1f}%"
@@ -1145,6 +1222,7 @@ def _render_ddl_assessment_table(
         <tr>
             <td>{_esc(obj_type)}</td>
             <td class="ctr">{st['total']:,}</td>
+            <td class="ctr">{dynamic_sql_cell}</td>
             <td class="ctr">{bands.get('critical', 0):,}</td>
             <td class="ctr">{bands.get('high', 0):,}</td>
             <td class="ctr">{bands.get('medium', 0):,}</td>
@@ -1156,6 +1234,7 @@ def _render_ddl_assessment_table(
             <td class="num" style="font-weight:600;">{effort}</td>
             <td style="color:#64748B;font-size:0.8rem;">{_esc(st.get('notes', ''))}</td>
         </tr>"""
+    total_dynamic_sql = "\u2014" if dynamic_sql_total is None else f"{dynamic_sql_total:,}"
     total_pct = f"{(totals['success'] / totals['total'] * 100):.1f}%" if totals["total"] else "—"
     # Always the true sum of the rows displayed above so TOTALS never understates
     # what's visibly listed in this table.
@@ -1169,6 +1248,7 @@ def _render_ddl_assessment_table(
         <tr class="effort-total">
             <td>TOTALS</td>
             <td class="ctr">{totals['total']:,}</td>
+            <td class="ctr">{total_dynamic_sql}</td>
             <td class="ctr">{totals['critical']:,}</td>
             <td class="ctr">{totals['high']:,}</td>
             <td class="ctr">{totals['medium']:,}</td>
@@ -1203,6 +1283,7 @@ def _render_top_issues_section(top_issues: List[Dict[str, Any]]) -> str:
         </tr>"""
 
     return f"""
+        <div class="print-omit">
         <h2 id="effort-top-issues" style="font-size:1.35rem;font-weight:700;color:#102E46;margin:32px 0 12px;">Top issues (DDL)</h2>
         <p class="effort-lead">The conversion issue codes that occur most across DDL objects, listed
         most severe first — a critical code hit a dozen times needs attention before a low one hit
@@ -1217,6 +1298,7 @@ def _render_top_issues_section(top_issues: List[Dict[str, Any]]) -> str:
                 </tr></thead>
                 <tbody>{issues_html}</tbody>
             </table>
+        </div>
         </div>"""
 
 
@@ -1311,12 +1393,12 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
 {_EFFORT_KPI_CARDS_HTML}
 
         <h2 id="effort-calculator" style="font-size:1.35rem;font-weight:700;color:#102E46;margin-bottom:12px;">Migration effort calculator</h2>
-        <p class="effort-lead">
+        <p class="effort-lead print-omit">
             Every hours-per-object cell is editable. Change one and its row, its section subtotal,
             the total and the cards above all follow — Snowflake's own figure stays beside yours, so
             nothing is overwritten.
         </p>
-        <p class="effort-lead">
+        <p class="effort-lead print-omit">
             Your changes are called <strong>overrides</strong>{_OVERRIDES_INFO_ICON}. They live in
             this page while it is open — download them to keep them, or to hand them to someone else.
         </p>
@@ -1331,6 +1413,7 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
                 <thead><tr>
                     <th>Object Type</th>
                     <th class="ctr">Objects</th>
+                    <th class="ctr">Dynamic SQL</th>
                     <th class="ctr">Critical</th>
                     <th class="ctr">High</th>
                     <th class="ctr">Medium</th>
@@ -1342,7 +1425,7 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
                     <th class="num">Effort (h)</th>
                     <th>Priced as</th>
                 </tr></thead>
-                <tbody>{_render_ddl_assessment_table(ddl)}</tbody>
+                <tbody>{_render_ddl_assessment_table(ddl, assessment.get("calculator_rows"))}</tbody>
             </table>
         </div>
 

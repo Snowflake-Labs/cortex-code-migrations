@@ -24,10 +24,9 @@ needs it there.
   `reopened` return): a helper / view / function in the closure changed.
   For each `dependsOn` id, `migration_status(mode="next_task", object_ids=[…])`.
   - Any `nextTask` not null → **Skip this object.** Report blocked on that walk.
-  - Else `deploy(sandbox=true, where="id = '<objectId>'")` — omit `mode`.
-    Closure (tables from CSVs, functions, views, peer procedures) on both
-    sides, and this object on source. Then
-    `deploy(sandbox=true, mode=redeploy_object, where="id = '<objectId>'")`.
+  - Else `deploy(sandbox=true, mode=redeploy_closure, where="id = '<objectId>'")`.
+    The closure's functions, views and peer procedures, then this object, on
+    the Snowflake side only. No table reload, so seeded rows stay.
 - **Else:** `deploy(sandbox=true, mode=redeploy_object, where="id = '<objectId>'")`.
 
 `mode=redeploy_object` `failure_class=sql` is this object's converted body.
@@ -46,23 +45,35 @@ Call `run_tests` with `object_name` or `where` (`mode` defaults to `validate`).
   cases run in `AIMSBX_*`; mutated tables restore from the common catalogs
   before the next case.
 - After AIMSBX DML the tools did not see (`sql_execute`),
-  `run_tests(restore_from="sandbox")` so restore uses a clone of that
-  pair instead. `reload_tables` and mutating `query_source` into AIMSBX
-  latch this automatically.
+  `deploy(sandbox=true, mode=redeploy_object, restore_from="sandbox")` so
+  restore uses a fresh clone of that pair instead. `run_tests(restore_from="sandbox")`
+  clones only when none is latched yet. `reload_tables` and mutating
+  `query_source` into AIMSBX latch this automatically.
 - Capture: same tool, `mode=capture` (no restore).
+
+`run_tests` returns at once with `status: "started"` and a `job_id`; the run
+goes on in the background. A walker returns waiting: the orchestrator wakes it
+when the run ends. Then `job_status(job_id, details=true)`: `details.result`
+is the JSON below. `status: "already_running"` means a run of these objects is
+still going: do not call `run_tests` again, wait for that `job_id`.
+A refusal with `unowned: true` means that run's MCP process died and nothing
+shows its scai stopped: once no `scai test` process is left for those objects,
+call `run_tests` again with `release_unowned=<job_id>`.
+`walk_run test` / `capture` wait for the run and reply with the JSON.
 
 JSON: `success`, `exit`, `total`, `passed`, `failed`, `errors`,
 `no_baseline`, optional capped `failing` (`name`, `status`, `error_message`),
-short `warnings`. Capture also returns `captured_rows`. Use those counts.
+short `warnings`; a failed validate adds `results_table`. Capture also returns `captured_rows`. Use those counts.
 No result grids, empty baseline/actual tables, diffs, or coverage report.
 
 - `success: false` with `passed > 0` is mixed — read `failing`. Do not treat
   it as empty.
+- `nothingRan: true` (`total: 0`): no case ran, so nothing was validated and
+  `runTests` is reopened (`reopened: false` with `reopen_error` when it could
+  not be). Read `reason`; do not finish the object.
 - `params_hash` / `differences` are not in that summary. Cases land in
-  `<metadata_database>.VALIDATION.RESULTS`. Query `VALIDATION.LATEST`
-  (`.scai/config/plugin.yml` `metadata_database` — `SNOWCONVERT_AI` unless
-  overridden; same catalog as ORCHESTRATION, not the migration target) only
-  in the fix loop / verifier. No `<project_dir>/test-results/results.json`.
+  `results_table`. Query `VALIDATION.LATEST` in that catalog (not the
+  migration target) only in the fix loop / verifier. No `<project_dir>/test-results/results.json`.
 - BTEQ rows: `metadata.kind: "bteq"`; compare file I/O + table deltas, not
   a return value.
 - Statuses: `PASS` matches baseline; `FAIL` differs; `ERROR` exception;
@@ -170,11 +181,12 @@ Otherwise proceed — the machine routes to the fix loop.
 - **All pass:** stamp so `TASK_EVENTS` get an `advanced` row — do not leave
   completion to `next_task` alone:
   `transition_status(status="advance", task="runTests", outcome="completed", where="id = '<object_id>'")`.
-  The server checks it against the `testValidationResults` oracle
+  The server checks it against the `testValidationResults` status source
   (`VALIDATION.RESULTS`) and refuses it when they disagree. Do not write
   `codeStatus.testing`. Return.
 - **Any fail (not dependency):** do not stamp — only a completed advance is
-  oracle-confirmed here; `codeStatus.testing` is read-only. The oracle already
+  confirmed by the status source here; `codeStatus.testing` is read-only. The
+  status source already
   reads failed (`error='sql'`) and the walk routes to rule application.
   `next_task.reason` names the latest-run breakdown (`N passed, M failed
   and override-accepted, K failed hash … with no overlay`). Use those
@@ -184,14 +196,17 @@ Otherwise proceed — the machine routes to the fix loop.
   escalate, not the SQL fix loop.
 - **Still failing after the fix loop**, and either a Snowflake-SQL or YAML
   change would be illogical (source wall-clock expression; source-side
-  non-determinism such as `TOP` ties with no unique `ORDER BY`; do not
-  edit source to make a case pass) **or** the remaining hashes are leftover
-  RESULTS identities after you replaced illogical YAML inputs with a
-  still-covering row: spawn **one** foreground `test_case_verifier`
+  non-determinism such as `TOP` ties with no unique `ORDER BY`; identity /
+  sequence / UUID values each side generates, and their copies in
+  referencing columns; do not
+  edit source to make a case pass) **or** the remaining hashes are illogical
+  YAML rows you added a covering row for, or leftover RESULTS
+  identities: spawn **one** foreground `test_case_verifier`
   (`run_in_background=false`, `subagent_type="test_case_verifier"`) with
   fresh context for **all** remaining hashes on this object.
   - Hand `objectId`, `projectDir`, `pluginDir`, the `params_hash` list,
-    and the RESULTS diffs — not a verdict, not a ready-made call. Do not
+    `results_table` from the failed reply, and the RESULTS diffs — not a
+    verdict, not a ready-made call. Do not
     pass `fork_conversation_history` or `agent_id`.
   - That child reads each case and the human `answered` row (`human: true`
     is binding override-accept). Do **not** call
@@ -209,7 +224,7 @@ transition_status(status="override_accept_case", task="runTests",
 ```
 
   - `task` must be `runTests`. `params_hash`, `asks`, `choice`, and
-    `reason` are required. The oracle joins
+    `reason` are required. The status source joins
     `(code_unit_id, params_hash, target)`.
   - Wait. For each `cases[]` row: `accepted` — keep going; `rejected` —
     stamp `error="sql"` and fix (a Snowflake-SQL or YAML edit exists; a
@@ -222,10 +237,10 @@ transition_status(status="override_accept_case", task="runTests",
     RESULTS" when the YAML still covers the path.
 - Do not edit the YAML to remove a test case (delete, comment out, or omit
   on regenerate — overflow, short-input, leftover RESULTS FAIL).
-  - `scai test validate` only runs rows still in the file; the oracle
+  - `scai test validate` only runs rows still in the file; the status source
     scores every `params_hash` it has ever seen in `VALIDATION.RESULTS`.
     Dropping a failing row prints 20/20 while `runTests` stays failed.
-  - Replacing illogical inputs (harness-rounded MONEY past the type limit)
-    with a still-covering row is not a delete — the old hash stays FAIL
-    in RESULTS and is `override_accept_case` once coverage has not dropped.
+  - For illogical inputs (harness-rounded MONEY past the type limit), add
+    a row that covers the same path and keep the illogical one; if it
+    fails, its hash is `override_accept_case`.
   - A case that should not count is `override_accept_case`, not a YAML omit.

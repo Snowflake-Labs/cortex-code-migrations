@@ -47,6 +47,7 @@ from .loaders import (
     load_code_units_from_registry,
     load_object_references_from_registry,
     load_missing_references_from_registry,
+    load_missing_entries_from_registry,
     load_exclusion_findings_from_registry,
     # Unified (auto-dispatch) loaders
     load_code_units_auto,
@@ -124,6 +125,7 @@ __all__ = [
     "load_code_units_from_registry",
     "load_object_references_from_registry",
     "load_missing_references_from_registry",
+    "load_missing_entries_from_registry",
     "load_exclusion_findings_from_registry",
     # Unified (auto-dispatch) loaders
     "load_code_units_auto",

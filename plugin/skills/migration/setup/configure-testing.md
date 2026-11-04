@@ -33,16 +33,13 @@ logs.
 
 ## Sell block
 
-Show the user this block verbatim:
+In two or three sentences of your own, tell the user that we are now configuring the **testing framework**, which checks that the migrated procedures and functions produce the same output on Snowflake as on the source. Draw on these facts; do not recite them:
 
-> **Now we'll configure the testing framework.** This makes sure your migrated procedures and functions on Snowflake produce the same output as the originals on your source database. A quick orientation before we pick how to run it:
->
-> - **It's an automated comparison.** For each procedure, the framework runs it on your source DB *and* on Snowflake, then compares the two results. Anything that doesn't match shows up as a failure you can drill into.
-> - **Your source DB is the reference.** Whatever your source procedure produces is treated as the "correct" answer; the goal is to make Snowflake match.
-> - **It handles the hard cases.** Procedures that return multiple result sets, that use OUTPUT/INOUT parameters, or that modify tables (DML) are all covered — for DML, table changes are compared, not just return values.
-> - **Tests are isolated.** Each test runs against a fresh clone of your data on the Snowflake side; the source side uses snapshot or transactional isolation. Tests can't pollute each other or your real data.
-> - **Results are saved in Snowflake.** Expected outputs from your source DB are captured once and stored in Snowflake, so the framework can compare against them repeatedly while you iterate on a fix — no need to re-query the source. Test outcomes are also stored in Snowflake, ready to review or share later.
-> - **Multi-dialect.** Works for SQL Server, Oracle, Redshift, PostgreSQL, and Teradata source databases.
+- It runs each procedure on the source and on Snowflake and compares the results; the source is the reference, and each mismatch is a failure they can drill into.
+- It covers multiple result sets, OUTPUT/INOUT parameters and DML (table changes are compared).
+- Tests are isolated: a fresh clone of the data on Snowflake, snapshot or transactional isolation on the source.
+- Expected outputs are captured once and stored in Snowflake with the test outcomes, so fixes can be retried without re-querying the source.
+- Sources: SQL Server, Oracle, Redshift, PostgreSQL and Teradata.
 
 ## Q1: query logs (source-data only)
 
@@ -92,7 +89,7 @@ everything is green.
 - `schema_status_validation: error("<msg>")` → surface `<msg>`; common cause is missing `CREATE SCHEMA on DATABASE` or `OWNERSHIP on VALIDATION`. Reference doc covers both.
 - `schema_status_dmv: error("<msg>")` → surface `<msg>`; `scai data migrate-schema` failed while installing DATA_MIGRATION / DATA_VALIDATION in the metadata database. Common cause is missing `CREATE SCHEMA` on that database.
 - `installing("…")` on any `schema_status_*` → still running, not a failure: tell the user, then call `configure()` with no arguments to keep waiting.
-- `prereq_status_clone_perms: failed("<msg>")` → surface `<msg>`; cause is missing `CREATE DATABASE ON ACCOUNT` (needed for clone-based test isolation). Reference doc has the GRANT.
+- `prereq_status_clone_perms: failed("<msg>")` → surface `<msg>`; cause is missing `CREATE DATABASE ON ACCOUNT` (needed for clone-based test isolation). Reference doc has the GRANT. If the account can't grant it, ask the user to have pre-created databases named under `testing_sandbox_databases` in test_config.yaml (reference doc), then recheck.
 - `schema_status_metadata: error("...not visible...recreate_metadata_database=true")` → surface the message. Ask the user whether to restore/GRANT USAGE / repoint `metadata_database`, or start fresh. Only after they confirm starting fresh, call `configure(recreate_metadata_database=true)`. Do **not** treat this as a transient recheck.
 - `schema_status_metadata: error("...cannot tell whether...already bootstrapped...")` → surface. Pre-upgrade stamp under a non-default pin, or the latch names a different metadata database. If the user confirms the database already exists, call `configure(ensure_metadata_schema=true)` (recheck latches it). Only after they confirm starting **empty**, call `configure(recreate_metadata_database=true)`.
 - `schema_status_metadata: error("...not reachable...")` → surface. Mixed-case / quoted stored name; rename per `configure-snowflake-target.md`, do **not** recreate.

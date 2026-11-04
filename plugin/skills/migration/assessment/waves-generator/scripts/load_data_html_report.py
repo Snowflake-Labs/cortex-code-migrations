@@ -243,14 +243,20 @@ def load_missing_object_references_from_registry(registry_dir):
     """Load missing object references from SnowConvert registry JSON files.
 
     Returns dict with keys:
-        - missing_objects: set of missing object names
+        - missing_objects: set of missing object names, every in-scope
+          ``isMissing`` entry included
         - dependents: dict mapping missing object -> list of dependents
         - details: list of dependency details
+        - missing_without_callers: dict mapping each missing object no
+          in-scope caller references -> whether its ``requiredBy`` names any
         - data_source: 'registry'
         - warning: None (or error message on failure)
     """
     import re
-    from snowconvert_reports import load_missing_references_from_registry
+    from snowconvert_reports import (
+        load_missing_entries_from_registry,
+        load_missing_references_from_registry,
+    )
 
     _NA_SEG_RE = re.compile(r'\[N/A\]\.')
     _NA_VALS = {"N/A", "n/a", "NA", "na", ""}
@@ -269,6 +275,15 @@ def load_missing_object_references_from_registry(registry_dir):
             yield caller, referenced, r.relation_type, r.line, r.file_name
 
     result = _accumulate_missing_refs(_iter())
+    # A missing entry no in-scope caller references still belongs in the
+    # list (the Dependencies table shows it as Missing). Record whether its
+    # ``requiredBy`` names anyone, so the report can say why it has no callers.
+    result['missing_without_callers'] = {}
+    for name, has_required_by in load_missing_entries_from_registry(Path(registry_dir)).items():
+        name = _clean(name)
+        if name and name != '[]' and name not in result['missing_objects']:
+            result['missing_objects'].add(name)
+            result['missing_without_callers'][name] = has_required_by
     result['data_source'] = 'registry'
     result['warning'] = None
     return result

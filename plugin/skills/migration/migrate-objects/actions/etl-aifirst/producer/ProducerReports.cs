@@ -878,12 +878,13 @@ internal static class ProducerReports
       // `using`: IAssessmentDb is IDisposable and owns the SQLite write connection. In-memory mode
       // (inputFileCount 0 < DiskThresholdFileCount 10_000) means nothing lands on disk.
       using var db = new SqliteAssessmentDb();
+      using var references = new SqliteObjectReferenceRepository(db);
       // The registry is read on one line of the calculator, inside Add(ICompound, ILineageContext) --
       // the AST route, which this producer never takes because every row arrives through AddDirect.
       // An empty registry is therefore the inert answer, for the same reason the input-path
       // calculator above is the unused one.
       var calculator = new ObjectReferenceCalculator(
-        migrationData, db, new UnusedLineageInputPathCalculator(), new DbtModelRegistry());
+        migrationData, references, new UnusedLineageInputPathCalculator(), new DbtModelRegistry());
       IObjectReferenceCalculator sink = calculator;
       foreach (var row in rows)
       {

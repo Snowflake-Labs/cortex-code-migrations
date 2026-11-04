@@ -30,7 +30,7 @@ pluginDir: <pluginDir>
 | Helper `result` | Do |
 |---|---|
 | `done` | Continue with `setup_sandbox`; it loads that generated CSV. |
-| `busy` | Return `partial`. The helper already waited for the pipeline lease. Do not generate the table yourself. |
+| `busy` | Return `partial`. Another call holds this table, or the testbed's locks stayed busy for the whole call. Do not generate the table yourself. |
 | `escalate` | Park `deployCommonSandbox` with the helper's `reason` and `asks`, then return `stuck`. |
 
 ## All objects deployment
@@ -106,5 +106,5 @@ is no registry stamp. Still advance, so `TASK_EVENTS` get an `advanced` row —
 transition_status(status="advance", task="deployCommonSandbox", outcome="completed", where="id = '<object_id>'")
 ```
 
-The server checks the sandbox oracle. If advance refuses (`does not confirm
-completion`), wait for the oracle and retry. Then keep going with `next_task`.
+The server checks the sandbox status source. If advance refuses (`does not
+confirm completion`), wait for it and retry. Then keep going with `next_task`.

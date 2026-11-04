@@ -7,8 +7,13 @@
     <AssemblyName>AiFirst.Producer.Tests</AssemblyName>
     <EngineBin Condition="'$(EngineBin)' == ''">$(AIFIRST_ENGINE_BIN)</EngineBin>
     <EngineBin Condition="'$(EngineBin)' != ''">$([MSBuild]::EnsureTrailingSlash('$(EngineBin)'))</EngineBin>
+    <UseEnginePackages Condition="'$(EngineBin)' == ''">true</UseEnginePackages>
     <ProducerAssembly Condition="'$(AIFIRST_PRODUCER_ASSEMBLY)' != ''">$(AIFIRST_PRODUCER_ASSEMBLY)</ProducerAssembly>
     <ProducerAssembly Condition="'$(ProducerAssembly)' == ''">../bin/Debug/net10.0/aifirst-migrate.dll</ProducerAssembly>
+    <!-- Same engine packages and version as the producer (see ../CallableMigrator.csproj). -->
+    <_SqlProcessorCsproj>$(MSBuildThisFileDirectory)../../../../../../../../../Snowflake.SnowConvertDesktop/Snowflake.SnowConvertDesktop.Sql/Snowflake.SnowConvertDesktop.Sql.csproj</_SqlProcessorCsproj>
+    <EnginePackageVersion Condition="'$(EnginePackageVersion)' == '' and Exists('$(_SqlProcessorCsproj)')">$([System.Text.RegularExpressions.Regex]::Match($([System.IO.File]::ReadAllText('$(_SqlProcessorCsproj)')), 'Include="Mobilize\.Snow\.CodeProcessor" Version="([^"]+)"').Groups[1].Value)</EnginePackageVersion>
+    <RestoreConfigFile Condition="'$(UseEnginePackages)' == 'true' and '$(RestoreConfigFile)' == ''">$(MSBuildThisFileDirectory)../../../../../../../../../Snowflake.SnowConvertDesktop/nuget.config</RestoreConfigFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -17,10 +22,15 @@
     </Reference>
   </ItemGroup>
 
-  <Target Name="ValidateEngineBin" BeforeTargets="AddEngineReferences">
-    <Error Condition="'$(EngineBin)' == ''"
-           Text="Set AIFIRST_ENGINE_BIN or pass -p:EngineBin=..." />
-    <Error Condition="'$(EngineBin)' != '' and !Exists('$(EngineBin)')"
+  <ItemGroup Condition="'$(UseEnginePackages)' == 'true'">
+    <PackageReference Include="Artinsoft.Common.CoreAST" Version="$(EnginePackageVersion)" />
+    <PackageReference Include="Mobilize.Common.Store.SqliteStorage" Version="$(EnginePackageVersion)" />
+    <PackageReference Include="Mobilize.Snow.CodeProcessor" Version="207.0.0" />
+    <PackageReference Include="Mobilize.Snow.CodeProcessor.Content" Version="207.0.0" />
+  </ItemGroup>
+
+  <Target Name="ValidateEngineBin" BeforeTargets="AddEngineReferences" Condition="'$(UseEnginePackages)' != 'true'">
+    <Error Condition="!Exists('$(EngineBin)')"
            Text="EngineBin does not exist: $(EngineBin)" />
   </Target>
 
@@ -28,13 +38,13 @@
     <_ExcludeDlls>$(EngineBin)aifirst-migrate.dll;$(EngineBin)UnitTests.dll;$(EngineBin)Moq.dll;$(EngineBin)Castle.Core.dll;$(EngineBin)Microsoft.VisualStudio.TestPlatform*.dll;$(EngineBin)Microsoft.TestPlatform*.dll;$(EngineBin)MSTest*.dll;$(EngineBin)testhost.dll</_ExcludeDlls>
   </PropertyGroup>
 
-  <Target Name="AddEngineReferences" BeforeTargets="ResolveReferences">
+  <Target Name="AddEngineReferences" BeforeTargets="ResolveReferences" Condition="'$(UseEnginePackages)' != 'true'">
     <ItemGroup>
       <ReferencePath Include="$(EngineBin)*.dll" Exclude="$(_ExcludeDlls)" />
     </ItemGroup>
   </Target>
 
-  <Target Name="StageEngineRuntime" AfterTargets="Build">
+  <Target Name="StageEngineRuntime" AfterTargets="Build" Condition="'$(UseEnginePackages)' != 'true'">
     <ItemGroup>
       <_Runtime Include="$(EngineBin)*.dll" Exclude="$(_ExcludeDlls);$(EngineBin)aifirst-migrate.dll" />
       <_Runtime Include="$(EngineBin)*.json" />

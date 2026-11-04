@@ -164,6 +164,8 @@ After running, handle the result:
 >
 > **Azure Synapse:** scai `--auth service-principal` becomes worker `mode = "azure_ad"` with `client_id` / `client_secret` — not `mode = "service_principal"`. `interactive` cannot start a worker (headless). Confirm `mode` after generate-config. See [Azure Synapse auth modes](../references/worker-config-reference.md#azure-synapse-auth-modes).
 >
+> **SQL Server Windows authentication:** when the source connection `auth_method` is `windows`, generate-config writes `authentication = "windows_auth"` and no SQL password. On a domain-joined Windows host the worker process must run as a domain account SQL Server accepts. On WSL or Linux, follow [`../../connection/sql-server-connection/references/wsl-windows-auth.md`](../../connection/sql-server-connection/references/wsl-windows-auth.md) before starting the worker. Snowpark Container Services uses a keytab; that path is the SPCS worker skill, [`../references/sqlserver-spcs-windows-auth.md`](../references/sqlserver-spcs-windows-auth.md).
+>
 > **PostgreSQL:** `data_infrastructure(mode="up")` applies the selected method after generation:
 > `pg_copy` → `use_copy = true` (psql preferred, ODBC fallback automatic); `odbc` → `use_copy = false`
 > and an ODBC driver is then required. Legacy `regular` leaves the flag as generated. The `database`

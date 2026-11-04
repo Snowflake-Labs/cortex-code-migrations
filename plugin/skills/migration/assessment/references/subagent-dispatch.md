@@ -4,13 +4,15 @@ Read this file in full after `assessment_inputs` is complete. Substitute every
 placeholder and use absolute paths, except `staged_pbits` (see §6.8).
 
 When `data_lineage.dispatch` is true and `staged_pbits` is non-empty, dispatch
-is **two steps**, not one: enrichment first, then the remaining fan-out. When
-dispatch is false or `staged_pbits` is empty, skip the first step and send the
-remaining in-scope runners in one message. After each dispatch message, wait
+is **three steps**: enrichment first, then the remaining fan-out, then
+business use cases alone. When dispatch is false or `staged_pbits` is empty,
+skip the first step: send the fan-out in one message, then business use cases
+alone once it has returned. After each dispatch message, wait
 for its agents in the same turn with `agent_output(agent_id=<id>, wait=true)`;
 do not end the turn. Before waiting, tell the user what is running, where to
-watch it and how completion is signalled, and report each analysis as it
-finishes (see SKILL.md Step 5).
+watch it and how completion is signalled. Write one line each time a wait
+returns: the analyses that finished, or what is still running (see SKILL.md
+Step 5).
 
 ## Contents
 
@@ -18,6 +20,7 @@ finishes (see SKILL.md Step 5).
 - Core assessment runners
 - ETL and Discovery runners
 - Data Lineage runner
+- Business use cases runner, after the fan-out
 
 ## Common contract
 
@@ -38,24 +41,11 @@ finishes (see SKILL.md Step 5).
 }
 ```
 
-Data Lineage adds `manifest`. The parent waits for these returns in the same
-turn as the dispatch message.
+Data Lineage adds `manifest`; business use cases add `wave_plan` and
+`top_use_cases`. The parent waits for these returns in the same turn as the
+dispatch message.
 
 ## Core assessment runners
-
-### 6.1 waves-runner prompt
-
-```text
-Read and follow plugin/skills/migration/assessment/waves-generator/SKILL.md.
-You are a non-interactive sub-agent. Do not ask questions.
-Context: project_dir, partition_min_size, partition_max_size,
-prioritization_globs, wave_ordering, output_dir=<project_dir>/assessment.
-Call configure(project_dir). From project_dir run scai assessment waves with
---min-size/--max-size, one --prioritize per glob, and
---no-category-waves only for dependency ordering. Fail rather than wait for
-TTY input. Return the common JSON contract for waves-generator with the newest
-waves_analysis_*.json and partition/SCC/object counts.
-```
 
 ### Object exclusion
 
@@ -83,7 +73,7 @@ ASM0031 is skipped, not error.
 
 ### Anti-patterns
 
-Dispatch only for SQL Server and Redshift.
+Dispatch only for SQL Server, Redshift, Oracle, and Teradata.
 
 ```text
 Read and follow plugin/skills/migration/assessment/anti-patterns/SKILL.md.
@@ -150,7 +140,9 @@ the project root run scai assessment etl generate. Render DAG HTML from the
 newest dag_model_*.json with:
 uv run --project "<etl_assessment_skill_dir>" python "<etl_assessment_skill_dir>/scripts/dag_renderer/render_dags.py" "$dag_model"
 Never pass project_dir as --project. For auto-review-all classify every
-package and produce ai_ssis_summary.html. Return the common JSON contract for
+package and produce ai_ssis_summary.html. Review the packages yourself, one at
+a time; never split them across sub-agents, background jobs or parallel
+`scai assessment etl update` calls. Return the common JSON contract for
 etl-assessment with the newest etl_assessment_analysis_*.json and package
 counts.
 ```
@@ -279,6 +271,30 @@ No reporting layer is still `ok`. When extraction cannot produce a usable
 model, omit enrichment but still build the graph. Unresolved references that
 were safely omitted are successful output and must remain in the summary.
 
+### Business use cases, after the fan-out
+
+Always dispatch, alone, after every fan-out agent has returned. Candidates read
+the exclusion findings and Power BI dependencies the earlier steps wrote, and
+`waves plan` writes `planning.wave` and `planning.waveRank`, so it must not
+race another child's registry write.
+
+```text
+Read and follow plugin/skills/migration/assessment/business-use-cases/SKILL.md
+in assessment mode.
+You are a non-interactive sub-agent. Do not ask questions.
+Context: project_dir.
+Call configure(project_dir). From project_dir run scai assessment waves
+candidates, adjudicate every candidate with the scai assessment waves query
+tools, run the coverage pass, and write
+artifacts/assessment/waves/business-use-cases.json. Run scai assessment waves
+use-cases and fix every ASM0050 problem it lists, at most three rounds. When a
+use case is deployable, run scai assessment waves plan with no options. Never
+invent a code unit id. Never ask for a wave size, prioritization patterns or an
+ordering. Return the skill's JSON: use-cases.json as output_json,
+wave-plan.json as wave_plan, and at most three top_use_cases copied from those
+files.
+```
+
 ### 6.8 Common rules for every dispatch
 
 1. **Enrichment before the fan-out.** When `data_lineage.dispatch` is true and
@@ -294,10 +310,14 @@ were safely omitted are successful output and must remain in the summary.
 4. **Each sub-agent writes only its own output JSON** and does not hand-edit
    the registry, source SQL, or other sub-agents' artifacts. CLI commands the
    skill tells it to run may write the registry (`scai assessment powerbi
-   enrich` is the one that does). Those CLI-owned writes are allowed, and they
-   are ordered: enrichment completes before waves and object-exclusion run.
+   enrich`, `scai assessment object-exclusion` and `scai assessment waves
+   plan` do). Those CLI-owned writes are allowed, and they are ordered:
+   enrichment completes before object exclusion runs, and both complete
+   before business use cases plan the waves.
 5. **JSON return only** — free-form text in the report is harder to consume
    reliably.
+6. **Business use cases last and alone.** Dispatch `business-use-cases` only
+   after every other agent has returned, in a message of its own.
 
 Do not end your turn after the dispatch message: wait for every launched agent
 with `agent_output(agent_id=<id>, wait=true)` in the same turn.

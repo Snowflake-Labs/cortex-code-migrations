@@ -20,6 +20,7 @@
 ## Guides
 - orchestration_guide: control-flow-guide.md
 - transformation_guide: dataflow-guide.md
+- scripting_proc_guide: scripting-proc-guide.md
 - element_types: element-types.md
 - ewi_directory: ewi/
 

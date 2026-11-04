@@ -47,7 +47,7 @@ card, so never ask a standalone ETL yes/no. Ask which platform via `ask_user_que
     ```
 
     Do **not** pass `--overwrite` here — the SQL is already in `source/` and would be
-    wiped. If it times out, runs in the background or fails, handle it as
+    wiped. Launch it with `run_in_background=true`, or set the bash tool `timeout` to at least `900000` (15 minutes). The default 120 second timeout kills the process. If it times out, runs in the background or fails, handle it as
     [Step 3 of the skill](SKILL.md#if-the-import-times-out-or-runs-in-the-background) says.
 
   Getting the containment check wrong is not silently destructive: re-adding files
@@ -60,7 +60,9 @@ card, so never ask a standalone ETL yes/no. Ask which platform via `ask_user_que
 
 - **Another ETL platform:**
   1. Ask which platform. Accept a free-form name if it is not in the list. Store the
-     lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `adf`, …).
+     lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `hop`, `adf`, …).
+     For Hop, `hop` and `apacheHop` are the same intake: the helper vendors under
+     `source/_etl_aifirst/hop/` and enumerates `units[].platform` as `apacheHop`.
   2. Ask for the folder path containing the platform's source documents.
   3. Copy losslessly into `source/_etl_aifirst/<platform>/` by invoking the enumeration
      helper — do **not** hand-copy files and do **not** run `scai code add` for these
@@ -83,13 +85,15 @@ card, so never ask a standalone ETL yes/no. Ask which platform via `ask_user_que
      `platform`, `format`, `source_file` (project-relative). Query those deterministic
      IDs first. For an ID that already exists, verify that its platform, format, and
      `files.source.path` exactly match the envelope and do not recreate it. Stop on a
-     mismatch. For each missing ID, call:
+     mismatch. For each missing ID, call with that unit's envelope fields — pass
+     `units[i].platform` as `platform`, not the asked slug. Hop's envelope platform
+     is `apacheHop`.
 
      ```
      create_registry_unit(
        unit_id="<UNIT_ID>",
        name="<NAME>",
-       platform="<PLATFORM_SLUG>",
+       platform="<UNIT_PLATFORM>",
        format="<FORMAT>",
        source_file="<PROJECT_RELATIVE_SOURCE_PATH>"
      )
@@ -104,19 +108,22 @@ card, so never ask a standalone ETL yes/no. Ask which platform via `ask_user_que
      `customKind`. `register_units` creates `kind: custom` units without
      `files.source.path`, which is the exact shape this register step must not write.
 
-  5. Verify each unit reached the registry with the shape convert expects:
+  5. Verify each unit reached the registry with the shape convert expects.
+     Query by the envelope `unit_id`:
 
      ```
      query_registry(
-       where="kind = 'etl' AND extensions.sourcePlatform = '<PLATFORM_SLUG>'",
+       where="id = '<UNIT_ID>'",
        fields="id,kind,source,files,extensions"
      )
      ```
 
-     Confirm the response lists every `unit_id` you just created, that each row has
-     `kind: "etl"`, `source.objectType: "workflow"`, and a `files.source.path` equal
-     to the vendored source file. If any of that is missing, stop and tell the user
-    . There is no side manifest to fall back to.
+     Confirm `kind: "etl"`, `source.objectType: "workflow"`, and a
+     `files.source.path` equal to the vendored source file, and
+     `extensions.sourcePlatform` equal to the envelope platform. A Hop unit may also
+     have `source.platform = apacheHop`; do not set or change either with
+     `update_registry`. If any of that is missing, stop and tell
+     the user. There is no side manifest to fall back to.
 
   Repeat steps 3–5 once per platform if the migration has more than one AI-First ETL
   source. Do not mix `source/_etl/` and `source/_etl_aifirst/<platform>/` for the same

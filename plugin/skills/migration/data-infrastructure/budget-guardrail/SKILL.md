@@ -46,8 +46,42 @@ not re-run. The caller then continues to `up`.
   `DMV_<POOL_ID>_STOP()`. A pool is in only one custom budget, so naming both after it keeps another
   project's guardrail in the same account from being reused or replaced.
 
-If the warehouse also serves other workloads, say so: the cap stops them too. Recommend a dedicated warehouse
-for the migration if they want the cap to stop only DMV.
+**Owners, other users and this month's spend.** Read these before the cap is asked (Step 3). All are
+read-only:
+
+```sql
+SHOW WAREHOUSES LIKE '<WAREHOUSE>';            -- "owner"
+SHOW COMPUTE POOLS LIKE '<COMPUTE_POOL>';      -- "owner", "num_services", "num_jobs"
+SHOW SERVICES IN COMPUTE POOL <COMPUTE_POOL>;  -- the services and jobs <ROLE> can see
+
+SELECT COALESCE(SUM(CREDITS_USED), 0) AS WAREHOUSE_CREDITS
+  FROM SNOWFLAKE.ACCOUNT_USAGE.WAREHOUSE_METERING_HISTORY
+  WHERE WAREHOUSE_NAME = UPPER('<WAREHOUSE>')
+    AND START_TIME >= DATE_TRUNC('MONTH', CURRENT_TIMESTAMP());
+SELECT COALESCE(SUM(CREDITS_USED), 0) AS POOL_CREDITS
+  FROM SNOWFLAKE.ACCOUNT_USAGE.SNOWPARK_CONTAINER_SERVICES_HISTORY
+  WHERE COMPUTE_POOL_NAME = UPPER('<COMPUTE_POOL>')
+    AND START_TIME >= DATE_TRUNC('MONTH', CURRENT_TIMESTAMP());
+```
+
+Count only rows whose `name` is exactly the object's (`_` is a wildcard in `LIKE`). Use the exact name, without
+`UPPER`, for a quoted mixed-case name. The sum of the two credits is `<MONTH_SPEND>`. These views lag by up to
+a few hours, so it is a floor. A failing spend query (`does not exist or not authorized`, usually because
+`SNOWFLAKE.USAGE_VIEWER` is missing) means the spend is **unknown**. Say so on the card. It does not stop the
+offer.
+
+An object is **shared** when its owner is not `<ROLE>`, or when the pool runs a service other than this
+migration's orchestrator and worker. The warehouse is also shared when the user says it serves other work. A
+cap on a shared object stops everyone who uses it, not only DMV, so recommend a dedicated warehouse and pool if
+they want the cap to stop only this migration.
+
+`SHOW SERVICES` lists only services `<ROLE>` holds a privilege on (unless it has MANAGE GRANTS), so owning the
+pool does not mean every service on it is visible: another team's service can run there unseen, and the stop
+suspends it too. Reconcile the counts: `num_services` + `num_jobs` from `SHOW COMPUTE POOLS` counts every
+service and job running on the pool, visible or not. Compare it with the `SHOW SERVICES` rows whose `status`
+is `RUNNING` and that are this migration's orchestrator, worker or their jobs. When the pool's count is
+higher, or the pool row or its counts cannot be read, isolation cannot be established: the pool is
+**possibly shared**. Treat it like a shared pool on the card; it does not stop the offer.
 
 ## Step 2 — Check for existing budgets (before any change)
 
@@ -84,7 +118,14 @@ what exists. **If the budget exists:**
 ```sql
 CALL SNOWCONVERT_AI.BUDGETS.DMV_<POOL_ID>_BUDGET!GET_LINKED_RESOURCES();
 CALL SNOWCONVERT_AI.BUDGETS.DMV_<POOL_ID>_BUDGET!GET_CUSTOM_ACTIONS();
+CALL SNOWCONVERT_AI.BUDGETS.DMV_<POOL_ID>_BUDGET!GET_SPENDING_HISTORY(
+  TIME_LOWER_BOUND => DATE_TRUNC('MONTH', CURRENT_TIMESTAMP()),
+  TIME_UPPER_BOUND => CURRENT_TIMESTAMP());
 ```
+
+The sum of `CREDITS_SPENT` is `<BUDGET_SPEND>`: what the budget has already counted against its limit this
+month. It can be less than `<MONTH_SPEND>`, since the budget counts an object only from when it was added. If
+the call fails, `<BUDGET_SPEND>` is **unknown**; say so on the card.
 
 **If the procedure exists:**
 
@@ -125,6 +166,34 @@ read it back (Step 6). The action references the procedure by name, so it does n
 
 ## Step 3 — Ask for the cap (one card)
 
+Open the card with what Step 1 read:
+
+> `<WAREHOUSE>` is owned by `<WAREHOUSE_OWNER>` and `<COMPUTE_POOL>` by `<POOL_OWNER>`. This month they have
+> used about `<MONTH_SPEND>` credits so far.
+
+Add each warning that applies:
+
+- **A shared object:** "`<OBJECT>` is owned by `<OWNER>` (or: also runs `<OTHER_SERVICES>`). When the cap trips,
+  it suspends `<OBJECT>` for everyone who uses it, not only this migration."
+- **Possibly shared:** "`<COMPUTE_POOL>` runs `<POOL_COUNT>` services and jobs, and I can see only
+  `<VISIBLE_COUNT>` of them as this migration's (or: I could not read how many it runs). Others may run there
+  that `<ROLE>` cannot see, and the cap would suspend them too." Recommend a dedicated pool as for a shared one.
+- **A new budget's first month** (Step 5 creates it): "The `<MONTH_SPEND>` credits used so far this month are
+  not counted: a new budget counts objects added to it one by one only from when they are added (their
+  earlier usage is not backfilled), so this month the cap counts only what they spend from now on; from next
+  month it counts the whole month." A `PROJECTED`
+  basis forecasts from those few days only, so it may stop too early or too late this month. The same holds
+  for an object an existing budget does not link yet.
+- **An existing budget near the cap:** the budget already counts `<BUDGET_SPEND>` this month, so a limit whose
+  threshold is at or below it trips at its next refresh. Never suggest a limit at or below `<BUDGET_SPEND>`.
+  When you give example limits, start them above it with room for the migration. If the user picks a limit
+  whose threshold is at or below it, say that before Step 5: "This cap is already reached, so it would suspend
+  `<WAREHOUSE>` and `<COMPUTE_POOL>` within hours of being set." Ask them to confirm it or pick another.
+- **Spend unknown:** "I could not read this month's spend." For an existing budget whose `<BUDGET_SPEND>` is
+  unknown, add: "so I cannot tell whether this cap is already reached."
+
+Still offer the cap. The warnings tell the user what it will stop, and the user decides. A no is a decline.
+
 Ask together:
 
 1. **Monthly limit** in credits — the budget's spending limit.
@@ -145,6 +214,21 @@ Run `SHOW GRANTS TO ROLE <ROLE>;`, `SHOW GRANTS ON WAREHOUSE <WAREHOUSE>;` and
 | Creating the budget | database roles `SNOWFLAKE.BUDGET_CREATOR` and `SNOWFLAKE.USAGE_VIEWER`; USAGE on the database and CREATE SNOWFLAKE.CORE.BUDGET and CREATE PROCEDURE on the schema |
 | Adding the two objects | APPLYBUDGET on the warehouse and on the pool (the budget's owner already holds its ADMIN instance role) |
 | The procedure's own actions (it runs as its owner) | OPERATE and MODIFY on the warehouse and on the pool |
+
+`SHOW GRANTS TO ROLE` lists only direct grants, not those `<ROLE>` inherits through a role granted to it. With
+`<ROLE>` as the session's role, a privilege the `ON` results list for another grantee is held when
+`SELECT IS_ROLE_IN_SESSION('<grantee_name>');` returns `TRUE`. For the two database roles,
+`IS_DATABASE_ROLE_IN_SESSION` takes the relative name and reads it in the session's database (a fully
+qualified `'SNOWFLAKE.BUDGET_CREATOR'` always returns `FALSE`), so switch to `SNOWFLAKE` and back:
+
+```sql
+SELECT CURRENT_DATABASE();   -- note it, to restore below
+USE DATABASE SNOWFLAKE;
+SELECT IS_DATABASE_ROLE_IN_SESSION('BUDGET_CREATOR'), IS_DATABASE_ROLE_IN_SESSION('USAGE_VIEWER');
+USE DATABASE <previous_database>;   -- skip when CURRENT_DATABASE() was NULL
+```
+
+If `USE DATABASE SNOWFLAKE` fails, the role holds neither database role. Only what none of these shows is missing.
 
 For anything missing, show the exact statements for an admin to run, then wait:
 

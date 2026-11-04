@@ -291,6 +291,57 @@ ORDER BY ID;
 
 If metadata/schema extraction completes with **zero rows** but no worker error, compare worker TOML `[connections.source.*].database` against workflow `source.databaseName` (Oracle: service name; Teradata: database name). This is the most common silent failure mode.
 
+### SQL Server Error 10347 (CLR not enabled)
+
+**Symptom:** Every SQL Server extraction task fails with `Common Language Runtime(CLR) is not enabled
+on this instance. (10347)`; `job_status(details=true)` carries a matching `reports.hints` entry.
+
+**Cause:** Extraction formats temporal columns with T-SQL `FORMAT()`, which needs the SQL Server CLR
+runtime. SQL Server 2012+, Azure SQL Database and Managed Instance have it with no configuration.
+Azure SQL Edge does not, and refuses `sp_configure 'clr enabled'`.
+
+**Fix:** Report it under **Extraction** as a source prerequisite: the source must be a full SQL Server
+edition (see [extraction-strategies-reference.md](./extraction-strategies-reference.md#sql-server-sqlserver)).
+Not a code defect, so not `fixCode`. Never run `sp_configure` or other server changes through
+`query_source`; the source server belongs to the user.
+
+### Text holding the BCP terminators (SQL Server BCP)
+
+**Symptom:** a SQL Server table extracted with BCP (worker `use_bcp = true`) fails its load with
+`100038 Numeric value '…' is not recognized`, `100040 Date '…' is not recognized` or a NULL in a
+non-nullable column, where the rejected value looks like a piece of text. `job_status(details=true)`
+then carries a matching `reports.hints` entry. Or the table loads but validation shows a row count
+or L2 mismatch, which is the silent case.
+
+**Cause:** BCP writes text unquoted, ending a field at U+001F and a row at U+001E. A text value that
+holds U+001E ends its row early, so the rest of the value is read as the next row and usually fails
+the load. A value that holds U+001F starts a new field and can load cut off, or as NULL, with no
+error, so only validation catches it.
+
+**Check:** run one read-only `query_source` on the failing table, listing its `char`, `varchar`,
+`nchar`, `nvarchar`, `text` and `ntext` columns (`EXISTS` stops at the first hit):
+
+```sql
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM [db].[schema].[table]
+  WHERE CHARINDEX(NCHAR(30), CAST([col_a] AS NVARCHAR(MAX)) COLLATE Latin1_General_BIN2) > 0
+     OR CHARINDEX(NCHAR(31), CAST([col_a] AS NVARCHAR(MAX)) COLLATE Latin1_General_BIN2) > 0
+     OR CHARINDEX(NCHAR(30), CAST([col_b] AS NVARCHAR(MAX)) COLLATE Latin1_General_BIN2) > 0
+     OR CHARINDEX(NCHAR(31), CAST([col_b] AS NVARCHAR(MAX)) COLLATE Latin1_General_BIN2) > 0
+) THEN 1 ELSE 0 END AS HAS_BCP_TERMINATORS;
+```
+
+The binary collation matters: under some collations these control characters compare as ignorable.
+Run it only for a table with the symptom, never as a scan of every table.
+
+**Fix (only on `1`):** set `escapeBcpTerminators: true` on that table's entry, not under
+`defaultTableConfiguration`. The extract then escapes those characters and the load decodes them, so the
+SELECT runs a `REPLACE` per text column on that table only. The flag changes the next extract, not the
+rows already loaded. Propose a reload of the table with `synchronization.strategy: full-replace`, and
+run it once the user agrees (autonomous: as in [Clearing a bad load](../SKILL.md)). Native targets
+only: the orchestrator rejects the flag on Iceberg. On `0`, diagnose the value as any other load failure.
+Detail: [workflow-config-reference.md](./workflow-config-reference.md#bcp-terminators-and-escapebcpterminators).
+
 ### Teradata Error 6701 / 5355 (mixed charsets)
 
 **Symptom:** Extraction task fails on Teradata with Error **6701** or **5355** when the source table has columns in different character sets (for example LATIN + KANJISJIS + GRAPHIC in one row).

@@ -30,6 +30,25 @@ If leftover sandbox yaml exists for this view
 (`.scai/bindings/sandbox/{hash}.yaml` after a make_testable mint), use
 that file's `source:` / `snow:` maps instead of the attach common yaml.
 
+## Or: run validate_data
+
+Instead of Steps 1–3, a data validation workflow can check the view:
+`validate_data(mode="setup", where="id = '<object_id>'")` writes it under
+`views:`, then `validate_data(mode="run", workflow_path=...)`.
+
+- On SQL Server, setup gives a view without an `indexColumnList` a key for row
+  validation when the source confirms one, and lists it in
+  `applied_index_columns`. A view listed there with a null `indexColumnList`
+  got none, so row validation cannot run. `reason: no_unique_key`: use
+  Steps 1–3 instead. `reason: source_query_failed`: a key query failed on the
+  source (the log says why); fix that and run setup again, or use Steps 1–3.
+
+- A direct run that passes stamps `validateView` completed itself: the result
+  lists the view in `validate_view.stamped`. Stop there.
+- A view in `validate_view.not_stamped` failed: classify it with Step 4.
+- An orchestrated run only records the attempt. Once `job_status` shows it
+  finished, stamp the outcome with Step 4b.
+
 ## Step 1: Row Count Comparison
 
 ```
@@ -55,6 +74,12 @@ with the `snow:` catalog from `active_bindings`. Never substitute
 `SHOW DATABASES` or roam other catalogs. If `sql_execute` is unavailable,
 denied, times out, or the catalog is missing, park; do not fall back to
 shell, `snow sql`, Python, or an unqualified query.
+
+`SQL execution returned no query ID and result is unavailable` is one of
+those failures: stamp `infra` (Step 4b), do not retry it in a loop, and tell
+the user what
+[Cortex Code sql_execute: No Query ID](../references/troubleshooting.md#cortex-code-sql_execute-no-query-id)
+says.
 
 ## Step 2: Spot Check
 
@@ -96,7 +121,7 @@ Before reporting fail, identify *why*. The classification drives how the parent 
 | The view's DDL is wrong (compile error, column missing, type mismatch, bad expression) | Snowflake-side query errors, or values diverge despite full data | `sql` |
 | Fixture rows or a missing AIMSBX table | Source and Snowflake agree on empty/wrong; a different legal dataset would exercise the view — **or** 42S02 / `missing_object` | *(do not stamp — Step 4a)* |
 | Snowflake side has 0 rows (or far fewer) because base tables haven't had data migrated yet | Source has rows; Snowflake-side count is 0 or anomalously low; the view's `dependencies` in the registry list tables whose live `migrateData` job is not completed | *(do not stamp)* |
-| Validation couldn't run (connection drop, query timeout, permissions) | Tool-level error, not a row-count divergence; do not substitute a shell query | `infra` |
+| Validation couldn't run (connection drop, query timeout, permissions, `sql_execute` "no query ID") | Tool-level error, not a row-count divergence; do not substitute a shell query | `infra` |
 
 ### Step 4a: Fixture / missing AIMSBX table
 
