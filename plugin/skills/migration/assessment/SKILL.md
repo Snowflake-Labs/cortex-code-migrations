@@ -1,6 +1,6 @@
 ---
 name: assessment
-description: Use when assessing a SnowConvert migration workload, planning waves, identifying exclusions or risks, estimating effort, analyzing Dynamic SQL or ETL, reviewing SQL Server, Teradata, or Redshift discovery data, or mapping Data Lineage.
+description: Use when assessing a SnowConvert migration workload, finding its business use cases and planning one migration wave per use case, identifying exclusions or risks, estimating effort, analyzing Dynamic SQL or ETL, reviewing SQL Server, Teradata, or Redshift discovery data, or mapping Data Lineage.
 version: 0.1.0
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -12,8 +12,9 @@ license: Proprietary. See License-Skills for complete terms
 Tell the user:
 
 > **Migration Assessment** — I'll analyze your converted code to generate a
-> migration plan: dependency waves, object categorization, dynamic SQL
-> patterns, and a summary report.
+> migration plan: the business use cases in your workload with one migration
+> wave per use case, object categorization, dynamic SQL patterns, and a
+> summary report.
 
 This is an end-to-end entry point. Given source code, drive setup, registration,
 and conversion as needed before assessment. Never ask for CSV, registry, or
@@ -32,26 +33,47 @@ those inputs into the project.
 2. If invoked directly, call `progress_setup()` and follow its `next_task`
    until `runAssessment` is ready.
 3. Use existing `scai` commands/scripts only. Never author assessment JSON,
-   registry state, or `multi_report.html`.
+   registry state, or `multi_report.html`. Every assessment command is
+   `scai assessment <subcommand>` (`waves`, `report`, `object-exclusion`,
+   `anti-patterns`, `effort-estimate`, `sql-dynamic`, `conversion-issues`,
+   `data-lineage`, see [Command reference](#command-reference));
+   there is no `scai assess` or `scai code assess`. Projects with AI-First ETL
+   (Hop, Alteryx, ...) take the same path; their units appear in the waves.
 4. Generate the final HTML export only with `scai assessment report`.
 5. Gather remaining user input before dispatch. When `assessment_options` is
    already set (AIM collected Q1 and `assessment_name` on one
    `progress_setup` card), skip the Step 3 confirmation — do not ask it again.
    `progress_setup` returns those answers under `answered`; when that block is
    present, the scope is settled and no scope question goes to the user.
-   When Q1 included `prioritize` or `custom_wave_size`, AIM collects
-   `prioritization_globs` and `assessment_wave_size` as text fields on the
-   next card; do not re-ask either, nor offer a skip / give-patterns choice. Still collect only the remaining Step 4 inputs selected by those
-   tokens. Then follow
-   the Step 5 dispatch
-   reference: when Power BI templates are staged, Data Lineage runs alone first;
-   otherwise send in-scope Task calls in one message. Do not prompt again until
+   Never ask for a wave size, prioritization patterns or a wave ordering: one
+   business use case is one wave, ordered by dependency inside it. Still
+   collect only the remaining Step 4 inputs selected by those tokens. Then
+   follow the Step 5 dispatch reference: when Power BI templates are staged,
+   Data Lineage runs alone first; then send the other in-scope Task calls in
+   one message; business use cases run alone last. Do not prompt again until
    results are collected.
 6. A child failure does not block siblings. Validate each return and offer one
    retry of failed children using the same captured inputs.
 7. Present the Step 8 status table as soon as it is ready. Then ensure/open the
    live dashboard as defined in [On Completion](#on-completion). Opening the
    dashboard must not delay or hide those results.
+
+## Command reference
+
+`progress_setup` sends this block with `runAssessment` as `next_skill_commands`.
+<!-- next-skill-commands:begin -->
+Assessment commands, each run from `<project_dir>` (`waves` takes no `--project-dir`).
+They are the only ones: no `scai assess`, `scai assessment run`, or `scai code assess`.
+Each analysis runs in its own sub-agent per Step 5; the report runs last (Step 7).
+- Waves: `scai assessment waves`
+- Object exclusion: `scai assessment object-exclusion`
+- Effort estimate: `scai assessment effort-estimate`
+- Anti-patterns (SQL Server): `scai assessment anti-patterns`
+- Dynamic SQL: `scai assessment sql-dynamic generate --project-dir <project_dir> --output <project_dir>/assessment/json/sql_dynamic_analysis.json`
+- Conversion issues: `scai assessment conversion-issues`
+- Data Lineage: `scai assessment data-lineage`
+- Report (the step's done signal): `scai assessment report --project-dir <project_dir> --output <project_dir>/assessment/multi_report.html`
+<!-- next-skill-commands:end -->
 
 ## Step 0: Configure session
 
@@ -79,33 +101,45 @@ Resolve without prompting:
 | Assessment output | `<project_dir>/assessment/` |
 
 Scan `.pbix` only to explain that it is unsupported; never process or stage it.
-Waves always come from `scai assessment waves` over the registry.
+Business use cases and their waves always come from the `scai assessment
+waves` tools over the registry, into `<project_dir>/artifacts/assessment/waves/`.
 Conversion CSVs under `.scai/` or the legacy `reports/` folders are for tooling. Point users at AIM Assessment (HTML report or the conversion-reports zip), not at those folders.
 
 ## Step 3: Confirm Scope
 
-Call `configure()` and read `assessment_options`. If it is a non-empty
-comma-separated token list, **do not wait** — those tokens are the scope
-answer. Continue to Step 4. Data Lineage always runs; Power BI enrichment uses
-the templates registration already staged without another yes/no.
+Call `configure()` and read `assessment_options` and
+`assessment_conversion_issues`. If `assessment_options` is a non-empty
+comma-separated token list **and** `assessment_conversion_issues` is `yes` or
+`no`, **do not wait**: those are the scope and Conversion Issues answers.
+Continue to Step 4. If only `assessment_options` is set, ask just the
+Conversion Issues yes/no below with one `ask_user_question` call and persist it
+to `assessment_conversion_issues` before Step 4. Data Lineage always runs;
+Power BI enrichment uses the templates registration already staged without
+another yes/no.
 
-Otherwise use one `ask_user_question` call for a multi-select scope question
-and the report name (default from `metadata_tools.py --show-assessment-name`):
+Otherwise use one `ask_user_question` call for three questions, in this order:
+the multi-select scope question, the Conversion Issues yes/no, and the report
+name (default from `metadata_tools.py --show-assessment-name`):
 
 ```text
-Waves, standard analyses, Data Lineage, and the HTML report always run.
+Business use cases with one migration wave each, standard analyses, Data
+Lineage, and the HTML report always run.
 What else do you want? Select all that apply:
-- Customize wave size
-- Prioritize specific objects
-- Dependency-based wave order
 - Deep Dynamic SQL review
 - Discovery (SQL Server, Teradata, or Redshift only)
 - AI analysis of SSIS packages (when present)
 - None of these
 ```
 
-Persist the comma-separated tokens to `assessment_options` and the second
-answer to `assessment_name`. This is the only scope/name confirmation.
+```text
+Include a Conversion Issues report? It ranks the SSC-EWI issues from this conversion, writes a local ZIP for Jira, and adds the section to the assessment report. Nothing is uploaded unless you share it later.
+- Yes
+- No
+```
+
+Persist the comma-separated tokens to `assessment_options`, the yes/no to
+`assessment_conversion_issues` (`yes` or `no`), and the third answer to
+`assessment_name`. This is the only scope/name confirmation.
 
 ## Step 4: Gather Sub-Skill Inputs
 
@@ -123,15 +157,20 @@ Use its exact gates, context fields, command requirements, and JSON return
 contracts.
 
 When `data_lineage.dispatch` is true and `staged_pbits` is non-empty, this
-step is **two steps**, not one:
+step is **three steps**:
 
 1. **Enrichment first.** Dispatch only `data-lineage` and wait for it.
 2. **Then the parallel fan-out.** In a later message, fire one Task call per
-   remaining in-scope sub-skill. Do not include `data-lineage` again.
+   remaining in-scope sub-skill except `business-use-cases`. Do not include
+   `data-lineage` again.
+3. **Then business use cases.** Once every fan-out agent has returned,
+   dispatch `business-use-cases` alone and wait for it. It reads the
+   exclusion findings and Power BI dependencies the earlier steps wrote, and
+   its plan writes the registry, so it never runs beside another child.
 
 When `data_lineage.dispatch` is false, or `staged_pbits` is empty, skip the
-first step and send remaining in-scope sub-skills in one message. Include
-`data-lineage` in that fan-out when it is in scope.
+first step and send the fan-out in one message. Include `data-lineage` in that
+fan-out when it is in scope. Business use cases still run alone after it.
 
 **Wait in the same turn; do not end it.** After each dispatch message, call
 `agent_output(agent_id=<id>, wait=true)` for every agent that message launched,
@@ -145,22 +184,28 @@ and next questions never appear.
 the dispatch message itself, ahead of the Task calls, so the user sees it while
 the analyses run. In two or three plain sentences, with no table or checklist:
 
-- name every analysis you launched, e.g. "waves, object exclusion, effort
+- name every analysis you launched, e.g. "object exclusion, effort
   estimate, anti-patterns, dynamic SQL and SSIS"; say which are slow and why,
-  such as per-item review;
+  such as per-item review, and that business use cases and their waves come
+  last because they build on these results;
 - say that each one runs as its own tab above the conversation, where the user
   can watch it, and that any command it asks to run shows a permission card
   that needs approval before that analysis can go on;
+- say that on a large project the slow ones can run for many minutes, and that
+  you post a short line every few minutes until they finish;
 - say how the user will know the step is done: you report each analysis as it
   finishes, then you build the combined report (`multi_report.html`), which
   ends the step.
 
-**Update as they finish.** Each time an `agent_output` wait returns, say in one
-sentence which analyses just finished, with their one-line summary, and which
-are still running. Then wait again. A wait that returns before its agent
-finishes is not a failure, and the user sees no card for it, so never describe
-it as "timed out". Never close a message with a promise to collect the results
-later: keep waiting in the same turn.
+**Update as they finish, and while they run.** Each time an `agent_output` wait
+returns, write one sentence, then wait again. When analyses finished, name them
+with their one-line summary and say which are still running. When none finished,
+say which are still running and what each is on now, from its latest output
+(such as the package or object it reached), so the conversation is never silent
+for minutes. A wait that returns before its agent finishes is not a failure, and
+the user sees no card for it, so never describe it as "timed out". Never close a
+message with a promise to collect the results later: keep waiting in the same
+turn.
 
 A permission card the user sees marked **Timed out** belongs to one analysis's
 command, which did not run. Do not explain it as your own wait. Name the
@@ -205,7 +250,12 @@ When Data Lineage returns a manifest, verify the manifest and
 `artifacts/assessment/powerbi/enrichment.json` exist. Do not inspect the
 registry to re-audit enrichment.
 
-Conversion issues does not skip a missing registry: `ASM0045` is `error`. Zero pairs is `ok`. When the user declined it in Step 4, synthesize `skipped` and do not dispatch it. An `ok` return with one or more summary rows is complete only when every summary row has a non-empty `problem_description` and `recommended_fix`. Empty fields mean the child stopped after the first command: fail it with `error: "conversion-issues enrichment missing"` and offer the retry. The parent does not upload the ZIP; the HTML tab shows the ZIP path and the Share issues link.
+Business use cases add `wave_plan` and `top_use_cases`. When `wave_plan` is not
+null, verify it exists; otherwise fail with `error: "wave plan missing"`. A
+`null` plan with an `ok` status means no use case was deployable, which its
+summary says.
+
+Conversion issues does not skip a missing registry: `ASM0045` is `error`. Zero pairs is `ok`. When `assessment_conversion_issues` is not `yes`, synthesize `skipped` and do not dispatch it. An `ok` return with one or more summary rows is complete only when every summary row has a non-empty `problem_description` and `recommended_fix`. Empty fields mean the child stopped after the first command: fail it with `error: "conversion-issues enrichment missing"` and offer the retry. The parent does not upload the ZIP; the HTML tab shows the ZIP path and the Share issues link.
 
 When Informatica returns `"ok"`, also verify
 `<project_dir>/assessment/informatica/ai_informatica_summary.html` exists and
@@ -213,7 +263,7 @@ is non-empty. Otherwise fail with `error: "AI summary missing or empty"`.
 
 Create a `results` table in this order:
 
-1. waves-generator
+1. business-use-cases
 2. object-exclusion-detection
 3. effort-estimate
 4. anti-patterns
@@ -249,10 +299,12 @@ uv run --project plugin/skills/migration/assessment \
 
 A failed write is a warning; continue with the project name.
 
-Run:
+Read `plugin_version`: the trimmed text of `VERSION` at the plugin root,
+three directories above this SKILL.md. Run:
 
 ```bash
 scai assessment report \
+  --plugin-version "<plugin_version>" \
   --project-dir "<project_dir>" \
   --output "<project_dir>/assessment/multi_report.html" \
   [--ssis-json "<path>" when etl-assessment is ok] \
@@ -262,6 +314,8 @@ scai assessment report \
 The command also writes a sibling PDF of every tab beside the HTML. It needs Chrome, Edge, or Chromium. If the PDF cannot be rendered, the HTML is still written and the command fails.
 
 Always pass `--project-dir` and successful SSIS/Informatica outputs explicitly.
+Pass `--plugin-version` so the report names the plugin build; leave it out only
+when `VERSION` cannot be read.
 Other standard artifacts are auto-discovered. Do not write custom HTML. Record
 a report failure and continue so the user still receives analysis results.
 
@@ -288,6 +342,26 @@ Label the final row **Data Lineage**. Its summary includes graph counts,
 optional Power BI enrichment counts, and any unresolved references.
 An `ok` row cites the child-generated stable
 `artifacts/assessment/data-lineage.json`.
+
+Label the first row **Business use cases**. Then, when it returned
+`top_use_cases`, show them as a numbered list, at most three, in rank order.
+Each entry gives the name and its purpose in one line, then
+`<objects> objects (SQL <sql>, ETL <etl>, BI <bi>)`. Say that the first is
+recommended to migrate first, that each use case deploys its objects in
+dependency order, and that the dashboard's Planning section lists every use
+case. Do not show wave numbers or confidence: each use case is migrated on its
+own, and confidence is internal. This is information, not a question: do not
+ask the user to choose here.
+
+When the user later asks to start with another use case, re-plan with that id
+first and every other rated id from `use-cases.json` after it, in rank order:
+
+```bash
+scai assessment waves plan --use-case <chosen-id> --use-case <next-id> ...
+```
+
+A request for a wave or use case around an app, a process, a report or an
+object goes to `business-use-cases/SKILL.md` in on-demand mode.
 
 If any child failed, ask after the table:
 
@@ -316,7 +390,8 @@ Then perform On Completion. Do not stop after generating artifacts.
 
 | Request | Skill |
 |---|---|
-| Waves | `waves-generator/SKILL.md` |
+| Business use cases; a wave for an app, process, report or object | `business-use-cases/SKILL.md` |
+| Size-based waves, only when explicitly asked (a wave size, prioritization patterns, category order) | `waves-generator/SKILL.md` |
 | Exclusions | `object_exclusion_detection/SKILL.md` |
 | Effort | `effort-estimate/SKILL.md` |
 | Anti-patterns | `anti-patterns/SKILL.md` |
@@ -365,8 +440,8 @@ opener. Go straight to the closing message below.
 Present the closing message with:
 
 - opening line: `migration_status.in_scope` objects in `wave_count` waves;
-- summary table: Register, Convert, ETL conversion, Waves, Object exclusion,
-  Dynamic SQL, SSIS/Informatica, Missing objects;
+- summary table: Register, Convert, ETL conversion, Business use cases,
+  Object exclusion, Dynamic SQL, SSIS/Informatica, Missing objects;
 - 2–4 triggered findings only (staging ≥30%, unresolved external references,
   conversion friction, ETL risk, circular dependencies);
 - the Step 7 HTML export path;
@@ -375,7 +450,8 @@ Present the closing message with:
 
 > What would you like to do?
 > 1. **Review the dashboard** — if a dashboard page opened, say `Assessment opened at <url>/assessment` and invite questions; if the HTML export opened instead, say `HTML report opened at <path>`; if neither opened, say `Review the results above; the dashboard could not be opened`
-> 2. **Modify the assessment** — re-run with changed parameters
+> 2. **Modify the assessment** — re-run with changed parameters, or start
+>    with a different business use case
 > 3. **Move on to migration setup** — configure the Snowflake target, testing,
 >    and data infrastructure
 

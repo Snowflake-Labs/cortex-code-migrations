@@ -2,7 +2,7 @@
 
 > **Scope:** Iceberg target migration is available for any supported source dialect, **but only when the
 > source object is a fully relational table** — if the source is itself an Iceberg / external / catalog-backed
-> table, **do not continue** (see the source gate in [SKILL.md](../SKILL.md) Step 3a.1). The supported
+> table, **do not continue** (see the source gate in [Iceberg target gates](./iceberg-target-gates.md#3a1--source-must-be-fully-relational-hard-gate)). The supported
 > target is a **Snowflake-managed Iceberg table (spec v2 or v3) on an external volume** with
 > `storageMode: compatible` (or `native` on v3) and load mode `ADD_FILES_COPY` or `FULL_INGEST` — external / AWS-Glue /
 > other catalogs are out of scope. Use this reference

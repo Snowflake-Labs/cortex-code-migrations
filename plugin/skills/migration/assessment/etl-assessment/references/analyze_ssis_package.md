@@ -8,11 +8,19 @@
    - The `pending` command returns ONLY ONE package on purpose
    - Complete ALL steps for current package before requesting next
 
-2. **Context Window Management**
+2. **One writer, in this agent**
+   - Work through the packages yourself, serially. Never hand slices of them to sub-agents,
+     Task calls, background jobs or scripted loops, and never run `update` in parallel: every
+     `update` rewrites the whole assessment JSON, and parallel reviewers exhaust the machine's memory.
+
+3. **Context Window Management**
    - If context window is approaching its limit before checkpoint, STOP immediately
    - Ask user: "I've analyzed X packages. Context window is near limit. Would you like me to continue?"
+   - As a non-interactive sub-agent, where you cannot ask, stop the loop instead and return with the
+     classified and pending counts in `summary`. Every finished package is already saved, so a re-run
+     resumes from `pending`. Running out of context is never a reason to fan out.
 
-3. **Follow Steps Strictly**
+4. **Follow Steps Strictly**
 The instructions in the steps must be follow for each package strictly.
 
 ---

@@ -120,6 +120,28 @@ internal static class Program
 
     var positional = args.Where(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray();
 
+    // --orchestration-probe <unit> <container-id> [NAME=default ...] [--variable=NAME=value ...]
+    // [--project-variable=NAME=value ...] [--parameter-file=FILE]: the orchestration SQL alone, for
+    // goldens. NAME=default is a named parameter; --variable / --project-variable set a section.
+    if (Array.IndexOf(args, "--orchestration-probe") >= 0)
+    {
+      var unit = positional[0];
+      var container = positional[1];
+      static (string, string) Split(string p) => (p[..p.IndexOf('=')], p[(p.IndexOf('=') + 1)..]);
+      string[] Flagged(string flag) =>
+        args.Where(a => a.StartsWith(flag, StringComparison.Ordinal)).Select(a => a[flag.Length..]).ToArray();
+      var values = positional.Skip(2).Select(p => (Split(p), true, "package"))
+        .Concat(Flagged("--variable=").Select(p => (Split(p), false, "package")))
+        .Concat(Flagged("--project-variable=").Select(p => (Split(p), false, "project")))
+        .Select(v => new AiFirstProducerIrHydrator.IrParameter(v.Item1.Item1, v.Item1.Item2, "VARCHAR", v.Item2, v.Item3))
+        .ToList();
+      var unitVariables = ProducerParameters.Build(unit, values, Flagged("--parameter-file=").FirstOrDefault());
+      var identity = new OrchestrationIdentity(
+        unit, container, container, SsisNameUtilities.GetComponentNameWithoutPackage(container), "pipeline", "probe");
+      Console.Write(EmitOrchestrationSql(identity, "probe://" + unit + ".hpl", Path.GetTempPath(), unitVariables));
+      return 0;
+    }
+
     // SPIKE 4 takes an output root only — it synthesises its own tasks, no IR needed.
     if (novelOrchestration)
     {
@@ -307,11 +329,24 @@ internal static class Program
         // projection + raw condition) is "computed once in the shared base" -- and it takes nothing
         // platform-specific, only ILogger. The InfPc name is where the code LIVES, not what it means.
         new FilterTranslator(logger),
+        // Keyed writes into a named table (see AiFirstProducerIrHydrator.HydrateKeyedWrite). Both
+        // take only ILogger and an SQL processor the OLE DB Command translator never calls when the
+        // command has no SQL, which a producer-hydrated one never has.
+        new InfPcOptimizedUpdateStrategyTargetTranslator(logger),
+        new SsisOleDbCommandTranslator(new NoOpEtlSqlProcessor(), logger: logger),
+        // Hop Merge rows (diff), which the engine has no element for.
+        new HopMergeRowsDiffTranslator(),
+        new WriteErrorRowsTranslator(),
         new UnsupportedTransformationTranslator(),
       ],
       reusableTransformationTracker: null);
 
     var models = new List<IDbtModel>();
+
+    // Strategy macros the translators (and the write modes) return beside a model: update_only,
+    // delete_only, insert_only, replace_if_rows, hop_synchronize, hop_scd2, hop_combination. A model naming a strategy whose macro is not in
+    // the project fails at dbt run time.
+    var strategyMacros = new List<DbtMacro>();
 
     // THE EXACT FILE TIER-2 STAMPING MAY TOUCH, KEYED BY THE NODE THAT PRODUCED IT -- never a
     // name lookup. Populated only for a node whose outcome is "ok" (not SUBST/EMPTY/THREW) AND
@@ -343,6 +378,21 @@ internal static class Program
           empty++;
           Console.WriteLine($"  EMPTY  {node.Id,-30} {node.Element.GetType().Name}");
           continue;
+        }
+
+        strategyMacros.AddRange(results.OfType<DbtMacro>());
+
+        // The OLE DB Command translator tags its mart `oledb_command`, an SSIS name.
+        if (query is MartQueryForDbt { Transformation: OleDbCommandTransformation } commandMart
+          && !DialectPlatform.IsSsisNative(platformId))
+        {
+          query = commandMart with { Metadata = commandMart.Metadata with { Tags = null } };
+        }
+
+        if (ir.WriteModesByNodeId.TryGetValue(node.Id, out var writeMode))
+        {
+          query = ProducerWriteModes.Apply(query, writeMode, strategyMacros);
+          Console.WriteLine($"  write  {node.Id,-30} {writeMode.Kind}");
         }
 
         var model = DbtModelFactory.CreateModel(query, ctx);
@@ -412,9 +462,30 @@ internal static class Program
     var unitDir = Path.Combine(etlRoot, unitName);
     var dbtProjectDir = Path.Combine(unitDir, dataFlowDirectoryName);
     Directory.CreateDirectory(dbtProjectDir);
+    WriteClockColumns(unitDir, ir);
+    WriteSinkWrites(unitDir, ir);
 
-    new DbtProjectStructureWriter(fileSystem, yaml, new DbtPackageTracker(), logger)
-      .InitializeProjectStructure(dbtProjectDir);
+    // The unit's named parameters and variables, one engine variable definition each. They drive
+    // dbt_project.yml `vars:` here and the CONFIG / --vars task graph below; none means both stay as
+    // before.
+    var unitVariables = ProducerParameters.Build(unitName, ir.Parameters, ir.ParameterFile);
+    var parameters = unitVariables.Definitions;
+    Console.WriteLine(
+      $"parameters  : {parameters.Count(p => p.IsParameter)} named parameter(s), "
+      + $"{parameters.Count(p => !p.IsParameter)} variable(s)"
+      + (parameters.Count == 0 ? string.Empty : ": " + string.Join(", ", parameters.Select(p => p.Name)))
+      + (unitVariables.ParameterFile is null ? string.Empty : $"; parameter file {unitVariables.ParameterFile}"));
+
+    var projectWriter = new DbtProjectStructureWriter(
+      fileSystem, yaml, new DbtPackageTracker(), new DbtProfileSpecWriter(fileSystem, yaml, logger), logger);
+    if (parameters.Count == 0)
+    {
+      projectWriter.InitializeProjectStructure(dbtProjectDir);
+    }
+    else
+    {
+      projectWriter.InitializeProjectStructure(dbtProjectDir, parameters, ProducerParameters.EmptyContents());
+    }
 
     new DbtModelsWriter(fileSystem, logger).WriteModels(models, dbtProjectDir);
 
@@ -458,7 +529,8 @@ internal static class Program
     // whose content is entirely static. A producer cannot call it, so the text is duplicated —
     // two of the must-create files are unreachable purely because of an access modifier.
     // Writing them through the production DbtMacroWriter proves the writer itself is reusable.
-    new DbtMacroWriter(fileSystem, logger).WriteMacros(DefaultMacros(), dbtProjectDir);
+    new DbtMacroWriter(fileSystem, logger).WriteMacros(
+      DefaultMacros().Concat(strategyMacros.DistinctBy(m => m.Name)), dbtProjectDir);
 
     // ---- orchestration SQL -----------------------------------------------------------------
     // WRITTEN ONLY WHEN THE IR NAMED A CONTAINER. Emitting nothing is the deliberate alternative to
@@ -474,7 +546,8 @@ internal static class Program
       var orchestrationSql = EmitOrchestrationSql(
         identity,
         sourceDocument ?? ("producer://" + unitName),
-        outRoot);
+        outRoot,
+        unitVariables);
       File.WriteAllText(Path.Combine(unitDir, unitName + ".sql"), orchestrationSql);
       var rootTasks = CountOf(orchestrationSql, "CREATE OR REPLACE TASK");
       var afterClauses = CountOf(orchestrationSql, "AFTER ");
@@ -686,12 +759,15 @@ internal static class Program
     }
 
     var logger = NullLogger.Instance;
+    var ewiInformation = new EwiInformationService(new EwiModelReader(logger));
+    var ewiFormatter = new EwiFormatter(ewiInformation);
     var registry = new ProducerTaskTranslatorRegistry(
       translators: Array.Empty<IOrchestratorTaskTranslator>(),   // deliberately NONE registered
       logger: logger,
-      ewiFormatter: new EwiFormatter(new EwiInformationService(new EwiModelReader(logger))),
+      ewiFormatter: ewiFormatter,
       createTaskEmitter: new SsisSfCreateTaskEmitter(
-        new NoOpObjectTaggingProvider(), new NoOpTaskConfigJsonGenerator()),
+        new NoOpObjectTaggingProvider(), new NoOpTaskConfigJsonGenerator(),
+        new IssueCommentGenerator(ewiInformation, ewiFormatter)),
       createProcedureEmitter: new SfCreateProcedureEmitter(new NoOpObjectTaggingProvider()),
       assessmentBuilder: new NoOpEtlAssessmentBuilder(),
       pipeline: pipeline,
@@ -969,6 +1045,83 @@ internal static class Program
     return n;
   }
 
+  internal const string ClockColumnsFileName = "clock_columns.json";
+
+  /// <summary>
+  /// Writes <c>clock_columns.json</c> beside the unit's dbt project: per written table, the columns
+  /// whose value is the run's clock time (SCD2 validity and audit dates, a combination's last
+  /// update). The test seed excludes them from the comparison, since the original pipeline and the
+  /// converted one run at different times. Nothing is written when no target has one.
+  /// </summary>
+  private static void WriteClockColumns(string unitDir, AiFirstProducerIrHydrator.HydratedIr ir)
+  {
+    var tables = new List<Dictionary<string, object>>();
+    foreach (var node in ir.Pipeline.Nodes)
+    {
+      if (node.Element is not TargetTransformation target
+        || !ir.WriteModesByNodeId.TryGetValue(node.Id, out var mode)
+        || mode.Spec?.GetValueOrDefault("clock_columns") is not IEnumerable<string> clock
+        || !clock.Any())
+      {
+        continue;
+      }
+
+      tables.Add(new Dictionary<string, object>
+      {
+        ["table"] = target.TableName,
+        ["transform"] = node.Element.Name,
+        ["columns"] = clock.ToList(),
+      });
+    }
+
+    if (tables.Count == 0)
+    {
+      return;
+    }
+
+    File.WriteAllText(
+      Path.Combine(unitDir, ClockColumnsFileName),
+      System.Text.Json.JsonSerializer.Serialize(
+        new Dictionary<string, object> { ["tables"] = tables },
+        new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) + "\n");
+    Console.WriteLine($"clock cols  : {ClockColumnsFileName} written for {tables.Count} table(s)");
+  }
+
+  internal const string SinkWritesFileName = "sink_writes.json";
+
+  /// <summary>
+  /// Writes <c>sink_writes.json</c> beside the unit's dbt project: per written table, how the unit
+  /// writes it (<see cref="AiFirstProducerIrHydrator.SinkWrite.Mode"/>) and the table columns that
+  /// identify a row of it. The test seed reads it: a table the run does not replace starts from the
+  /// source's rows on both sides, and its rows are compared on those keys. Nothing is written when
+  /// the unit writes no table.
+  /// </summary>
+  private static void WriteSinkWrites(string unitDir, AiFirstProducerIrHydrator.HydratedIr ir)
+  {
+    var tables = ir.Pipeline.Nodes
+      .Where(node => ir.SinkWritesByNodeId?.ContainsKey(node.Id) == true)
+      .Select(node => ir.SinkWritesByNodeId![node.Id])
+      .Select(sink => new Dictionary<string, object>
+      {
+        ["table"] = sink.Table,
+        ["transform"] = sink.Transform,
+        ["mode"] = sink.Mode,
+        ["keys"] = sink.Keys,
+      })
+      .ToList();
+    if (tables.Count == 0)
+    {
+      return;
+    }
+
+    File.WriteAllText(
+      Path.Combine(unitDir, SinkWritesFileName),
+      System.Text.Json.JsonSerializer.Serialize(
+        new Dictionary<string, object> { ["tables"] = tables },
+        new System.Text.Json.JsonSerializerOptions { WriteIndented = true }) + "\n");
+    Console.WriteLine($"sink writes : {SinkWritesFileName} written for {tables.Count} table(s)");
+  }
+
   // Copied from the fixture, which duplicated it from the engine's private static
   // GetDefaultArtifacts(). The duplication IS the finding — see the call site.
   private static DbtMacro[] DefaultMacros() =>
@@ -1060,7 +1213,8 @@ internal static class Program
     // The routine is SSIS-NAMED and platform-NEUTRAL in behaviour: split the refId on '\', sanitize
     // each segment, join with '_'. On a container id with no separator (DataStage `CustomerSummaryDerive`,
     // Pentaho `customer_summary_fullname_birthyear`) it returns the sanitized id unchanged.
-    var directory = SsisNameUtilities.GetComponentNameWithoutPackage(container.Id);
+    var directory = ProducerIdentifiers.DbtProjectName(
+      SsisNameUtilities.GetComponentNameWithoutPackage(container.Id));
     if (string.IsNullOrWhiteSpace(directory) || directory == "unknown")
     {
       directory = !string.IsNullOrWhiteSpace(container.ModelName)
@@ -1179,12 +1333,26 @@ internal static class Program
   /// constructor rejects a blank one, so it is passed rather than defaulted.
   /// </param>
   /// <param name="outRoot">The migration output root, same argument.</param>
+  /// <param name="unitVariables">
+  /// The unit's parameters and variables. Non-empty gives the root a CONFIG and a ClearVariables /
+  /// InitVariablesFromConfig body (plus the project section and a LoadParameterFile call when the
+  /// unit has them), and the child a BuildDbtVarsJsonUDF + --vars call. Empty keeps the
+  /// parameterless graph byte-identical to before.
+  /// </param>
   /// <returns>The pretty-printed orchestration SQL: root task first, then the container's task.</returns>
   private static string EmitOrchestrationSql(
-    OrchestrationIdentity identity, string sourceDocumentPath, string outRoot)
+    OrchestrationIdentity identity,
+    string sourceDocumentPath,
+    string outRoot,
+    ProducerUnitVariables? unitVariables = null)
   {
+    unitVariables ??= ProducerUnitVariables.None;
+    var parameters = unitVariables.Definitions;
+    var ewiInformation = new EwiInformationService(new EwiModelReader(NullLogger.Instance));
     var createTaskEmitter = new SsisSfCreateTaskEmitter(
-      new NoOpObjectTaggingProvider(), new NoOpTaskConfigJsonGenerator());
+      new NoOpObjectTaggingProvider(),
+      new ProducerTaskConfigJsonGenerator(unitVariables),
+      new IssueCommentGenerator(ewiInformation, new EwiFormatter(ewiInformation)));
 
     var task = new SsisDataPipelineTask(
       name: identity.DataFlowName,
@@ -1200,17 +1368,23 @@ internal static class Program
       additionalProcedures: new List<ICompound>(),
       orchestratorPipeline: pipeline,
       orchestratorName: identity.UnitName,
-      allDefinitions: new List<EtlVariableDefinition>(),
-      topLevelTaskNames: [task.FullName],
+      allDefinitions: parameters.ToList(),
+      topLevelTaskNames: new HashSet<string> { task.FullName },
       orchestrationContext: null!,
       isReusablePackage: false);
 
     var translator = new SsisDataPipelineTaskTranslator(
       new PassThroughIssueCommentGenerator(),
       createTaskEmitter,
-      new ExecuteDbtProjectStatementGenerator(),
+      new ProducerExecuteDbtProjectStatementGenerator(new ExecuteDbtProjectStatementGenerator()),
       new TaskVariableWrapperService(
-        Array.Empty<IOrchestratorTaskVariableWrapper>(), NullLogger.Instance));
+        Array.Empty<IOrchestratorTaskVariableWrapper>(), NullLogger.Instance),
+      new ProducerMigrationDataService(
+        etlInputPath: identity.UnitName,
+        partitionKey: string.Empty,
+        migrationId: string.Empty,
+        sessionTimestamp: string.Empty),
+      new WorkloadDbtProjectNameProvider());
 
     var childTask = translator.Translate(task, context)
       ?? throw new InvalidOperationException("the translator returned no statement at all");
@@ -1225,14 +1399,23 @@ internal static class Program
       outputPath: outRoot,
       fileName: identity.UnitName,
       orchestratorName: identity.UnitName);
+    if (parameters.Count > 0)
+    {
+      conversionContext.AllDefinitions = parameters;
+      conversionContext.VariableStatements = ProducerParameters.RootSetup(
+        parameters[0].Scope, unitVariables.ProjectKeys.Count > 0, unitVariables.ParameterFile is not null);
+    }
 
     var mapper = new SsisControlFlowMapper(
       new PrettyPrinterService(), createTaskEmitter, new PassThroughIssueCommentGenerator());
 
-    return mapper.GetSnowflakeSqlOrchestrator(
+    var sql = mapper.GetSnowflakeSqlOrchestrator(
       orchestrator,
       [childTask],
       conversionContext,
       new OrchestrationConversionDetails(new NoOpEtlAssessmentBuilder()));
+    return unitVariables.ParameterFile is null
+      ? sql
+      : ProducerParameters.ParameterFileNotice(unitVariables.ParameterFile) + sql;
   }
 }

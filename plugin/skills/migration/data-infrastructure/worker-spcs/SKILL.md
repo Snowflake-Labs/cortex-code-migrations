@@ -1,6 +1,6 @@
 ---
 name: worker-spcs
-description: Deploy the Data Exchange Worker on Snowpark Container Services (SPCS) — image selection, Snowflake Secrets, CREATE SERVICE SQL generation, and verification. Triggers: SPCS worker, container worker, snowpark container, deploy worker SPCS, spcs deployment.
+description: Deploy the Data Exchange Worker on Snowpark Container Services (SPCS) — image selection, Snowflake Secrets, CREATE SERVICE SQL generation, and Windows authentication with a Kerberos keytab when SQL Server requires it. Triggers: SPCS worker, container worker, snowpark container, deploy worker SPCS, spcs deployment, windows authentication, kerberos keytab.
 parent_skill: data-infrastructure-setup
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -10,10 +10,31 @@ license: Proprietary. See License-Skills for complete terms
 `<metadata_database>` below is `.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
 overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
 project's.
+`scai` commands you run from the project's directory read the same pin (an exported
+`CUSTOM_SNOWCONVERT_DATABASE` still wins), so a custom metadata database is supported: never tell the user it
+must be `SNOWCONVERT_AI`. Repointing a set-up project needs the new database to exist, or
+`configure(recreate_metadata_database=true)`.
 
 Deploy the Data Exchange Worker as a Snowpark Container Services (SPCS) service. SPCS automatically provides Snowflake authentication via `@SPCS_CONNECTION` — no Snowflake credentials are needed in the service spec.
 
 > Run worker instances on a compute pool that will stay **active** for the full migration. SPCS automatically restarts instances if they stop.
+
+## Windows authentication
+
+When the project's source is SQL Server, run this before Step 1. Step 1's `scai data worker setup` rejects a Windows connection that has no `kerberos_principal`, and it does not create the keytab secrets.
+
+```bash
+scai connection list -l sqlserver --json
+```
+
+Find the row whose `name` is the project's `source_connection`. Read `auth_method` inside `credentialsMaskedJson`.
+
+| `auth_method` | Action |
+|---------------|--------|
+| `windows` | Read [`../references/sqlserver-spcs-windows-auth.md`](../references/sqlserver-spcs-windows-auth.md) and follow it through worker setup. It runs `scai data worker setup`. Then skip Steps 1–4 and continue at Step 5, using the service name setup printed (`DATA_EXCHANGE_WORKER_SERVICE` unless a custom name was set). Step 3's username and password secrets do not apply. Start at **Save the source connection** when `kerberos_principal` is missing; otherwise start at **Create the Kerberos secrets**. |
+| anything else | Continue at Step 1. |
+
+When the source is not SQL Server, continue at Step 1.
 
 ## Step 1 — Image Version
 
@@ -52,7 +73,7 @@ Record that exact version tag (e.g., `1.11.1`). Use it as `<version>` in all sub
 - `<replica_count>` — the instance count the user provides in Step 4
 - `<driver-download-host>` — **(Oracle/Teradata only)** the hostname of the NuGet driver download endpoint; ask the user for this value if they are on Oracle or Teradata
 
-Affinity binds this worker to the workflow it should process — see the [Affinity Reference](../references/affinity-reference.md) for the model (and why the orchestrator stays null-affinity). The automatic `scai data worker setup` path uses the project's stable default. The custom service-spec path below needs an explicit label because `AGENT_AFFINITY` must exactly match the workflow.
+Affinity binds this worker to the workflow it should process — see the [Affinity Reference](../references/affinity-reference.md) for the model (and which affinity each orchestrator serves). The automatic `scai data worker setup` path uses the project's stable default. The custom service-spec path below needs an explicit label because `AGENT_AFFINITY` must exactly match the workflow.
 
 Propose a short, stable label for this source database/server, for example `mdx-salesnorth`.
 

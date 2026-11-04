@@ -41,6 +41,33 @@ function Log {
     $line | Tee-Object -FilePath $LogFile -Append | Write-Host
 }
 
+function Set-EnvironmentWebProxy {
+    # Windows PowerShell 5.1 web cmdlets use the system proxy and ignore HTTPS_PROXY,
+    # which curl, uv, scai and pwsh 7 all honor. Send them through it too, so a proxy
+    # set for the session reaches every download below. Returns $true when it did.
+    if ($PSVersionTable.PSVersion.Major -ge 6) { return $false }
+    $url = @($env:HTTPS_PROXY, $env:https_proxy, $env:HTTP_PROXY, $env:http_proxy) |
+        Where-Object { $_ } | Select-Object -First 1
+    if (-not $url) { return $false }
+    $uri = [System.Uri]$url
+    $bypass = @((@($env:NO_PROXY, $env:no_proxy) -join ',') -split ',' |
+        ForEach-Object { $_.Trim().TrimStart('.') } |
+        Where-Object { $_ -and $_ -ne '*' } |
+        ForEach-Object { [regex]::Escape($_) })
+    $proxy = New-Object System.Net.WebProxy("$($uri.Scheme)://$($uri.Authority)", $true, [string[]]$bypass)
+    if ($uri.UserInfo) {
+        $user, $pass = $uri.UserInfo -split ':', 2
+        $proxy.Credentials = New-Object System.Net.NetworkCredential(
+            [System.Uri]::UnescapeDataString($user), [System.Uri]::UnescapeDataString("$pass"))
+    } else {
+        $proxy.UseDefaultCredentials = $true
+    }
+    [System.Net.WebRequest]::DefaultWebProxy = $proxy
+    return $true
+}
+
+if (Set-EnvironmentWebProxy) { Log "Downloads use the proxy from HTTPS_PROXY / HTTP_PROXY" }
+
 $VersionFile = Join-Path $PluginRoot "VERSION"
 if (!(Test-Path $VersionFile)) {
     Log "ERROR: plugin/VERSION not found"
@@ -74,7 +101,7 @@ function Get-PluginRef {
 function Get-RefChannel {
     param([string]$Ref)
     if (-not $Ref -or $Ref -eq 'main') { return 'stable' }
-    if ($Ref -eq 'preview' -or $Ref -match '^v\d+\.\d+\.\d+-Pr\.') { return 'preview' }
+    if ($Ref -eq 'preview' -or $Ref -match '^v\d+\.\d+\.\d+-Pr(\.|$)') { return 'preview' }
     if ($Ref -match '^v\d+\.\d+\.\d+$') { return 'stable' }
     return ""
 }
@@ -126,9 +153,9 @@ if ($cfg) {
         $ScaiVersionPin = $cfg.scai.version
         Log "Config pins scai.version=$ScaiVersionPin"
     }
-    # Only a plugin version counts (X.Y.Z or X.Y.Z-Pr.N), as in the bash hook:
+    # Only a plugin version counts (X.Y.Z, X.Y.Z-Pr or X.Y.Z-Pr.N), as in the bash hook:
     # anything else would build a tag URL that cannot exist and retry it every session.
-    if ($cfg.plugin.version -is [string] -and $cfg.plugin.version -match '^\d+(\.\d+)*(-Pr\.\d+)?$') {
+    if ($cfg.plugin.version -is [string] -and $cfg.plugin.version -match '^\d+(\.\d+)*(-Pr(\.\d+)?)?$') {
         $PluginVersionPin = $cfg.plugin.version
         Log "Config pins plugin.version=$PluginVersionPin"
     }
@@ -384,7 +411,10 @@ function Set-ScaiShim {
     param([string]$Version)
     $exe = Join-Path (Join-Path $scaiRoot $Version) "orchestrator\scai.exe"
     New-Item -ItemType Directory -Path $scaiBinDir -Force | Out-Null
-    "@echo off`r`n`"$exe`" %*" | Set-Content -Path $scaiShim -Encoding ASCII
+    # The failed goto ends the batch before scai starts, so cmd.exe never rereads
+    # the shim after `scai update` rewrites it. Keep in sync with
+    # ApplicationUpdateService.BuildWindowsShimContent.
+    "@echo off`r`ngoto #_undefined_# 2>NUL || `"$exe`" %*" | Set-Content -Path $scaiShim -Encoding ASCII
     Set-ScaiActivatedNow $Version
     Add-UserPath $scaiBinDir
 }
@@ -883,13 +913,13 @@ function Test-VersionNewer {
 }
 
 # A VERSION file's text, trimmed, when it is a plugin version, else "": X.Y.Z
-# (stable) or X.Y.Z-Pr.N (preview), as scai. A proxy or
+# (stable) or X.Y.Z-Pr / X.Y.Z-Pr.N (preview), as scai. A proxy or
 # captive portal can answer the published VERSION URL with a page of its own,
 # and an installed VERSION file can be empty.
 function ConvertTo-PluginVersion {
     param([string]$Text)
     $t = "$Text".Trim()
-    if ($t -match '^\d+(\.\d+)*(-Pr\.\d+)?$') { return $t }
+    if ($t -match '^\d+(\.\d+)*(-Pr(\.\d+)?)?$') { return $t }
     return ""
 }
 
@@ -912,22 +942,28 @@ if (Test-Path (Join-Path $PluginRoot ".no-auto-update")) {
         $pin = $PluginVersionPin
     }
     $why = ""
+    $rejected = ""
     if ($pin) {
         $published = $pin
         $installRef = "v$pin"
         $why = "pinned"
     } else {
+        $fetched = ""
         try {
-            $published = ConvertTo-PluginVersion "$(Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$PluginRepo/$pluginBranch/plugin/VERSION" -TimeoutSec 15 -UseBasicParsing -ErrorAction Stop)"
+            $fetched = "$(Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$PluginRepo/$pluginBranch/plugin/VERSION" -TimeoutSec 15 -UseBasicParsing -ErrorAction Stop)".Trim()
         } catch {
-            $published = ""
+            $fetched = ""
         }
+        $published = ConvertTo-PluginVersion $fetched
+        if ($fetched -and -not $published) { $rejected = if ($fetched.Length -gt 60) { $fetched.Substring(0, 60) } else { $fetched } }
         $installRef = $pluginBranch
         # A channel switch installs the new channel's latest, also a lower version (as scai).
         # Compare plugin branches: dev and preview share the preview branch.
         if ($pluginChannel -and (Get-ChannelBranch $pluginChannel) -ne $pluginBranch) { $why = "channel $pluginChannel -> $($env:SCAI_CHANNEL)" }
     }
-    if (-not $published) {
+    if ($rejected) {
+        Log "WARNING: the published $PluginName VERSION '$rejected' (branch $pluginBranch) is not a plugin version; not updating"
+    } elseif (-not $published) {
         Log "Could not fetch the published $PluginName VERSION (branch $pluginBranch)"
     } elseif ($published -eq $installed -or (-not $why -and -not (Test-VersionNewer $published $installed))) {
         Log "$PluginName plugin up to date (v$installed, branch $pluginBranch) ($([math]::Round(((Get-Date) - $start).TotalSeconds))s)"

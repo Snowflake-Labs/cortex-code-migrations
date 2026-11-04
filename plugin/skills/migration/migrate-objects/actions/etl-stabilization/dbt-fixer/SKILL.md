@@ -135,7 +135,8 @@ dbt test --select <node_name> --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/
 
 ⚠️ **Drop and recreate the node's target objects before each attempt.** If a build FAILS, the previous
 attempt's relation is still in place, and the tests will then pass against stale rows — reporting a fix
-that did not happen. Always drop (or `--full-refresh`) so a failed build cannot inherit an earlier pass.
+that did not happen. Always drop (or `--full-refresh`) so a failed build cannot inherit an earlier pass. A
+`materialized='dynamic_table'` node needs `DROP DYNAMIC TABLE`; `DROP TABLE` does not drop it.
 
 ⚠️ **An assertion that ERRORS is not an assertion that FAILS.** A test whose SQL is itself invalid (for
 example a scalar subquery that returns multiple rows once a fix produces duplicates) errors rather than

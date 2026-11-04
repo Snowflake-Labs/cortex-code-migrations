@@ -43,7 +43,6 @@ Situational commands (error recovery, dbt):
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import hashlib
 import json
 import os
@@ -52,6 +51,13 @@ import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+# fcntl is POSIX-only. Importing it at module scope crashes Windows before
+# any command runs (ModuleNotFoundError: No module named 'fcntl').
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 from check_sync_leaks import check_file
 from path_resolver import (
@@ -134,13 +140,36 @@ def save_json(path: Path, data: dict) -> None:
 
 @contextlib.contextmanager
 def _locked(status_path: Path):
+    """Exclusive lock around a session_status.json update.
+
+    POSIX keeps fcntl.flock on the lock file. Windows has no fcntl module,
+    so msvcrt.locking locks the first byte and blocks until that byte is free.
+    """
     lock_path = status_path.with_suffix(status_path.suffix + ".lock")
-    with open(lock_path, "w") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
+    # "w" truncates. A Windows byte lock rejects truncate while held, so
+    # open for update there and lock one byte instead of the whole file.
+    mode = "a+b" if sys.platform == "win32" else "w"
+    with open(lock_path, mode) as lf:
+        if sys.platform == "win32":
+            try:
+                lf.seek(0)
+                if lf.read(1) == b"":
+                    lf.write(b"\0")
+                    lf.flush()
+            except OSError:
+                pass
+            lf.seek(0)
+            msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            fcntl.flock(lf, fcntl.LOCK_EX)
         try:
             yield
         finally:
-            fcntl.flock(lf, fcntl.LOCK_UN)
+            if sys.platform == "win32":
+                lf.seek(0)
+                msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lf, fcntl.LOCK_UN)
 
 
 def now_iso() -> str:

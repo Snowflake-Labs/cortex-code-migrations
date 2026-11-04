@@ -18,7 +18,10 @@ Call `run_tests(mode=capture, where='id = xyz')`. Do **not** pass
 `--profile`, `--database-bindings`, `--isolation-strategy`, or
 `--restore-from-bindings` — the tool injects leftover sandbox yaml when
 present, else the project common yaml. Call `run_tests`, not a raw
-`scai test capture` shell.
+`scai test capture` shell. It returns a `job_id` at once: return waiting
+until the run ends, then read the result from `job_status(job_id,
+details=true)` under `details.result`. Never call it again while the same
+object's run is `already_running`.
 
 Both connections come from `configure` for this project — read them back from
 `migration_status` rather than from anything in your own environment. In particular the
@@ -62,7 +65,7 @@ matches nothing. `run_tests` prints these listings, filled in for each object, a
 
 ## Mark capture complete
 
-Confirm the oracle, then advance so `TASK_EVENTS` get an `advanced` row:
+Confirm the status source, then advance so `TASK_EVENTS` get an `advanced` row:
 
 - **Procedures/functions** — `VALIDATION.BASELINE_METADATA` has a successful row for the object (`SUCCESS` true, even when `ROW_COUNTS` is empty or all zeros), or one whose `ROW_COUNTS` sum to more than zero. A failed capture with an empty count stays pending. Do not wait on `source_ready`: procedures do not write that table-only watermark. Then:
   `transition_status(status="advance", task="captureBaseline", outcome="completed", where="id = '<unit_id>'")`

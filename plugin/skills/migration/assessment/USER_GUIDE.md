@@ -8,7 +8,7 @@ This guide helps users understand how to effectively use the SnowConvert Assessm
 
 The SnowConvert Assessment Skill analyzes your database migration workload using SnowConvert output files. It helps you:
 
-- **Plan deployment waves** - Organize objects into deployment sequences that respect dependencies
+- **Find business use cases** - Identify the outcomes your workload delivers (reports, marts, feeds) and plan one migration wave per use case, its objects in dependency order
 - **Identify exclusions** - Find temporary, staging, and deprecated objects that may not need migration
 - **Surface migration optimization opportunities** - Group SnowConvert findings into performance, architecture/security, and behavior/semantic risk buckets (SQL Server)
 - **Analyze complexity** - Assess Dynamic SQL patterns and SSIS packages for migration effort
@@ -22,8 +22,8 @@ This skill is designed for interactive use:
 | Capability | Description |
 |------------|-------------|
 | 📊 **View Reports** | After analysis, an interactive HTML report is generated that you can explore |
-| 🔄 **Iterate & Refine** | Ask to adjust results - change wave sizes or prioritize objects |
-| 🎯 **Set Goals Upfront** | Specify your preferences before analysis (e.g., number of waves, priority objects) |
+| 🔄 **Iterate & Refine** | Ask to start with a different use case, or for a wave around an app or process |
+| 🎯 **Set Goals Upfront** | Name the application or process that matters most, and it gets its own use case |
 
 ## Getting Started
 
@@ -78,50 +78,46 @@ Analyze my SnowConvert reports at /path/to/Reports
 Start fresh analysis (don't reuse previous results)
 ```
 
-### Setting Goals Upfront
+### Business Use Cases and Waves
 
-**Limit Number of Waves:**
-```
-I want a maximum of 5 deployment waves
-```
+Every assessment finds the workload's business use cases without asking for a
+wave size or priorities. Each use case becomes one wave, and its objects deploy
+in dependency order. The top three are shown in chat; the dashboard's
+**Planning** section lists every use case with its narrative, counts and
+deployment stages.
 
+**Start with a different use case:**
 ```
-Create 3-4 deployment waves for easier rollout
-```
-
-**Control Wave Size:**
-```
-Waves should have 20-30 objects each
+Make Loan Decision Audit wave 1
 ```
 
+**A wave around an application, process or object:**
 ```
-I need smaller batches - maximum 15 objects per wave
-```
-
-**Prioritize Objects:**
-```
-Prioritize all Payroll-related objects in Wave 1
+Create a wave for the payroll app
 ```
 
 ```
-Put all Customer* objects in the earliest waves
+Find the use case behind the Store Stock report
 ```
 
+**Size-based waves, on request:** the earlier bin-packed waves remain
+available when you ask for them by size or pattern. They replace the business
+plan until you ask for business waves again.
 ```
-I need PKG_PAYROLL, PKG_HR, and PKG_FINANCE deployed first
+Generate waves of 20-30 objects each, prioritizing *Payroll*
 ```
 
 ### Refining Results After Analysis
 
 Once you have initial results, you can refine them:
 
-**Relocate Objects:**
+**Change the Wave Plan:**
 ```
-Move dbo.CriticalTable to Wave 1
+Put the stock report use case first
 ```
 
 ```
-Relocate all reporting procedures to Wave 5
+Add dbo.CriticalTable to its own use case
 ```
 
 **Investigate Dependencies:**
@@ -139,7 +135,7 @@ Which objects depend on dbo.LegacyTable?
 
 **Regenerate with Changes:**
 ```
-Regenerate waves with smaller batch sizes
+Find the business use cases again
 ```
 
 ```
@@ -220,54 +216,30 @@ not that a lineage diagram was produced.
 
 ## Tips for Best Results
 
-### 1. Specify Goals Upfront
+### 1. Name What Matters
 
-Instead of using defaults and refining later, tell the skill what you want:
-
-❌ Less efficient:
+Use cases are found from the registry, so an outcome that matters to you but
+leaves little trace in the code (a report fed through dynamic SQL, a process
+spread across scripts) may rank low. Name it and it gets its own use case:
 ```
-Generate waves
-```
-Then: `Make the waves smaller`
-Then: `Prioritize Payroll objects`
-
-✅ More efficient:
-```
-Generate waves with 20-30 objects each, prioritizing all Payroll-related objects
+Create a use case for month-end close and make it wave 1
 ```
 
-### 2. Use Patterns for Prioritization
+### 2. Understand Wave Ordering
 
-The skill supports wildcards for object selection:
+Waves follow the use cases' rank: confirmed before proposed, then confidence,
+then the fewest missing objects, the smallest size and the fewest conversion
+issues. Inside a wave, objects deploy in dependency order (stage 1 first).
+Objects no use case needs go into a closing wave, "Objects not in a business
+use case".
 
-| Pattern | Matches |
-|---------|---------|
-| `*Payroll*` | Any object containing "Payroll" |
-| `PKG_*` | Objects starting with "PKG_" |
-| `dbo.Customer*` | Objects in dbo schema starting with "Customer" |
-| `*_Archive` | Objects ending with "_Archive" |
-
-### 3. Understand Wave Ordering
-
-By default, waves are organized by object category:
-1. **TABLEs** - Deployed first (schema foundation)
-2. **VIEWs** - Second (depend on tables)
-3. **FUNCTIONs** - Third
-4. **PROCEDUREs** - Fourth
-5. **ETL/SSIS Packages** - Last (consume everything else)
-
-If you prefer pure dependency-based ordering (mixing all types), ask:
-```
-Use dependency-based ordering instead of category-based
-```
-
-### 4. Iterate on Results
+### 3. Iterate on Results
 
 After the initial analysis, you can:
 
 - **View the report** to understand the results
 - **Ask questions** about specific findings
-- **Request changes** like relocating objects or adjusting wave sizes
+- **Request changes** like starting with another use case or adding one
 - **Regenerate** with different parameters
 
 The skill maintains context, so you don't need to start over.
@@ -305,36 +277,32 @@ the tab.
 ### Key Metrics
 
 - **Total Objects** - Number of objects in the migration
-- **Waves/Partitions** - Number of deployment batches
+- **Business Use Cases / Waves** - One wave per use case, plus a closing wave for objects no use case needs
 - **Exclusion Candidates** - Objects that may not need migration
 - **Circular Dependencies** - Objects with mutual dependencies (require attention)
 
 ## Troubleshooting
 
-### "I want different wave sizes"
+### "Important objects are in a late wave"
 
-Specify min and max sizes:
+Ask for their process by name, so it becomes its own use case and goes first:
 ```
-Regenerate waves with minimum 15 and maximum 30 objects per wave
-```
-
-### "Important objects are in late waves"
-
-Use prioritization:
-```
-Prioritize *CriticalProcess* objects to appear in Wave 1
+Create a wave for the CriticalProcess app and make it wave 1
 ```
 
-### "I have too many waves"
+### "A use case is too large"
 
-Increase wave size:
+Waves can still be worked in parallel by stage. To split one, name the
+outcomes it mixes:
 ```
-Regenerate with larger waves - 60-100 objects each
+Split the Finance use case into the ledger load and the close reports
 ```
 
 ### "Objects with circular dependencies"
 
-Review the `sccs` section of `waves_analysis_<timestamp>.json` and consider:
+Objects that depend on each other share a deployment stage inside their wave.
+For size-based waves, review the `sccs` section of
+`waves_analysis_<timestamp>.json` and consider:
 - Schema refactoring
 - Deploying circular dependency groups together
 - Manual intervention for complex cases
@@ -342,7 +310,7 @@ Review the `sccs` section of `waves_analysis_<timestamp>.json` and consider:
 ## FAQ
 
 **Q: Can I run just one analysis (e.g., only waves)?**
-A: Yes! Ask for the specific analysis: "Just generate deployment waves"
+A: Yes! Ask for the specific analysis: "Just find the business use cases and their waves"
 
 **Q: How do I update the analysis after code changes?**
 A: Re-run the analysis with updated SnowConvert reports, or say "Start fresh analysis"

@@ -1,6 +1,7 @@
 ---
 name: cur_reconciler
 description: Repair Code Unit Registry entries and bindable dependency references in converted SQL. Mint a unit when the object exists under source/ or source-bindable but has no CUR entry. Qualify tokenless catalogs so sandbox bindings substitute — any object kind. Triggers: cur_reconciler, reconcile CUR, repair registry, broken dependency, bindable reference, tokenless catalog, unknown UDF, PUBLIC. function, missing from CUR, stale task status, wrong object type.
+tools: read, write, edit, grep, glob, bash, sql_execute, mcp__snowflake-migration-mcp__query_registry, mcp__snowflake-migration-mcp__update_registry, mcp__snowflake-migration-mcp__create_registry_unit, mcp__snowflake-migration-mcp__migration_status, mcp__snowflake-migration-mcp__query_source
 license: Proprietary. See License-Skills for complete terms
 ---
 
@@ -115,7 +116,7 @@ reference is sqlFixLoop — return `deferred` and name it in `unresolved`.
 
    Preserve unrelated fields, update affected references and graph fields,
    and change task/completion state only from its real artifact, event, or
-   oracle.
+   status source.
 4. Re-read changed entries and their affected neighborhood. Verify JSON,
    identities, edges, graph consequences, file evidence, and changed status.
 

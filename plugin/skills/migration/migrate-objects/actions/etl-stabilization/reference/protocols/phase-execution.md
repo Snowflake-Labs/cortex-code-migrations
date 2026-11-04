@@ -266,7 +266,7 @@ For each project the fix wave touched, with a warehouse available:
 
 1. Drop/recreate the affected relations (or build with `--full-refresh`) so a failed build cannot leave a
    previous attempt's rows in place — stale relations make the tests pass against old data and report a
-   fix that did not happen.
+   fix that did not happen. Drop a `materialized='dynamic_table'` relation with `DROP DYNAMIC TABLE`.
 2. `dbt build --select tag:stabilization_test` then `dbt test --select tag:stabilization_test`.
 3. **Any FAILING assertion means the node is not fixed.** Send it back to a fix agent with the failing
    assertion text (bounded by the fixer's per-node attempt cap). Never resolve a failure by weakening,

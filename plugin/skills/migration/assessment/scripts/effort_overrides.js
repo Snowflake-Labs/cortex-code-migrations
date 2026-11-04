@@ -63,6 +63,26 @@
   }
 
   /**
+   * Whether a banded row prices dynamic SQL on a column of its own. Only the
+   * Functions and Stored Procedures rows do; C# publishes `dynamic_sql_count` on
+   * them (0 included) and omits it everywhere else, so the column's presence is
+   * read from the artifact rather than from a row label.
+   */
+  function hasDynamicSqlColumn(row) {
+    return isBandedRow(row) && isNumber(row.dynamic_sql_count);
+  }
+
+  /** Objects on a row's Dynamic SQL column: they are not in its band counts. */
+  function dynamicSqlCount(row) {
+    return hasDynamicSqlColumn(row) ? row.dynamic_sql_count : 0;
+  }
+
+  /** Every object a banded row prices: its band counts plus its Dynamic SQL column. */
+  function bandedObjectCount(row) {
+    return numberOr(row.band_counts.total, 0) + dynamicSqlCount(row);
+  }
+
+  /**
    * Whether a user's number could change anything on this row.
    *
    * A banded row with no objects is not editable: every band count is zero, so
@@ -79,7 +99,7 @@
       return numberOr(row.quantity, 0) > 0;
     }
     if (isBandedRow(row)) {
-      return numberOr(row.band_counts.total, 0) > 0;
+      return bandedObjectCount(row) > 0;
     }
     return !!row;
   }
@@ -112,6 +132,7 @@
 
   /**
    * Snowflake's own figure for one editable cell: a band's rate on a banded row,
+   * the Dynamic SQL rate for the band-less cell of a row that has that column,
    * or a flat row's whole budget, which is null when Snowflake does not price the
    * line at all.
    *
@@ -123,6 +144,9 @@
     if (!band) {
       if (row && row.pricing === "per_object") {
         return isNumber(row.unit_hours) ? row.unit_hours : null;
+      }
+      if (hasDynamicSqlColumn(row)) {
+        return isNumber(row.dynamic_sql_unit_hours) ? row.dynamic_sql_unit_hours : null;
       }
       return row && isNumber(row.flat_hours) ? row.flat_hours : null;
     }
@@ -252,13 +276,30 @@
         const overriddenBands = EDITABLE_BANDS.filter(function (band) {
           return customRates[band] !== snowflakeRateFor(row, band);
         });
-        const overridden = overriddenBands.length > 0;
+        // The Dynamic SQL rate is the row's one band-less figure, so it is stored
+        // where every band-less figure is, flat_hours[row.key]: editing it leaves
+        // the band rates alone, and the function and procedure rows keep separate
+        // entries. Each object on the column is charged this rate instead of a
+        // band rate, never on top of one.
+        const dynamicCount = dynamicSqlCount(row);
+        const snowflakeDynamic = snowflakeRateFor(row, null);
+        const dynamicCandidate = flatOverrides[row.key];
+        const dynamicStored =
+          editable && isNumber(dynamicCandidate) ? round4(dynamicCandidate) : null;
+        const dynamicRate = dynamicStored !== null ? dynamicStored : snowflakeDynamic;
+        const dynamicOverridden = dynamicStored !== null && dynamicStored !== snowflakeDynamic;
+        const overridden = overriddenBands.length > 0 || dynamicOverridden;
+        const bandHours = row.repetition
+          ? priceRepetition(row, customRates)
+          : priceBands(row.band_counts, customRates);
         return Object.assign({}, row, {
           custom_band_rates: customRates,
           custom_estimated_hours: overridden
-            ? (row.repetition ? priceRepetition(row, customRates) : priceBands(row.band_counts, customRates))
+            ? round4(bandHours + dynamicCount * numberOr(dynamicRate, 0))
             : row.estimated_hours,
           custom_flat_hours: null,
+          custom_dynamic_sql_unit_hours: hasDynamicSqlColumn(row) ? dynamicRate : null,
+          is_dynamic_sql_overridden: dynamicOverridden,
           is_overridden: overridden,
           overridden_bands: overriddenBands,
           is_editable: editable,
@@ -278,6 +319,8 @@
           custom_band_rates: null,
           custom_estimated_hours: rateOverridden ? round4(quantity * rate) : row.estimated_hours,
           custom_flat_hours: rate,
+          custom_dynamic_sql_unit_hours: null,
+          is_dynamic_sql_overridden: false,
           is_overridden: rateOverridden,
           overridden_bands: [],
           is_editable: editable,
@@ -295,6 +338,8 @@
         custom_band_rates: null,
         custom_estimated_hours: overridden ? stored : row.estimated_hours,
         custom_flat_hours: overridden ? stored : row.flat_hours,
+        custom_dynamic_sql_unit_hours: null,
+        is_dynamic_sql_overridden: false,
         is_overridden: overridden,
         overridden_bands: [],
         is_editable: editable,
@@ -485,7 +530,7 @@
    */
   function isEmptyCountedRow(row) {
     if (isBandedRow(row)) {
-      return numberOr(row.band_counts.total, 0) === 0;
+      return bandedObjectCount(row) === 0;
     }
     if (row && (row.pricing === "flat_total" || row.pricing === "per_object")) {
       return numberOr(row.quantity, 0) === 0;
@@ -773,6 +818,7 @@
     EDITABLE_BANDS: Object.freeze(EDITABLE_BANDS.slice()),
     validateRateInput: validateRateInput,
     isBandedRow: isBandedRow,
+    hasDynamicSqlColumn: hasDynamicSqlColumn,
     editableBands: editableBands,
     priceBands: priceBands,
     snowflakeRateFor: snowflakeRateFor,

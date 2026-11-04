@@ -11,6 +11,10 @@ from pathlib import Path
 EMPTY_COPY = (
     "No conversion issues. AIM did not record SSC-EWI issues on in-scope code units."
 )
+NOT_RUN_COPY = (
+    "The conversion issues analysis has not run for this assessment. Run the assessment "
+    "again and include the Conversion Issues report to rank the SSC-EWI issues from this conversion."
+)
 SUPPORT_EMAIL = "aim-support@snowflake.com"
 AI_FIX_DISCLAIMER = (
     "This Recommended Fix was produced by an AI assistant and has not been fully validated. "
@@ -24,6 +28,8 @@ SHARE_FORM_URL = (
 _ZIP_FROM_REPORT = "../artifacts/assessment/conversion-issues/conversion_issues.zip"
 # Lines kept on each side of the conflictive line before the reader expands.
 FOCUS_CONTEXT = 4
+# The PDF prints the most frequent pairs only; the HTML keeps every row.
+PRINT_ROWS = 10
 _QUOTED = re.compile(r"'([^']{3,})'")
 
 
@@ -52,7 +58,13 @@ def conversion_issues_css() -> str:
 
 
 def render_conversion_issues_tab(artifact: dict | None) -> str:
-    body = _empty() if not artifact else _report(artifact)
+    """A missing artifact means the analysis did not run; zero pairs means it found none."""
+    if not artifact:
+        body = _empty(NOT_RUN_COPY)
+    elif not _has_rows(artifact):
+        body = _empty(EMPTY_COPY)
+    else:
+        body = _report(artifact)
     return f"""
         <div class="tab-content ci-tab" :class="{{active: activeTab === 'conversion-issues'}}">
             {body}
@@ -60,8 +72,16 @@ def render_conversion_issues_tab(artifact: dict | None) -> str:
     """
 
 
-def _empty() -> str:
-    return f'<div class="ci-empty"><p>{html.escape(EMPTY_COPY)}</p></div>'
+def _has_rows(artifact: dict) -> bool:
+    panels = artifact.get("panels") if isinstance(artifact.get("panels"), list) else []
+    return any(
+        isinstance(panel, dict) and isinstance(panel.get("rows"), list) and panel["rows"]
+        for panel in panels
+    )
+
+
+def _empty(copy: str) -> str:
+    return f'<div class="ci-empty"><p>{html.escape(copy)}</p></div>'
 
 
 def _report(artifact: dict) -> str:
@@ -125,7 +145,7 @@ def _report(artifact: dict) -> str:
                     </div>
                 </div>
             </div>
-            <div class="ci-cat-nav">{''.join(buttons)}</div>
+            <div class="ci-cat-nav print-omit">{''.join(buttons)}</div>
             {''.join(tables)}
         </div>
     """
@@ -286,9 +306,12 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
     codes: list[str] = []
     types: list[str] = []
     body = []
+    listed = 0
     for row_index, row in enumerate(rows):
         if not isinstance(row, dict):
             continue
+        listed += 1
+        print_class = " print-omit" if listed > PRINT_ROWS else ""
         code = _text(row.get("code"))
         issue_type = _text(row.get("issue_type"))
         if code and code not in codes:
@@ -319,7 +342,7 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
             + "')"
         )
         body.append(
-            '<tr class="ci-row" '
+            f'<tr class="ci-row{print_class}" '
             + _vue_bind("v-show", visible)
             + " "
             + _vue_bind("@click", "ciToggleDetail('" + _vue_str(detail_id) + "')")
@@ -332,7 +355,7 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
             + f"<td class=\"ci-pct\">{_percent(row.get('percent'))}</td>"
             + f"<td class=\"ci-objects\">{html.escape(type_text)}</td>"
             + "</tr>"
-            + '<tr class="ci-detail" '
+            + f'<tr class="ci-detail{print_class}" '
             + _vue_bind(
                 "v-show",
                 "ciOpenDetail === '" + _vue_str(detail_id) + "' && " + visible,
@@ -358,7 +381,14 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
             + "</td></tr>"
         )
 
+    print_note = (
+        f'<p class="print-only print-note">This PDF lists the {PRINT_ROWS} most frequent of '
+        f"{listed:,} pairs. Every pair, with its sample code, is in the HTML report.</p>"
+        if listed > PRINT_ROWS
+        else ""
+    )
     return f"""
+        {print_note}
         <div class="ci-table-wrap">
         <table class="ci-table">
             <colgroup>

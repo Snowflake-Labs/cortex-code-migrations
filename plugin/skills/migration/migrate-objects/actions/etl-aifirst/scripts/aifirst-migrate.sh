@@ -36,17 +36,81 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRAMEWORK="$HERE"
-if [ -z "${AIFIRST_EMITTER:-}" ]; then
-  echo "usage: set AIFIRST_EMITTER to the AiFirstEtl producer dll (e1 Snowflake.SnowConvert.AiFirstEtl)" >&2
-  # exit 2: usage / unresolvable input — producer DLL must be provided before any stage runs
-  exit 2
+# Deferred: testbed mining reads only the document and must run even when the
+# producer DLL is missing (CWS has no build). Record the usage error; exit after mining.
+EMITTER_ERR=""
+# A plugin install never receives the gitignored ../bin/, so the emitter is found, in order: an
+# explicit AIFIRST_EMITTER, the aifirst/ beside the installed scai (SCAI_CLI), the plugin's ../bin/
+# (build-plugin.sh), then the producer's own Debug build (source checkouts, make temp snapshots).
+EMITTER=""
+EMITTER_HOST=""
+PACKAGED_EMITTER="$HERE/../bin/aifirst-migrate.dll"
+DEV_EMITTER="$HERE/../producer/bin/Debug/net10.0/aifirst-migrate.dll"
+SCAI_BIN="${SCAI_CLI:-$(command -v scai 2>/dev/null || true)}"
+SCAI_REAL=""
+INSTALLED_EMITTER=""
+if [ -n "$SCAI_BIN" ] && [ -e "$SCAI_BIN" ]; then
+  SCAI_REAL="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$SCAI_BIN" 2>/dev/null || echo "$SCAI_BIN")"
+  INSTALLED_EMITTER="$(dirname "$SCAI_REAL")/aifirst/aifirst-migrate.dll"
 fi
-EMITTER="$AIFIRST_EMITTER"
-if [ ! -f "$EMITTER" ]; then
-  echo "usage: AIFIRST_EMITTER does not name a readable file: $EMITTER" >&2
-  # exit 2: usage / unresolvable input — path set but not a readable file
-  exit 2
+if [ -n "${AIFIRST_EMITTER:-}" ]; then
+  if [ -f "$AIFIRST_EMITTER" ]; then
+    EMITTER="$AIFIRST_EMITTER"
+  else
+    EMITTER_ERR="usage: AIFIRST_EMITTER does not name a readable file: $AIFIRST_EMITTER"
+  fi
+else
+  for candidate in "$INSTALLED_EMITTER" "$PACKAGED_EMITTER" "$DEV_EMITTER"; do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then EMITTER="$candidate"; break; fi
+  done
+  if [ -z "${EMITTER:-}" ]; then
+    EMITTER_ERR="usage: packaged AI-First runtime is missing: $PACKAGED_EMITTER"
+    if [ -n "$INSTALLED_EMITTER" ]; then
+      EMITTER_ERR+=$'\n'"  also checked beside the installed scai: $INSTALLED_EMITTER"
+    fi
+    EMITTER_ERR+=$'\n'"development only: set AIFIRST_EMITTER to a readable producer dll"
+  fi
 fi
+
+# The packaged emitter is an apphost: it reuses the runtime bundled beside scai through
+# DOTNET_ROOT, as the SQL code processor does. Without a bundled runtime it runs as `dotnet <dll>`.
+EMITTER_RUNTIME_ROOT=""
+if [ -n "${EMITTER:-}" ]; then
+  if [ -n "$SCAI_REAL" ] && [ "$EMITTER" = "$INSTALLED_EMITTER" ] && [ -d "$(dirname "$SCAI_REAL")/host/fxr" ]; then
+    EMITTER_RUNTIME_ROOT="$(dirname "$SCAI_REAL")"
+  elif [ -d "$(dirname "$(dirname "$EMITTER")")/host/fxr" ]; then
+    EMITTER_RUNTIME_ROOT="$(dirname "$(dirname "$EMITTER")")"
+  fi
+  case "$(uname -s 2>/dev/null || echo unknown)" in
+    MINGW*|MSYS*|CYGWIN*) EMITTER_HOST="$(dirname "$EMITTER")/aifirst-migrate.exe" ;;
+    *) EMITTER_HOST="$(dirname "$EMITTER")/aifirst-migrate" ;;
+  esac
+fi
+
+run_emitter() {
+  if [ -n "$EMITTER_RUNTIME_ROOT" ] && [ -f "$EMITTER_HOST" ]; then
+    (
+      export DOTNET_ROOT="$EMITTER_RUNTIME_ROOT"
+      case "$(uname -m 2>/dev/null || echo unknown)" in
+        x86_64|amd64) export DOTNET_ROOT_X64="$EMITTER_RUNTIME_ROOT" ;;
+        aarch64|arm64) export DOTNET_ROOT_ARM64="$EMITTER_RUNTIME_ROOT" ;;
+      esac
+      "$EMITTER_HOST" "$@"
+    )
+    return $?
+  fi
+  if command -v dotnet >/dev/null 2>&1; then
+    dotnet "$EMITTER" "$@"
+    return $?
+  fi
+  if [ -f "$EMITTER_HOST" ]; then
+    "$EMITTER_HOST" "$@"
+    return $?
+  fi
+  echo "usage: AI-First emitter apphost is missing ($EMITTER_HOST) and dotnet is not on PATH" >&2
+  echo "Installed scai carries the runtime under host/fxr next to the binary. Run the apphost beside aifirst-migrate.dll." >&2
+  return 127
+}
 
 # --no-shim is passed through to the emitter. It exists to DEMONSTRATE the degradation path: with the
 # SSIS semantics shim off, the same document emits an unresolvable sentinel and drops 4 columns, which
@@ -118,7 +182,13 @@ for _v in "${_INPUTS[@]}"; do
   declare -n _ref="$_v"
   _p="$_ref"
   if [ ! -f "$_p" ] || [ ! -r "$_p" ]; then
-    echo "usage: $_v does not name a readable file: $_p" >&2
+    # Emitter is still the first usage check. Dummy argc-valid paths must not
+    # hide a missing AIFIRST_EMITTER. Readable DOC/TABLE continue so mining can run.
+    if [ -n "$EMITTER_ERR" ]; then
+      echo "$EMITTER_ERR" >&2
+    else
+      echo "usage: $_v does not name a readable file: $_p" >&2
+    fi
     # exit 2: usage — unresolvable input path, fail before stages run
     exit 2
   fi
@@ -126,11 +196,30 @@ for _v in "${_INPUTS[@]}"; do
 done
 unset -n _ref
 
+# The output root is a staging directory, absolutised because stages cd elsewhere. Its tree is
+# $OUT/Output/ETL/<PACKAGE>; never pass the project's snowflake/_etl/<unit>, which nests that tree.
+_out_parent="$(dirname "$OUT")"
+if [ ! -d "$_out_parent" ]; then
+  echo "usage: <output-root> parent directory does not exist: $_out_parent" >&2
+  exit 2
+fi
+OUT="$(cd "$_out_parent" && pwd)/$(basename "$OUT")"
+if [ "$INSPECT_ONLY" = "0" ]; then
+  case "$OUT/" in
+    */snowflake/_etl/*)
+      echo "usage: <output-root> must be a staging directory outside snowflake/_etl/ (got $OUT)." \
+           "Pass STAGE=\$(mktemp -d) as <output-root>; convert/etl-aifirst/MIGRATE.md Step 4 then" \
+           "copies \$STAGE/Output/ETL/<PACKAGE> into snowflake/_etl/<PACKAGE>." >&2
+      exit 2
+      ;;
+  esac
+fi
+
 GATE_BUNDLES="${AIFIRST_GATE_BUNDLES:-$OUT.gates}"
 if [ "$SYNTHESIZE_TABLE" = "1" ]; then
   STAGE0_EVIDENCE="$GATE_BUNDLES/stage0"
   rm -rf "$STAGE0_EVIDENCE"
-  AUTHOR_CLI="${AIFIRST_TABLE_AUTHOR_CLI:-${AIFIRST_VERIFIER_CLI:-claude}}"
+  AUTHOR_CLI="${AIFIRST_TABLE_AUTHOR_CLI:-${AIFIRST_VERIFIER_CLI:-cortex}}"
   if python3 "$HERE/author_platform_table.py" "$PLATFORM_ID" --checked-in >/dev/null; then
     echo "-- stage 0: use checked-in platform table"
     if ! python3 "$HERE/author_platform_table.py" "$PLATFORM_ID" "$DOC" "$STAGE0_EVIDENCE" \
@@ -198,11 +287,13 @@ from coverage_gate import RULES
 identity = (json.load(open(sys.argv[2], encoding="utf-8")).get("platform") or "").strip()
 if identity in RULES:
     sys.exit(0)
-near = difflib.get_close_matches(identity, list(RULES), n=1, cutoff=0.4)
+by_folded = {k.lower(): k for k in RULES}
+near = difflib.get_close_matches(identity.lower(), list(by_folded), n=1, cutoff=0.4)
 print("*** COVERAGE WILL BE UNMEASURED -- the table states platform %r, which has no "
       "source-element counting rule." % identity)
 if near:
-    print("    Did you mean %r? Gate A keys its denominator by this exact string." % near[0])
+    print("    Did you mean %r? Gate A keys its denominator by this exact string."
+          % by_folded[near[0]])
 print("    Rules exist for: %s." % ", ".join(sorted(RULES)))
 PY
 )
@@ -227,6 +318,35 @@ INTEGRITY_IR="$GATE_BUNDLES/integrity/ir.json"
 echo "=============================================================="
 echo " AI-first migration: $(basename "$DOC")"
 echo "=============================================================="
+
+# Mine testbed specs from the DOCUMENT (the IR drops split arms and join keys) beside "$OUT", which
+# stage 3 removes. Knobs: AIFIRST_TESTBED_OUT (default "$OUT.testbed"),
+# AIFIRST_TESTBED_EXISTING_TABLES (colon-separated DDL dirs), AIFIRST_TESTBED_PROJECT.
+TESTBED_OUT="${AIFIRST_TESTBED_OUT:-$OUT.testbed}"
+mine_testbed() {
+  local args=( "$@" ) d rc
+  IFS=':' read -r -a TB_EXISTING <<<"${AIFIRST_TESTBED_EXISTING_TABLES:-}"
+  for d in "${TB_EXISTING[@]+"${TB_EXISTING[@]}"}"; do
+    [ -n "$d" ] && args+=( --existing-tables "$d" )
+  done
+  [ -n "${AIFIRST_TESTBED_PROJECT:-}" ] && args+=( --project-root "$AIFIRST_TESTBED_PROJECT" )
+  python3 "$HERE/testbed_mine.py" "$DOC" "$TESTBED_OUT" "${args[@]+"${args[@]}"}" 2>&1 | sed 's/^/   /'
+  rc=${PIPESTATUS[0]}
+  if [ "$rc" -eq 1 ]; then
+    echo "   WARN: testbed mining failed; no *.testbed.json for this document" >&2
+  elif [ "$rc" -eq 2 ]; then
+    echo "   (no testbed mining adapter for this document; none emitted)"
+  fi
+}
+if [ "$INSPECT_ONLY" = "0" ]; then
+  echo "-- testbed mining -> $TESTBED_OUT"
+  mine_testbed
+fi
+if [ -n "$EMITTER_ERR" ]; then
+  echo "$EMITTER_ERR" >&2
+  rm -f "$IR" "$EMITLOG"
+  exit 2
+fi
 
 if [ "$INSPECT_ONLY" = "1" ]; then
   if [ ! -d "$OUT" ]; then
@@ -307,8 +427,13 @@ echo "   ir: $(wc -c <"$IR" | tr -d ' ') bytes"
 # "the translator threw on this element" apart from "nothing ever asked the translator about it" --
 # two causes of the same missing model that need different fixes.
 echo "-- stage 3: emit"
+if [ -n "$EMITTER_RUNTIME_ROOT" ] && [ -f "$EMITTER_HOST" ]; then
+  echo "   emitter: $EMITTER_HOST (apphost on the runtime in $EMITTER_RUNTIME_ROOT)"
+else
+  echo "   emitter: $EMITTER (dotnet)"
+fi
 rm -rf "$OUT"
-if ! dotnet "$EMITTER" $EMIT_FLAGS "$IR" "$OUT" "$DOC" >"$EMITLOG" 2>&1; then
+if ! run_emitter $EMIT_FLAGS "$IR" "$OUT" "$DOC" >"$EMITLOG" 2>&1; then
   echo "   FAILED: emission produced no usable tree" >&2
   sed -n '1,40p' "$EMITLOG" >&2
   rm -f "$IR" "$EMITLOG"
@@ -318,6 +443,8 @@ fi
 files=$(find "$OUT" -type f 2>/dev/null | wc -l | tr -d ' ')
 models=$(find "$OUT" -name '*.sql' -path '*models*' 2>/dev/null | wc -l | tr -d ' ')
 echo "   wrote: $files file(s), $models model(s)"
+echo "-- testbed mining (IR cross-check) -> $TESTBED_OUT"
+mine_testbed --ir "$IR"
 # THE EMITTER'S OWN ACCOUNT OF THE THREE NEW ARTIFACTS, echoed here because $EMITLOG is deleted at the
 # end and these are the only lines that state the CAUSE when stage 4 later reports a zero. Stage 4
 # still counts from the artifact, not from these lines — this is diagnosis, not the measurement.
@@ -335,6 +462,67 @@ printf '%s\n' "$ELEMENTS_CENSUS" | sed 's/^/   | /'
 if ! printf '%s' "$ELEMENTS_CENSUS" | grep -q "metadata rows:"; then
   echo "   *** ETL.Elements metadata census did not run — graph rows are unchanged."
   degraded=1
+fi
+
+# ---- STAGE 3a2: produce the sidecar the later stages already know how to consume -----------------
+# Produce from the first tree, then re-represent + re-emit once; a committed sidecar skips this.
+SIDECAR="$DOC.ai.json"
+echo "-- stage 3a2: sidecar produce"
+if [ -n "${AIFIRST_SKIP_SIDECAR_PRODUCE:-}" ]; then
+  echo "   skipped (AIFIRST_SKIP_SIDECAR_PRODUCE is set)"
+elif [ -s "$SIDECAR" ]; then
+  echo "   using existing sidecar: $SIDECAR ($(wc -c <"$SIDECAR" | tr -d ' ') bytes)"
+else
+  SIDECAR_DIR="${AIFIRST_GATE_BUNDLES:-$OUT.gates}/sidecar"
+  mkdir -p "$SIDECAR_DIR"
+  SIDECAR_LOG="$SIDECAR_DIR/produce.log"
+  PRODUCE_OUT="$SIDECAR_DIR/produced.json"
+  SIDECAR_DUMP="$SIDECAR_DIR/prompts"
+  echo "   census+produce against tree $OUT"
+  if (cd "$FRAMEWORK" && python3 sidecar_producer.py produce "$TABLE" "$DOC" \
+        --tree "$OUT" --out "$PRODUCE_OUT" --dump-prompts "$SIDECAR_DUMP" \
+        --timeout "${AIFIRST_SIDECAR_TIMEOUT:-900}") \
+        >"$SIDECAR_LOG" 2>&1; then
+    if [ -s "$PRODUCE_OUT" ]; then
+      cp "$PRODUCE_OUT" "$SIDECAR"
+      echo "   wrote sidecar: $SIDECAR ($(wc -c <"$SIDECAR" | tr -d ' ') bytes)"
+      echo "-- stage 3a2b: re-represent + re-emit with sidecar"
+      PRE_SIDECAR="$OUT.pre-sidecar"
+      rm -rf "$PRE_SIDECAR"
+      cp -a "$OUT" "$PRE_SIDECAR"
+      if ! (cd "$FRAMEWORK" && python3 main.py "$TABLE" "$DOC" "$IR") >/dev/null 2>&1; then
+        echo "   *** RE-REPRESENT FAILED — keeping first-pass IR/tree. Sidecar is on disk."
+        echo "       See $SIDECAR_LOG"
+        rm -rf "$PRE_SIDECAR"
+        degraded=1
+      else
+        rm -rf "$OUT"
+        if ! run_emitter $EMIT_FLAGS "$IR" "$OUT" "$DOC" >"$EMITLOG" 2>&1; then
+          echo "   *** RE-EMIT FAILED — restoring first-pass tree. Sidecar is on disk."
+          echo "       See $SIDECAR_LOG"
+          rm -rf "$OUT"
+          mv "$PRE_SIDECAR" "$OUT"
+          degraded=1
+        else
+          rm -rf "$PRE_SIDECAR"
+          files=$(find "$OUT" -type f 2>/dev/null | wc -l | tr -d ' ')
+          models=$(find "$OUT" -name '*.sql' -path '*models*' 2>/dev/null | wc -l | tr -d ' ')
+          echo "   re-emitted: $files file(s), $models model(s)"
+          echo "-- testbed mining (IR cross-check after sidecar) -> $TESTBED_OUT"
+          mine_testbed --ir "$IR"
+          ELEMENTS_CENSUS=$(python3 "$HERE/etl_elements_census.py" "$TABLE" "$DOC" "$OUT" 2>&1) || true
+          printf '%s\n' "$ELEMENTS_CENSUS" | sed 's/^/   | /'
+        fi
+      fi
+    else
+      echo "   produce wrote no sidecar (no gaps, or every request abstained)."
+      echo "       See $SIDECAR_LOG"
+    fi
+  else
+    echo "   *** SIDECAR PRODUCE FAILED — fill will run without one. See $SIDECAR_LOG"
+    sed -n '1,40p' "$SIDECAR_LOG" | sed 's/^/   | /'
+    degraded=1
+  fi
 fi
 
 # ---- STAGE 3b: TIER 3 — fill what the engine could not render ------------------------------------
@@ -365,8 +553,26 @@ fi
 # "Source 'raw.CUSTOMER' not found in project" -- and everything else parsed clean.
 echo "-- stage 3c: declare sources"
 for proj in $(find "$OUT" -name 'dbt_project.yml' -exec dirname {} \; 2>/dev/null); do
-  python3 "$HERE/emit_sources_yml.py" "$proj" || true
+  python3 "$HERE/emit_sources_yml.py" "$proj" "$DOC" || true
 done
+
+# ---- STAGE 3c1: unit parameters -> var() in the shipped models -----------------------------------
+# After ai_fill and the sources declaration, which both write model files a ${NAME} can land in. A
+# ${ left anywhere, or a parameter no model reads, is degradation.
+echo "-- stage 3c1: unit parameters (var() rewrite)"
+PARAMS=$(python3 "$HERE/params_postpass.py" "$IR" "$OUT" 2>&1) || true
+printf '%s\n' "$PARAMS" | sed 's/^/   /'
+if ! printf '%s\n' "$PARAMS" | grep -qE '^parameters : declared=[0-9]+ rewritten=[0-9]+ residual=0 missing=0$'; then
+  echo "   *** UNIT PARAMETERS NOT FULLY WIRED — a model still holds \${...} or does not read a"
+  echo "       parameter the source substitutes."
+  degraded=1
+fi
+
+# ---- STAGE 3c1b: clock-filled sink columns -> clock_columns.json -----------------------------------
+# After the models are final; the test seed excludes what this declares. Never degrades: an
+# undeclared clock column shows up as a mismatch.
+echo "-- stage 3c1b: clock-filled sink columns"
+python3 "$HERE/clock_postpass.py" "$OUT" --table "$TABLE" --doc "$DOC" 2>&1 | sed 's/^/   /' || true
 
 # ---- STAGE 3c2: RE-EMIT LINEAGE OVER THE TREE THAT ACTUALLY SHIPPED ----------------------------
 # NAMED 3c2 AND NOT 3e SO THE PRINTED ORDER MATCHES THE EXECUTION ORDER. It runs between 3c and 3d,
@@ -386,7 +592,7 @@ done
 #
 # Ordered BEFORE stage 4, which counts ObjectReferences rows out of the artifact.
 echo "-- stage 3c2: re-emit lineage over the filled tree"
-RELINEAGE=$(dotnet "$EMITTER" --relineage "$IR" "$OUT" "$DOC" 2>&1)
+RELINEAGE=$(run_emitter --relineage "$IR" "$OUT" "$DOC" 2>&1)
 RELINEAGE_RC=$?
 printf '%s\n' "$RELINEAGE" | grep -E "^lineage rows|^  lineage|^  report|^  WARN" | sed 's/^/   /'
 if [ $RELINEAGE_RC -ne 0 ]; then
@@ -497,6 +703,8 @@ mkdir -p "$GATE_BUNDLES"
 # mechanism it was testing is broken.
 GATEA_VERIFIER_DEFAULT="python3 -u $HERE/gate_a.py verifier --bundle {bundle} --verdict {verdict} --verifier-timeout 1800"
 GATEB_VERIFIER_DEFAULT="python3 -u $HERE/gate_b.py verifier --bundle {bundle} --verdict {verdict} --verifier-timeout 1800"
+# Supported host is Cortex Code (`cortex exec`). A missing host is UNMEASURED, never clean.
+# `AIFIRST_VERIFIER_CLI` remains the test/developer override (including a stub `claude` CLI).
 if [ -n "${AIFIRST_VERIFIER_CLI:-}" ]; then
   GATEA_VERIFIER_DEFAULT="$GATEA_VERIFIER_DEFAULT --cli $AIFIRST_VERIFIER_CLI"
   GATEB_VERIFIER_DEFAULT="$GATEB_VERIFIER_DEFAULT --cli $AIFIRST_VERIFIER_CLI"
@@ -524,7 +732,7 @@ if [ "$GATEA_MODE" = "batched-run" ]; then
   if [ -n "${AIFIRST_GATEA_BATCH_SIZE:-}" ]; then
     GATEA_BATCH_ARGS+=(--batch-size "$AIFIRST_GATEA_BATCH_SIZE")
   fi
-  GATEA_CLI="${AIFIRST_VERIFIER_CLI:-claude}"
+  GATEA_CLI="${AIFIRST_VERIFIER_CLI:-cortex}"
   GATEA=$(python3 -u "$HERE/gate_a.py" batched-run "$TABLE" "$DOC" "$IR" "$OUT" \
             --bundle "$GATE_BUNDLES/gateA" --emit-log "$EMITLOG" \
             --cli "$GATEA_CLI" --verifier-timeout 900 \
@@ -616,7 +824,7 @@ echo "-- stage 3e2: gate B (intent parity — a model reads the SQL against the 
 GATEB_ARM="${AIFIRST_GATEB_ARM:-naive}"
 GATEB_MODE="${AIFIRST_GATEB_MODE:-batched-run}"
 if [ "$GATEB_MODE" = "batched-run" ]; then
-  GATEB=$(python3 -u "$HERE/gate_b.py" batched-run "$DOC" "$OUT"             --bundle "$GATE_BUNDLES/gateB" --arm "$GATEB_ARM"             --platform "$TABLE_PLATFORM"             --cli "${AIFIRST_VERIFIER_CLI:-claude}" --verifier-timeout 900             --parallelism "${AIFIRST_GATE_PARALLELISM:-4}"             --expression-batch-size "${AIFIRST_GATEB_EXPRESSION_BATCH_SIZE:-8}"             --model-batch-size "${AIFIRST_GATEB_MODEL_BATCH_SIZE:-12}" 2>&1)
+  GATEB=$(python3 -u "$HERE/gate_b.py" batched-run "$DOC" "$OUT"             --bundle "$GATE_BUNDLES/gateB" --arm "$GATEB_ARM"             --platform "$TABLE_PLATFORM"             --cli "${AIFIRST_VERIFIER_CLI:-cortex}" --verifier-timeout 900             --parallelism "${AIFIRST_GATE_PARALLELISM:-4}"             --expression-batch-size "${AIFIRST_GATEB_EXPRESSION_BATCH_SIZE:-8}"             --model-batch-size "${AIFIRST_GATEB_MODEL_BATCH_SIZE:-12}" 2>&1)
 else
   GATEB=$(python3 -u "$HERE/gate_b.py" run "$DOC" "$OUT"             --bundle "$GATE_BUNDLES/gateB" --arm "$GATEB_ARM"             --platform "$TABLE_PLATFORM"             --verifier-cmd "$GATEB_VERIFIER" --max-iterations 3 2>&1)
 fi
@@ -1137,8 +1345,10 @@ fi
 # It runs in BOTH modes, including --inspect-only, which is how its negative tests plant a loss in a
 # real tree and run THE SHIPPED CODE over it.
 echo "-- stage 4d: structural integrity (did the IR reach the dbt?)"
+# --source feeds the SINKS class (Hop only): the document's table sinks, each of which some model
+# must write with its declared write mode.
 INTEGRITY=$(python3 "$HERE/integrity_gate.py" "$INTEGRITY_IR" "$OUT" \
-              --platform "$TABLE_PLATFORM" \
+              --platform "$TABLE_PLATFORM" --source "$DOC" \
               --json "$(dirname "$INTEGRITY_IR")/integrity.json" 2>&1)
 INTEGRITY_RC=$?
 printf '%s\n' "$INTEGRITY" | sed 's/^/   /'
@@ -1156,7 +1366,8 @@ if ! printf '%s' "$INTEGRITY" | grep -q "^ integrity     :"; then
   degraded=1
 elif [ $INTEGRITY_RC -ne 0 ]; then
   echo "   *** INFORMATION LOST BETWEEN THE IR AND THE DBT — the representation carries nodes,"
-  echo "       columns, edges or payload values that no artifact in this tree does, itemised above."
+  echo "       columns, edges or payload values that no artifact in this tree does, or the document"
+  echo "       declares a table sink no model writes the way it does, itemised above."
   echo "       NOT a claim that the tree fails to run: an absent ref() compiles clean and a"
   echo "       substituted predicate runs and returns every row."
   degraded=1
@@ -1307,6 +1518,11 @@ fi
 # `$INTEGRITY_IR` is what `--bundle-dir` resolves to).
 echo "-- stage 6: remediation brief (index Gate B / integrity / AIM issues for stabilization)"
 if [ "$degraded" -ne 0 ]; then CONVERSION_EXIT=3; else CONVERSION_EXIT=0; fi
+# The element map (model -> source element, tier, source lines) is what lets the brief carry each
+# item's source fragment and lets a repair tell model-authored SQL from engine output. NON-GATING:
+# a map that cannot be built leaves the brief's items `source_unlocated`, which says so per item.
+ELEMENT_MAP=$(python3 "$HERE/element_map.py" "$TABLE" "$DOC" "$OUT" 2>&1)
+printf '%s\n' "$ELEMENT_MAP" | sed 's/^/   /'
 # Same disambiguation Stage 5 uses: capture stdout+RC, require a success marker. Piping to sed
 # alone would swallow a non-zero python exit under `set -uo pipefail` without `set -e`.
 BRIEF=$(python3 "$HERE/remediation_brief.py" "$TABLE" "$DOC" "$OUT" \
@@ -1336,7 +1552,6 @@ elif printf '%s' "$BRIEF" | grep -q " BRIEF INCOMPLETE "; then
 fi
 # ---- END STAGE 6 ------------------------------------------------------------------
 # =============================================================================
-=======
 # ---- STAGE 7: LINEAGE (I-31 / SNOW-3956440 Component 3) --------------------------
 # Reads the emitted project's source() calls and writes Reports/AiFirstLineage/lineage.json.
 # NON-GATING: a lineage read that fails does not set degraded.

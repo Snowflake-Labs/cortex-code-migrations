@@ -24,6 +24,7 @@ Uses AI to generate contextual benefits and purpose sections based on project ch
 import json
 import argparse
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from collections import defaultdict, Counter
@@ -291,10 +292,139 @@ def _is_temporal_table(obj_name, obj_info, mem_info):
     category = (mem_info.get('category') or obj_info.get('category', '')).upper()
     if 'TEMPORARY' in category or category == 'TEMP TABLE':
         return True
-    bare_name = obj_name.replace('[', '').replace(']', '').rsplit('.', 1)[-1]
-    if bare_name.startswith('#'):
+    if _bare_object_name(obj_name).startswith('#'):
         return True
     return False
+
+
+_BRACKET_GROUP = re.compile(r"\[([^\[\]]*)\]")
+_QUOTED_PART = re.compile(r'"([^"]*)"')
+_UNRESOLVED_OBJECT_TYPES = {"", "OTHER", "UNKNOWN"}
+_READ_RELATIONS = {"read", "reads", "select"}
+_WRITE_RELATIONS = {"write", "writes", "insert", "update", "merge", "delete", "truncate", "drop"}
+_LOOKUP_RELATIONS = {"lookup", "lookups"}
+_TABLE_REFERENCE_LABELS = {"read", "write", "lookup"}
+
+
+def _identifier_parts(raw: str) -> list[str]:
+    """Split a bracketed identifier, including a quoted name nested in one group."""
+    parts: list[str] = []
+    for group in _BRACKET_GROUP.findall(raw):
+        quoted = [part for part in _QUOTED_PART.findall(group) if part]
+        if quoted:
+            parts.extend(quoted)
+            continue
+        piece = group.strip().strip('"')
+        if piece:
+            parts.append(piece)
+    return parts
+
+
+def _bare_object_name(raw: str) -> str:
+    """Last identifier part. A quoted ``#temp`` is still a temp table."""
+    parts = _identifier_parts(raw or "")
+    if parts:
+        return parts[-1]
+    text = (raw or "").strip()
+    return text.rsplit(".", 1)[-1].strip().strip('"')
+
+
+def _display_schema_name(raw: str) -> str:
+    """SCHEMA.NAME for a bracketed identifier. A single part stays unqualified."""
+    text = (raw or "").strip()
+    if "[" not in text:
+        return text
+    parts = _identifier_parts(text)
+    if len(parts) >= 2:
+        return f"{parts[-2]}.{parts[-1]}"
+    if len(parts) == 1:
+        return parts[0]
+    return text
+
+
+def _reference_label(relation_type: str) -> str:
+    """Collapse a dependency verb to read, write, or lookup."""
+    head = (relation_type or "").split("-", 1)[0].strip().lower()
+    if not head or head == "-":
+        return ""
+    if head in _READ_RELATIONS:
+        return "read"
+    if head in _WRITE_RELATIONS:
+        return "write"
+    if head in _LOOKUP_RELATIONS:
+        return "lookup"
+    return head
+
+
+def _origin_file(dependents: list) -> str:
+    """Referencing file (or caller) plus its reference type, one entry per file."""
+    grouped: dict[str, list[str]] = {}
+    order: list[str] = []
+    for dep in dependents:
+        if not isinstance(dep, dict):
+            continue
+        place = (
+            dep.get("file_name") or dep.get("file") or dep.get("caller") or ""
+        ).strip()
+        if not place or place == "-":
+            continue
+        label = _reference_label(dep.get("relation_type") or dep.get("relationType") or "")
+        if place not in grouped:
+            grouped[place] = []
+            order.append(place)
+        if label and label not in grouped[place]:
+            grouped[place].append(label)
+    parts = []
+    for place in order:
+        labels = grouped[place]
+        if labels:
+            parts.append(f"{place} ({', '.join(labels)})")
+        else:
+            parts.append(place)
+    return ", ".join(parts)
+
+
+def _infer_missing_type(current: str, labels: list[str]) -> str:
+    """A read, write, or lookup of an unresolved object is a table."""
+    normalized = (current or "").strip().upper()
+    if normalized not in _UNRESOLVED_OBJECT_TYPES:
+        return current
+    if any(label in _TABLE_REFERENCE_LABELS for label in labels):
+        return "TABLE"
+    return current or "OTHER"
+
+
+def _blank_file(value: str) -> bool:
+    if is_na(value):
+        return True
+    return str(value).strip() == "-"
+
+
+def _relation_labels(dependents: list) -> list[str]:
+    labels: list[str] = []
+    for dep in dependents:
+        if not isinstance(dep, dict):
+            continue
+        label = _reference_label(dep.get("relation_type") or dep.get("relationType") or "")
+        if label and label not in labels:
+            labels.append(label)
+    return labels
+
+
+def _apply_missing_origin(row: dict, dependents_map: dict) -> None:
+    """Fill a Missing row from the callers that reference it.
+
+    The stub has no source file of its own. The caller's missing-dependency
+    edge is what names the mapping and the reference type. The row keeps its
+    raw name so dependency lookup still matches; the table shows SCHEMA.NAME.
+    """
+    dependents = dependents_map.get(row.get("name"), []) or []
+    labels = _relation_labels(dependents)
+    origin = _origin_file(dependents)
+    if origin and _blank_file(row.get("file", "")):
+        row["file"] = origin
+    row["type"] = _infer_missing_type(row.get("type", ""), labels)
+    row["display_name"] = _display_schema_name(row.get("name", ""))
 
 
 def generate_html_report(waves_json, output_path=None, reports_dir=None, registry_dir=None):
@@ -638,31 +768,29 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
                 'issues': obj.get('issues') or [],
             })
 
-    # Add missing objects (external references not found in workload).
-    # Skip any that already appeared in the main membership loop — that
-    # happens when the waves JSON emits isMissing entries as first-class
-    # objects[] rows (registry-synthesized mode), in which case the row is
-    # already rendered with category=OTHER / status=Missing.
-    already_rendered = {obj['name'] for obj in all_objects_data}
+    # A first-class missing stub has no source file. The caller's
+    # missing-dependency edge names the mapping and the reference type.
     missing_objects = missing_obj_refs.get('missing_objects', set())
     dependents_map = missing_obj_refs.get('dependents', {})
+    for row in all_objects_data:
+        if row.get('conversion_status') == 'Missing':
+            _apply_missing_origin(row, dependents_map)
+
+    already_rendered = {obj['name'] for obj in all_objects_data}
 
     for missing_obj_name in missing_objects:
         if missing_obj_name in already_rendered:
             continue
-        # Get files that reference this missing object
         dependent_list = dependents_map.get(missing_obj_name, [])
-        files = list(set(dep.get('file_name', '') for dep in dependent_list if dep.get('file_name')))
-        file_str = ', '.join(files) if files else '-'
 
         missing_type = 'Unknown'
         if _is_temporal_table(missing_obj_name, {}, {}):
             missing_type = 'TEMPORAL TABLE'
 
-        all_objects_data.append({
+        row = {
             'name': missing_obj_name,
             'type': missing_type,
-            'file': file_str,
+            'file': '',
             'wave': '-',  # Missing objects are not assigned to waves
             'dependencies': 0,  # Missing objects have no tracked dependencies
             'dependents': len(dependent_list),  # Number of objects that reference this
@@ -671,7 +799,11 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             'has_missing_deps': False,  # Missing objects themselves don't have missing deps
             'issues': [],
             'missing_dependencies': [],
-        })
+        }
+        _apply_missing_origin(row, dependents_map)
+        if _blank_file(row['file']):
+            row['file'] = '-'
+        all_objects_data.append(row)
 
     # Sort by wave, then by name (missing objects with wave='-' come last)
     all_objects_data.sort(key=lambda x: (float('inf') if x['wave'] == '-' else x['wave'], x['name']))
@@ -2072,11 +2204,14 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
 '''
 
     if top_dependents:
+        # A Missing row shows SCHEMA.NAME, like the dashboard; the raw name stays the lookup key.
+        display_names = {row['name']: row['display_name'] for row in all_objects_data if row.get('display_name')}
         for obj_name, count, wave in top_dependents:
             obj_name_attr = str(obj_name).replace('&', '&amp;').replace('"', '&quot;').replace("'", '&#39;').replace('<', '&lt;').replace('>', '&gt;')
+            shown_name = str(display_names.get(obj_name, obj_name)).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
             dependency_stats_html += f'''
                             <tr class="top-impact-row" data-object-name="{obj_name_attr}" style="cursor: pointer;">
-                                <td><span class="top-impact-object" data-tooltip="{obj_name_attr}" style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1em; color: #111827; font-family: inherit;">{obj_name}</span></td>
+                                <td><span class="top-impact-object" data-tooltip="{obj_name_attr}" style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1em; color: #111827; font-family: inherit;">{shown_name}</span></td>
                                 <td style="text-align: center;"><strong>{count}</strong></td>
                                 <td style="text-align: center;">{wave}</td>
                             </tr>
@@ -2161,6 +2296,8 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
     unique_types = sorted(set(obj['type'] for obj in all_objects_data))
 
     html += f'''
+        <p class="print-only print-note" style="display: none;">The PDF leaves out the All Objects table ({len(all_objects_data):,} objects). The full table, with its filters and CSV export, is in the HTML report's Dependencies tab.</p>
+        <div class="print-omit">
         <h2 id="all-objects" style="font-size: 1.5rem; font-weight: 700; color: #102E46; margin-bottom: 20px; margin-top: 32px;">All Objects</h2>
 
         <div style="margin-bottom: 14px; background: #F8FBFC; border: 1px solid #D5E6F7; border-left: 4px solid #29B5E8; border-radius: 6px; padding: 10px 12px;">
@@ -2283,6 +2420,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
                     <!-- Rows will be populated by JavaScript -->
                 </tbody>
             </table>
+        </div>
         </div>
         <div id="objectDetailsModal" style="display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); z-index: 12000; align-items: center; justify-content: center; padding: 20px;" onclick="closeObjectDetailsModal(event)">
             <div style="width: min(1400px, 98vw); max-height: 94vh; overflow: auto; background: #FFFFFF; border-radius: 14px; box-shadow: 0 18px 48px rgba(15, 23, 42, 0.35); border: 1px solid #E2E8F0;" onclick="event.stopPropagation()">
@@ -3214,7 +3352,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             const metaEl = document.getElementById('objectDetailsModalMeta');
             if (!modal || !nameEl || !metaEl) return;
 
-            nameEl.textContent = modalObjectNameValue || '-';
+            nameEl.textContent = String(obj.display_name || modalObjectNameValue || '-');
             metaEl.innerHTML = `
                 <div>
                     <div style="font-size:0.72rem; color:#64748B; text-transform:uppercase; letter-spacing:0.03em; margin-bottom:2px;">Type</div>
@@ -3614,7 +3752,8 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             const statusFilters = window.objectsFilters.status || new Set();
 
             visibleObjectsData = allObjectsData.filter(obj => {{
-                const matchesSearch = (searchTerm === '' || obj.name.toLowerCase().includes(searchTerm));
+                const shownName = String(obj.display_name || obj.name || '');
+                const matchesSearch = (searchTerm === '' || shownName.toLowerCase().includes(searchTerm) || String(obj.name || '').toLowerCase().includes(searchTerm));
                 const matchesType = (typeFilters.size === 0 || typeFilters.has(String(obj.type || '')));
                 const matchesWave = (waveFilters.size === 0 || waveFilters.has(String(obj.wave || '')));
                 const matchesStatus = (statusFilters.size === 0 || statusFilters.has(String(obj.conversion_status || '')));
@@ -3812,7 +3951,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
 
                 const cells = [
                     `<input type="checkbox" class="row-checkbox" ${{isSelected ? 'checked' : ''}} data-key="${{escapeAttr(selectionKey)}}" style="cursor: pointer; width: 14px; height: 14px;">`,
-                    `<div class="object-name-cell" data-tooltip="${{escapeAttr(obj.name)}}" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><span style="color: #111827; font-weight: 500; font-size: 0.8rem;">${{escapeHtml(obj.name)}}</span></div>`,
+                    `<div class="object-name-cell" data-tooltip="${{escapeAttr(obj.display_name || obj.name)}}" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><span style="color: #111827; font-weight: 500; font-size: 0.8rem;">${{escapeHtml(obj.display_name || obj.name)}}</span></div>`,
                     `<span style="background-color: #F3F4F6; color: #374151; padding: 2px 6px; border-radius: 3px; font-size: 0.7rem; font-weight: 500; white-space: nowrap;">${{escapeHtml(obj.type)}}</span>`,
                     `<div data-tooltip="${{escapeAttr(obj.file)}}" style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #6B7280; font-size: 0.75rem;"><span>${{escapeHtml(obj.file)}}</span></div>`,
                     `<span style="font-weight: 500; color: #374151; font-size: 0.8rem;">${{obj.wave}}</span>`,
@@ -4037,7 +4176,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
 
             dataToExport.forEach(obj => {{
                 rows.push([
-                    obj.name,
+                    obj.display_name || obj.name,
                     obj.type,
                     obj.file,
                     obj.wave,

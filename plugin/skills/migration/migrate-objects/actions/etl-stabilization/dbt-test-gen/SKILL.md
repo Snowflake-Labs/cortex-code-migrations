@@ -10,7 +10,7 @@ license: Proprietary. See License-Skills for complete terms
 
 # dbt Test Generator
 
-Generate and run semantic test cases for dbt project models based on the original dataflow logic in the source definition file. Tests are generated BEFORE fixes are applied, serving as an independent oracle derived from the source-of-truth (the source definition file). All generated test artifacts are stored in `<UNIT>/stabilization/tests/dbt/` to keep the original dbt project clean.
+Generate and run semantic test cases for dbt project models based on the original dataflow logic in the source definition file. Tests are generated BEFORE fixes are applied, serving as an independent check derived from the source of truth (the source definition file). All generated test artifacts are stored in `<UNIT>/stabilization/tests/dbt/` to keep the original dbt project clean.
 
 > **Autonomous mode:** When spawned as a team agent, skip all interactive stopping points, make reasonable defaults for user-facing decisions, and document assumptions in the completion report. When done, send a `send_message` to `main` summarizing your results, and respond to any `shutdown_request` with `send_message` using `type: "shutdown_response"` and `approve: true`.
 

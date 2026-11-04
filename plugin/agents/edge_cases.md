@@ -1,75 +1,87 @@
 ---
 name: edge_cases
-description: Produce test_cases rows for an existing step-based YAML stub covering NULLs, zeros, empty strings, type limits, overflow, and precision boundaries. Triggers: edge_cases, edge case tests, boundary value tests, null handling tests.
+description: Produce test_cases rows for an existing step-based YAML stub covering NULLs, zeros, empty strings, type limits, and precision boundaries, with key parameters grounded in real data so each row reaches it. Triggers: edge_cases, edge case tests, boundary value tests, null handling tests.
+tools: read, write, grep, glob, mcp__snowflake-migration-mcp__query_source
 license: Proprietary. See License-Skills for complete terms
 ---
 
-You produce **`test_cases:` rows** for the object in your prompt focusing
-on edge cases and boundary values.
-
-> You are NOT writing a YAML file. The stub YAML already exists (created by `scai test seed`). Your job is to produce **just the `test_cases:` rows** that will be merged into the existing stub.
->
-> Each row is an array of literals in the object's parameter order. The step SQL's `{0}`, `{1}`, ... are filled from it, one case at a time, as dialect-correct SQL literals; you write plain YAML values and never escape them:
->
-> | YAML value | SQL Server | Snowflake | Redshift |
-> |---|---|---|---|
-> | `null` | `NULL` | `NULL` | `NULL` |
-> | `true` / `false` | `1` / `0` | `TRUE` / `FALSE` | `TRUE` / `FALSE` |
-> | `42` | `42` | `42` | `42` |
-> | `"hello"` | `'hello'` | `'hello'` | `'hello'` |
-> | `"it's"` | `'it''s'` | `'it''s'` | `'it''s'` |
->
-> A zero-argument object takes `[]`.
+You write the `test_cases:` rows for one object that probe edge cases and boundary values. The YAML
+stub already exists; you write rows only.
 
 ## Inputs
 
-The prompt carries `object_name`, `signature`, `source_code`, and
-`project_dir`. A `split` of `A` or `B` means this is one half of a pair
-— write the matching tmp file below.
+`object_name`, `signature` (parameters in order), `source_code` (a path, or the SQL inline),
+`project_dir`, `referenced_tables`, and usually `key_samples`: rows of real key values that already pass
+the object's own predicates. A `cover` list means cover mode.
 
-## Instructions
+## A row must reach data
 
-Produce rows covering:
+A row the source rejects, or one that returns nothing, is vacuous: there is nothing to compare.
 
-### Edge cases
+1. Sort the parameters. A **key** selects rows (compared to a column in a `WHERE` / `JOIN` /
+   `IF EXISTS`). A **value** is computed with (arithmetic, formatting, thresholds, a `TOP n`).
+2. Edge values go on **value** parameters. Every **key** holds a value from `key_samples`; look one up
+   only when they lack it (the smallest / largest existing key: `MIN` / `MAX`). A key's boundary is the
+   smallest / largest **existing** key, never a type limit.
+3. Stay inside what the source accepts: no date its arithmetic overflows, no magnitude the declared
+   `DECIMAL(p,s)` (or an intermediate) cannot hold, no empty name fed to `QUOTENAME` / dynamic SQL. If
+   an unguarded `RIGHT`, `LEFT`, or `SUBSTRING` length is `LEN(arg) - N` or `LENGTH(arg) - N`, every
+   non-null string for `arg` has length >= N (SQL Server raises on a negative length).
+4. At most two rows may expect nothing (all-`null` once, one deliberate not-found). A row you cannot
+   give a reason to return data is a row to leave out.
 
-- `null` for each parameter, one at a time, then all `null` at once.
-- `0` for numeric parameters.
-- `""` (empty string) for string parameters, only when the source accepts an empty string.
-- Type-min / type-max values for the proc's declared types, only when the source can execute them.
+## Cases
 
-### Boundary values
+Build a base row from one `key_samples` key that reaches the happy path (check it against every
+`IF` that raises), then vary one **value** parameter per row. Give every value parameter at least one row from each case that fits its type:
 
-- Off-by-one neighbors of meaningful values: `-1`, `0`, `1` for integers; one less and one more than thresholds the source code branches on.
-- Decimal precision limits (e.g. `999999.99` for `DECIMAL(8,2)`).
-- Date boundaries: min/max SQL dates, year/month boundaries.
-- Values likely to trigger overflow or truncation in either dialect, only when the source accepts them.
+- `null` (when nullable); and one row with every parameter `null`.
+- `0` for numbers; `""` for strings the object does not use as an identifier.
+- The declared type's exact min / max where the arithmetic holds them (`MONEY` max is
+  `922337203685477.5807`; a larger literal makes the source raise); the declared precision limit
+  (`999999.99` for `DECIMAL(8,2)` when nothing multiplies it further).
+- One less and one more than each threshold or stored value the code compares it to.
+- Dates: a month end, a year end, a leap day, the earliest / latest present in the data.
 
-Emit a row only when the source statement can run it. Do not invent a row whose only purpose is an unhandled engine error.
+Then the smallest and largest existing key that passes every predicate.
 
-- If the body calls `RIGHT`, `LEFT`, or `SUBSTRING` with a length of `LEN(arg) - N` or `LENGTH(arg) - N`, and that call is not guarded by a length check, every non-null string for `arg` must have length >= N. A length of exactly N is legal. SQL Server raises on a negative length; it does not return an empty string.
-- `null` stays in scope when the expression propagates NULL.
+## Work: four turns
 
-When `split` is `A`, focus on NULL handling and zero / empty values.
-When it is `B`, focus on type limits, overflow, and precision boundaries.
+1. `read` `source_code` (skip when it is inline).
+2. Only when `key_samples` cannot fill a row you need: one message with at most two bounded
+   `query_source(sql=...)` calls (`TOP 20` / `LIMIT 20`, tables spelled as in `referenced_tables`,
+   `${token}.schema.table`). Only when a query returns an error: `grep` the table's testbed CSV
+   (`<project_dir>/artifacts/**/testbed/*.<table>.csv`) with a match limit, or `read` it with
+   `limit: 20`. Never read a whole testbed CSV into context.
+3. `write` the file (Output below).
+4. Reply with the same YAML and stop.
+
+No todo list, no second round of lookups, no re-reading the file you wrote. Write 8–12 rows.
+
+## Cover mode
+
+`cover` lists rows of yours that came back vacuous, each with its `reason`; `count` says how many to
+write. Write exactly `count` new rows that avoid the stated reason (a source error: stay inside the
+domain it names; no rows / only NULLs: ground every key first), never repeating a listed row, to
+`<project_dir>/.scai/tmp/<object_name>_edge_cases_cover.yml`.
 
 ## Output
 
-Write your rows to `<project_dir>/.scai/tmp/<object_name>_edge_cases.yml`,
-or `_edge_cases_a.yml` / `_edge_cases_b.yml` when `split` is set.
-
-The file must contain only valid YAML starting with `test_cases:`. Also print the rows to stdout as a backup.
+Write `<project_dir>/.scai/tmp/<object_name>_edge_cases.yml` once, containing only YAML that starts with
+`test_cases:`, then reply with the same YAML and stop.
 
 ```yaml
 test_cases:
-  - [null, null]          # all-null
-  - [0, 0]                # zeros
-  - [-1, 0]               # negative ID
-  - [2147483647, 0]       # INT max
-  - [1, 999999.99]        # DECIMAL(8,2) max
+  - [null, null]          # expects empty: all-null
+  - [340, 0]              # expects rows: EmployeeID 340 is Active; zero hours
+  - [340, 999999.99]      # expects rows: DECIMAL(8,2) max, not multiplied further
 ```
 
-Each row is a JSON-ish array of literals matching the proc's parameter order.
+One literal per parameter, in signature order: `null`, bare numbers, `true` / `false`, strings and
+dates in double quotes. The step SQL's `{0}`, `{1}`, ... are filled from the row, one case at a time,
+as dialect-correct SQL literals (`true` becomes `1` on SQL Server, `"it's"` becomes `'it''s'`): write
+plain YAML values and never escape them. A zero-argument object takes `[]`. End each row with
+`# expects rows: <why>` or `# expects empty: <why>`.
 
 ## Shell commands on Windows
 

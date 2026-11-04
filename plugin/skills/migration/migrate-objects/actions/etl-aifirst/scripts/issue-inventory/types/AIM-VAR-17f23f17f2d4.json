@@ -1,0 +1,280 @@
+{
+  "distinguisher": "the name is not a built-in; a parameter, project variable or environment file entry would give it a value.",
+  "first_observed": "",
+  "hashed_material": "aim.sig.v1\u001fVAR\u001freference:unset-variable\u001frun-time-name-without-a-value",
+  "id": "AIM-VAR-17f23f17f2d4",
+  "impact": "output-unverified",
+  "mint": {
+    "at": "2026-10-20T16:11:42Z",
+    "by": "detector:unresolved_run_time_references",
+    "category_novel": true,
+    "classification": {
+      "considered": [
+        {
+          "differs_in": [
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-VAR-02100d620688",
+          "parts": {
+            "category_equal": 1.0,
+            "construct_jaccard": 0.4,
+            "reason_similarity": 0.5098,
+            "text_similarity": 0.6582
+          },
+          "score": 0.6707
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-REF-c5b6a3e418c9",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.2,
+            "reason_similarity": 0.2963,
+            "text_similarity": 0.0422
+          },
+          "score": 0.1256
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-REF-19ec51fddf7b",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.2,
+            "reason_similarity": 0.2909,
+            "text_similarity": 0.0138
+          },
+          "score": 0.1202
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-SEM-98625df8eebf",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.36,
+            "text_similarity": 0.2235
+          },
+          "score": 0.1055
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-EMIT-c585d372314d",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.3774,
+            "text_similarity": 0.0707
+          },
+          "score": 0.0861
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-REPR-cbdd94a217f3",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.2857,
+            "text_similarity": 0.1434
+          },
+          "score": 0.0787
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-REPR-507534cad1e5",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.2857,
+            "text_similarity": 0.1284
+          },
+          "score": 0.0764
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-SEM-a092b48196ec",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.25,
+            "text_similarity": 0.1622
+          },
+          "score": 0.0743
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-EXPR-4d4d56018da3",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.2333,
+            "text_similarity": 0.1649
+          },
+          "score": 0.0714
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-REPR-60b737be1cb4",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.2857,
+            "text_similarity": 0.0542
+          },
+          "score": 0.0653
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-REPR-5161af7f0af6",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.2857,
+            "text_similarity": 0.0484
+          },
+          "score": 0.0644
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-EMIT-d89de15f331e",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.2857,
+            "text_similarity": 0.0213
+          },
+          "score": 0.0603
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-SHAPE-1d790c23a72b",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.1887,
+            "text_similarity": 0.1439
+          },
+          "score": 0.0593
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-EXPR-542a49f76777",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.2,
+            "text_similarity": 0.1207
+          },
+          "score": 0.0581
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-SHAPE-6f18b6827d1f",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.1846,
+            "text_similarity": 0.1234
+          },
+          "score": 0.0554
+        },
+        {
+          "differs_in": [
+            "category",
+            "construct",
+            "reason"
+          ],
+          "id": "AIM-PRED-47f7de0cd8c0",
+          "parts": {
+            "category_equal": 0.0,
+            "construct_jaccard": 0.0,
+            "reason_similarity": 0.1786,
+            "text_similarity": 0.1235
+          },
+          "score": 0.0542
+        }
+      ],
+      "rule": "NO_CANDIDATE_ABOVE_THRESHOLD",
+      "verdict": "NOVEL"
+    },
+    "distinguisher": "the name is not a built-in; a parameter, project variable or environment file entry would give it a value."
+  },
+  "note": "",
+  "note_lint": {
+    "findings": [],
+    "rule_version": "aim.text.v1",
+    "scope": "instance",
+    "verdict": "PASS"
+  },
+  "sig_version": "aim.sig.v1",
+  "signature": {
+    "category": "VAR",
+    "construct": "reference:unset-variable",
+    "reason": "run-time-name-without-a-value"
+  },
+  "supersedes": "",
+  "text": "Element '{element}' of kind '{kind}' carries a run-time reference to a name that no declared parameter, project configuration file or environment file beside the document sets. No CONFIG entry, control variable or dbt var holds a value for it, so the generated model keeps the reference as written. {detail}",
+  "text_lint": {
+    "findings": [],
+    "rule_version": "aim.text.v1",
+    "scope": "type",
+    "verdict": "PASS"
+  },
+  "title": "Run-time reference names a value nothing in the unit's files sets"
+}

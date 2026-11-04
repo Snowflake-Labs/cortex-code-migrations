@@ -50,10 +50,25 @@ This rule is the same for **every** task in the loop below — deploy, test, cap
 2. **Ask what's next.** Re-pull `migration_status(mode="my_objects_summary")` (or `migration_status(mode="next_task", object_ids=["<id>"])` for one object). The machine advances you when it can see the work is done — a tool wrote the registry field, the object exists in Snowflake, or the expected file exists.
 3. **Call `transition_status` to report or override:**
    - a **failure** you can't fix — `transition_status(status='advance', task='<task>', outcome='failed', error='<sql|infra>')`;
-   - an outcome the system **can't observe** and you had to judge — e.g. view parity ([migrate-object/VALIDATE_VIEW.md](migrate-object/VALIDATE_VIEW.md)), ETL stabilization ([migrate-etl/SKILL.md](migrate-etl/SKILL.md)). `runTests` is an oracle (`testValidationResults`); do not stamp it;
+   - an outcome the system **can't observe** and you had to judge — e.g. view parity ([migrate-object/VALIDATE_VIEW.md](migrate-object/VALIDATE_VIEW.md)), ETL stabilization ([migrate-etl/SKILL.md](migrate-etl/SKILL.md)). `runTests` has a status source (`testValidationResults`); do not stamp it;
    - an **override** — `bypass` a precondition, `reset` an errored task, or `skip`.
 
 The outcome and error vocabulary is defined once in [../extensibility/TASKS.md](../extensibility/TASKS.md#outcome-vocabulary).
+
+A `next_task` entry carries `do`: follow it rather than re-deriving the branch.
+Its `skillPath` is the task file's absolute path; `executor.skill` is the same
+file relative to the plugin's `skills/` directory, not the project. Every
+`transition_status` status, with its required arguments and refusals, is listed in
+[references/state-machine-tools.md](references/state-machine-tools.md).
+
+When the user decides an escalation, record it with `status='answer'` exactly as
+the `answerWith` field of `migration_status(mode="escalations")` shows.
+`guidance` (their words in `reason`, required) and `decompose` un-park the object
+for a re-run, `skip` takes it out of scope, `needs_repair` leaves it parked, and
+`mark_done` only records the decision: finish it through `finishObjects`.
+
+Errors that can hit any task, such as Cortex Code's `sql_execute` returning
+"no query ID", are in [references/troubleshooting.md](references/troubleshooting.md).
 
 ## Autonomous mode
 
@@ -61,6 +76,9 @@ The outcome and error vocabulary is defined once in [../extensibility/TASKS.md](
 the sub-agent latch for every other caller, so outside the app the answer is
 that autonomous is not available here and the wave runs interactively — say so
 and continue with the loop below rather than starting a run that cannot finish.
+`autonomous_available: true` in a `progress_setup` or `migration_status` payload
+means you are in the app with autonomous turned on; trust it over your own
+guess about where you are running.
 
 Inside the app, if the user asks to run the wave unattended — "autonomous",
 "auto-pilot", "just migrate everything", "run objects in parallel" — load
@@ -83,11 +101,13 @@ Between work units, ask the user to run `/compact` to free up context.
 
 Cache the response — it drives the render in 2b and the drill-down `id`s in 2c.
 
+> **Solo projects.** `solo_project: true` means no other Snowflake user holds an open claim on this project, so the user is working on it alone right now. Claim, finish and rebase exactly as below, but talk about it as their own work: do not mention teammates, other users or anyone else rebasing, and do not ask who a claim is for. `next_objects` carries the same flag; when either response lacks it, keep the wording below.
+
 If `groups` is empty, `blocked_groups` is empty, and `errored_count` and `done_count` are both 0, the user has no active claims. Tell them so and go to Step 2c → **"User picked `claimObjects`"** to pick up new work.
 
 ### 2b. Render
 
-> **Finish before claiming new work.** Done objects sitting unmerged keep your branch ahead of `main`, which forces every teammate to rebase against stale state (or worse, duplicate the work you've already finished). Whenever `done_count > 0`, you must steer the user toward `finishObjects` before offering any new claims.
+> **Finish before claiming new work.** Done objects not yet finished (saved to `main`) keep your branch ahead of `main`, which forces every teammate to rebase against stale state (or worse, duplicate the work you've already finished). Whenever `done_count > 0`, you must steer the user toward `finishObjects` before offering any new claims. On a `solo_project`, give the reason as getting their finished work saved to `main`, not as other people's rebases.
 
 Show **only** the following status lines, all derived from the cached summary response. Skip any line whose count is zero or whose group is empty — do not write "(no errored bucket)" or "(none)" placeholders, and do not mention buckets that don't apply.
 
@@ -95,7 +115,7 @@ Show **only** the following status lines, all derived from the cached summary re
 
 - One line per `group`: `<group.count> <group.object_type>s ready: <group.user_label>`. If `group.reason` contains a parenthetical like `(claimed in another session)`, include it after the count — e.g. `1 table (claimed in another session) ready: Deploy`.
 - One line per `blocked_groups` entry: `<count> <object_type>s blocked at "<blocked_group.user_label>" (waiting on dependencies)` — only if `blocked_groups` is non-empty. Same rule: include any session parenthetical from the reason after the count. Don't list individual deps here; that comes from the drill-down in 2c.
-- `<done_count> objects ready to finish (merge)` — only if `done_count > 0`.
+- `<done_count> objects ready to finish (save to main)` — only if `done_count > 0`.
 - `<errored_count> objects errored` — only if `errored_count > 0`.
 
 Then ask the user to pick a next action. **Only list actions you are actually offering** — never include an absent option just to acknowledge it. Build the action menu like this:
@@ -103,7 +123,7 @@ Then ask the user to pick a next action. **Only list actions you are actually of
 1. One numbered item per task group, labelled `<group.user_label> for the <group.count> <group.object_type>(s)` — e.g. `Deploy for the 5 tables`, `Generate test cases from source database for the 1 function`. Use `group.user_label` verbatim.
 2. One numbered item per `blocked_groups` entry, labelled `Resolve blocked <object_type>s waiting on "<blocked_group.user_label>" (see deps)` — only if `blocked_groups` is non-empty.
 3. `finishObjects` — only if `done_count > 0`.
-4. `claimObjects` — only if `done_count == 0` (its picker also offers *Bulk-deploy N clean tables* when `next_objects` reports `clean_tables_at_deploy`) (when `done_count > 0`, omit this entirely; the user must merge first). The exception: if the user *explicitly overrides* on a later turn ("I know, claim anyway", "skip the merge for now"), proceed to claim and flag the unmerged done objects in your reply.
+4. `claimObjects` — only if `done_count == 0` (its picker also offers *Bulk-deploy N clean tables* when `next_objects` reports `clean_tables_at_deploy`) (when `done_count > 0`, omit this entirely; the user must finish them first). The exception: if the user *explicitly overrides* on a later turn ("I know, claim anyway", "skip finishing for now"), proceed to claim and flag the unfinished done objects in your reply.
 5. The errored bucket — only if `errored_count > 0`.
 
 **Wait for the user's response — do not proceed to 2c until they choose.**
@@ -167,7 +187,7 @@ re-run.
 **Not for a data mismatch.** An errored `validateData` with `error: "data"`
 is a finished validation that found differences, so re-running the same workflow
 reproduces it. Use the re-validation menu in
-[validate_tables.md Step 5.G](../validate-objects/actions/validate_tables.md#5g--offer-re-validation-when-data-mismatches-remain)
+[validation report reference, 5.G](../validate-objects/actions/references/validation-report-reference.md#5g--offer-re-validation-when-data-mismatches-remain)
 instead.
 
 ### After `migrateData` (data migration run)
@@ -201,7 +221,10 @@ Skip this prompt for native projects — there the dependent objects already fol
 
 ## Step 3: Report
 
-Call `migration_status()` and present a completion summary to the user:
+Call `migration_status()` and present a completion summary to the user — take
+the finished count from `objects_done`, never from a sum of `stage_totals` (an
+object is counted once per stage it has cleared). `objects_done` covers the active
+wave: when the payload carries a `wave`, name it and `in_scope_all_waves`:
 > **Wave `<N>` complete.** `<deployed_count>` objects deployed, `<tested_count>` tested and passing, `<failed_count>` still failing. `<data_migrated_count>` tables with data migrated.
 
 If all waves are done:

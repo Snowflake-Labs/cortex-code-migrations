@@ -63,7 +63,7 @@ If the seed reports none of the above, `seedScript` is done — advance and proc
 
 ## Step 4: Advance
 
-When the per-object YAML exists under `<project_dir>/<files.artifacts.path>/test/` and Step 3 reported nothing unresolved, advance the walk. The oracle confirms the file is present — do not invent completion:
+When the per-object YAML exists under `<project_dir>/<files.artifacts.path>/test/` and Step 3 reported nothing unresolved, advance the walk. The status source confirms the file is present — do not invent completion:
 
 ```
 transition_status(status="advance", task="seedScript", outcome="completed", where="id = '<object_id>'")

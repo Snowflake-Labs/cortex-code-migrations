@@ -103,6 +103,11 @@ RULES = {
         "one element per <step> element. id = name = <name> child text, kind = <type> child "
         "text. The <info> transformation block itself is NOT counted by this rule.",
     ),
+    "ApacheHop": (
+        "hpl.transform.v1",
+        "one element per <transform> element. id = name = <name> child text, kind = <type> child "
+        "text. The <info> pipeline block itself is NOT counted by this rule.",
+    ),
     "IbmInfoSphereDataStage": (
         "dsx.stagetype.v1",
         "one element per DSRECORD block containing a `StageType \"...\"` property. "
@@ -175,16 +180,24 @@ def count_informatica(path):
     return out, caveats
 
 
-def count_pentaho(path):
+def _count_child_text_units(path, tag):
     root = ET.parse(path).getroot()
     out = []
     for e in root.iter():
-        if _local(e.tag) != "step":
+        if _local(e.tag) != tag:
             continue
         name = (e.findtext("name") or "").strip()
         kind = (e.findtext("type") or "").strip()
-        out.append(Element(name, name, kind, "step[name=%r]" % name))
+        out.append(Element(name, name, kind, "%s[name=%r]" % (tag, name)))
     return out, []
+
+
+def count_pentaho(path):
+    return _count_child_text_units(path, "step")
+
+
+def count_hop(path):
+    return _count_child_text_units(path, "transform")
 
 
 DSX_PROP = re.compile(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s+"(.*)"\s*$')
@@ -268,6 +281,7 @@ COUNTERS = {
     "SqlServerIntegrationServices": count_ssis,
     "InformaticaPowerCenter": count_informatica,
     "PentahoDataIntegration": count_pentaho,
+    "ApacheHop": count_hop,
     "IbmInfoSphereDataStage": count_datastage,
     "alteryx": count_alteryx,
 }

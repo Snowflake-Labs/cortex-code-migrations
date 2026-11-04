@@ -252,8 +252,9 @@ Like data migration, you can set shared defaults once via top-level `defaultTabl
 |-------|------|-------------|
 | `strategy` | String | `watermark`, `checksum`, or `none` |
 | `watermarkColumn` | String | Column whose max value marks the high-water mark. **Required** when `strategy: watermark`. |
-| `trackModifications` | Boolean | Watermark only — also reconcile rows modified (not just newly inserted) since the last run. |
 | `checksumExpression` | String | Checksum only — optional SQL aggregate per partition to detect change. Must not contain `;`. **Oracle:** built-in incremental checksum is supported; use this field to override with a cheaper probe (for example `MAX(ORA_ROWSCN)`). |
+
+> **Migration-only flags:** `trackModifications` and `trackDeletions` belong to data migration. Validation accepts both on the shared schema and acts on neither. It keeps and writes back `trackModifications` and drops `trackDeletions`, so don't set either in a validation workflow.
 
 > **Oracle:** `checksum` incremental validation is supported (same as other platforms). Default partition probes hash normalized columns; some types are excluded from the hash — see checksum detection limits below and [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
 
@@ -292,7 +293,6 @@ tables:
     synchronization:
       strategy: watermark
       watermarkColumn: SIGNATURE
-      trackModifications: true
 ```
 
 Checksum example:
@@ -497,7 +497,10 @@ Teradata uses **database.table** naming — omit source `schemaName` (there is n
 | Exclude columns from L3 row compare (timestamp / audit drift) | Per table: `useColumnSelectionAsExcludeList: true` and `columnSelectionList: [created_at]` (or `CREATED_AT`, `updated_at`, …). Common for SQL Server `DATETIME2` → Snowflake `TIMESTAMP_*` precision or write-time drift. |
 | Whitelist known formatting differences | `acceptedTransformations` |
 | Reduce source locking | `queryModifiers` on table or worker TOML |
-| Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber` |
+| Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber`, and a leading `columnNamesToPartitionBy` the source can prune on |
+| Partition column the source cannot prune | `columnNamesToPartitionBy` — put the column from the `Partition prune` finding first; for low cardinality, append remaining physical-key columns or the PK (see [Composite partition keys](../../../migrate-objects/actions/data-migration/references/workflow-config-reference.md#composite-partition-keys)) |
+| Compare LOB contents in L3 (Oracle `CLOB` / `NCLOB` / `BLOB`, SQL Server `TEXT` / `NTEXT` / `IMAGE`, …), which L3 leaves out by default | `validationConfiguration.includeLobColumnsInRowValidation: true`, globally or per table. Oracle then needs `EXECUTE` on `DBMS_CRYPTO`. See [L3 LOB columns](#l3-lob-columns-opt-in-includelobcolumnsinrowvalidation) |
+| L3 extract via object storage | `validationConfiguration.extraction.strategy` + `extraction.externalStage` (see [L3 pushdown](../l3-pushdown/SKILL.md)) |
 | Rename columns between source and target | `columnMappings`, `indexColumnList`, `targetIndexColumnList` |
 | Incremental watermark column | `defaultTableConfiguration.synchronization.watermarkColumn` (or per-table) |
 | Views vs tables in one workflow | Use `objects[]` or separate `views[]` section |

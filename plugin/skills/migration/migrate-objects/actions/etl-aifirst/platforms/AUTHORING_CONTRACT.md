@@ -118,7 +118,8 @@ needed. An aggregate belongs there. A union that declares no output port site do
 Gate A's denominator by the identity string, and an identity with no rule leaves coverage
 UNMEASURED for the whole run — not failed, not passed, unmeasurable, which is the one outcome this
 pipeline treats as worse than a bad number. The keys are `SqlServerIntegrationServices`,
-`InformaticaPowerCenter`, `PentahoDataIntegration`, `IbmInfoSphereDataStage` and `alteryx`. They
+`InformaticaPowerCenter`, `PentahoDataIntegration`, `ApacheHop`, `IbmInfoSphereDataStage` and
+`alteryx`. They
 are not uniformly cased and are not derivable from the platform's name; use the requested identity
 in `REQUEST.md` verbatim, and if it is a platform with no rule yet, say so in
 `authoring_notes.md` rather than inventing a near miss.

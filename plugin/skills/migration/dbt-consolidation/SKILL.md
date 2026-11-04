@@ -1,6 +1,6 @@
 ---
 name: dbt-consolidation
-description: Collect one dbt consolidation choice before SSIS and Informatica dbt conversions. Consolidate SSIS projects and models by package, consolidate every SSIS package into one dbt project, consolidate Informatica projects and models by folder, or retain the per-Data-Flow/per-mapping layout. Supplies `--consolidate-dbt-projects` or, for SSIS only, `--consolidate-as-single-dbt-project` for `scai code convert`. Load from `convert` or `code-conversion-only` only when ETL will emit dbt.
+description: Collect one dbt consolidation choice before SSIS and Informatica dbt conversions. Consolidate SSIS projects and models by package, consolidate every SSIS package into one dbt project, consolidate Informatica projects and models by folder, consolidate every Informatica folder into one dbt project, or retain the per-Data-Flow/per-mapping layout. Supplies `--consolidate-dbt-projects` or, when only one platform is on dbt, `--consolidate-as-single-dbt-project` for `scai code convert`. Load from `convert` or `code-conversion-only` only when ETL will emit dbt.
 parent_skill: migration
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -16,7 +16,7 @@ Do **not** load this skill for Informatica Snowflake Scripting, SSIS Snowflake S
 
 Consolidation defaults **on** after the question unless the user chooses the per-object layout (SSIS: one dbt project per Data Flow; Informatica: one dbt project per mapping). Still ask before convert. Accepting the recommended default sets `CONSOLIDATE_DBT_PROJECTS`.
 
-Every workload asks **one** consolidation question. `--consolidate-dbt-projects` consolidates SSIS by package and Informatica by folder. `--consolidate-as-single-dbt-project` is an SSIS-only choice that writes one dbt project for the whole workload. The two flags are mutually exclusive. When both platforms are present, ask once and apply that answer to both; do not offer or pass the single-project flag on that question.
+Every workload asks **one** consolidation question. `--consolidate-dbt-projects` consolidates SSIS by package and Informatica by folder. `--consolidate-as-single-dbt-project` writes one dbt project for the whole workload. It is offered only when a single platform is on dbt (SSIS only, or Informatica only). The two flags are mutually exclusive. When both platforms are on dbt, ask once and apply that answer to both; do not offer or pass the single-project flag on that question.
 
 ## Workflow
 
@@ -30,7 +30,7 @@ Detect platform from `source/_etl/` (`.dtsx` = SSIS; Informatica XML = Informati
 
 Say to the user (verbatim):
 
-> *"Consolidating by folder writes one dbt project per PowerCenter folder (`--consolidate-dbt-projects`). Mappings in that folder share the project, and each mapping's models stay under `models/<mapping>/`, tagged with the mapping name. The other choice writes one dbt project per mapping."*
+> *"Consolidating by folder writes one dbt project per PowerCenter folder (`--consolidate-dbt-projects`). Mappings in that folder share the project, and each mapping's models stay under `models/<mapping>/`, tagged with the mapping name. The other choices write one dbt project per mapping, or one dbt project for the whole workload. Consolidating into a single dbt project writes one dbt project for the entire workload (`--consolidate-as-single-dbt-project`). Models stay grouped by folder and mapping inside that project (`models/<folder>/<mapping>/`, tagged `<folder>__<mapping>`). It is not the default."*
 
 Then ask via `ask_user_question` (`multiSelect = false`):
 
@@ -38,8 +38,7 @@ Then ask via `ask_user_question` (`multiSelect = false`):
 >
 > 1. **Consolidate dbt projects and models by folder** (default)
 > 2. **Generate 1 project per mapping**
-
-Do **not** offer a single-dbt-project choice. Do **not** set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT` or pass `--consolidate-as-single-dbt-project`.
+> 3. **Consolidate into a single dbt project**
 
 ### SSIS only
 
@@ -68,18 +67,18 @@ Then ask via `ask_user_question` (`multiSelect = false`):
 > 1. **Consolidate by SSIS package and Informatica folder** (default)
 > 2. **Generate 1 project per Data Flow and per mapping**
 
-Do **not** offer a single-dbt-project choice. Do **not** set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT` or pass `--consolidate-as-single-dbt-project`. That flag consolidates all generated dbt output, including Informatica.
+Do **not** offer a single-dbt-project choice. Do **not** set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT` or pass `--consolidate-as-single-dbt-project`. The flag is offered only when a single platform is on dbt.
 
-For Informatica dbt only and for both platforms:
+For both platforms:
 
 - On **1**, including when the user accepts the recommended default, set `CONSOLIDATE_DBT_PROJECTS = true` for the calling skill.
-- On **2** only, leave `CONSOLIDATE_DBT_PROJECTS` unset. Do **not** pass `--consolidate-dbt-projects`.
+- On **2** only, leave `CONSOLIDATE_DBT_PROJECTS` unset. Do **not** pass `--consolidate-dbt-projects` or `--consolidate-as-single-dbt-project`.
 
-For SSIS only:
+For Informatica dbt only and for SSIS only:
 
 - On **1**, including when the user accepts the recommended default, set `CONSOLIDATE_DBT_PROJECTS = true`. Leave `CONSOLIDATE_AS_SINGLE_DBT_PROJECT` unset.
 - On **2**, leave both unset. Do **not** pass `--consolidate-dbt-projects` or `--consolidate-as-single-dbt-project`.
-- On **3**, set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT = true` and leave `CONSOLIDATE_DBT_PROJECTS` unset. Pass `--consolidate-as-single-dbt-project` only.
+- On **3**, set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT = true` and leave `CONSOLIDATE_DBT_PROJECTS` unset. Pass `--consolidate-as-single-dbt-project` only. The calling skill still appends the other platform's scripting flag when that platform is on Snowflake Scripting.
 
 Never pass both consolidation flags.
 
@@ -89,14 +88,14 @@ Then return to the calling skill. Do not ask another consolidation question.
 
 | Option | Description |
 |--------|-------------|
-| `--consolidate-dbt-projects` | Recommended default. SSIS: consolidate projects and sequential models by package at `{PackageName}Dbt/` instead of one project per Data Flow. Informatica: one dbt project per folder instead of one per mapping, with models under `models/<mapping>/`. Pass when the user chooses that consolidation, including the recommended default. Leave unset for the per-Data-Flow/per-mapping layout and for the SSIS single-project choice. Ignored for Informatica Snowflake Scripting. Mutually exclusive with `--consolidate-as-single-dbt-project`. |
-| `--consolidate-as-single-dbt-project` | SSIS dbt only, when the user chooses **Consolidate into a single dbt project**. One dbt project for every SSIS package in the workload; models stay grouped by package and Data Flow. Do not pass it with `--consolidate-dbt-projects`, for Informatica dbt, for the shared both-platforms answer, or for SSIS Snowflake Scripting. |
+| `--consolidate-dbt-projects` | Recommended default. SSIS: consolidate projects and sequential models by package at `{PackageName}Dbt/` instead of one project per Data Flow. Informatica: one dbt project per folder instead of one per mapping, with models under `models/<mapping>/`. Pass when the user chooses that consolidation, including the recommended default. Leave unset for the per-Data-Flow/per-mapping layout and for the single-project choice. Ignored for Informatica Snowflake Scripting. Mutually exclusive with `--consolidate-as-single-dbt-project`. |
+| `--consolidate-as-single-dbt-project` | SSIS dbt only or Informatica dbt only, when the user chooses **Consolidate into a single dbt project**. One dbt project for the whole workload (`etl_dbt_project`). SSIS models stay grouped by package and Data Flow. Informatica models stay grouped by folder and mapping (`models/<folder>/<mapping>/`, tagged `<folder>__<mapping>`). Do not pass it with `--consolidate-dbt-projects`, for the shared both-platforms-on-dbt answer, or for the platform that chose Snowflake Scripting. It combines with the other platform's scripting flag. |
 
 ## CHECKPOINT Addendum
 
 After the calling skill's conversion CHECKPOINT, also confirm:
 
 - [ ] exactly one consolidation question was asked
-- [ ] the convert flag matches the answer: `--consolidate-dbt-projects` only for package or folder consolidation; neither flag for the per-Data-Flow/per-mapping layout; `--consolidate-as-single-dbt-project` only when SSIS-only chose the single dbt project
+- [ ] the convert flag matches the answer: `--consolidate-dbt-projects` only for package or folder consolidation; neither flag for the per-Data-Flow/per-mapping layout; `--consolidate-as-single-dbt-project` only when SSIS-only or Informatica-only chose the single dbt project
 
 Then return to the calling skill.

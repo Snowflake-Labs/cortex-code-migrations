@@ -78,12 +78,32 @@ Only after the underlying issue is understood should you add a missing pair by h
 
 Then show the user the seeded table pairs and their keys, and ask them to confirm or correct — the CUR can miss dynamically-named or conditionally-written tables. Adjust per their feedback. This is a stopping point that needs the user's input — as is Step 3b on an Informatica project — even when the seeder filled every key: end your turn with the pairs, the keys and the question. Asking means your final message, whether or not a question tool is available; the answer arrives in a later turn, so do not advance in this one.
 
-## Step 3b: Ask for the Informatica `pmcmd` Endpoint (Informatica projects only)
+## Step 3b: Set the Informatica `pmcmd` Endpoint (Informatica projects only)
 
-A seeded Informatica unit carries no `service` / `domain` of its own. Neither can be derived from
-the CUR, and both are the same for every unit of a project, so they live **once** in the
-`informatica:` section of `.scai/settings/test_config.yaml` — beside `pmcmd_path` / `username` /
-`password` — which `scai test seed` creates with `TODO_INFA_*` placeholders and warns about:
+A seeded Informatica unit carries no `service` / `domain`, and `scai test seed` writes no
+`informatica:` section to `.scai/settings/test_config.yaml`, nor a warning about either. Both are
+the same for every unit of a project and cannot be derived from the CUR, so they are set **once**,
+on the pmcmd connection the unit's header calls
+`scai connection add-informatica-pmcmd --service ... --domain ...`. That connection also holds
+`pmcmd_path`, user and password, in a cleartext, machine-level file under
+`~/.snowflake/scai/connections/`; say that plainly if the user asks where the password ends up.
+
+**Have the user register it.** As at Step 3, this is a stopping point that needs the user's input:
+nothing on disk holds the Integration Service or the domain, so never infer or invent them. Follow
+[`../../../connection/informatica-pmcmd-connection/SKILL.md`](../../../connection/informatica-pmcmd-connection/SKILL.md)
+from its **Step 1**. Without `--auth` its command prompts for every value, service and domain
+included, even ones passed as flags, and in a shell without a terminal, like yours, it registers
+nothing — so the user runs it in their own terminal and types every value there, not in chat.
+
+**A registered connection is used only once it is selected**; registering writes no default.
+Select it with `scai connection set-default -l informatica -s <name>` (that skill's Step 3), or
+with `informatica_connection: <name>` in `.scai/config/project.yml`; `--etl-connection <name>`
+selects it only for the command it is passed to. Unselected, it supplies no credential or endpoint.
+
+**The fallback is a hand-written `informatica:` section in `.scai/settings/test_config.yaml`**,
+which the runner still reads — for credentials kept in exported variables, or `pmcmd`'s own domain
+defaults (a connection requires `--service` and `--domain`). A selected connection holding
+`pmcmd_path`, user and password replaces this section wholesale, ignoring its `service` / `domain`.
 
 ```yaml
 informatica:
@@ -94,40 +114,20 @@ informatica:
   domain: Domain_EDW           # pmcmd -d:  the domain that service belongs to
 ```
 
-> **The recommended route is a registered `scai` connection**, not this block — the seeded comments
-> say `# PREFERRED` for the same reason. It carries the credentials plus `service` / `domain`,
-> survives a new shell, and keeps the secret out of the repository entirely: with one registered
-> these credential fields are unnecessary, not merely overridden. It is not encryption — that file is
-> cleartext too, just machine-level under `~/.snowflake/scai/connections/` instead of a project file that gets
-> committed and pasted into issues. Say that plainly if the user asks where the password ends up.
-> Do not register one from here: `etl-validate` does, in
-> [Step 1 of `../etl-validate/SKILL.md`](../etl-validate/SKILL.md), and only when its
-> `pmcmd_credentials` check fails — see
-> [`../etl-validate/references/informatica-pmcmd-reference.md`](../etl-validate/references/informatica-pmcmd-reference.md).
->
-> **Never write a credential value into this file.** `username:` / `password:` stay exactly as
-> seeded: `${...}` are *references*, this file is committed, and nothing downstream catches a literal
-> — `--check-env` passes on one. If the user offers the password it goes to an exported variable or
-> to the connection's own hidden prompt, never here. "Write them in" below means `pmcmd_path`,
-> `service` and `domain`.
-
-**Ask the user for `service` and `domain`** — and for `pmcmd_path` too if that placeholder is
-still there. As at Step 3, this is a stopping point that needs the user's input, not agent-side
-work: nothing on disk can supply these values (see above), so there is nothing to infer them from.
-Do not invent a plausible-looking Integration Service name, and do not leave a sentinel in place
-expecting `--check-env` to settle it later — the check reports the gap, it cannot fill it. With the
-user's answers in hand, write them in once for the project, then verify **every** seeded unit
-resolves before handing off to `etlValidate`:
+**Never write a credential value into this file.** `username:` / `password:` are `${...}`
+references: the file is committed, and nothing downstream catches a literal — `--check-env` passes
+on one. If the user offers the password it goes to an exported variable or to the connection's own
+hidden prompt, never here. Then verify **every** seeded unit resolves before `etlValidate`:
 
 ```bash
 scai test etl-validate --platform {PLATFORM_ID} --check-env
 ```
 
-The `informatica_service_domain` check names any file that still cannot resolve an endpoint. A
-leftover `TODO_INFA_*` there is a failure, not a default — an unresolved sentinel would otherwise
-reach `pmcmd` as a literal `-sv TODO_INFA_SERVICE`.
-
-Two things this does **not** mean:
+`informatica_service_domain` quotes the project-wide `informatica.service` / `informatica.domain`
+pair: show it to the user, as the selected connection may be a machine-wide default set for
+another project. `no service/domain configured anywhere` means the endpoint is unset, often
+because no connection is selected: accept it only if the user relies on the domain's defaults. A
+failure names the files whose leftover `TODO_INFA_*` or unset `${VAR}` would reach `pmcmd`.
 
 - **Per-unit `TODO_INFA_FOLDER` / `TODO_INFA_WORKFLOW` are separate.** Those are the only
   placeholders still emitted into a unit's own YAML, and only when the CUR could not supply them —

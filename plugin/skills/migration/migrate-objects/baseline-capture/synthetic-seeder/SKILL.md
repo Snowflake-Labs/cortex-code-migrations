@@ -13,7 +13,7 @@ parent_skill: baseline-capture
 # Synthetic Seeder Skill
 
 Generate two-sided synthetic data tests for migrated stored procedures and functions.
-Tests are derived from **source SQL analysis** — the source is the oracle, not the
+Tests are derived from **source SQL analysis** — the source is the ground truth, not the
 converted code. Each test is a step-based YAML artifact directly consumable by
 `scai test capture` and `scai test validate`.
 
@@ -122,7 +122,7 @@ Before generating, internalize these rules:
 7. **Idempotent setup** — prefer `INSERT ... SELECT ... WHERE NOT EXISTS (SELECT 1 FROM t WHERE pk = ?)` so tests are safe to re-run.
 8. **Fully qualified names** — always use `SCHEMA.TABLE` in all SQL, both source and Snowflake sides.
 9. **No object creation** — never `CREATE TABLE` or `CREATE VIEW` in test steps. Only insert into tables that already exist as dependencies. If a required table is missing, that is a dependency bug — report it and stop.
-10. **Source is the oracle** — derive expected behavior by reading the source SQL logic, not the Snowflake conversion.
+10. **Source is the ground truth** — derive expected behavior by reading the source SQL logic, not the Snowflake conversion.
 
 ---
 
@@ -366,7 +366,7 @@ Count must equal the number of YAMLs in the coverage matrix that passed validati
 
 ### 6.2 — Advance and report
 
-When every planned YAML is written and validated, advance the walk. The oracle re-checks on-disk `test_cases:` — do not invent completion:
+When every planned YAML is written and validated, advance the walk. The status source re-checks on-disk `test_cases:` — do not invent completion:
 
 ```
 transition_status(status="advance", task="seedSynthetic", outcome="completed", where="id = '<object_id>'")

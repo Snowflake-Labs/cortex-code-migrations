@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 
 # Orchestration Test Generator
 
-Generate and run functional equivalence tests for orchestration SQL (task graphs and stored procedures) based on the original control flow logic in the source definition file. Tests are generated BEFORE fixes are applied, serving as an independent oracle derived from the source-of-truth (the source definition file). All generated test artifacts are stored in `<UNIT>/stabilization/tests/orchestration/`.
+Generate and run functional equivalence tests for orchestration SQL (task graphs and stored procedures) based on the original control flow logic in the source definition file. Tests are generated BEFORE fixes are applied, serving as an independent check derived from the source of truth (the source definition file). All generated test artifacts are stored in `<UNIT>/stabilization/tests/orchestration/`.
 
 > **Autonomous mode:** When spawned as a team agent, skip all interactive stopping points, make reasonable defaults for user-facing decisions, and document assumptions in the completion report. When done, send a `send_message` to `main` summarizing your results, and respond to any `shutdown_request` with `send_message` using `type: "shutdown_response"` and `approve: true`.
 
@@ -242,7 +242,7 @@ Use `CREATE OR REPLACE` on all objects.
 Use `TRUNCATE` + `INSERT INTO ... SELECT` for all tables (Snowflake disallows `TO_VARIANT()` in `VALUES`). This is the **data reset** — runs before every ACT/ASSERT cycle.
 
 - **D1.** Populate `control_variables` from root task CONFIG. For procedure-based packages (`SSC-FDM-SSIS0005`), extract from the `DELETE + INSERT ... UNION ALL` block instead.
-- **D2.** Synthetic data for read-dependency tables. Do NOT populate write-target tables — assertions verify what ACT writes. TRUNCATE write-target tables to clear stale data.
+- **D2.** Synthetic data for read-dependency tables. Do NOT populate write-target tables — assertions verify what ACT writes. TRUNCATE write-target tables to clear stale data, except a Dynamic Table target (`SSC-FDM-SSIS0032`): it cannot be truncated, and ACT's `dbt run` refreshes it from the seeded sources.
 
 #### Step 2.3: Coverage Matrix
 

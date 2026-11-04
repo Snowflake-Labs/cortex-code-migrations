@@ -11,7 +11,7 @@ Not on the convert runtime path. Runtime lives in `../scripts/`.
 | `declared_vs_identified.py` | Element-loss gate over `runall.RUNS` |
 | `decisions.py` | Informatica blind-run decision checks (CLI XML path) |
 | `provenance_audit.py` | Provenance audit helper |
-| `citecheck.py` | Location-oracle falsifiability (ADF/Pentaho fixtures) |
+| `citecheck.py` | Location-citation falsifiability (ADF/Pentaho fixtures) |
 | `fixture_paths.py` | Shared fixture root resolution |
 
 No machine-absolute paths. Point env vars at local corpora when needed.

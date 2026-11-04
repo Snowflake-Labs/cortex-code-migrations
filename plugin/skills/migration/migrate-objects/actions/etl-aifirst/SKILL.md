@@ -39,4 +39,12 @@ Stage 0 uses the matching checked-in table when one exists. Otherwise it authors
 in an isolated view, accepts it only after structural and source-accounting validation, preserves it
 under `<output-root>.gates/stage0/`, and feeds those accepted bytes to the deterministic stages. Set
 `AIFIRST_TABLE_AUTHOR_CLI` to select the authoring CLI; it falls back to `AIFIRST_VERIFIER_CLI`, then
-the existing verifier default.
+`cortex`. Model-backed stages (sidecar produce, Gate A/B) use the same Cortex default.
+
+## Sidecar
+
+When identify/census finds an element the IR cannot represent, Stage 3a2 of the driver produces
+`<document>.ai.json` (via `sidecar_producer.py` against the first emitted tree), re-represents so
+`emit.py` hydrates `$kind` / columns, re-emits, then Stage 3b `ai_fill` writes any `ModelSql`.
+A sidecar already beside the document is consumed and not rewritten. Set
+`AIFIRST_SKIP_SIDECAR_PRODUCE=1` to keep the consume-only path (convert-ctrl / nosidecar).

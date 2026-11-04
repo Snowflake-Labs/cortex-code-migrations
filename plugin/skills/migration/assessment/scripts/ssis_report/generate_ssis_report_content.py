@@ -33,7 +33,7 @@ if _scripts_dir not in sys.path:
 from snowconvert_reports.console_utils import DONE  # noqa: E402
 
 # Import the local SSIS HTML report generator
-from .ssis_html_report_generator import HTMLReportGenerator, sanitize_filename
+from .ssis_html_report_generator import HTMLReportGenerator, package_detail_filename
 
 
 def generate_ssis_html_content(
@@ -94,7 +94,6 @@ def generate_ssis_html_content(
             ).replace(os.sep, '/')
             for package_csv_row in generator.packages:
                 package_path = package_csv_row.get('path', '')
-                package_name = package_csv_row.get('name', '')
                 
                 # Get package data from JSON
                 package_json_data = generator.get_package_data_from_json(package_path)
@@ -105,8 +104,7 @@ def generate_ssis_html_content(
                 package_html = generator.generate_package_detail_page(package_csv_row, package_json_data, main_report_filename=main_report_filename, dag_base_path=dag_base_path)
                 
                 # Save package page in packages subfolder
-                package_filename = f"package_{sanitize_filename(package_name)}.html"
-                package_file_path = packages_dir / package_filename
+                package_file_path = packages_dir / package_detail_filename(package_csv_row)
                 
                 with open(package_file_path, 'w', encoding='utf-8') as f:
                     f.write(package_html)

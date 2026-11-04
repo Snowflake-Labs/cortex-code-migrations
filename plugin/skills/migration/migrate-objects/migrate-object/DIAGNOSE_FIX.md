@@ -37,7 +37,7 @@ Approaches to avoid:
 query_registry(where="id = '<objectId>'", fields="id,source,files,target")
 ```
 
-The oracle is `invalidation.reason` on `next_task` (waiter-named inputs):
+The evidence is `invalidation.reason` on `next_task` (waiter-named inputs):
 `query_source` of the source builtin vs this helper. Edit
 `files.converted.path`, `deploy` with no `sandbox` (common catalogs),
 re-probe. Do not change or deploy another object onto `common`.
@@ -73,6 +73,16 @@ not a swarm.
 `IDENTIFIER(`, `sp_executesql`, `EXEC(` / `EXEC @`): use
 "../rule-engine/resolving-ewis/reference/SSC-EWI-0030.md" for help.
 
+**SnowConvert markers with a guide** — read it before choosing a fix
+(all under "../rule-engine/resolving-ewis/reference/"):
+
+| Marker or construct | Guide |
+|---|---|
+| `SSC-EWI-TS0143` (SQL CLR `EXTERNAL NAME`), or a call to a CLR aggregate | "SSC-EWI-TS0143.md" |
+| `SSC-EWI-TS0086` (`OPENQUERY`), a four-part name, `EXEC … AT`, a synonym to a linked server, `SSC-EWI-TS0089`, a distributed transaction | "linked-servers.md" |
+| `SSC-FDM-TS0002`, `SSC-FDM-TS0080`, `SSC-EWI-TS0077` (collation) | "SSC-FDM-TS0002.md", "SSC-FDM-TS0080.md", "SSC-EWI-TS0077.md" |
+| Any other `SSC-EWI-*` / `SSC-FDM-*` | "<CODE>.md", when it exists |
+
 **YAML `steps:` do not match the proc** — this is not a SQL bug. Load
 "./EDIT_TEST_YAML.md" when the failure smells like:
 
@@ -105,9 +115,12 @@ an accept. A name starting `[AVOID]` is an approach not to repeat.
 | Missing schema prefix that is not a catalog-binding problem | Add the prefix |
 | Unknown function / procedure / object, or a two-part `PUBLIC.X` / tokenless catalog, for a project object of any kind | Spawn **one** foreground `cur_reconciler`. Wait. `repaired` / `clean` → `deploy(sandbox=true)` omit `mode`. Do not inline, stub, or write SNAP into this file. |
 | Source function left as T-SQL | Snowflake equivalent |
+| SQL CLR routine (`SSC-EWI-TS0143`) or CLR aggregate call | Rewrite from its .NET source or source behaviour per its guide, same name and signature. Escalate, with no `cause`, only what that guide parks |
+| Linked-server reference | Per "linked-servers.md": a remote object this project migrates becomes a cross-database name; one it does not is a missing dependency (`cur_reconciler`) |
 | YAML `steps:` mismatch | Step 3 recipe, recapture |
-| Precision / collation / padding, and a CAST or `RTRIM` still means what the source means | Edit converted SQL, then **note** (you chose among meanings) |
+| Precision / collation / padding, and a CAST, `RTRIM` or `COLLATE` still means what the source means | Edit converted SQL (collation: its guide above), then **note** (you chose among meanings) |
 | Diffs are clock drift and the source (or a view it reads) computes from now | Step 5 — do not edit |
+| Only identity / sequence / UUID values each side generates differ, and their copies in referencing columns | Step 5 — do not edit |
 | Dialect error-code / SQLSTATE mismatch (`error_mismatch`) while both sides error | Do not delete the YAML case. Stamp and retry; a second verifier is allowed after a later code change. |
 | Missing object, and `next_task` on that id is not terminal | Do not stamp. The walk derives the wait from that object's status. |
 | Source cannot run as written (INSERT…EXEC column-count, missing source columns, source `EXEC` error) | Escalate. Do not edit converted SQL to invent columns the source file does not have, and do not `ALTER` source. |
@@ -125,7 +138,9 @@ borrowed object. Escalate only when that child returns `escalate`.
 
 When the only remaining failures are clock drift from an expression that
 must stay (`GETDATE`, `CURRENT_TIMESTAMP`, `CURRENT_DATE`, `DATEDIFF`
-against now, age-from-today), a code change would lie. Do not edit. Do
+against now, age-from-today), or values each side generates (identity,
+sequence, `NEWID()` / `UUID_STRING()`) and their copies in referencing
+columns, a code change would lie. Do not edit. Do
 not call `override_accept_case` yourself. Do not spawn a verifier.
 
 Stamp `fixCode` completed. The machine retries `runTests`; that guide
@@ -133,6 +148,14 @@ hands every remaining hash to one `subagent_type = test_case_verifier`.
 Rejected hashes come back as `error="sql"`.
 
 ## Step 6: Apply a code fix
+
+**A long procedure.** When the source has 200+ non-empty lines and two
+passes (Step 1) have not converged, or its converted SQL is mostly EWIs
+and unconverted blocks, rebuild it by segment per
+[references/LONG_PROCEDURE.md](references/LONG_PROCEDURE.md) in place of
+a minimal edit. Under `subagent_mode`, do not stop to present its segment
+map or assembled SQL: write the result to `files.converted.path`, then
+deploy and stamp as below. Escalate as this guide says, not as it does.
 
 Edit `files.converted.path` only. Minimal change. Keep source comments.
 Do not strip `EXECUTE AS` or the SnowConvert `COMMENT` provenance block
@@ -159,7 +182,7 @@ Do not spawn `sandbox_specialist`.
 | Need | Call |
 |---|---|
 | This object only into the live sandbox | `deploy(sandbox=true, mode=redeploy_object, where="id = '<objectId>'")` |
-| Closure into the live sandbox (a helper / view / function also changed) | `deploy(sandbox=true, where="id = '<objectId>'")` — omit `mode`. Tables (CSV reload), peer functions/views. No DROP / CLONE. Then `mode=redeploy_object` for this object's Snowflake body. |
+| Closure into the live sandbox (a helper / view / function also changed) | `deploy(sandbox=true, where="id = '<objectId>'")` — omit `mode`. Tables (new ones CLONEd; CSVs reloaded on both halves, so reseed after), peer functions/views. No DROP. Then `mode=redeploy_object` for this object's Snowflake body. |
 | This object only onto the common catalogs | `deploy(where="id = '<objectId>'")` — no `sandbox`. `next_task` is `deploy`, or a source-less helper. |
 
 A source `already exists` on the sandbox twin is a skip; Snowflake is

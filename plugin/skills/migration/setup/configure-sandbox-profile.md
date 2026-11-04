@@ -11,17 +11,12 @@ bindings deploy/migrate/validate run on.
 
 ## Step 1: Explain what this step configures
 
-Tell the user:
+In a sentence or two of your own, tell the user what the **sandbox profile** is: the source connection, Snowflake target connection and database bindings (source → Snowflake databases) that every deploy / migrate / validate / test run uses, so those runs hit a sandbox rather than production. They confirm it before it is saved and can change it later in Settings.
 
-> **Sandbox profile** — the connections and databases every deploy /
-> migrate / validate / test run uses, so they hit a sandbox, not production:
-> a **source connection**, a **Snowflake target connection** and **database
-> bindings** (source → Snowflake databases). You'll confirm it before it's
-> saved; change it later in Settings.
-
-A source connection is **required**, even when the user only wants synthetic
-test data: deploy, migrate and validate read from it. Say so if asked to go
-on without one.
+A source connection is **required**, even for synthetic test data:
+deploy, migrate and validate read from it. Say so if asked to skip it,
+unless `configure()` shows `migration_scope: deploy_only` (Deploy-only).
+`no-source-project.md` overrides Steps 3-6.
 
 A profile names its bindings file (`--database-bindings`); editing one
 changes every profile using it. A profile for some databases binds a copy
@@ -105,15 +100,22 @@ recap. If the check fails, stop with remediation.
 
 For existing targets, call
 `configure(check_target_tables="<token>=<TARGET>,…", check_target_connection="<snowflake>")`
-and carry each `target_tables_with_rows:` line to the recap; on
-`unavailable: …`, say the check couldn't run.
+and carry each `target_database_exists:` line to the recap: what deploy
+replaces there. On `unavailable: …`, say the check couldn't run.
 
 ## Step 6: Confirm, persist, and complete
 
 Show a recap (name, description, source connection, Snowflake connection,
-bindings file, each source database and its target, targets to create). Per
-`target_tables_with_rows` line add "_<DB> has N tables deploy will
-replace (e.g. DBO.ORDERS, 1,204 rows). Their current rows will be lost._"
+bindings file, each source database and its target, targets to create), and
+each `target_database_exists:` line that replaces something, adding "_Deploy
+overwrites these objects; their code and rows will be lost._"
+
+Per existing target that deploy replaces something in, or whose check
+couldn't run, ask a separate yes/no naming the
+database and what deploy replaces there: **Replace these objects in <DB>** /
+**Pick another target** (back to Step 4). Never answer it yourself: with no
+person to answer, stop and escalate it.
+
 Then ask **Yes, save profile** / **Change something**. On
 **Change something**, ask what to change; for a connection, ask the Step 3
 question for that connection (the current one first, labelled **current**,
@@ -165,6 +167,17 @@ configure(sandbox_profile="<name>", source_connection="<source>",
   snowflake_connection="<snowflake>", snowflake_database="<first_target_db>",
   ensure_target_database=true)
 ```
+
+## Deploy-only
+
+`migration_scope: deploy_only` has no source database; the profile is
+Snowflake-only. Run the steps above with these changes:
+
+- Steps 1 and 3: leave the source out; ask only for Snowflake.
+- Step 4: bind as usual. Keep each `source:` entry convert wrote; a
+  placeholder binds to its own name.
+- Step 6: omit `--source-connection` from `scai profile create` and
+  `source_connection` from `configure`.
 
 Return to the parent setup skill.
 

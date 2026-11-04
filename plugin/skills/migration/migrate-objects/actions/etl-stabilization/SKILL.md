@@ -133,9 +133,12 @@ When a unit finishes — final validation passes, or close-unit succeeds — upd
 
 ## Scripting Flavor Routing
 
-For a **Snowflake Scripting** unit (detected in Entry Point Step 0), each converted Informatica mapping is a
-standalone stored procedure (a `kind=etl` unit) whose transformation blocks are delimited by boundary markers
-(`---- Start block '<FullName>'` / `---- End block …`) and may carry `!!!RESOLVE EWI!!!` stubs. The **data-flow
+For a **Snowflake Scripting** unit (detected in Entry Point Step 0), each converted Informatica mapping or SSIS
+data flow is a standalone stored procedure in the unit, which the workflow or package task `CALL`s
+(`scan.json` `mapping_procs`, and `linked_mapping_proc` on the calling task). An Informatica proc's
+transformation blocks are delimited by boundary markers (`---- Start block '<FullName>'` / `---- End block …`).
+An SSIS proc has one `cte_<component>` CTE per component and no markers (see
+`platforms/ssis/scripting-proc-guide.md`). Either may carry `!!!RESOLVE EWI!!!` stubs. The **data-flow
 half** of stabilization operates on these mapping procedures instead of dbt models; the **orchestration half**
 (the workflow task graph) is handled by the orchestration pair exactly as in the dbt path.
 
@@ -156,8 +159,8 @@ the procedure creates clean and passes. Use the `dataflow-proc` phase-type templ
 
 > **Discovery input.** Identifying which procedures are converted mappings and enumerating their defective
 > blocks comes from the unit scan plus the boundary markers. Where the scan does not classify a procedure as a
-> mapping unit, fall back to the source mapping `.xml` + the boundary markers to identify each mapping procedure
-> and its blocks.
+> mapping unit, fall back to the source definition (`.xml`, `.dtsx`) + the boundary markers (SSIS: the CTEs)
+> to identify each mapping procedure and its blocks.
 
 ---
 

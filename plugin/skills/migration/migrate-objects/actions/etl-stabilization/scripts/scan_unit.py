@@ -63,9 +63,16 @@ RE_FDM = re.compile(
 RE_DBT = re.compile(r"\bEXECUTE\s+DBT\s+PROJECT\b", re.IGNORECASE)
 RE_DBT_PROJECT_NAME = re.compile(r"\bEXECUTE\s+DBT\s+PROJECT\s+'([^']+)'", re.IGNORECASE)
 # Scripting data-flow linkage: a workflow task invokes a mapping procedure with
-# `CALL [schema.]m_<mapping>(:scope)`, the scripting analog of EXECUTE DBT PROJECT.
+# `CALL [schema.]<proc>(:scope)`, the scripting analog of EXECUTE DBT PROJECT.
+# Informatica names its procs `m_<mapping>`, so that prefix links on its own.
+# SSIS names them after the data flow (`public.Data_Flow_Task`), so any other
+# CALL links only when it names a procedure this unit defines.
 RE_MAPPING_CALL = re.compile(
     r"\bCALL\s+((?:[A-Za-z0-9_\"]+\.)?m_[A-Za-z0-9_]+)\s*\(",
+    re.IGNORECASE,
+)
+RE_ANY_CALL = re.compile(
+    r"\bCALL\s+((?:[A-Za-z0-9_\"]+\.)?[A-Za-z0-9_\"]+)\s*\(",
     re.IGNORECASE,
 )
 
@@ -254,7 +261,8 @@ def find_mapping_procs(unit_path: Path, orch_file: Path | None = None) -> list[d
     stored-procedure analog of find_dbt_projects.
 
     A mapping procedure is a standalone ``.sql`` file holding a
-    ``CREATE OR REPLACE PROCEDURE public.m_<mapping>(...)`` data-flow body; the
+    ``CREATE OR REPLACE PROCEDURE`` data-flow body (Informatica ``public.m_<mapping>``,
+    SSIS ``public.<Data_Flow>``); the
     orchestration/workflow file (CREATE TASK) is excluded. Returns ``[]`` for a
     dbt unit (which has no such files), so the dbt path is unaffected.
     """
@@ -492,24 +500,39 @@ def extract_dbt_project_name(lines: list[str]) -> str | None:
     return None
 
 
-def has_mapping_call(lines: list[str]) -> bool:
-    """True if any line CALLs a mapping procedure (scripting data-flow linkage,
-    the analog of has_dbt_project's EXECUTE DBT PROJECT)."""
-    return any(RE_MAPPING_CALL.search(line) for line in lines)
+def bare_proc_name(name: str) -> str:
+    """``public."Data_Flow_Task"(scope`` -> ``data_flow_task``: the unqualified,
+    unquoted, lower-cased procedure name, for matching a CALL to a definition."""
+    return name.split("(", 1)[0].rsplit(".", 1)[-1].strip().strip('"').lower()
 
 
-def linked_mapping_proc(lines: list[str]) -> str | None:
+def linked_mapping_proc(lines: list[str], unit_procs: frozenset[str] = frozenset()) -> str | None:
     """The mapping procedure a workflow task CALLs (e.g. ``public.m_load``), or
-    None. The scripting analog of extract_dbt_project_name."""
+    None. The scripting analog of extract_dbt_project_name.
+
+    ``unit_procs`` holds the bare names (see bare_proc_name) of the procedures
+    the unit defines; a CALL to one of them links whatever its name."""
     for line in lines:
         m = RE_MAPPING_CALL.search(line)
         if m:
             return m.group(1)
+        m = RE_ANY_CALL.search(line)
+        if m and bare_proc_name(m.group(1)) in unit_procs:
+            return m.group(1)
     return None
 
 
-def parse_orchestration(sql_path: Path) -> list[dict]:
-    """Parse the orchestration SQL into statements and elements."""
+def has_mapping_call(lines: list[str], unit_procs: frozenset[str] = frozenset()) -> bool:
+    """True if any line CALLs a mapping procedure (scripting data-flow linkage,
+    the analog of has_dbt_project's EXECUTE DBT PROJECT)."""
+    return linked_mapping_proc(lines, unit_procs) is not None
+
+
+def parse_orchestration(sql_path: Path, unit_procs: frozenset[str] = frozenset()) -> list[dict]:
+    """Parse the orchestration SQL into statements and elements.
+
+    ``unit_procs``: bare names of the unit's mapping procedures, so a task's
+    CALL to one of them is linked (see linked_mapping_proc)."""
     with open(sql_path, encoding="utf-8") as f:
         lines = f.readlines()
 
@@ -534,7 +557,7 @@ def parse_orchestration(sql_path: Path) -> list[dict]:
                 stmt_lines.append(next_line)
                 i += 1
 
-            elements = parse_elements(stmt_lines)
+            elements = parse_elements(stmt_lines, unit_procs)
 
             element_line_indices = set()
             for el in elements:
@@ -567,10 +590,10 @@ def parse_orchestration(sql_path: Path) -> list[dict]:
                 "line": stmt_start + 1,
                 "issues": stmt_issues,
                 "has_dbt_project": has_dbt_project(non_element_lines),
-                "has_mapping_call": has_mapping_call(non_element_lines),
+                "has_mapping_call": has_mapping_call(non_element_lines, unit_procs),
                 "elements": enriched_elements,
             }
-            stmt_linked_proc = linked_mapping_proc(non_element_lines)
+            stmt_linked_proc = linked_mapping_proc(non_element_lines, unit_procs)
             if stmt_linked_proc:
                 stmt["linked_mapping_proc"] = stmt_linked_proc
             statements.append(stmt)
@@ -582,7 +605,7 @@ def parse_orchestration(sql_path: Path) -> list[dict]:
     return statements
 
 
-def parse_elements(stmt_lines: list[str]) -> list[dict]:
+def parse_elements(stmt_lines: list[str], unit_procs: frozenset[str] = frozenset()) -> list[dict]:
     """Extract elements from ---- Start tags within a statement's lines."""
     elements: list[dict] = []
     current_el = None
@@ -595,8 +618,8 @@ def parse_elements(stmt_lines: list[str]) -> list[dict]:
                 current_el["issues"] = collect_issues(current_el["_lines"])
                 current_el["has_dbt_project"] = has_dbt_project(current_el["_lines"])
                 current_el["linked_dbt_project"] = extract_dbt_project_name(current_el["_lines"])
-                current_el["has_mapping_call"] = has_mapping_call(current_el["_lines"])
-                current_el["linked_mapping_proc"] = linked_mapping_proc(current_el["_lines"])
+                current_el["has_mapping_call"] = has_mapping_call(current_el["_lines"], unit_procs)
+                current_el["linked_mapping_proc"] = linked_mapping_proc(current_el["_lines"], unit_procs)
                 elements.append(current_el)
 
             current_el = {
@@ -613,8 +636,8 @@ def parse_elements(stmt_lines: list[str]) -> list[dict]:
         current_el["issues"] = collect_issues(current_el["_lines"])
         current_el["has_dbt_project"] = has_dbt_project(current_el["_lines"])
         current_el["linked_dbt_project"] = extract_dbt_project_name(current_el["_lines"])
-        current_el["has_mapping_call"] = has_mapping_call(current_el["_lines"])
-        current_el["linked_mapping_proc"] = linked_mapping_proc(current_el["_lines"])
+        current_el["has_mapping_call"] = has_mapping_call(current_el["_lines"], unit_procs)
+        current_el["linked_mapping_proc"] = linked_mapping_proc(current_el["_lines"], unit_procs)
         elements.append(current_el)
 
     return elements
@@ -1134,7 +1157,10 @@ def main() -> None:
 
     statements: list[dict] = []
     if orch_file:
-        statements = parse_orchestration(orch_file)
+        unit_procs = frozenset(
+            bare_proc_name(mp["proc_name"] or mp["name"]) for mp in mapping_procs
+        )
+        statements = parse_orchestration(orch_file, unit_procs)
 
     if statements:
         enrich_with_assessment(statements, assessment)

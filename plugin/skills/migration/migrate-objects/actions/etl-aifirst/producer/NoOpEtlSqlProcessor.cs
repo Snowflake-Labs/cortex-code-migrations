@@ -15,6 +15,7 @@ namespace AiFirst.Producer;
 using System;
 using System.Collections.Generic;
 using Artinsoft.Common.AST;
+using Mobilize.AnsiSql.AST;
 using Mobilize.Snow.Common;
 using Mobilize.Snow.Issues;
 using Snowflake.SnowConvert.EtlToDbt.Services.SqlProcessing;
@@ -24,6 +25,8 @@ internal sealed class NoOpEtlSqlProcessor : IEtlSqlProcessor
   public string CurrentLanguageName => "producer";
 
   public AstSource ParseSqlQuery(string code, string currentFileName) => null!;
+
+  public AstSource? ParseSqlQueryWithoutSemantics(string code, string currentFileName) => null;
 
   public AstSource TransformSqlQueryForLineageOnly(
     string code,
@@ -38,6 +41,16 @@ internal sealed class NoOpEtlSqlProcessor : IEtlSqlProcessor
       string? implicitLineageContext = null,
       string? implicitScope = null,
       Dictionary<string, string>? replacements = null)
+    => (null!, Array.Empty<(IssueName, object[])>());
+
+  public (AstSourceBuilder resultSource, IEnumerable<(IssueName IssueName, object[] Args)> ewis)
+    TransformSqlQuery(
+      string code,
+      string currentFileName,
+      string? implicitScope,
+      string? implicitLineageContext,
+      Dictionary<string, string>? etlVariablePlaceholderMapping,
+      IReadOnlyDictionary<string, SqlType> knownLobColumnTypes)
     => (null!, Array.Empty<(IssueName, object[])>());
 }
 
@@ -64,6 +77,19 @@ internal sealed class NoOpMultiDialectEtlSqlProcessor : IMultiDialectEtlSqlProce
       SourceLanguage dialect,
       string? implicitLineageContext = null,
       string? implicitScope = null,
-      Dictionary<string, string>? replacements = null)
+      Dictionary<string, string>? replacements = null,
+      bool outerJoinsToOnlyAnsiSyntax = false)
+    => (null!, Array.Empty<(IssueName, object[])>());
+
+  public (AstSourceBuilder resultSource, IEnumerable<(IssueName IssueName, object[] Args)> ewis)
+    TransformSqlQuery(
+      string code,
+      string currentFileName,
+      SourceLanguage dialect,
+      string? implicitScope,
+      string? implicitLineageContext,
+      Dictionary<string, string>? etlVariablePlaceholderMapping,
+      bool outerJoinsToOnlyAnsiSyntax,
+      IReadOnlyDictionary<string, SqlType> knownLobColumnTypes)
     => (null!, Array.Empty<(IssueName, object[])>());
 }

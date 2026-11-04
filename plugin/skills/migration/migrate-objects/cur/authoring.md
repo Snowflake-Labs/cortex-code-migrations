@@ -139,7 +139,7 @@ artifact used to *find* the object; it is not `files.source.path`.
 you hashed with xxHash3-128 (32 hex chars).
 
 Do not stamp `codeStatus.*` or `cloudStatus.*` completed without an
-artifact or oracle.
+artifact or status source.
 
 ## Closed enums (wire names)
 

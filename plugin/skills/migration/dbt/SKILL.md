@@ -150,7 +150,7 @@ dependency, so **the DAG is silently missing edges** and parse still succeeds.
 Two checks, both in [Detecting headless models](references/headless-model-detection.md):
 
 1. **Upstream-call diff** — compare the live `ref()`/`source()` targets per file against the
-   `source/` original. `source/` is the oracle; any drop is converter-introduced.
+   `source/` original. `source/` is the ground truth; any drop is converter-introduced.
 2. **No live `FROM`** — a comment-stripped scan of every `SSC-EWI-0001` file.
 
 What must hold, and why each is easy to get wrong:

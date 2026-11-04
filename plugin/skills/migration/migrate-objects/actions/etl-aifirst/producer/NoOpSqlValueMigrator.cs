@@ -27,6 +27,7 @@ namespace AiFirst.Producer;
 using System;
 using System.Collections.Generic;
 using Artinsoft.Common.AST;
+using Mobilize.AnsiSql.AST;
 using Mobilize.Snow.Common;
 using Mobilize.Snow.Issues;
 using Snowflake.SnowConvert.EtlToDbt.Services.SqlProcessing;
@@ -63,6 +64,15 @@ internal sealed class NoOpInfPcSqlValueMigrator : IInfPcSqlValueMigrator
     string? currentScopeName = null)
     => (rawSql, Array.Empty<(IssueName, object[])>());
 
+  public (string? sql, IReadOnlyList<(IssueName IssueName, object[] Args)> ewis) MigrateWithIssues(
+    string? rawSql,
+    string fileName,
+    string? lineageComponentName,
+    IReadOnlyList<EtlVariableDefinition>? variableDefinitions,
+    string? currentScopeName,
+    IReadOnlyDictionary<string, SqlType> knownLobColumnTypes)
+    => (rawSql, Array.Empty<(IssueName, object[])>());
+
   public SourceIdentificationResult IdentifySources(
     string? rawSql,
     string fileName,
@@ -70,7 +80,8 @@ internal sealed class NoOpInfPcSqlValueMigrator : IInfPcSqlValueMigrator
     IReadOnlyList<string>? fdmComments = null,
     string? lineageComponentName = null,
     Func<ICompound, ICompound>? astTransform = null,
-    SourceLanguage? dialect = null)
+    SourceLanguage? dialect = null,
+    Func<string, string?>? sourceOriginResolver = null)
     => new() { BodyWithVariablePlaceholders = rawSql };
 
   public (string? sql, IReadOnlySet<string> identifiedSources,

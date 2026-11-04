@@ -83,8 +83,29 @@ After applying, tell the agent "done" or "recheck" — it will run `configure(en
 | `READ, WRITE ON STAGE` | Uploading baseline JSON files to `@VALIDATION.BASELINES`, reading them during validation |
 | `SELECT ON ALL/FUTURE TABLES` | Validation procs reading source rows the procedures under test touch |
 | `USAGE ON ALL/FUTURE PROCEDURES, FUNCTIONS` | Invoking the migrated procs/functions during validation |
-| `CREATE DATABASE ON ACCOUNT` | Clone-based isolation for DML proc tests |
+| `CREATE DATABASE ON ACCOUNT` | Clone-based isolation for DML proc tests (not needed with `testing_sandbox_databases`, below) |
 | `USAGE, OPERATE ON WAREHOUSE` | Running validation queries |
+
+### Without `CREATE DATABASE ON ACCOUNT`: `testing_sandbox_databases`
+
+Some accounts grant `CREATE DATABASE` only through an admin procedure. Then have an admin create one empty database per converted database, used for nothing else, and grant the role on each:
+
+```sql
+CREATE DATABASE AIM_TEST_MDB;              -- one per converted database
+GRANT USAGE, CREATE SCHEMA ON DATABASE AIM_TEST_MDB TO ROLE <ROLE>;
+```
+
+and name them in `.scai/settings/test_config.yaml`, keyed by converted database (one name alone serves every converted database, if their schema names do not collide):
+
+```yaml
+testing_sandbox_databases:
+  mdb: AIM_TEST_MDB
+  udm: AIM_TEST_UDM
+```
+
+Testing then creates no database. A procedure sandbox creates its schemas in the named database (so the database must not already hold schemas of those names), clones the tables into them, and drops only the schemas it marked at teardown; the database, its `PUBLIC` schema and anything else in it stay. Tables in `PUBLIC` cannot be sandboxed this way, and two converted databases with a same-named table need a named database each. A named database takes one sandbox at a time. `scai test validate` isolates cases with per-table backups (`--isolation-strategy backup_restore`) instead of database clones. `clone_perms` probes `CREATE SCHEMA` in each named database instead of `CREATE DATABASE`.
+
+A `restore_from=sandbox` snapshot needs a second such database per converted database, named under `testing_sandbox_snapshot_databases` in the same shape; without it that request is refused.
 
 ## Source-side privileges by dialect
 
@@ -136,7 +157,8 @@ GRANT CREATE DATABASE ON <PARENT_DATABASE> TO <USER>;
 |---|---|
 | `Insufficient privileges to operate on database '<DB>'` | `GRANT USAGE ON DATABASE`, then `configure(ensure_metadata_schema=true)` |
 | `Insufficient privileges to operate on schema 'VALIDATION'` or `not authorized to perform: CREATE SCHEMA` | `GRANT CREATE SCHEMA ON DATABASE`, then `configure(ensure_metadata_schema=true)`. After the deploy succeeds, the schema-bundle grants above are still needed for ongoing test runs. |
-| `prereq_status_clone_perms: failed("CREATE DATABASE on ACCOUNT is not granted ...")` | `GRANT CREATE DATABASE ON ACCOUNT`. If your role inherits this via a parent role, the probe may report a false positive — confirm with `SHOW GRANTS ON ROLE <ROLE>` and proceed (the actual clone operation will succeed). |
+| `prereq_status_clone_perms: failed("CREATE DATABASE on ACCOUNT is not granted ...")` | `GRANT CREATE DATABASE ON ACCOUNT`, or, where the account cannot grant it, name pre-created databases under `testing_sandbox_databases` (above). If your role inherits this via a parent role, the probe may report a false positive — confirm with `SHOW GRANTS ON ROLE <ROLE>` and proceed (the actual clone operation will succeed). |
+| `prereq_status_clone_perms: failed("The current role cannot create schemas in ...")` | Create the named databases, then `GRANT USAGE, CREATE SCHEMA ON DATABASE` on each to the role. |
 | `Object 'VALIDATION.BASELINES' is not owned by ... GRANT WRITE` | `GRANT READ, WRITE ON STAGE` (or grant ownership of the schema) |
 | Source-side: `permission denied on EXECUTE` | Apply the dialect-specific EXECUTE grants above |
 | Source-side: `SELECT permission denied on relation X` | Apply the dialect-specific SELECT grants above |

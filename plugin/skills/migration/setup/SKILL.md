@@ -8,14 +8,9 @@ license: Proprietary. See License-Skills for complete terms
 
 ## On Entry
 
-Tell the user:
-> **Phase 1: Setup** — I'll walk you through connecting to your source database, initializing the project, registering your objects, converting them to Snowflake SQL, and generating an assessment report. Once you've seen the assessment I'll ask whether you want to go on to migrating objects.
+In one or two sentences of your own, tell the user that **Phase 1: Setup** connects to the source database, initializes the project, registers the objects, converts them to Snowflake SQL and produces an assessment report, and that you will ask before going on to migrating objects.
 
-For a Snowflake source, use this instead:
-> **Snowflake Validation Setup** — I'll initialize a Snowflake-source project,
-> configure the Snowflake target and orchestrator, and capture your validation
-> strategy. Snowflake-source projects skip code conversion, assessment,
-> deployment, data migration, testing setup, and the Data Exchange Worker.
+For a Snowflake source, say instead that **Snowflake Validation Setup** initializes a Snowflake-source project, configures the Snowflake target and orchestrator, and captures the validation strategy; it skips code conversion, assessment, deployment, data migration, testing setup and the Data Exchange Worker.
 
 ## Install check
 
@@ -133,7 +128,9 @@ the next step automatically. The flow:
    asking the user any question it needs. Do not surface "Next step
    pending: X — let me know" prose and wait — that's a wasted
    round-trip; the user already said "continue" upstream. When the
-   sub-skill returns, go back to step 1.
+   sub-skill returns, check its closing `configure(...)` response for a
+   `setup_next:` line. That JSON is what `progress_setup()` would return
+   now, so go to step 2 with it. With no such line, go back to step 1.
 
    **Do not recap what the machine already settled.** `completed_tasks`
    names questions that were answered, not things the project has, and the
@@ -173,7 +170,7 @@ means `migration/dbt/setup.md`, a sibling of `setup/`.
 | `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
 | `chooseEtlFlow`                  | inline prompt (`next_prompt`) — recommended stabilize-first vs. validate-first ETL routing; writes `etl_flow=stabilize|validate`, then continues to `continueToMigration` |
 | `continueToMigration`            | inline prompt (`next_prompt`) — continue into migration setup or stop at the assessment report; autonomous only |
-| `chooseRunMode`                  | inline prompt (`next_prompt`) — pick manual vs autonomous run mode; each answer carries its `then` |
+| `chooseRunMode`                  | inline prompt (`next_prompt`) — full migration run autonomously, full migration approved manually, or deploy & fix only (no source database); each answer carries its `then`. `deploy_only` is saved as `migration_scope: deploy_only` with manual run mode, and setup then ends after `configureSandboxProfile` |
 | `chooseAutonomousSubagentCount`  | inline prompt (`next_prompt`) — autonomous only; persist the project-wide concurrent sub-agent limit |
 | `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | Default (non-Snowflake) branch   | `configureGit` → `configureSandboxProfile` → `chooseTestingPath`  |
@@ -188,8 +185,11 @@ means `migration/dbt/setup.md`, a sibling of `setup/`.
 Conversion and assessment come first on purpose: neither needs a Snowflake
 target, so a user reaches their assessment report before opting into
 migration setup. The ETL flow choice follows assessment; the continue gate
-follows that, then run mode. Everything else — git included — follows the
-`chooseRunMode` prompt.
+follows that, then run mode, which also asks the migration scope (with
+autonomous off it is the continue gate, offering full or deploy & fix only).
+Everything else — git included — follows the `chooseRunMode` prompt. Never
+answer it for the user: deploy-only rules out autonomous mode, and
+`configure` refuses `run_mode="autonomous"` while it is set.
 
 The milestone commits (`registerCode`, `convertCode`, `runAssessment`) need git,
 which is configured after that prompt, so they land together on the first
@@ -215,12 +215,19 @@ path.
 
 ## Skipping an optional step
 
-To skip an optional setup step for this run, call
-`progress_setup(mode="setup", skip="runAssessment")`. The response
+Skip a step only when the user said to skip it. To skip it for this run, call
+`progress_setup(mode="setup", skip="<task>")`. The response
 resolves the next step exactly as a normal call would (for the last step,
 `completed: true`) — act on it directly. Nothing is persisted, so the step
 is offered again later; for a permanent opt-out use
-`configure(tasks={"runAssessment": {"enabled": false}})`.
+`configure(tasks={"<task>": {"enabled": false}})`.
+
+`runAssessment` is never skipped for a run: a request to migrate (and
+validate) includes it, and `progress_setup` refuses the skip. Run the
+commands `next_skill_commands` quotes; the smallest assessment is
+`assessment_options="none"` (waves and the HTML report). Only a user who
+explicitly declines the assessment turns it off, with the `configure` call
+above.
 
 Trust `progress_setup()` / related MCP return values for what is done vs
 pending — do not invent completion from chat history.

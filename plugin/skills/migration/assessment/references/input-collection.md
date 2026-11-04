@@ -6,7 +6,7 @@ sub-agent. Gather every applicable answer first. Sub-agents are non-interactive.
 ## Contents
 
 - Data Lineage and Power BI inputs
-- Waves and analysis depth
+- Business use cases and analysis depth
 - Conversion issues
 - Informatica target
 - Discovery inputs
@@ -66,35 +66,21 @@ Record every returned `pbit_files[].path` as a project-relative path in
   dispatch `data-lineage`.
 - When templates are staged, dispatch `data-lineage` first and alone, never in
   the same fan-out as another sub-skill. `scai assessment powerbi enrich`
-  mutates the CUR; waves and object-exclusion patch those same units, so a
+  mutates the CUR; object-exclusion and wave planning patch those same units, so a
   same-turn fan-out is a lost-update race. Wait for Data Lineage to return,
   then dispatch the rest. With no templates, include `data-lineage` in the
   single-message fan-out: the child skips Power BI extraction and enrichment
   but still builds the graph from the registry.
 - Always set `data_lineage.dispatch: true`.
 
-### 5.1 Waves inputs
+### 5.1 Business use cases
 
-#### Waves
-
-Waves always run. Read `assessment_options`:
-
-1. When it contains `custom_wave_size`, read `assessment_wave_size` from
-   `configure()`. AIM collects it as a `min-max` text field on the same card
-   as the prioritization patterns; `default` means 40-80. **Do not ask for the
-   wave size again.** Only when the value is unset (legacy or CLI session) ask
-   once for integer min/max — together with the prioritization patterns in the
-   same `ask_user_question` call when those are unset too. Otherwise use
-   `partition_min_size=40` and `partition_max_size=80`.
-2. When it contains `prioritize`, read `prioritization_globs` from
-   `configure()`. AIM collects it as **one text field** right after Q1, where
-   `none` or empty means skip. **Do not ask whether to prioritize again** and
-   do not offer a skip / "I'll give patterns" choice — Q1 already answered
-   that. Only when the value is unset (legacy or CLI session) ask once, for the
-   patterns themselves; an empty answer is the skip. Otherwise use an empty
-   list.
-3. Use `dependency` when it contains `dependency_order`; otherwise use
-   `category`.
+Nothing to collect. Business use cases always run, after the other analyses:
+each use case becomes one migration wave, and its objects deploy in
+dependency order inside it. **Do not ask for a wave size, prioritization
+patterns or a wave ordering.** An `assessment_options` value from an older
+session may still carry `custom_wave_size`, `prioritize` or
+`dependency_order`; ignore those tokens.
 
 ### 5.2 Dynamic SQL review
 
@@ -103,13 +89,12 @@ otherwise use `generate-only`. Do not ask again.
 
 ### 5.2b Conversion issues
 
-When Conversion issues is in scope, ask once. Do not run it because it appeared in the scope list.
+Set `run: true` when `assessment_conversion_issues` is `yes`; otherwise
+`run: false`. Do not ask again: the assessment card (in AIM, its second
+question; on the CLI, the Step 3 scope call) already asked it. Do not run it
+because it appeared in the scope list.
 
-> Include a Conversion Issues report? It ranks the SSC-EWI issues from this conversion, writes a local ZIP for Jira, and adds the section to the assessment report. Nothing is uploaded unless you share it later.
-> 1. Yes
-> 2. No
-
-Map yes to `run: true` and no to `run: false`. Do not dispatch when `run` is false; synthesize a skipped result. A yes still requires the child to research every summary row and rerun with `--updates` before the report is generated. Do not ask the user to write the problem or the fix.
+Do not dispatch when `run` is false; synthesize a skipped result. A yes still requires the child to research every summary row and rerun with `--updates` before the report is generated. Do not ask the user to write the problem or the fix.
 
 ### 5.3 ETL/SSIS review
 
@@ -127,7 +112,7 @@ When SSIS (`.dtsx`) is in scope, first look for a target the project already rec
 
 > Which conversion target for SSIS?
 > 1. **dbt** — data flows become dbt models orchestrated by Snowflake Tasks
-> 2. **scripting** — data flows become Snowflake Scripting procedures (preview; stabilization and deploy are not part of this flow)
+> 2. **scripting** — data flows become Snowflake Scripting procedures, stabilized before deploy
 
 Record `ssis.target` as `dbt` or `scripting`. Pass it to the SSIS child as `ssis_target`. The review-mode rule in 5.3 is unchanged.
 
@@ -146,8 +131,8 @@ default to `generate-only`, or allow `skip` after Informatica is in scope.
 ### 5.4–5.6 No-input analyses
 
 - Object exclusion needs no prompt.
-- Effort estimate needs no prompt and supports SQL Server/Redshift only.
-- Anti-patterns needs no prompt and supports SQL Server/Redshift only.
+- Effort estimate needs no prompt and supports SQL Server, Redshift, Teradata and Oracle only.
+- Anti-patterns needs no prompt and supports SQL Server, Redshift, Oracle, and Teradata.
 - For unsupported dialects, do not dispatch; synthesize a skipped result.
 
 ### 5.7 Discovery (SQL Server, Teradata, and Redshift)
@@ -360,11 +345,7 @@ Keep this in working context only; never write it to disk:
 assessment_inputs:
   project_dir: <abs>
   output_dir_assessment: <project_dir>/assessment
-  waves:
-    partition_min_size: <int>
-    partition_max_size: <int>
-    prioritization_globs: [<glob>, ...]
-    wave_ordering: category | dependency
+  business_use_cases: {}
   exclusion: {}
   effort_estimate: {}
   anti_patterns: {}

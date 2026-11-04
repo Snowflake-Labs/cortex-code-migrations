@@ -20,7 +20,7 @@ Call `deploy` with the `invocation` from `next_task` — it already has
 | Reload closure table CSVs (wipes AIMSBX DML; latches restore-from-sandbox) | `sandbox=true`, `mode=reload_tables` |
 | This object only onto the common catalogs | omit `sandbox` — that is the later `deploy` task, not this one |
 
-After AIMSBX DML the tools did not see (`sql_execute`), pass `restore_from="sandbox"` on `deploy` or `run_tests`.
+After AIMSBX DML the tools did not see (`sql_execute`), pass `restore_from="sandbox"` on `deploy` with `mode=redeploy_object` — the other modes reload CSVs first, and `run_tests` clones only when none is latched yet.
 
 `reload_tables` resets only tables with a testbed CSV on disk, through the
 source half. When a closure table has none, or the procedure has no source
@@ -123,5 +123,5 @@ an `advanced` row — `next_task` alone writes none:
 transition_status(status="advance", task="createIsolatedSandbox", outcome="completed", where="id = '<object_id>'")
 ```
 
-The server checks the sandbox oracle. If advance refuses, wait for the oracle
+The server checks the sandbox status source. If advance refuses, wait for it
 and retry.

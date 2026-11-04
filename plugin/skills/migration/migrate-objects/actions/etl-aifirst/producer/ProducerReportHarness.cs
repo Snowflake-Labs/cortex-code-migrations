@@ -121,6 +121,8 @@ internal sealed class ProducerAssessmentConfiguration : IAssessmentConfiguration
 
   public int MaxNamesNumber => throw new NotSupportedException(nameof(this.MaxNamesNumber));
 
+  public int MaxDefinitionNamesNumber => throw new NotSupportedException(nameof(this.MaxDefinitionNamesNumber));
+
   public IReadmeTemplateInformation ReadmeTemplateInformation
     => throw new NotSupportedException(nameof(this.ReadmeTemplateInformation));
 
@@ -326,6 +328,17 @@ internal sealed class ProducerMigrationDataService(
   public SupportedEncodings Encoding => throw new NotSupportedException(nameof(this.Encoding));
 
   public bool InformaticaToSnowflakeScripting => false;
+
+  public bool SsisToSnowflakeScripting => false;
+
+  public bool ConsolidateDbtProjects => false;
+
+  public bool ConsolidateAsSingleDbtProject => false;
+
+  // Unset means the SQLite store, the one ObjectReferenceCalculator opens for the lineage report.
+  public string? AssessmentDatabase => null;
+
+  public string? AssessmentDatabaseConnection => null;
 
   public bool RenamingEnabled => false;
 

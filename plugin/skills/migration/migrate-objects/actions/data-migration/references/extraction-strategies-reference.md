@@ -1,6 +1,6 @@
 # Extraction strategies by source dialect
 
-**Extraction strategy** controls *how* data leaves the source system. It is separate from **migration type** (preliminary / incremental / full) and **sync strategy** (none / checksum / watermark).
+**Extraction strategy** controls *how* data leaves the source system. It is separate from **migration type** (preliminary / incremental / full) and **sync strategy** (none / full-replace / checksum / watermark).
 
 The `data-migration-setup` state machine (`progress_setup(mode="data_migration")`) presents methods in
 recommended order. Selecting one is explicit confirmation that its listed prerequisites can be met; if
@@ -30,10 +30,16 @@ projects configured earlier keep their behavior. Prefer `odbc` when the user act
 
 **Setup required**
 
+- Source edition with the CLR runtime: every worker method's extraction query (and SQL Server data
+  validation) formats temporal columns with T-SQL `FORMAT()`, which runs on SQL Server's CLR.
+  SQL Server 2012 and later, Azure SQL Database and Azure SQL Managed Instance run it with no change
+  (`clr enabled` may stay `0`). **Azure SQL Edge** has no CLR and refuses `sp_configure 'clr enabled'`;
+  every extraction fails with error `10347` ("Common Language Runtime(CLR) is not enabled on this
+  instance"), so it cannot be a data migration source.
 - [worker-local-setup/SKILL.md](../../../../data-infrastructure/worker-local-setup/SKILL.md) — SQL Server driver: `scai` installs `mssql-python` with the worker, so the ODBC driver pre-flight (`odbcinst -q -d`) applies only on macOS 14 and earlier, with BCP or CETAS, and when the worker TOML's `extra_options` holds a keyword `mssql-python` does not accept (the worker then falls back to `pyodbc`; the doctor's *SQLServer driver* row still passes)
 - Worker TOML `[connections.source.sqlserver]` — standard host/port/database/credentials from `scai data worker generate-config`
 - CETAS: external data source + Parquet format + matching Snowflake external stage
-- BCP: Worker TOML `use_bcp = true`; workflow `extraction.strategy: regular`. There is no fallback when `bcp` is missing—the task fails. BCP always uses the worker's field/row terminators and UTF-8. It covers **bulk `data_movement` only**; other task types read through the worker's SQL Server driver. The `bcp` utility itself needs the Microsoft ODBC Driver, so with BCP the driver has to be present on every host.
+- BCP: Worker TOML `use_bcp = true`; workflow `extraction.strategy: regular`. There is no fallback when `bcp` is missing—the task fails. BCP always uses the worker's field/row terminators and UTF-8. It covers **bulk `data_movement` only**; other task types read through the worker's SQL Server driver. Text holding U+001E / U+001F (BCP's row and field terminators) splits its row unless the table sets `escapeBcpTerminators: true`; see [troubleshooting](./troubleshooting-reference.md#text-holding-the-bcp-terminators-sql-server-bcp). The `bcp` utility itself needs the Microsoft ODBC Driver, so with BCP the driver has to be present on every host.
 - ODBC: Worker TOML `use_bcp = false`; workflow `extraction.strategy: regular`
 
 Azure SQL Database does not support CETAS: use `cloud_direct` when its object-store prerequisites are
@@ -228,7 +234,7 @@ container and the same path**:
 
 | Strategy | Where the data is written | What must match it |
 |----------|---------------------------|--------------------|
-| `cloud_direct` (S3, GCS) | Worker's `[connections.target.s3|gcs]` `bucket_name` + `prefix` | `extraction.externalStage` URL |
+| `cloud_direct` (S3, GCS) | Worker's `[connections.target.s3|gcs]` `bucket_name` + `prefix`. S3 also needs `region_name` (omitted, the client uses us-east-1). On SPCS, `worker setup` stores the config's keys / GCS key file as a Snowflake secret, not plain env values | `extraction.externalStage` URL |
 | `cloud_direct` (Azure) | Container (+ optional `prefix`) plus the orchestrator's `task_results/workflows/...` path | stage URL at the container + `prefix`, so `@stage/task_results/...` is where the files are |
 | `cet_as` | SQL Server / Synapse `EXTERNAL DATA SOURCE` location + `cet_as_path_prefix` | `extraction.externalStage` URL |
 | `unload` | Redshift `unload_s3_bucket` (+ prefix) | `extraction.externalStage` URL |

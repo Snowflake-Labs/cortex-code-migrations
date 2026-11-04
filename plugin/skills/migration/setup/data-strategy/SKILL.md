@@ -13,6 +13,10 @@ those two wizards — it asks no new questions of its own (the questions live in
 no assumptions about who invoked it. Deciding *whether* to capture the strategy is the caller's job; when
 this skill runs, it runs the wizards.
 
+Setup reaches this step only once the user chose to migrate or validate table data: never
+skip it or disable it with `configure(tasks=...)`; run both wizards. One already answered (say,
+during data-infrastructure setup) returns `completed: true`.
+
 For a Snowflake-source validation-only project, skip Step 1 and run only the
 validation wizard in Step 2. Snowflake is already the source and target, so
 data migration is not available.

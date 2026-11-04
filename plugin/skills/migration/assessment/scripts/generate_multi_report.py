@@ -31,6 +31,7 @@ import base64
 import csv
 import html as html_escape_module
 import json
+import os
 import re
 import sys
 import tempfile
@@ -102,6 +103,18 @@ try:
 except ImportError as e:
     print(f"Warning: Data lineage report generator not available: {e}", file=sys.stderr)
     DATA_LINEAGE_SUPPORT = False
+
+try:
+    from business_use_cases_report import (
+        BUSINESS_USE_CASES_CSS,
+        load_json_object as load_business_use_cases_json,
+        render_business_use_cases_html,
+        render_pending_objects_html,
+    )
+    BUSINESS_USE_CASES_SUPPORT = True
+except ImportError as e:
+    print(f"Warning: Business use cases report generator not available: {e}", file=sys.stderr)
+    BUSINESS_USE_CASES_SUPPORT = False
 
 from conversion_issues_report import (
     conversion_issues_css,
@@ -180,6 +193,9 @@ VIRTUALIZATION_ENABLED = False
 
 # Flip to False to hide Workload Insights from every supported report.
 WORKLOAD_INSIGHTS_ENABLED = True
+
+# The PDF prints this many rows of each Object Exclusion classification; the HTML keeps every row.
+EXCLUSION_PRINT_ROWS_PER_CLASSIFICATION = 10
 
 
 def generate_ai_summary(summary: Dict, temp_staging: List, deprecated: List, testing: List) -> str:
@@ -444,6 +460,7 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
     
     rows = []
     row_id = 0
+    rows_in_classification = {}
     
     for obj in all_objects:
         full_name = html_escape_module.escape(str(obj['full_name']))
@@ -453,6 +470,8 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
         classification = obj['classification']
         classification_label = obj['classification_label']
         raw = obj['raw']
+        rows_in_classification[classification] = rows_in_classification.get(classification, 0) + 1
+        print_class = ' print-omit' if rows_in_classification[classification] > EXCLUSION_PRINT_ROWS_PER_CLASSIFICATION else ''
         
         # Get reason from matched patterns (use combined patterns if available, else from raw).
         # Patterns come straight from SCAI as regex strings; translate them to
@@ -554,13 +573,13 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
         if has_details:
             details_content = ''.join(details_items)
             details_html = f'''
-            <tr class="details-row" id="details-{row_id}" style="display: none;" data-classification="{classification}" data-type="{obj_type}">
+            <tr class="details-row{print_class}" id="details-{row_id}" style="display: none;" data-classification="{classification}" data-type="{obj_type}">
                 <td colspan="5" class="details-cell">{details_content}</td>
             </tr>'''
         
         # Show expand icon only if there are details
         expand_icon = '<span class="expand-icon">+</span>' if has_details else ''
-        row_class = 'expandable' if has_details else ''
+        row_class = ('expandable' if has_details else '') + print_class
         onclick_attr = f'onclick="toggleDetails({row_id}, this)"' if has_details else ''
         
         # Get all classifications for filtering (comma-separated)
@@ -940,10 +959,15 @@ def generate_waves_html_content(waves_info: Dict) -> tuple:
     return (waves_info['html_content'], waves_info.get('sidebar_html', ''), waves_info['javascript'])
 
 
+MISSING_REASON_NO_DEPENDENTS = "No recorded dependents"
+MISSING_REASON_DEPENDENTS_OUT_OF_SCOPE = "No in-scope dependents"
+
+
 def _shared_refs_to_overview(shared_result: Dict) -> Dict:
     """Convert the shared missing-refs loader contract into the Overview UI contract."""
     missing_set = shared_result.get('missing_objects', set()) or set()
     dependents_map = shared_result.get('dependents', {}) or {}
+    without_callers = shared_result.get('missing_without_callers', {}) or {}
     details = shared_result.get('details', []) or []
     data_source = shared_result.get('data_source', 'none')
     warning_msg = shared_result.get('warning') or ''
@@ -964,12 +988,19 @@ def _shared_refs_to_overview(shared_result: Dict) -> Dict:
             for item in dependent_rows
             if str(item.get('caller', '')).strip()
         })
-        missing_objects.append({
+        row = {
             'referenced': missing_name,
             'callers': callers,
             'dependants_count': len(callers),
             'reference_count': len(dependent_rows),
-        })
+        }
+        if missing_name in without_callers:
+            row['reason'] = (
+                MISSING_REASON_DEPENDENTS_OUT_OF_SCOPE
+                if without_callers[missing_name]
+                else MISSING_REASON_NO_DEPENDENTS
+            )
+        missing_objects.append(row)
 
     return {
         'missing_objects': missing_objects,
@@ -1192,6 +1223,48 @@ def _conversion_issues_artifact(project_dir: Path = None, conversion_issues_json
     return load_conversion_issues(path)
 
 
+def _planning_tab(tab_id: str, body: str) -> str:
+    return (
+        f'<div class="tab-content" :class="{{active: activeTab === \'{tab_id}\'}}">'
+        + body
+        + "</div>"
+    )
+
+
+def _optional_report_json(path: Path) -> Optional[Dict]:
+    """A companion artifact. Missing is normal; present but unreadable is a warning."""
+    if not path.is_file() or not BUSINESS_USE_CASES_SUPPORT:
+        return None
+    loaded = load_business_use_cases_json(path)
+    if loaded is None:
+        print(
+            f"Warning: could not read {path.name}; the business use cases report omits it.",
+            file=sys.stderr,
+        )
+    return loaded
+
+
+APP_VERSION_ENV = "AIM_APP_VERSION"
+
+
+def build_version_label(plugin_version: Optional[str] = None) -> str:
+    """Which build produced this report, for the journey hero: ``AIM App version {v}`` or ``AIM Plugin version {v}``.
+
+    ``AIM_APP_VERSION`` is set on the process AIM runs (``aim serve``, and the
+    ``scai`` it starts), so it names the installed app build. Without it, the
+    plugin version ``scai`` was given names the build. Neither gives ``""``,
+    and the hero shows no pill. Nothing on the machine is looked up: the HTML
+    keeps what the generating process knew.
+    """
+    app_version = os.environ.get(APP_VERSION_ENV, "").strip()
+    if app_version:
+        return f"AIM App version {app_version}"
+    plugin_version = (plugin_version or "").strip()
+    if plugin_version:
+        return f"AIM Plugin version {plugin_version}"
+    return ""
+
+
 def generate_multi_report(
     output_file: Path,
     exclusion_json: Path = None,
@@ -1206,8 +1279,10 @@ def generate_multi_report(
     effort_estimates_json: Path = None,
     workload_insights_json: Path = None,
     data_lineage_json: Path = None,
+    use_cases_json: Path = None,
     project_dir: Path = None,
     conversion_issues_json: Path = None,
+    plugin_version: Optional[str] = None,
 ) -> None:
     """Generate multi-tab HTML report"""
 
@@ -1337,9 +1412,43 @@ def generate_multi_report(
         if override_count:
             print(f"  - Effort overrides: {override_count} from {overrides_path.name}")
 
-    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns and not effort_estimates_json and not workload_insights_json and not has_data_lineage:
-        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, anti-patterns, effort estimates, workload insights, or data lineage) must be provided")
-    
+    business_use_cases_html = ""
+    pending_objects_html = ""
+    has_business_use_cases = False
+    if BUSINESS_USE_CASES_SUPPORT:
+        wave_plan_artifact = None
+        use_case_effort_artifact = None
+        use_cases_body = None
+        if use_cases_json:
+            print(f"Loading business use cases from {use_cases_json}...")
+            use_cases_artifact = load_business_use_cases_json(use_cases_json)
+            if use_cases_artifact is None:
+                print(
+                    f"Warning: business use cases could not be read: {use_cases_json}",
+                    file=sys.stderr,
+                )
+            else:
+                plan_path = Path(use_cases_json).parent / "wave-plan.json"
+                effort_path = Path(use_cases_json).parent / "use-case-effort.json"
+                wave_plan_artifact = _optional_report_json(plan_path)
+                use_case_effort_artifact = _optional_report_json(effort_path)
+                use_cases_body = render_business_use_cases_html(
+                    use_cases_artifact,
+                    wave_plan_artifact,
+                    use_case_effort_artifact,
+                )
+                has_business_use_cases = True
+        if use_cases_body is None:
+            use_cases_body = render_business_use_cases_html({"useCases": []})
+        business_use_cases_html = _planning_tab("business-use-cases", use_cases_body)
+        pending_objects_html = _planning_tab(
+            "pending-objects",
+            render_pending_objects_html(wave_plan_artifact, use_case_effort_artifact),
+        )
+
+    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns and not effort_estimates_json and not workload_insights_json and not has_data_lineage and not has_business_use_cases:
+        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, anti-patterns, effort estimates, workload insights, data lineage, or business use cases) must be provided")
+
     # Process exclusion data — schema produced by `scai assessment object-exclusion`
     # is the single source of truth; field names below match that schema directly.
     exclusion_summary = exclusion_data.get('summary', {}) if exclusion_data else {}
@@ -1528,10 +1637,14 @@ def generate_multi_report(
         testing_readiness=testing_readiness,
         data_migration_readiness=data_migration_readiness,
         assessment_name=resolve_assessment_name(project_dir),
+        build_version=build_version_label(plugin_version),
         initial_active_tab=initial_active_tab,
         initial_discovery_tab=initial_discovery_tab,
         project_dir=project_dir,
         conversion_issues_artifact=_conversion_issues_artifact(project_dir, conversion_issues_json),
+        business_use_cases_html=business_use_cases_html,
+        pending_objects_html=pending_objects_html,
+        business_use_cases_css=BUSINESS_USE_CASES_CSS if BUSINESS_USE_CASES_SUPPORT else "",
     )
     
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -1588,12 +1701,16 @@ def generate_html_template(
     testing_readiness: Any = None,
     data_migration_readiness: Any = None,
     assessment_name: str = "",
+    build_version: str = "",
     ssis_registry_packages: Optional[List[Dict[str, str]]] = None,
 
     initial_active_tab: str = "journey",
     initial_discovery_tab: str = "lineage",
     project_dir: Path = None,
     conversion_issues_artifact: Dict = None,
+    business_use_cases_html: str = "",
+    pending_objects_html: str = "",
+    business_use_cases_css: str = "",
 ) -> str:
     """Generate the complete HTML template"""
     dynamic_sql_meta_json = json.dumps(dynamic_sql_meta or {}, ensure_ascii=False)
@@ -1659,11 +1776,15 @@ def generate_html_template(
     if top_missing_objects:
         for item in top_missing_objects:
             referenced = html_escape_module.escape(str(item.get('referenced', '')))
+            reason_html = (
+                f'<div style="color: #6B7280; font-size: 0.8em; font-style: italic;">{html_escape_module.escape(str(item["reason"]))}</div>'
+                if item.get('reason') else ''
+            )
             dependants_count = int(item.get('dependants_count') or len(item.get('callers') or []))
             reference_count = int(item.get('reference_count') or dependants_count)
             missing_top10_rows.append(f'''
                             <tr>
-                                <td><span class="copyable-top-object" data-tooltip="{referenced}" style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1em; color: #111827; font-family: inherit; cursor: copy;">{referenced}</span></td>
+                                <td><span class="copyable-top-object" data-tooltip="{referenced}" style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1em; color: #111827; font-family: inherit; cursor: copy;">{referenced}</span>{reason_html}</td>
                                 <td style="text-align: center;"><strong>{reference_count}</strong></td>
                                 <td style="text-align: center;"><strong>{dependants_count}</strong></td>
                             </tr>
@@ -1698,7 +1819,7 @@ def generate_html_template(
                         <div>
                             <h3 style="margin: 0; color: #92400E; font-size: 1.1rem;">{missing_objects_count:,} Missing Object References Found</h3>
                             <p style="margin: 4px 0 0 0; color: #B45309; font-size: 0.86rem;">
-                                These objects are referenced but not defined in the source workload.
+                                These objects are not defined in the source workload.
                             </p>
                         </div>
                     </div>
@@ -1768,6 +1889,12 @@ def generate_html_template(
     # The sidebar sits inside the Vue mount, so v-pre is required or a name
     # containing {{ }} would be compiled as an expression.
     safe_assessment_name = html_escape_module.escape(assessment_name) if assessment_name else ''
+    # v-pre for the same reason as the sidebar name: the hero is inside the Vue mount.
+    build_version_pill_html = (
+        f'<span class="journey-pill" v-pre>{html_escape_module.escape(build_version)}</span>'
+        if build_version
+        else ''
+    )
     assessment_title_prefix = f'{safe_assessment_name} — ' if safe_assessment_name else ''
     assessment_name_html = (
         f'<span class="status-badge-neutral" v-pre>{safe_assessment_name}</span>'
@@ -2011,6 +2138,8 @@ def generate_html_template(
     """
 
     journey_steps = [
+        ('business-use-cases', 'Planning',
+         'Review the business use cases found in the workload, and the objects none of them include. Each use case can migrate on its own. Lineage and the deployment plan are in the assessment report in the app.'),
         ('overview', 'Code/ETL Conversion',
          'Convert your database code and ETL pipelines to Snowflake. Review conversion readiness, dependencies, object exclusions, and dynamic SQL.'),
         ('data-migration', 'Data Migration &amp; Validation',
@@ -2073,9 +2202,9 @@ def generate_html_template(
     )
     # Naming a phase the reader has no card or nav item for reads as a missing tab.
     journey_phases_copy = (
-        'converting code and ETL, moving and validating data, testing, and virtualization'
+        'planning the migration, converting code and ETL, moving and validating data, testing, and virtualization'
         if show_virtualization
-        else 'converting code and ETL, moving and validating data, and testing'
+        else 'planning the migration, converting code and ETL, moving and validating data, and testing'
     )
     journey_download_html = ""
     if project_dir:
@@ -2100,6 +2229,7 @@ def generate_html_template(
                 </p>
                 <div class="journey-actions">
                     <span class="journey-pill">Source platform: {safe_source_dialect}</span>
+                    {build_version_pill_html}
                     {journey_download_html}
                 </div>
             </div>
@@ -2172,7 +2302,7 @@ def generate_html_template(
         """
     else:
         etl_tab_content = """
-            <div class="tab-content" :class="{active: activeTab === 'etl'}">
+            <div class="tab-content print-compact" :class="{active: activeTab === 'etl'}">
                 <div style="margin-bottom: 32px;">
                     <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
                         ETL Assessment Report
@@ -2279,7 +2409,7 @@ def generate_html_template(
         query_logs_panel_html = f"""
             <div v-show="discoveryTab === 'query-logs'" class="discovery-panel"
                  role="tabpanel" aria-label="Query Logs Analysis">
-                <div class="lineage-segment" role="group" aria-label="Query log views">
+                <div class="lineage-segment print-omit" role="group" aria-label="Query log views">
                     <button type="button" data-query-logs-view="analysis"
                             :aria-pressed="queryLogsView === 'analysis'" aria-controls="query-logs-analysis-panel"
                             :class="{{active: queryLogsView === 'analysis'}}" @click="queryLogsView = 'analysis'">
@@ -2295,7 +2425,7 @@ def generate_html_template(
                      role="region" aria-label="Analysis">
                     {workload_insights_content}
                 </div>
-                <div v-show="queryLogsView === 'extract'" id="query-logs-extract-panel"
+                <div v-show="queryLogsView === 'extract'" id="query-logs-extract-panel" class="print-omit"
                      role="region" aria-label="Extract Log">
                     {workload_insights_extract_content}
                 </div>
@@ -2322,7 +2452,7 @@ def generate_html_template(
             </div>
             <div v-show="discoveryTab === 'lineage'" class="discovery-panel"
                  role="tabpanel" aria-label="Lineage">
-                <div class="lineage-segment" role="group" aria-label="Lineage views">
+                <div class="lineage-segment print-omit" role="group" aria-label="Lineage views">
                     <button type="button" data-lineage-view="data"
                             :aria-pressed="lineageView === 'data'" aria-controls="data-lineage-panel"
                             :class="{{active: lineageView === 'data'}}" @click="lineageView = 'data'">
@@ -2339,7 +2469,7 @@ def generate_html_template(
                     {data_lineage_content}
                 </div>
                 <div v-show="lineageView === 'object'" id="object-lineage-panel"
-                     class="empty-state object-lineage-notice" role="region" aria-labelledby="object-lineage-title">
+                     class="empty-state object-lineage-notice print-omit" role="region" aria-labelledby="object-lineage-title">
                     <h3 id="object-lineage-title">Object Lineage</h3>
                     <p>Object Lineage is available only in the interactive Migration Dashboard.</p>
                     <div class="prompt-head">
@@ -2435,7 +2565,8 @@ def generate_html_template(
                         Flagged Objects for Review
                     </h2>
                     <p style="color: #64748B; margin-bottom: 1rem;">Showing {flagged_count} objects that match naming patterns for temporary, deprecated, testing, or duplicate categories. These objects require review before migration.</p>
-                    <div class="export-buttons" style="margin-bottom: 1.5rem;">
+                    <p class="print-only print-note">This PDF lists the first {EXCLUSION_PRINT_ROWS_PER_CLASSIFICATION} objects of each classification. All {flagged_count} flagged objects are in the HTML report (multi_report.html) and its CSV and Excel downloads.</p>
+                    <div class="export-buttons print-omit" style="margin-bottom: 1.5rem;">
                         <button class="export-btn-compact" onclick="downloadCSV('all')">Download All (CSV)</button>
                         <button class="export-btn-compact" onclick="downloadExcel('all')">Download All (Excel)</button>
                         <button class="export-btn-compact" onclick="downloadCSV('temp')">Temporary/Staging (CSV)</button>
@@ -2445,7 +2576,7 @@ def generate_html_template(
                     </div>
                     
                     <!-- Search and Count -->
-                    <div style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap;">
+                    <div class="print-omit" style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap;">
                         <div style="display: flex; align-items: center; gap: 0.5rem;">
                             <input type="text" id="search-objects" placeholder="Search by name, schema, file..." onkeyup="filterExclusionTable()" style="padding: 0.5rem 1rem; border: 1px solid #E2E8F0; border-radius: 6px; font-size: 0.875rem; width: 280px;">
                         </div>
@@ -2462,7 +2593,7 @@ def generate_html_template(
                                     <th class="col-schema">
                                         <div class="th-content">
                                             <span>Schema</span>
-                                            <select id="schema-filter" onchange="filterExclusionTable()" class="column-filter">
+                                            <select id="schema-filter" onchange="filterExclusionTable()" class="column-filter print-omit">
                                                 <option value="all">All</option>
                                                 {generate_schema_filter_options(temp_staging, deprecated, testing)}
                                             </select>
@@ -2471,7 +2602,7 @@ def generate_html_template(
                                     <th class="col-type">
                                         <div class="th-content">
                                             <span>Type</span>
-                                            <select id="type-filter" onchange="filterExclusionTable()" class="column-filter">
+                                            <select id="type-filter" onchange="filterExclusionTable()" class="column-filter print-omit">
                                                 <option value="all">All</option>
                                                 {generate_type_filter_options(temp_staging, deprecated, testing)}
                                             </select>
@@ -2480,7 +2611,7 @@ def generate_html_template(
                                     <th class="col-reason">
                                         <div class="th-content">
                                             <span>Reason</span>
-                                            <select id="reason-filter" onchange="filterExclusionTable()" class="column-filter">
+                                            <select id="reason-filter" onchange="filterExclusionTable()" class="column-filter print-omit">
                                                 <option value="all">All</option>
                                                 {generate_reason_filter_options(temp_staging, deprecated, testing)}
                                             </select>
@@ -2489,7 +2620,7 @@ def generate_html_template(
                                     <th class="col-classification">
                                         <div class="th-content">
                                             <span>Classification</span>
-                                            <select id="classification-filter" onchange="filterExclusionTable()" class="column-filter">
+                                            <select id="classification-filter" onchange="filterExclusionTable()" class="column-filter print-omit">
                                                 <option value="all">All</option>
                                                 <option value="temp">Temp/Staging</option>
                                                 <option value="deprecated">Deprecated</option>
@@ -2510,7 +2641,7 @@ def generate_html_template(
         """
     else:
         exclusion_html = """
-            <div class="tab-content" :class="{active: activeTab === 'exclusion'}">
+            <div class="tab-content print-compact" :class="{active: activeTab === 'exclusion'}">
                 <h2 class="text-3xl font-bold text-sf-dark-blue mb-6 border-b-2 border-sf-blue pb-2">
                     Exclusion Report
                 </h2>
@@ -3192,7 +3323,7 @@ def generate_html_template(
         """
     else:
         dynamic_sql_html = """
-            <div class="tab-content" :class="{active: activeTab === 'dynamic-sql'}">
+            <div class="tab-content print-compact" :class="{active: activeTab === 'dynamic-sql'}">
                 <h2 class="text-3xl font-bold text-sf-dark-blue mb-6 border-b-2 border-sf-blue pb-2">
                     Dynamic SQL Report
                 </h2>
@@ -4837,10 +4968,22 @@ def generate_html_template(
             font-size: 0.85rem;
             vertical-align: middle;
         }}
+        /* The columns have fixed widths, so each filter sits under its label
+           and shrinks to its cell instead of spilling into the next one. */
         .exclusion-table th .th-content {{
             display: flex;
-            align-items: center;
-            gap: 0.5rem;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.35rem;
+        }}
+        .exclusion-table th .th-content > span {{
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .exclusion-table th .column-filter {{
+            min-width: 0;
+            max-width: 100%;
         }}
         .exclusion-table td {{
             padding: 0.75rem 0.75rem;
@@ -5104,11 +5247,15 @@ def generate_html_template(
                 break-before: page;
                 page-break-before: always;
             }}
+            /* A tab with no data prints its one-line empty state under the previous tab. */
+            .content > .tab-content.print-compact {{
+                break-before: auto;
+                page-break-before: auto;
+                margin-top: 32px;
+            }}
             .discovery-panel,
             #data-lineage-panel,
-            #object-lineage-panel,
-            #query-logs-analysis-panel,
-            #query-logs-extract-panel {{
+            #query-logs-analysis-panel {{
                 display: block !important;
             }}
             .wi-card {{
@@ -5121,12 +5268,30 @@ def generate_html_template(
         html.is-printing .content > .tab-content {{ display: block !important; }}
         html.is-printing .discovery-panel,
         html.is-printing #data-lineage-panel,
-        html.is-printing #object-lineage-panel,
-        html.is-printing #query-logs-analysis-panel,
-        html.is-printing #query-logs-extract-panel {{
+        html.is-printing #query-logs-analysis-panel {{
             display: block !important;
         }}
         
+        /* Business use cases readiness (scoped to #business-use-cases-report) */
+{business_use_cases_css}
+        /* The PDF is a summary: long lists print their first rows and a pointer to the
+           full list (.print-omit), and say so in a note only print shows (.print-only). */
+        .print-only {{ display: none !important; }}
+        @media print {{
+            .print-omit {{ display: none !important; }}
+            .print-only {{ display: block !important; }}
+        }}
+        html.is-printing .print-omit {{ display: none !important; }}
+        html.is-printing .print-only {{ display: block !important; }}
+        .print-note {{
+            margin: 8px 0 16px;
+            padding: 8px 12px;
+            border-left: 4px solid #29B5E8;
+            background: #F8FBFC;
+            color: #2A3342;
+            font-size: 0.85rem;
+        }}
+
         /* SSIS report styles (scoped to #ssis-report) */
 {ssis_css}
 
@@ -6214,6 +6379,17 @@ def generate_html_template(
                     <span>Migration Journey</span>
                 </a>
                 {discovery_nav_html}
+                <a class="nav-section" @click="selectSection(planningTabs, 'business-use-cases')">
+                    <span>Planning</span>
+                </a>
+                <div class="nav-group" v-show="planningTabs.includes(activeTab)">
+                    <a @click="activeTab = 'business-use-cases'" class="nav-link" data-tab="business-use-cases" :class="{{active: activeTab === 'business-use-cases'}}">
+                        Business use cases
+                    </a>
+                    <a @click="activeTab = 'pending-objects'" class="nav-link" data-tab="pending-objects" :class="{{active: activeTab === 'pending-objects'}}">
+                        Pending objects
+                    </a>
+                </div>
                 <a class="nav-section" @click="selectSection(codeEtlTabs, '{default_tab}')">
                     <span>Code/ETL Conversion</span>
                 </a>
@@ -6258,6 +6434,8 @@ def generate_html_template(
         <div class="content">
             {journey_overview_html}
             {discovery_html}
+            {business_use_cases_html}
+            {pending_objects_html}
             {overview_html}
             {render_conversion_issues_tab(conversion_issues_artifact)}
             {effort_tab_html}
@@ -6406,6 +6584,7 @@ def generate_html_template(
                     sourceDialect: {source_dialect_json},
                     // Must list every nav-link inside the group: the group is
                     // v-show'd on membership, so an omitted tab hides its own sub-nav.
+                    planningTabs: ['business-use-cases', 'pending-objects'],
                     codeEtlTabs: ['overview', 'conversion-issues', 'effort-estimates', 'waves', 'exclusion', 'dynamic-sql', 'etl'],
                     jsonData: dynamicSqlData,
                     searchQuery: '',
@@ -7728,9 +7907,21 @@ def main():
     )
 
     parser.add_argument(
+        '--use-cases-json',
+        type=Path,
+        help='Path to use-cases.json produced by `scai assessment waves use-cases`.'
+    )
+
+    parser.add_argument(
         '--conversion-issues-json',
         type=Path,
         help='Path to conversion-issues.json produced by `scai assessment conversion-issues`.'
+    )
+
+    parser.add_argument(
+        '--plugin-version',
+        help='Migration plugin version scai was given (its global --plugin-version). '
+             'The journey hero shows it as "AIM Plugin version {version}" when AIM_APP_VERSION is unset.'
     )
 
     parser.add_argument(
@@ -7811,6 +8002,11 @@ def main():
             if candidate.is_file():
                 args.data_lineage_json = candidate
                 print(f"Using data lineage JSON: {candidate}", file=sys.stderr)
+        if not args.use_cases_json:
+            candidate = args.project_dir / "artifacts" / "assessment" / "waves" / "use-cases.json"
+            if candidate.is_file():
+                args.use_cases_json = candidate
+                print(f"Using business use cases JSON: {candidate}", file=sys.stderr)
         if not args.effort_estimates_json:
             effort_dir = args.project_dir / "artifacts" / "assessment"
             if effort_dir.is_dir():
@@ -7847,8 +8043,8 @@ def main():
                     print(f"Using Informatica JSON: {args.informatica_json}", file=sys.stderr)
                     break
 
-    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.effort_estimates_json and not args.workload_insights_json and not args.data_lineage_json and not args.registry_dir:
-        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --effort-estimates-json, --workload-insights-json, --data-lineage-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
+    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.effort_estimates_json and not args.workload_insights_json and not args.data_lineage_json and not args.use_cases_json and not args.registry_dir:
+        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --effort-estimates-json, --workload-insights-json, --data-lineage-json, --use-cases-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
         print_usage()
         sys.exit(1)
 
@@ -7900,6 +8096,10 @@ def main():
             f"Error: Data Lineage JSON file not found: {explicit_data_lineage_json}",
             file=sys.stderr,
         )
+        sys.exit(1)
+
+    if args.use_cases_json and not args.use_cases_json.exists():
+        print(f"Error: Business use cases JSON file not found: {args.use_cases_json}", file=sys.stderr)
         sys.exit(1)
 
     # Registry-driven waves data. Two modes:
@@ -7963,8 +8163,10 @@ def main():
                 effort_estimates_json=getattr(args, 'effort_estimates_json', None),
                 workload_insights_json=getattr(args, 'workload_insights_json', None),
                 data_lineage_json=getattr(args, 'data_lineage_json', None),
+                use_cases_json=getattr(args, 'use_cases_json', None),
                 conversion_issues_json=getattr(args, 'conversion_issues_json', None),
                 project_dir=getattr(args, 'project_dir', None),
+                plugin_version=args.plugin_version,
             )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

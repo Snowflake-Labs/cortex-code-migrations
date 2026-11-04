@@ -4,6 +4,7 @@ Guide for the `verify` task. The machine routes an object here in two cases:
 
 - After conversion, when its type has no deploy/test path of its own — Oracle `PACKAGE`, `PACKAGE_BODY`, `TYPE`, `TYPE_BODY`, `SYNONYM`, and any other type the machine doesn't route onward.
 - After **deploy**, when a procedure or function has **no source side** (SnowConvert UDF helpers under `snowflake/UDF Helpers/`). Those objects are Snowflake-only: there is no source to seed or baseline against, so `createTests` / `runTests` will never pass.
+- In a **deploy-only** project (`configure()` shows `migration_scope: deploy_only`): procedures and functions after deploy, ETL and BTEQ after conversion. There is no source database, so never call `query_source`: verify in Snowflake only (Step 2's cases 2–6).
 
 There is no `scai` command for this step: **verify the object by whatever means the object allows**, then record the verdict.
 
