@@ -23,7 +23,8 @@ internal static class ReconciliationTests
       NativeFdmWithMatchingReportsPasses();
       ForeignDialectBleedClassification();
       IdentifierTests.DbtProjectNameIsAValidIdentifier();
-      Console.WriteLine("ReconciliationTests: 5 passed");
+      AssessmentBuilderTests.HasStatusReportsRegisteredStatuses();
+      Console.WriteLine("ReconciliationTests: 6 passed");
       return 0;
     }
     catch (Exception ex)
