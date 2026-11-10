@@ -40,7 +40,7 @@ Report what you checked and what you concluded. Do not claim more than the evide
 ## Step 3: Record the verdict
 
 - **Verified** → `transition_status(status="advance", task="verify", outcome="completed", where="id IN ('<object_id>')")`. This is the object's last task; it moves to done. After a fix-loop retry, the same named-input probe is the completion test.
-- **Not verifiable / genuinely out of scope** (e.g. the package was fully inlined and the standalone object will never exist in Snowflake) → say so, then mark it out of scope with `update_registry(field="inScope", status="false", objects="<object_id>")` once nothing depends on it.
+- **Not verifiable / genuinely out of scope** (e.g. the package was fully inlined and the standalone object will never exist in Snowflake) → say so, then `walk escalate` with asks offering `skip`. Taking it out of scope is a person's answer, which records who skipped it and why; `update_registry` refuses an agent's `inScope=false` on a started object.
 - **Converted output is wrong** (including an open invalidation whose named cases still mismatch) → `transition_status(status="advance", task="verify", outcome="failed", error="sql", where="id IN ('<object_id>')")`. The machine routes to `applyRules` / `fixCode`; do not load [DIAGNOSE_FIX.md](DIAGNOSE_FIX.md) by hand.
 
 Escalate to the user when you can't tell whether an object matters — a package whose logic went nowhere and whose callers are missing is a migration gap, not a completed object.

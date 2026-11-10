@@ -183,12 +183,10 @@ class WorkflowAnalysis:
 
     def calculate_complexity(self) -> Dict:
         severity_frequency: Dict[str, int] = defaultdict(int)
-        total_effort = 0.0
 
         for component in self.all_components:
             for issue in component.issues:
                 severity_frequency[issue.severity.capitalize()] += 1
-                total_effort += issue.effort_hours
 
         complexity_level = self._determine_complexity_level(
             self.total_ewi_count, dict(severity_frequency)
@@ -196,7 +194,6 @@ class WorkflowAnalysis:
 
         return {
             "severityFrequency": dict(severity_frequency),
-            "totalEffortHours": round(total_effort, 1),
             "complexity": complexity_level,
         }
 

@@ -267,7 +267,12 @@ For each project the fix wave touched, with a warehouse available:
 1. Drop/recreate the affected relations (or build with `--full-refresh`) so a failed build cannot leave a
    previous attempt's rows in place — stale relations make the tests pass against old data and report a
    fix that did not happen. Drop a `materialized='dynamic_table'` relation with `DROP DYNAMIC TABLE`.
-2. `dbt build --select tag:stabilization_test` then `dbt test --select tag:stabilization_test`.
+2. Build, then test, the touched project. `uv run --project` does not change the working directory, so
+   name the project and profiles explicitly, as the `dbt-fixer` and `dbt-test-gen` commands do:
+   ```bash
+   uv run --project {SKILL_DIR}/dbt-runtime dbt build --select tag:stabilization_test --project-dir {DBT_PROJECT_PATH} --profiles-dir ~/.dbt
+   uv run --project {SKILL_DIR}/dbt-runtime dbt test --select tag:stabilization_test --project-dir {DBT_PROJECT_PATH} --profiles-dir ~/.dbt
+   ```
 3. **Any FAILING assertion means the node is not fixed.** Send it back to a fix agent with the failing
    assertion text (bounded by the fixer's per-node attempt cap). Never resolve a failure by weakening,
    narrowing or deleting the assertion — the assertion is the specification derived from the source.

@@ -20,7 +20,7 @@ from typing import Any, NamedTuple
 from identify import (CONTAINER_ROLES, DERIVED, MISSING, MODEL, NO_SLOT,
                       NO_SLOT_DETAIL_VOCABULARY, RESIDUE, SOURCE, TABLE,
                       Identification, Port, TableSection)
-from source_sql import attach_source_sql
+from source_sql import attach_source_sql, select_list_names
 
 PLACEHOLDER_KIND = "UnsupportedTransformation"
 
@@ -3462,6 +3462,26 @@ class Emitter:
                             "port-reference resolution over the connector graph")
                 self.record_column_slots(name, f"element.OutputColumns[{oi}]", p, prov)
             oi += 1
+
+        # A Kettle Table input writes no <fields> (Kettle reads the layout from the database at
+        # start-up), so its stated query's SELECT list names the columns; refused, with a slot,
+        # when an item is `*` or cannot be named.
+        sql_attr = dispatch.get("output_columns_from_sql_attr") if dispatch else None
+        if sql_attr and not outputs:
+            sql_text = self.idn.node_of(el).get(sql_attr) or ""
+            cols, why = select_list_names(sql_text)
+            if cols:
+                for c in cols:
+                    outputs.append({"Name": c, "DataType": None})
+                self.slots.append(Slot(
+                    name, "element.OutputColumns", DERIVED, "output_columns_from_sql",
+                    f"{len(cols)} column(s) named by the SELECT list of the stated query "
+                    f"({self.idn.attr_ref(self.idn.node_of(el), sql_attr)}); the document "
+                    f"states no field list and no data types"))
+            else:
+                self.slots.append(Slot(
+                    name, "element.OutputColumns", MISSING, "output_columns_from_sql",
+                    f"the stated query does not name its columns: {why}"))
 
         node["element"] = {
             "$kind": ir_kind,

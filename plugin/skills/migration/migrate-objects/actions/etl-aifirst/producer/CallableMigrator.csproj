@@ -73,8 +73,8 @@
   <ItemGroup Condition="'$(UseEnginePackages)' == 'true'">
     <PackageReference Include="Artinsoft.Common.CoreAST" Version="$(EnginePackageVersion)" />
     <PackageReference Include="Mobilize.Common.Store.SqliteStorage" Version="$(EnginePackageVersion)" />
-    <PackageReference Include="Mobilize.Snow.CodeProcessor" Version="207.1.0" />
-    <PackageReference Include="Mobilize.Snow.CodeProcessor.Content" Version="207.1.0" />
+    <PackageReference Include="Mobilize.Snow.CodeProcessor" Version="$(EnginePackageVersion)" />
+    <PackageReference Include="Mobilize.Snow.CodeProcessor.Content" Version="$(EnginePackageVersion)" />
   </ItemGroup>
 
   <Target Name="ValidateEngineBin" BeforeTargets="AddEngineReferences" Condition="'$(UseEnginePackages)' != 'true'">

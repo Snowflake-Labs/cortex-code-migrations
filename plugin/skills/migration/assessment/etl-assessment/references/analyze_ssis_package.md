@@ -8,17 +8,14 @@
    - The `pending` command returns ONLY ONE package on purpose
    - Complete ALL steps for current package before requesting next
 
-2. **One writer, in this agent**
+2. **Read Every Package in Full**
+   - Write each analysis from that package's whole `scan-package` output. Never shorten, grep, or skip scan output, and never reuse sentences from another package's analysis: `update` refuses an analysis that repeats another package's.
+   - If you cannot finish every package, stop and return `error` with the number of packages still PENDING. Do not ask anyone to continue and do not mark a package DONE that you did not read. Every finished package is already saved, so a re-run resumes where you stopped; running out of context is never a reason to fan out.
+
+3. **One writer, in this agent**
    - Work through the packages yourself, serially. Never hand slices of them to sub-agents,
      Task calls, background jobs or scripted loops, and never run `update` in parallel: every
      `update` rewrites the whole assessment JSON, and parallel reviewers exhaust the machine's memory.
-
-3. **Context Window Management**
-   - If context window is approaching its limit before checkpoint, STOP immediately
-   - Ask user: "I've analyzed X packages. Context window is near limit. Would you like me to continue?"
-   - As a non-interactive sub-agent, where you cannot ask, stop the loop instead and return with the
-     classified and pending counts in `summary`. Every finished package is already saved, so a re-run
-     resumes from `pending`. Running out of context is never a reason to fan out.
 
 4. **Follow Steps Strictly**
 The instructions in the steps must be follow for each package strictly.
@@ -35,6 +32,10 @@ The instructions in the steps must be follow for each package strictly.
 ```
 
 ---
+
+## Batch mode (`review_mode: review-batch`)
+
+Work through `package_paths` in order instead of Step 1: for each path, run Step 2 and Step 3 with that path. Never run `pending`, which returns the first PENDING package of the whole assessment, including packages another batch is reviewing. When the last path is done, run `scai assessment etl summary` and confirm each of your paths shows DONE.
 
 ## Step 1: Get Pending Package
 

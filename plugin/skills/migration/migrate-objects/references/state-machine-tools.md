@@ -63,9 +63,11 @@ The authoritative contract is the `answerWith` field of
 |---|---|
 | `guidance` | Clears the task stamp so a re-dispatch proceeds. `reason` (the person's words) is required: a re-dispatch without it repeats the failure. |
 | `decompose` | Clears the task stamp, as `guidance` does. |
-| `skip` | Sets `inScope=false`. |
+| `skip` | A person's only, with `reason`: retires the object as skipped (`inScope=false` plus `extensions.skipped` = who, why, when, task), supersedes its claim and never marks it done. A live walker's object needs `reclaim=true`. `finish` reports it `skipped` and refuses `force`; counts report it as `objects_skipped`. Its dependents stay blocked. |
+| `skip_data` | Answers only a `migrateData` escalation. The table stays in scope with its structure deployed but no rows copied: `extensions.taskExclusions` excludes its `migrateData` and `validateData`, the walk continues, and each dependent gate follows its declared `onDependencyExcluded`. |
 | `needs_repair` | Leaves the object parked. It drops out of the open queue but still reads `needsHuman`, so it is never re-offered as work. |
 | `mark_done` | Records the decision only. Finishing is a separate, explicit `finish` call. |
+| `unvalidated` | At `captureBaseline`/`runTests` only, with `reason`, and never from a hail_mary: nothing about the object can be tested. Both read passed over, so `finish` needs no force; it counts as `unvalidated`, never tested. |
 
 Who may answer: an interactive session directly. Under `subagent_mode`, the
 autonomous parent may relay an explicit user reply from its own conversation,

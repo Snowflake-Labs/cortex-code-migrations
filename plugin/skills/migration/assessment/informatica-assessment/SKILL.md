@@ -112,7 +112,6 @@ This step is a sub workflow to analyze workflows individually. After this, conti
 - What to read from the XML files (MAPPING, TRANSFORMATION, SOURCE, TARGET elements)
 - How to classify workflows (with concrete criteria for each category)
 - Required analysis format and minimum lengths
-- Effort estimation guidelines
 
 ### Sub-Workflow: Analyze Each Workflow
 

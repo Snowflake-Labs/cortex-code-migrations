@@ -102,6 +102,7 @@ Classify the exact failure in this order:
 | Deploy/CREATE error on a `snowflakeSQL` target | Edit only the failing `snowflakeSQL` target. |
 | Comparison proves a converted-code defect | Repair the responsible canonical dbt or `snowflakeSQL` target. |
 | A wall-clock or nondeterministic column: listed in the unit's `clock_columns.json` (its `reasons` say `clock` or `nondeterministic: <element>`), written by a transform the platform table lists under `runtime.wall_clock_transforms` or `runtime.nondeterministic_transforms`, computed by an expression transform from one of its `runtime.wall_clock_functions` alone, or recorded by the seed as a load-time default (the YAML header says which) | Exclude it on that table entry with `source_columns: {mode: exclude, list: [...]}` (and `target_columns` when the target name differs); do not rewrite code. The ETL YAML has no `excluded_columns` key. Only columns on those lists may be excluded: a difference on any other column is a finding to classify, never a column to drop. |
+| Designed SSIS source failure whose message matches `expected_failure.message` | The runner already completed that source branch and continued comparison. Leave it. Do not stop with `needs-user`. |
 | No exact failure, conflicting evidence, or multiple faithful interpretations | Stop with `needs-user`; ask one concrete question before editing. |
 
 Name the root cause before making a change. If the evidence cannot distinguish

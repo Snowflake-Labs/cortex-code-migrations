@@ -42,6 +42,7 @@
 | `validationCustomTypeRules` | Array | No | Per-column cross-type mappings for L1 |
 | `queryModifiers` | Object | No | SQL hints for source queries (see migration reference). DV Jinja templates alias the source table as `src` or `rw` (not `t`), so check the template context before writing a hint that references the alias. |
 | `intervalHandling` | `"interval"` \| `"varchar"` | `"interval"` | Interval column mapping mode |
+| `hashMd5Function` | String | No | **Teradata only.** The `HASH_MD5` UDF L3 calls, as `DATABASE.HASH_MD5`, so one installation serves every source database (see [Teradata identifiers](#teradata-identifiers)) |
 
 \*At least one entry is required across `tables`, `views`, and `objects`.
 
@@ -57,7 +58,7 @@ qualified names before running.
 | `metricsValidation` | Boolean | `false` | L2 — compare aggregate statistics (opt-in) |
 | `rowValidation` | Boolean | `true` | L3 — row-level comparison |
 | `rowValidationMode` | String | `hybrid` | Only `hybrid` is supported (`row`/`cell` are rejected) |
-| `continueOnFailure` | Boolean | `true` | Continue validating remaining tables on failure |
+| `continueOnFailure` | Boolean | `true` | Continue to the next validation level (L1 → L2 → L3) after a failure. The orchestrator's default when the key is omitted is `false`. An L1 object-type `FAILURE` never continues |
 | `maxFailedRowsNumber` | Integer | No | Stop L3 after N mismatch rows per partition / early-stop threshold |
 | `excludeMetrics` | Boolean | No | `true` drops the `avg` / `sum` / `stddev` L2 metrics on both source and target (the orchestrator's default is `false`) |
 | `includeCountDistinct` | Boolean | No | `true` adds the `count_distinct` L2 metric on both source and target (default `false`; the most expensive L2 metric on large tables). See [L2 `count_distinct`](#l2-count_distinct-opt-in-includecountdistinct) |
@@ -223,7 +224,7 @@ Unlike `includeCountDistinct`, the key goes only in a `validationConfiguration` 
 | `columnSelectionList` | Columns to include (or exclude) |
 | `useColumnSelectionAsExcludeList` | When `true`, `columnSelectionList` is an exclusion list |
 | `columnMappings` | `{"source_col": "TARGET_COL"}` for renamed columns |
-| `indexColumnList` | Row-identity columns for L3. Snake_case alias: `index_column_list`. |
+| `indexColumnList` | Row-identity columns for L3. Snake_case alias: `index_column_list`. On SQL Server and Oracle, `validate_data(mode="setup")` fills it when it is unset: from IDENTITY / the primary key, then a unique index. A table with neither (a heap) gets every comparable column, reported in `applied_index_columns` with `source: all_columns`. L3 counts each key's rows on both sides, so full-row duplicates pass only when both sides hold the same number of copies. The key leaves LOB columns out, so such a heap also gets `validationConfiguration.includeLobColumnsInRowValidation: true`, unless the workflow sets that key itself: L3 hashes its LOBs instead of skipping a heap whose only other columns are LOBs. A heap that renames or selects columns (`columnMappings` / `columnSelectionList`, its own or inherited from `defaultTableConfiguration`), or has no comparable column, gets `rowValidation: false` instead. |
 | `targetIndexColumnList` | Target-side index columns when different. Snake_case alias: `target_index_column_list`. |
 | `columnNamesToPartitionBy` | Partition columns for large-table validation. The first column should be one the source can prune on (sort key, clustered index, Teradata level-1 RANGE_N column, partition key, Oracle IOT primary key, Snowflake / BigQuery clustering key, or BigQuery partition column / `_PARTITIONTIME`). A Teradata primary index does not prune range scans — prefer the RANGE_N column when present, or a composite `[partitioning column, PI column]` when the date is low-cardinality. BigQuery `_PARTITIONTIME` needs `columnMappings` in DV (it is not in the target schema). When omitted, a key is inferred for tables (never for views); an object that needs more than one partition with no key fails with an error naming `columnNamesToPartitionBy`. An explicit `[]` turns partitioning off (no inference, one partition whatever the size): never write it, here or in `defaultTableConfiguration`, unless the user explicitly asks for a single partition and accepts the performance cost. |
 | `targetPartitionSizeRows` / `targetPartitionSizeMb` | Per-table partition sizing (mutually exclusive) |
@@ -342,7 +343,7 @@ After L3 completes, partition results use standard codes:
 |------|---------|
 | `VALID` | No mismatches detected |
 | `INVALID` | Row-level mismatches found |
-| `POSSIBLE_MISMATCH` | Early stopping triggered before full comparison — treat as needing review, not automatic pass |
+| `POSSIBLE_MISMATCH` | Provisional row mismatch, written only when the table has `acceptedTransformations`. The cell drill-down then promotes the row to a mismatch or deletes it as explained by an accepted transformation. A row left in this state was not reconciled; treat it as needing review, not as a pass |
 
 ## Custom L2 metrics (`validationCustomMetrics`)
 
@@ -484,7 +485,7 @@ Align `source.databaseName` (when present) with the Oracle **service name** in w
 
 ## Teradata identifiers
 
-Teradata uses **database.table** naming — omit source `schemaName` (there is no schema layer). Align `databaseName` with `[connections.source.teradata].database` in worker TOML. Teradata L3 requires the `HASH_MD5` UDF in that database. Snowflake target identifiers still require `schemaName`.
+Teradata uses **database.table** naming — omit source `schemaName` (there is no schema layer). Align `databaseName` with `[connections.source.teradata].database` in worker TOML. Teradata L3 requires the `HASH_MD5` UDF in that database, unless top-level `hashMd5Function: DATABASE.HASH_MD5` names one installation for every database (two parts at most: Teradata has no schemas, so `DB.SCHEMA.HASH_MD5` is rejected). Snowflake target identifiers still require `schemaName`.
 
 ## Common edit scenarios
 

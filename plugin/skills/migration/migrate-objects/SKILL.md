@@ -64,7 +64,8 @@ file relative to the plugin's `skills/` directory, not the project. Every
 When the user decides an escalation, record it with `status='answer'` exactly as
 the `answerWith` field of `migration_status(mode="escalations")` shows.
 `guidance` (their words in `reason`, required) and `decompose` un-park the object
-for a re-run, `skip` takes it out of scope, `needs_repair` leaves it parked, and
+for a re-run, `skip` takes it out of scope, `skip_data` (a `migrateData` park
+only) keeps the table but copies no rows, `needs_repair` leaves it parked, and
 `mark_done` only records the decision: finish it through `finishObjects`.
 
 Errors that can hit any task, such as Cortex Code's `sql_execute` returning

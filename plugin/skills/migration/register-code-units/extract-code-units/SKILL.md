@@ -219,8 +219,11 @@ yes/no — extras already collected that on the setup/register card.
 >
 > 1. **SSIS** — `.dtsx` packages (converted natively)
 > 2. **Informatica Power Center** — XML repo export (converted natively)
-> 3. **Another ETL platform** — Talend, Alteryx, Informatica Cloud / IICS, DataStage,
->    Pentaho, Azure Data Factory, or something else (routes through AI-First)
+> 3. **Apache Hop or Pentaho**: Hop `.hpl` / `.hwf`, Pentaho `.ktr` / `.kjb` (AI-First
+>    approach, not native support: converted end to end, then validated against the
+>    original)
+> 4. **Another ETL platform**: Talend, Alteryx, Informatica Cloud / IICS, DataStage,
+>    Azure Data Factory, or something else (AI-First approach, not native support)
 
 - **SSIS / Informatica Power Center:** ask for the ETL folder path and
   run (do **not** pass `--overwrite` — the extracted SQL is already in `source/`):
@@ -239,10 +242,13 @@ yes/no — extras already collected that on the setup/register card.
   [add-code-units Step 3](../add-code-units/SKILL.md#if-the-import-times-out-or-runs-in-the-background)
   says before you go on.
 
-- **Another ETL platform:** these files never go through `scai code add` —
+- **Apache Hop or Pentaho / Another ETL platform:** these files never go through `scai code add` —
   the native `EtlFileClassifier` under `source/_etl/` only understands SSIS and
   Informatica PowerCenter. Instead:
-  1. Ask which platform. Accept a free-form name if it is not in the list. Store the
+  1. For **Apache Hop or Pentaho**, take the platform from the files (`.hpl` / `.hwf`
+     are `hop`, `.ktr` / `.kjb` are `pentaho`) or ask which one; when the folder holds
+     both, register each set separately. Otherwise ask which platform. Accept a free-form
+     name if it is not in the list. Store the
      lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `hop`, `adf`, …).
      For Hop, `hop` and `apacheHop` are the same intake: the helper vendors under
      `source/_etl_aifirst/hop/` and enumerates `units[].platform` as `apacheHop`.

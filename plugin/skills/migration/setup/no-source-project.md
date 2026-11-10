@@ -65,7 +65,6 @@ configure(
   sandbox_profile="<name>",
   no_source_connection=true,
   snowflake_connection="<snowflake>",
-  snowflake_database="<first_target_db>",
   ensure_target_database=true
 )
 ```

@@ -56,5 +56,5 @@ No code change. dbt refreshes the table each time the project runs. Running it n
 ## Key Points
 
 - Never `TRUNCATE`, `INSERT`, `UPDATE`, or `MERGE` into a Dynamic Table, in fixes or in test setup. Seed its source tables instead; the next `dbt run` refreshes it.
-- To rebuild it from scratch, use `dbt run --full-refresh` or `DROP DYNAMIC TABLE`; `DROP TABLE` does not drop a Dynamic Table.
+- To rebuild it from scratch, use `uv run --project {SKILL_DIR}/dbt-runtime dbt run --full-refresh --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt` or `DROP DYNAMIC TABLE`; `DROP TABLE` does not drop a Dynamic Table.
 - Do **NOT** remove the FDM comment.

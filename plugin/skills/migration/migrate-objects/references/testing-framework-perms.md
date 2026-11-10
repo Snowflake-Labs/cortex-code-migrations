@@ -107,6 +107,16 @@ Testing then creates no database. A procedure sandbox creates its schemas in the
 
 A `restore_from=sandbox` snapshot needs a second such database per converted database, named under `testing_sandbox_snapshot_databases` in the same shape; without it that request is refused.
 
+### Shared lookup databases: `testing_reference_databases`
+
+A procedure that only reads some converted databases (shared lookup data, too large to copy per object) can read them in place. List their converted database names in `.scai/settings/test_config.yaml`:
+
+```yaml
+testing_reference_databases: [adp, viewpoint]
+```
+
+Each one needs an entry on both sides of `.scai/bindings/database-bindings.yaml`, which names the shared database it reads. A procedure sandbox binds the token to that database instead of copying it: no database, schema or table is created, cloned, seeded, restored or dropped there, and the sandbox's write guards refuse SQL that changes it. Setup refuses an object that deploys into a reference database itself, or whose reference shares a database with one it copies. A test case whose procedure writes a reference database fails with `procedure writes reference catalog <X>; it needs private isolation`: leave that database out of the list for it.
+
 ## Source-side privileges by dialect
 
 When `scai test capture` later fails with `permission denied on EXECUTE` or `SELECT permission denied` errors, the source role is missing privileges. The testing framework needs to (a) execute every procedure under test and (b) read every table those procedures touch.

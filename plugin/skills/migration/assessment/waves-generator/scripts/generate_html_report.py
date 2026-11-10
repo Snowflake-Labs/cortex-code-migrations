@@ -48,6 +48,7 @@ import sys
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
+from snowconvert_reports.issue_docs import ISSUE_DOCUMENTATION_URL_JS
 from snowconvert_reports.loaders.waves_json import WavesJsonAdapter
 
 
@@ -2872,32 +2873,7 @@ def generate_html_content(graph_summary, cycles, excluded_edges, waves_data,
             return div.innerHTML;
         }}
 
-        // Keep in step with ISSUE_DOC_FAMILY in dashboard-ui snowconvertIssueDescriptions.ts.
-        const ISSUE_DOCS_ROOT = 'https://docs.snowflake.com/en/migrations/aim-for-datawarehouses/code-conversion/issues-and-troubleshooting';
-        const DIALECT_PAGE_STEM = {{
-            BQ: 'bigquery', DB: 'db2', HV: 'hive', INF: 'informatica', OR: 'oracle',
-            PG: 'postgresql', RS: 'redshift', SPK: 'spark', SSIS: 'ssis', SY: 'sybase',
-            TD: 'teradata', TS: 'sqlServer', VT: 'vertica',
-        }};
-        const ISSUE_DOC_FAMILY = {{
-            EWI: {{ folder: 'conversion-issues', suffix: 'EWI', dialects: null }},
-            FDM: {{ folder: 'functional-difference', suffix: 'FDM', dialects: null }},
-            PRF: {{ folder: 'performance-review', suffix: 'PRF', dialects: ['OR', 'TS'] }},
-            OOS: {{ folder: 'out-of-scope', suffix: 'OOS', dialects: [] }},
-        }};
-
-        function issueDocumentationUrl(code) {{
-            const match = /^SSC-(EWI|FDM|PRF|OOS)-([A-Z]*)\\d+$/i.exec(String(code || '').trim());
-            if (!match) return '';
-            const family = ISSUE_DOC_FAMILY[match[1].toUpperCase()];
-            if (!family) return '';
-            const infix = match[2].toUpperCase();
-            const stem = DIALECT_PAGE_STEM[infix];
-            const hasDialectPage = stem && (family.dialects === null || family.dialects.indexOf(infix) !== -1);
-            const page = hasDialectPage ? stem + family.suffix : 'general' + family.suffix;
-            return ISSUE_DOCS_ROOT + '/' + family.folder + '/' + page + '#' + String(code).trim().toLowerCase();
-        }}
-
+{ISSUE_DOCUMENTATION_URL_JS}
         function normalizeObjectNameForMatch(name) {{
             return String(name || '')
                 .replace(/[\\[\\]"]/g, '')

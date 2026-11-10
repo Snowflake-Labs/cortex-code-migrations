@@ -56,4 +56,4 @@ Do NOT iterate blindly. Escalate to the user when:
 | Same error persists | Same primary error for 3 consecutive iterations |
 | Errors churning | Errors keep changing but never resolve after 5 total iterations |
 
-On escalation, present iteration history and offer: provide guidance, decompose and retry, skip, mark as needs human repair, or mark done.
+On escalation, present iteration history and offer: provide guidance, decompose and retry, skip (remove the object from the migration), mark as needs human repair, or mark done. For a table parked on `migrateData`, also offer skip data (`skip_data`): keep the table and deploy its structure, but do not copy its rows.

@@ -90,8 +90,8 @@ ETL in this project reaches convert through one of two roots, kept apart on purp
   stated platform on `extensions.sourcePlatform`. Written by the register skills'
   `import_aifirst_etl.py` helper (lossless copy + enumeration) and the MCP
   `create_registry_unit` tool the register skill calls once per source document
-  (Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory,
-  or anything else the user names).
+  (Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data
+  Factory, or anything else the user names).
 
 **Read both.** Check `source/_etl/` for a native platform, then ask the Code Unit
 Registry for AI-First platforms:
@@ -141,8 +141,8 @@ etl` rows with `extensions.sourcePlatform` set, set `<AIFIRST_ETL_PATH> =
 source/_etl_aifirst/` and keep the returned rows for Step 4.5: each row carries the
 `id`, the platform on `extensions.sourcePlatform`, and the vendored source at
 `files.source.path`. Common platforms you will see include **Talend**, **Alteryx**
-(`.yxmd`), **Informatica Cloud / IICS**, **DataStage** (`.dsx`), **Pentaho** (`.ktr`
-/ `.kjb`), and **Azure Data Factory**, but any other name the user typed is valid —
+(`.yxmd`), **Informatica Cloud / IICS**, **DataStage** (`.dsx`), **Apache Hop** (`.hpl`
+/ `.hwf`), **Pentaho** (`.ktr` / `.kjb`), and **Azure Data Factory**, but any other name the user typed is valid —
 Step 4.5 passes it through.
 
 If the registry has no AI-First ETL rows but the user tells you mid-conversation that
@@ -192,7 +192,7 @@ After the user answers:
 
 ### Step 4: Run Conversion
 
-Before running, tell the user what the conversion will cover: the SQL and native ETL already in the project (`source/`, plus `source/_etl/` when present), Power BI repointing if `PBIT_PATH` was set, and Tableau repointing if `TABLEAU_PATH` was set. Tableau-only (empty `source/`, `TABLEAU_PATH` set) is valid. On a SqlServer project, also tell them convert will write `.scai/bindings/database-bindings.yaml` by default so each source catalog maps to a Snowflake database — they can opt out before you run if they want the older single-database convert. On other dialects, say nothing about bindings. AI-First ETL under `source/_etl_aifirst/` is **not** part of `scai code convert` — Step 4.5 handles it independently.
+Before running, tell the user what the conversion will cover: the SQL and native ETL already in the project (`source/`, plus `source/_etl/` when present), Power BI repointing if `PBIT_PATH` was set, and Tableau repointing if `TABLEAU_PATH` was set. Tableau-only (empty `source/`, `TABLEAU_PATH` set) is valid. On a SqlServer project, also tell them a full-migration convert writes `.scai/bindings/database-bindings.yaml` so each source catalog maps to a Snowflake database. The opt-out is a code-conversion-only project, or `--dbt`. A stored false on a SqlServer full-migration project is overwritten. On other dialects, say nothing about bindings. AI-First ETL under `source/_etl_aifirst/` is **not** part of `scai code convert` — Step 4.5 handles it independently.
 
 > **Skip `scai code convert` entirely** when there is nothing native to run against:
 > `source/` has no `.sql`, `source/_etl/` is missing or empty, `PBIT_PATH` is unset,
@@ -209,13 +209,13 @@ scai code convert <SETTINGS_FLAGS> --json
 
 `--json` is always required so you can parse the result envelope. Substitute `<SETTINGS_FLAGS>` with the confirmed flags from Step 3.6 (or omit the token when empty). Then append one flag per decision already recorded in the steps above — nothing else. Do **not** pass `--etl-replatform-sources-path`; ETL already lives under `source/_etl/` from register.
 
-Append `--generate-source-bindable-format --generate-snowflake-bindable-format` (**default on / opt-out**) **only when `source_language` from `configure()` is SqlServer** (compare case-insensitively), and never on the dbt repointing path — they are invalid alongside `--dbt` and the engine rejects the command (see `dbt/SKILL.md` Step 2). They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Omit both flags when the user explicitly opts out. Deploy stays legacy-safe: projects converted earlier, with no bindings file, still use `-d snowflake_database`. Bare `scai code convert` without these flags (engine default) is also opt-out.
+On a SqlServer full-migration project (`source_language` from `configure()`, compared case-insensitively), append `--generate-source-bindable-format --generate-snowflake-bindable-format`, whatever `subagent_mode` says. They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Leave them off on a code-conversion-only project, on any other dialect, and on the dbt repointing path — they are invalid alongside `--dbt` and the engine rejects the command (see `dbt/SKILL.md` Step 2). Leaving them off is not an opt-out on a SqlServer full-migration project: `scai code convert` still emits bindable artifacts there, and a stored false is overwritten. Deploy stays legacy-safe: projects converted earlier, with no bindings file, still use `-d snowflake_database`. A convert that wrote an unedited bindings file restores catalog tokens in the SQL on deploy, with or without `-d`. The connection stays on the database passed with `-d` when that flag is set. An edited bindings file requires `--database-bindings` and cannot be combined with `-d`.
 
 Only SQL Server's conversion settings define the bindable-format flags today; on every other dialect scai rejects them (`CVT0013`, "Unrecognized option"). So on a non-SQL Server project, leave them off and say nothing about them — it is not an opt-out and not a scai version problem. If you are unsure whether this dialect supports them, `scai code convert --list-settings --json` lists the settings it accepts. If a convert ever fails with `CVT0013` on one of these flags, rerun without them and do **not** tell the user their scai is outdated or unsupported — the flag is simply not defined for their dialect.
 
 | Append | When |
 |--------|------|
-| `--generate-source-bindable-format --generate-snowflake-bindable-format` | `source_language` is SqlServer (interactive and `subagent_mode`). Skip on explicit opt-out, on any other dialect, and on the `--dbt` path, where scai rejects them. |
+| `--generate-source-bindable-format --generate-snowflake-bindable-format` | `source_language` is SqlServer and the project is a full migration (interactive and `subagent_mode`). Skip for a code-conversion-only project, on any other dialect, and on the `--dbt` path, where scai rejects them. A stored false is overwritten on a SqlServer full-migration convert. |
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 2 (Informatica target is Snowflake Scripting) |
 | `--ssis-to-snowflake-scripting` | `SSIS_SCRIPTING_MODE` was set in Step 2 (SSIS target is Snowflake Scripting) |
 | `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt, or Informatica dbt) |
@@ -235,10 +235,17 @@ one or more `kind: etl` rows with `extensions.sourcePlatform` set. Load
 `./etl-aifirst/MIGRATE.md` and follow it once per registered AI-First ETL unit,
 passing that unit's `id`, `extensions.sourcePlatform`, and `files.source.path` from
 the Step 2 `query_registry` response. It routes each platform (Talend, Alteryx,
-Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory, or another name
-the user typed) through the AI-First convert action instead of the native engine,
+Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory, or another
+name the user typed) through the AI-First convert action instead of the native engine,
 reports its exit code, and returns here when done. It does not touch the SQL
 conversion Step 4 just produced.
+
+Before the first AI-First unit, tell the user plainly that these platforms are
+converted through the AI-First approach, not natively supported like SSIS and
+Informatica PowerCenter. AI-First is a model-assisted attempt at an end-to-end
+conversion, not native support: coverage is narrower than SSIS and Informatica
+PowerCenter, steps with no SnowConvert equivalent are written by a model or flagged
+for review, and each converted job must pass validation before it is trusted.
 
 For an AI-First-ETL-only project (Step 4 was skipped), Step 4.5 is the whole
 conversion — do not treat the missing native envelope as an error.
@@ -349,7 +356,7 @@ snowflake/
 │       ├── procedure/
 │       └── function/
 └── _etl/                              # Converted ETL code — both native (SSIS / Informatica PowerCenter)
-                                       # and AI-First (Talend / Alteryx / IICS / DataStage / Pentaho / ADF /…)
+                                       # and AI-First (Talend / Alteryx / IICS / DataStage / Hop / Pentaho / ADF /…)
                                        # land here once Step 4 and Step 4.5 finish, so downstream skills
                                        # find every converted package under one root
     └── <package_name>/
@@ -370,7 +377,7 @@ snowflake/
     └── conversion-reports.zip
 source/
 └── _etl_aifirst/                       # AI-First ETL inputs, one directory per platform, written by register
-    └── <platform>/                     # (Talend, Alteryx, IICS, DataStage, Pentaho, ADF, …)
+    └── <platform>/                     # (Talend, Alteryx, IICS, DataStage, Hop, Pentaho, ADF, …)
 reports/
 └── AiFirstIssues/                     # Present only after Step 4.5 (AI-First "Something else" ETL path)
     └── <package_name>/

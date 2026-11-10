@@ -20,7 +20,7 @@ Use this when a customer asks about **protecting the source**, **bounded migrati
 
 1. Prefer explaining rate limits **before** lowering `max_parallel_tasks` globally or stopping workers — workers can stay up while matching tasks wait in `pending`.
 2. `TARGET_CONCURRENT_TASKS` is a **target**, not a hard ceiling — eligibility is snapshot-based, so many workers polling together can overshoot before claims settle. Worst case is roughly **2× the target** (target `5` → up to ~10 executing). Set the target **below** a hard source limit with headroom for your worker count. **`TARGET_CONCURRENT_TASKS = 0`** is the one exact value — it reliably pauses matching scopes.
-3. Enforcement applies to **worker (DEA) single-task pulls** only — not orchestrator batch pulls. Workers with `max_parallel_tasks > 1` batch-fetch bypass rate limiting; keep default single-task fetch when using limits.
+3. Enforcement applies to **worker (DEA) single-task pulls** only — not orchestrator batch pulls (`PULL_MANY_TASKS`). Every worker thread pulls one task at a time (`get_tasks(max_tasks=1)` → `PULL_SINGLE_TASK`) whatever `max_parallel_tasks` is, so every worker pull is rate-limited. A higher `max_parallel_tasks` adds concurrent pullers, which widens the overshoot in point 2.
 4. Insert rules with SQL in a Snowflake session (admin on migration metadata schema):
 
 ```sql

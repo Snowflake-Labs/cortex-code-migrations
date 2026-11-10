@@ -51,10 +51,12 @@ macOS and Linux:
 ```
 
 ### What to Look For
+Do not state effort hours in the summary. The Effort Estimates calculator owns effort, and the report shows it on the Effort Estimates tab.
+
 Focus on the most impactful signals from the summary command output:
 
 **1) Workload Overview**
-- Total workflow count, mapping count, total components, estimated effort hours
+- Total workflow count, mapping count, total components
 - Business domains covered (e.g., finance, sales, operations, product)
 - Major purposes (e.g., "ETL platform covering AR processing, GL aggregations, party management")
 
@@ -129,7 +131,7 @@ Use this structure with visual sections so it can be embedded into the HTML repo
   <div style="background: #f0f9ff; border-left: 4px solid #29B5E8; border-radius: 8px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;">
     <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Workload Overview</h3>
     <p style="font-size: 0.9rem; color: #334155; line-height: 1.7; margin: 0;">
-      [Short narrative paragraph with <strong>bold key numbers</strong>: workflow count, total mappings, total components, estimated effort hours, and 1-2 sentences about what business domains/processes this workload covers.]
+      [Short narrative paragraph with <strong>bold key numbers</strong>: workflow count, total mappings, total components, and 1-2 sentences about what business domains/processes this workload covers.]
     </p>
   </div>
 

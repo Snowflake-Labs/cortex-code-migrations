@@ -77,6 +77,17 @@
     return hasDynamicSqlColumn(row) ? row.dynamic_sql_count : 0;
   }
 
+  /** View EWI Breakdown's Dynamic SQL line for an applied row: its objects on that
+   *  column at its applied rate. Null with no objects there; hours null with no rate. */
+  function dynamicSqlBreakdown(row) {
+    const count = dynamicSqlCount(row);
+    if (count <= 0) {
+      return null;
+    }
+    const rate = row.custom_dynamic_sql_unit_hours;
+    return { count: count, hours: isNumber(rate) ? round4(count * rate) : null };
+  }
+
   /** Every object a banded row prices: its band counts plus its Dynamic SQL column. */
   function bandedObjectCount(row) {
     return numberOr(row.band_counts.total, 0) + dynamicSqlCount(row);
@@ -819,6 +830,7 @@
     validateRateInput: validateRateInput,
     isBandedRow: isBandedRow,
     hasDynamicSqlColumn: hasDynamicSqlColumn,
+    dynamicSqlBreakdown: dynamicSqlBreakdown,
     editableBands: editableBands,
     priceBands: priceBands,
     snowflakeRateFor: snowflakeRateFor,

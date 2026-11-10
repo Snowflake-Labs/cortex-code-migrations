@@ -159,13 +159,12 @@ To replace a name, `scai profile remove <name>` first.
 
 4. `scai profile set-default <name>`
 
-5. Persist profile **and** connections, the first target as
-   `snowflake_database`:
+5. Persist profile **and** connections, never `snowflake_database`
+   (the bindings file holds the targets):
 
 ```
 configure(sandbox_profile="<name>", source_connection="<source>",
-  snowflake_connection="<snowflake>", snowflake_database="<first_target_db>",
-  ensure_target_database=true)
+  snowflake_connection="<snowflake>", ensure_target_database=true)
 ```
 
 ## Deploy-only

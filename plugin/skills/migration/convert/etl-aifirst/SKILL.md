@@ -297,7 +297,9 @@ where scai fills `{launchers_dir}`; never point it at a repository path. The
 block goes in the **project** `.scai/settings/test_config.yaml` (full recipe in
 `etl-seed` Step 0b). `HOP_HOME` (or `HOP_RUN`), `HOP_JAVA_HOME` (Java 17+ for
 Hop 2.x), `HOP_PROJECT` and `HOP_ENVIRONMENT` go under `env:` because the
-child does not inherit the harness environment.
+child does not inherit the harness environment. For Pentaho the launcher is
+`pentaho_run_launcher.py` and validate runs with `--platform pentaho`
+(`etl-seed` Step 0b has both blocks).
 
 ## Writing lineage into the Code Unit Registry
 
@@ -327,10 +329,10 @@ dependencies do — that report is rebuilt generically from any unit's
    - Exactly one match: that entry's `id` is the dependency.
    - Zero matches: use the bare table name as `id` and set `"isMissing": true`. Do not drop it.
    - More than one match: do not guess; escalate.
-3. **Hop writes.** `lineage.json` does not measure Hop sinks (TableOutput,
-   Insert/Update, Update, Delete, Synchronize after merge, Dimension and
-   Combination lookup/update). If `files.source.path` is a Hop `.hpl` / `.hwf`,
-   also run:
+3. **Hop and Pentaho writes.** `lineage.json` does not measure Hop or Pentaho
+   sinks (TableOutput, Insert/Update, Update, Delete, Synchronize after merge,
+   Dimension and Combination lookup/update). If `files.source.path` is a Hop
+   `.hpl` / `.hwf` or a Pentaho `.ktr`, also run:
 
    ```bash
    python3 <action>/scripts/hop_write_deps.py --source <files.source.path>

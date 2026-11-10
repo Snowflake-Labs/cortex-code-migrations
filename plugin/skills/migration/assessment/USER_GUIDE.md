@@ -83,7 +83,7 @@ Start fresh analysis (don't reuse previous results)
 Every assessment finds the workload's business use cases without asking for a
 wave size or priorities. Each use case becomes one wave, and its objects deploy
 in dependency order. The top three are shown in chat; the dashboard's
-**Planning** section lists every use case with its narrative, counts and
+**Wave Planning** section (Preview) lists every use case with its narrative, counts and
 deployment stages.
 
 **Start with a different use case:**
@@ -250,7 +250,7 @@ The skill maintains context, so you don't need to start over.
 
 Before presenting final results, the skill starts or reuses the **live
 dashboard** and opens `/assessment`. A saved dashboard opt-out is respected.
-The skill still writes `assessment/multi_report.html` as a shareable export and
+The skill still writes `assessment/{customer}_migration_plan_{timestamp}.html` as a shareable export and
 opens it as the fallback when the dashboard is disabled or unavailable.
 
 The generated HTML report opens on the **Migration Journey** page. For SQL Server,

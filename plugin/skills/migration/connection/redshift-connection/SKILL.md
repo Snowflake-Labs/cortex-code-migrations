@@ -30,8 +30,8 @@ Tell the user:
 | `--database` | Yes | Database name to connect to |
 | `--region` | Yes | AWS region (e.g., `us-west-2`) |
 | `--user` | Yes | Redshift database user |
-| `--access-key-id` | Yes | AWS Access Key ID |
-| `--secret-access-key` | Yes | AWS Secret Access Key |
+| `--access-key-id` | Yes | AWS Access Key ID (prompted securely) |
+| `--secret-access-key` | Yes | AWS Secret Access Key (prompted securely) |
 
 ### IAM Serverless
 
@@ -42,8 +42,8 @@ Tell the user:
 | `--workgroup` | Yes | Redshift Serverless workgroup name |
 | `--database` | Yes | Database name to connect to |
 | `--region` | Yes | AWS region (e.g., `us-west-2`) |
-| `--access-key-id` | Yes | AWS Access Key ID |
-| `--secret-access-key` | Yes | AWS Secret Access Key |
+| `--access-key-id` | Yes | AWS Access Key ID (prompted securely) |
+| `--secret-access-key` | Yes | AWS Secret Access Key (prompted securely) |
 
 ### Standard Auth
 
@@ -55,7 +55,7 @@ Tell the user:
 | `--port` | No | Port number (default: 5439) |
 | `--database` | Yes | Database name to connect to |
 | `--user` | Yes | Redshift username |
-| `--password` | Yes | Redshift password |
+| `--password` | Yes | Redshift password (prompted securely) |
 
 ## Workflow
 
@@ -66,9 +66,10 @@ Ask the user:
 > "I need the following to connect to Redshift:
 > - **Cluster ID** or **Workgroup** (depending on auth method)
 > - **Database name**
-> - **AWS credentials** (for IAM auth) or **username/password** (for standard auth)
+> - **Region** (IAM auth) or **Host** (standard auth)
+> - **Username** (provisioned cluster and standard auth)
 >
-> How would you like to provide these?"
+> How would you like to provide these? For security, enter the AWS keys or the password only in the masked prompt; do not send it in chat."
 
 Options:
 1. **1Password** - Credentials stored in 1Password vault
@@ -89,7 +90,10 @@ Options:
 scai connection add-redshift
 ```
 
-**IAM Provisioned Cluster (inline):**
+The CLI prompts securely for the secrets these commands leave out: `--access-key-id` and
+`--secret-access-key` for IAM auth, `--password` for standard auth. Never include them in the command line.
+
+**IAM Provisioned Cluster:**
 ```bash
 scai connection add-redshift \
   -s <CONNECTION_NAME> \
@@ -97,24 +101,20 @@ scai connection add-redshift \
   --user <USER> \
   --cluster-id <CLUSTER_ID> \
   --database <DATABASE> \
-  --region <REGION> \
-  --access-key-id <ACCESS_KEY_ID> \
-  --secret-access-key <SECRET_ACCESS_KEY>
+  --region <REGION>
 ```
 
-**IAM Serverless (inline):**
+**IAM Serverless:**
 ```bash
 scai connection add-redshift \
   -s <CONNECTION_NAME> \
   --auth iam-serverless \
   --workgroup <WORKGROUP> \
   --database <DATABASE> \
-  --region <REGION> \
-  --access-key-id <ACCESS_KEY_ID> \
-  --secret-access-key <SECRET_ACCESS_KEY>
+  --region <REGION>
 ```
 
-**Standard auth (inline):**
+**Standard auth:**
 ```bash
 scai connection add-redshift \
   -s <CONNECTION_NAME> \
@@ -122,9 +122,14 @@ scai connection add-redshift \
   --host <HOST> \
   --port 5439 \
   --database <DATABASE> \
-  --user <USERNAME> \
-  --password <PASSWORD>
+  --user <USERNAME>
 ```
+
+When your `bash` has no terminal (the desktop app), that prompt cannot be answered. Get each secret with the
+app's `request_secret` tool and follow the app's rule for filling it into the command: the secret goes in a
+variable that opens the command, and the flag takes `"$VAR"`. A `<secret>` placeholder written as the flag's
+own value is passed through as literal text, saved to `redshift.toml`, and every test then fails as an invalid
+security token. Never ask for a secret in chat.
 
 Connections require TLS by default for the connection test (`--ssl-mode Require`);
 pass another Npgsql SSL mode only if the endpoint genuinely does not accept TLS.
@@ -162,17 +167,17 @@ Then return to the calling skill.
 ## Security Rules
 
 - **NEVER** log or display secrets (passwords, secret access keys) in plain text
-- **NEVER** include secrets in command-line arguments that might be logged
-- Use interactive mode or credential managers (1Password) to avoid secret exposure
+- **NEVER** include secrets in command-line arguments that might be logged. Omit `--password`, `--access-key-id` and `--secret-access-key`; the CLI prompts for them securely in an interactive terminal.
+- A credential manager helps only when it resolves the value inside the same command (1Password `op run`). Storing a secret elsewhere first does not, because `scai` reads credentials only from its own files under `~/.snowflake/scai/connections/`.
 
 ## Quick Reference
 
 | Action | Command |
 |--------|---------|
 | Add connection (interactive) | `scai connection add-redshift` |
-| Add IAM provisioned | `scai connection add-redshift -s NAME --auth iam-provisioned-cluster --cluster-id CLUSTER --database DB --region REGION --user USER --access-key-id KEY --secret-access-key SECRET` |
-| Add IAM serverless | `scai connection add-redshift -s NAME --auth iam-serverless --workgroup WG --database DB --region REGION --access-key-id KEY --secret-access-key SECRET` |
-| Add standard auth | `scai connection add-redshift -s NAME --auth standard --host HOST --database DB --user USER --password PASS` |
+| Add IAM provisioned | `scai connection add-redshift -s NAME --auth iam-provisioned-cluster --cluster-id CLUSTER --database DB --region REGION --user USER` |
+| Add IAM serverless | `scai connection add-redshift -s NAME --auth iam-serverless --workgroup WG --database DB --region REGION` |
+| Add standard auth | `scai connection add-redshift -s NAME --auth standard --host HOST --database DB --user USER` |
 | Test connection | `configure(source_connection=NAME)` (runs the test internally) |
 | List connections | `scai connection list -l redshift --json` |
 | Set default | `scai connection set-default -l redshift -s NAME` |

@@ -54,6 +54,16 @@ class TablesTests(unittest.TestCase):
         self.assertIn('CREATE TABLE IF NOT EXISTS DB.SCH.IN1 (\n    ID NUMBER\n);', ddl)
         self.assertIn('-- OUT.O1: no columns recorded', ddl)
 
+    def test_render_ddl_header_names_ddl_source(self):
+        inputs = ('input',)
+        tables.update(self.path, 'LIB.IN1', 'convert', [{'name': 'ID', 'type': 'NUMBER'}], 'user_file')
+        self.assertTrue(tables.render_ddl(self.path, inputs).startswith('-- DDL source: user\n'))
+        tables.update(self.path, 'LIB.IN1', 'convert', [{'name': 'ID', 'type': 'NUMBER'}], 'inferred')
+        self.assertTrue(tables.render_ddl(self.path, inputs).startswith('-- DDL source: inferred\n'))
+        self.assertTrue(tables.render_ddl(self.path).startswith('-- DDL source: inferred\n'))  # OUT.O1 has none
+        tables.update(self.path, 'OUT.O1', 'convert', [{'name': 'ID', 'type': 'NUMBER'}], 'live')
+        self.assertTrue(tables.render_ddl(self.path).startswith('-- DDL source: mixed\n'))
+
     def test_cli_check_stale_exit_code(self):
         self.assertEqual(tables.main(['check-stale', str(self.path), str(self.dir)]), 0)
         json.loads(json.dumps(tables.load(self.path)))  # valid JSON round-trip

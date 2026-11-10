@@ -48,6 +48,10 @@ Detailed reference for Redshift connection options, authentication methods, and 
 
 ## Authentication Methods
 
+The commands below leave out `--access-key-id`, `--secret-access-key` and `--password`: the CLI prompts
+for them in a masked field. Never put a secret, or a `<secret>` placeholder, on the command line (see Step 3
+of `../SKILL.md`).
+
 ### IAM Provisioned Cluster (Recommended)
 
 Uses AWS IAM credentials to authenticate with a provisioned Redshift cluster.
@@ -59,9 +63,7 @@ scai connection add-redshift \
   --user myuser \
   --cluster-id my-cluster \
   --database mydb \
-  --region us-west-2 \
-  --access-key-id AKIAXXXXXXXXXXXXXXXX \
-  --secret-access-key <SECRET>
+  --region us-west-2
 ```
 
 **When to use:**
@@ -83,9 +85,7 @@ scai connection add-redshift \
   --auth iam-serverless \
   --workgroup my-workgroup \
   --database mydb \
-  --region us-west-2 \
-  --access-key-id AKIAXXXXXXXXXXXXXXXX \
-  --secret-access-key <SECRET>
+  --region us-west-2
 ```
 
 **When to use:**
@@ -104,8 +104,7 @@ scai connection add-redshift \
   --host my-cluster.xxxxxxxxxxxx.us-west-2.redshift.amazonaws.com \
   --port 5439 \
   --database mydb \
-  --user myuser \
-  --password <PASSWORD>
+  --user myuser
 ```
 
 Add `--ssl-mode <MODE>` to override the default `Require`; the stored value is the

@@ -33,7 +33,10 @@ This sub-skill expects:
 
 ## Prerequisites
 
-- `dbt-snowflake` installed and available on PATH
+- `{SKILL_DIR}` is the parent `etl-stabilization/` directory (the one containing `pyproject.toml`).
+- `dbt-snowflake` is declared by the `{SKILL_DIR}/dbt-runtime/` uv project — every dbt command below
+  runs as `uv run --project {SKILL_DIR}/dbt-runtime dbt ...`, which resolves dbt from that environment.
+  No manual `pip install` is required.
 - Active Snowflake connection with a warehouse configured in `~/.dbt/profiles.yml`
 - The warehouse can use an empty dummy database -- no pre-populated data or tables are required
 - The source definition file must be accessible and readable
@@ -78,7 +81,7 @@ List all `.sql` files under `macros/`. For each:
 ### Step 0.3: Attempt dbt parse (quick validation)
 
 ```bash
-dbt parse --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt 2>&1
+uv run --project {SKILL_DIR}/dbt-runtime dbt parse --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt 2>&1
 ```
 
 If this fails, record the error but DO NOT STOP. The error is documented in the test report and the dbt-fixer will resolve it. Proceed to Phase 1 (source analysis and test file generation do not require dbt parse to succeed).
@@ -352,13 +355,13 @@ Apply the seed configuration from `dbt_project_patch.yml` to `<DBT_PROJECT>/dbt_
 ### Step 4.2: Seed the Test Data (Arrange)
 
 ```bash
-dbt seed --select tag:stabilization_test --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
+uv run --project {SKILL_DIR}/dbt-runtime dbt seed --select tag:stabilization_test --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
 ```
 
 ### Step 4.3: Build the Models (Act)
 
 ```bash
-dbt run --select tag:stabilization_test --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
+uv run --project {SKILL_DIR}/dbt-runtime dbt run --select tag:stabilization_test --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
 ```
 
 > **Location-override layer (SnowConvert `sc_override_*` vars):** Applies only when
@@ -370,7 +373,7 @@ dbt run --select tag:stabilization_test --project-dir <DBT_PROJECT_PATH> --profi
 ### Step 4.4: Run the Tests (Assert)
 
 ```bash
-dbt test --select tag:stabilization_test --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
+uv run --project {SKILL_DIR}/dbt-runtime dbt test --select tag:stabilization_test --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
 ```
 
 ### Step 4.5: Handle Failures
@@ -448,7 +451,7 @@ After all tests are executed:
 - Check if the test is asserting against the unfixed model (expected baseline failure) vs a test bug
 
 ### All tests fail with "relation does not exist"
-- Verify `dbt seed --full-refresh` ran before `dbt run`
+- Verify `uv run --project {SKILL_DIR}/dbt-runtime dbt seed --full-refresh --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt` ran before `dbt run`
 - Check that `stabilization_test_sources.yml` points to the correct database/schema
 - Verify Snowflake connection: `SELECT CURRENT_DATABASE(), CURRENT_SCHEMA()`
 
@@ -472,6 +475,7 @@ After all tests are executed:
 - Test environment: `DATABASE.SCHEMA`
 - `ROADMAP.md` path — for identifying current phase and assigned dbt projects
 - `session_status.json` path — for reading project/node status
+- Skill directory: `SKILL_DIR`
 
 ### On-Demand References (read when needed)
 
@@ -501,7 +505,7 @@ Stage 1 does NOT require dbt to compile. It reads the source definition file and
 
 **Stage 2: Execute tests (may fail — that's expected)**
 - Copy test artifacts into dbt project
-- Run `dbt seed` → `dbt run` → `dbt test`
+- Run the `dbt seed` → `dbt run` → `dbt test` sequence (each via `uv run --project {SKILL_DIR}/dbt-runtime`, as in Phase 4)
 - If ANY step fails: record the failure in `test_report.md` as a baseline result and STOP execution (do not retry)
 - If all steps pass: record baseline results per test
 

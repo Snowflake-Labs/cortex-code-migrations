@@ -131,7 +131,8 @@ default to `generate-only`, or allow `skip` after Informatica is in scope.
 ### 5.4–5.6 No-input analyses
 
 - Object exclusion needs no prompt.
-- Effort estimate needs no prompt and supports SQL Server, Redshift, Teradata and Oracle only.
+- Effort estimate needs no prompt and supports the dialects
+  `effort-estimate/SKILL.md` lists: SQL Server, Redshift, Teradata and Oracle.
 - Anti-patterns needs no prompt and supports SQL Server, Redshift, Oracle, and Teradata.
 - For unsupported dialects, do not dispatch; synthesize a skipped result.
 

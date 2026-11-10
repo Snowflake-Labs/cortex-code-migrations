@@ -400,6 +400,11 @@ def _card(case: dict, shared: int | None, hours: float | None) -> str:
     ]
     if _int(metrics.get("scriptCount")) > 0:
         counts.append(_count(metrics.get("scriptCount"), "Scripts"))
+    macros = _int(metrics.get("macroCount")) or _int((metrics.get("typeCounts") or {}).get("MACRO"))
+    if macros > 0:
+        counts.append(_count(macros, "Macros"))
+    if _int(metrics.get("bteqCount")) > 0:
+        counts.append(_count(metrics.get("bteqCount"), "BTEQ"))
     if _int(metrics.get("biCount")) > 0:
         counts.append(_count(metrics.get("biCount"), "Reports"))
     purpose_html = f'<p class="buc-purpose">{html.escape(purpose)}</p>' if purpose else ""

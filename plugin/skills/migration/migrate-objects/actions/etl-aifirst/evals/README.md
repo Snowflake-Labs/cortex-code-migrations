@@ -10,10 +10,11 @@ why the two are kept separate.
 
 ## Files
 
-- `trigger-eval-set.json` — 20 prompts: 10 should-trigger (one per AI-First
-  platform table, see below) and 10 should-not-trigger (natively-supported
-  dialects plus deliberately tricky near-misses). Each item carries a
-  `split: "train"|"test"` field (12 train / 8 test, stratified by
+- `trigger-eval-set.json` — 22 prompts: 12 should-trigger (at least one per
+  AI-First platform table, see below; two for Apache Hop, added with SNOW-4441089)
+  and 10 should-not-trigger (natively-supported dialects plus deliberately tricky
+  near-misses). Each item carries a
+  `split: "train"|"test"` field (13 train / 9 test, stratified by
   `should_trigger`, matching `run_loop.py`'s own 60/40 convention) and a
   `platform` / `note` field for traceability — `run_eval.py` itself only
   reads `query` and `should_trigger`, the rest is documentation.

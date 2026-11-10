@@ -25,7 +25,8 @@ Do not put `asks` in the prompt — that child reads `mode="escalations"` with
 
 - `guidance` / `decompose` in `answered` → first-send a **new** `general_task`
   with `guidance:` (the old walker conversation is done).
-- `forced` / `skip` / `mark_done` → re-read the board.
+- `forced` / `skip` / `skip_data` / `mark_done` → re-read the board. After
+  `skip_data` the table is ready work again (its data tasks are excluded).
 - `needs_repair` / `refused` → leave parked.
 
 Do not `status='answer'` for a hail_mary return; you relay only an explicit

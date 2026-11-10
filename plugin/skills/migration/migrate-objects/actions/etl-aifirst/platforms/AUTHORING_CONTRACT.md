@@ -124,6 +124,10 @@ are not uniformly cased and are not derivable from the platform's name; use the 
 in `REQUEST.md` verbatim, and if it is a platform with no rule yet, say so in
 `authoring_notes.md` rather than inventing a near miss.
 
+## `dialect.value_type_semantics` — optional
+
+A map from the platform's own type names (the `type_vocabulary` entries) to one sentence each on what the type holds and what it lowers to in Snowflake, for every type whose same-named Snowflake type would be wrong. The model sidecar reads it as part of the platform's semantics sheet (`sidecar_producer.semantics_sheet`; non-`_` keys only), so a model writing a tier-2 payload or a tier-3 model does not have to guess the type's meaning. Example: Kettle's `Date` is a point in time with the time of day, so it lowers to `TIMESTAMP_NTZ`, and a `CAST(... AS DATE)` loses data (Pentaho run w4-d2: 30 rows lost their time until the repair loop removed the cast). State only facts you can cite from the platform's own type definitions; leave the block out rather than guess.
+
 ## `dialect.expression_translation` — optional, and all-or-nothing
 
 Omit this block and every expression is emitted by the **verbatim flat path**: each scanned token

@@ -42,6 +42,13 @@
     "note": "explicit platform name and activity types"
   },
   {
+    "query": "We run our nightly loads as Apache Hop pipelines (.hpl files, plus a couple of .hwf workflows) that read from a staging database and write fact tables. We're moving the warehouse to Snowflake; how do we get these pipelines converted?",
+    "should_trigger": true,
+    "split": "train",
+    "platform": "hop",
+    "note": "explicit platform name and file extensions"
+  },
+  {
     "query": "hey so we're finally doing the full SnowConvert migration and I keep seeing 'code convert' mentioned everywhere in the docs, but our actual transformation layer is a drag-and-drop Alteryx workflow, not SQL code -- does the normal convert path even handle that or is there something else for it?",
     "should_trigger": true,
     "split": "test",
@@ -68,6 +75,13 @@
     "split": "test",
     "platform": "pentaho",
     "note": "held-out: names file extensions and 'kettle' (Pentaho's engine name) instead of the product name"
+  },
+  {
+    "query": "Our ETL team built everything in Hop (the Apache project that forked Kettle). Can the migration tooling take those pipelines and produce something that runs on Snowflake?",
+    "should_trigger": true,
+    "split": "test",
+    "platform": "hop",
+    "note": "platform named as Hop, no file extension"
   },
   {
     "query": "We've got about 200 SQL Server stored procedures and a dozen views that need converting to Snowflake syntax as part of our migration -- no ETL tool involved, it's all just T-SQL.",

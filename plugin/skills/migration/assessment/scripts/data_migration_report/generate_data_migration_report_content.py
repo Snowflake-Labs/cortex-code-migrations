@@ -27,6 +27,7 @@ re-render cannot strand its listeners.
 from __future__ import annotations
 
 import html
+import re
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from snowconvert_reports.data_migration_readiness import (
     DataMigrationReadiness,
     TypeFinding,
 )
+from snowconvert_reports.data_types_scan import ScannedColumn, TypeUsage
 
 from .content import (
     ANSWER_NO,
@@ -80,6 +82,7 @@ from .content import (
     TOPOLOGY_LEDE,
     TOPOLOGY_TITLE,
     UNLOAD_QUESTION,
+    USAGE_SHOW_TABLES,
     VALIDATION_LABELS,
     WORKER_OPTIONS,
     WORKER_TITLE,
@@ -167,6 +170,28 @@ def _status_pill(kind: str, value: str, label: str) -> str:
     return f'<span class="dmv-pill-status dmv-{kind}--{value.replace(" ", "-")}">{label}</span>'
 
 
+def _usage_column_label(column: ScannedColumn, type_name: str) -> str:
+    """The column's name, plus its declared type when that says more than the row's."""
+    bare = " ".join(re.sub(r"[\[\]\"`]", "", column.declared_type).upper().split())
+    return column.name if bare == type_name.upper() else f"{column.name} ({column.declared_type})"
+
+
+def _usage_tables(usage: TypeUsage, type_name: str) -> str:
+    """Collapsed list of the tables and columns using a type; ``v-pre`` because
+    identifiers are user data and may contain Vue's ``{{``."""
+    if not usage.tables:
+        return ""
+    items = "".join(
+        f'<li><code>{html.escape(table.table)}</code> '
+        f'{html.escape(", ".join(_usage_column_label(c, type_name) for c in table.columns))}</li>'
+        for table in usage.tables
+    )
+    return (
+        f'<details class="dmv-usage-tables" v-pre><summary>{USAGE_SHOW_TABLES}</summary>'
+        f'<ul aria-label="Tables using {html.escape(type_name)}">{items}</ul></details>'
+    )
+
+
 def _findings_table(findings: Sequence[TypeFinding], show_usage: bool) -> str:
     headers = list(FINDINGS_HEADERS)
     if show_usage:
@@ -183,7 +208,8 @@ def _findings_table(findings: Sequence[TypeFinding], show_usage: bool) -> str:
                 f'<td class="dmv-cell-usage">{usage.column_count} '
                 f'{_plural(usage.column_count, "column")}'
                 f"<span>{usage.table_count} "
-                f'{_plural(usage.table_count, "table")}</span></td>'
+                f'{_plural(usage.table_count, "table")}</span>'
+                f"{_usage_tables(usage, coverage.type_name)}</td>"
             )
         elif show_usage:
             usage_cell = '<td class="dmv-cell-usage">&mdash;</td>'
@@ -534,6 +560,12 @@ DATA_MIGRATION_CSS = """
         }
         #data-migration-phase .dmv-cell-usage { white-space: nowrap; color: #475569; }
         #data-migration-phase .dmv-cell-usage span { display: block; color: #94A3B8; font-size: 0.72rem; }
+        #data-migration-phase .dmv-usage-tables summary { cursor: pointer; color: #1A6CE7; font-size: 0.72rem; margin-top: 4px; }
+        #data-migration-phase .dmv-usage-tables ul {
+            list-style: none; margin: 6px 0 0; padding: 0;
+            white-space: normal; min-width: 28ch; max-height: 16rem; overflow-y: auto;
+            font-size: 0.72rem; line-height: 1.6;
+        }
         #data-migration-phase .dmv-cell-note { color: #64748B; line-height: 1.5; min-width: 24ch; }
         #data-migration-phase .dmv-pill-status {
             display: inline-block;
