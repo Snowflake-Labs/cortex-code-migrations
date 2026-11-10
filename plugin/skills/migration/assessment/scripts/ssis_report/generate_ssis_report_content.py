@@ -72,7 +72,6 @@ def generate_ssis_html_content(
         generator = HTMLReportGenerator(
             json_path=str(ssis_json_path),
             executive_summary_path=str(summary_html_path) if summary_html_path else None,
-            ai_estimation_enabled=False,
             registry_packages=registry_packages,
         )
         

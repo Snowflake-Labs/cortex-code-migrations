@@ -87,7 +87,26 @@ if [ -n "${EMITTER:-}" ]; then
   esac
 fi
 
+# A FRESH PROCESS FOR A FAILED ENGINE ID SEED. The emitter exits 75 (EngineIdGeneratorGuard) when the
+# engine could not fetch an AST id seed: that process would hang or emit a wrong node, and only a new
+# process fetches a new seed. A normal emit starts again from an empty tree; --relineage works over the
+# shipped tree, so it is run again as is.
 run_emitter() {
+  local attempt=1 max="${AIFIRST_EMITTER_ATTEMPTS:-3}" rc out=""
+  if [ "${1:-}" != "--relineage" ] && [ $# -ge 3 ]; then
+    out="${*: -2:1}"
+  fi
+  while :; do
+    run_emitter_once "$@"
+    rc=$?
+    [ "$rc" -eq 75 ] && [ "$attempt" -lt "$max" ] || return $rc
+    echo "   emitter: engine id seed failed (exit 75), running it again in a new process (attempt $((attempt + 1)) of $max)" >&2
+    [ -n "$out" ] && rm -rf "$out"
+    attempt=$((attempt + 1))
+  done
+}
+
+run_emitter_once() {
   if [ -n "$EMITTER_RUNTIME_ROOT" ] && [ -f "$EMITTER_HOST" ]; then
     (
       export DOTNET_ROOT="$EMITTER_RUNTIME_ROOT"

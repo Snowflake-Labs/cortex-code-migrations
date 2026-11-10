@@ -87,8 +87,8 @@ single call:
 configure(snowflake_connection="<name>", snowflake_database="<db>")
 ```
 
-Pass `snowflake_database` **only** when the response had none or the user
-just changed it; otherwise leave it out. If the response says
+Pass `snowflake_database` **only** without `snowflake_targets:` and when
+the response had none or the user changed it. If the reply says
 `snowflake_database changed: OLD → NEW` and the user did not ask for that,
 restore `OLD` right away as the note says, and tell the user.
 

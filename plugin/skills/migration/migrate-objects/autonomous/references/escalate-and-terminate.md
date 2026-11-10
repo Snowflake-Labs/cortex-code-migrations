@@ -43,9 +43,15 @@ row, and relay the user's words verbatim:
 
 ```
 transition_status(status="answer", task="<parked task>",
-                  resolution="<guidance|decompose|skip|needs_repair|mark_done>",
+                  resolution="<guidance|decompose|skip|skip_data|needs_repair|mark_done|unvalidated>",
                   reason="<the user's words>", where="id = '<id>'")
 ```
+
+When the user says to leave an object parked (stop, leave it, they will fix it
+themselves), relay it as `resolution="needs_repair"`, never `guidance`: guidance
+un-parks the object and the board hands it to a walker that only parks it again.
+For several objects parked at the same task, answer them in one call per task with
+`where="id IN ('<id1>', '<id2>')"`. `needs_repair` leaves nothing to send.
 
 Only the autonomous parent may make this call in `subagent_mode`; Cortex stamps
 the current parent identity, so do not pass `agent_id`. Never call
@@ -63,9 +69,17 @@ other objects' prompts yourself.
 
 When `answered` shows a new human row, later-send with
 `guidance: <their words>` for `guidance` or `decompose`.
-`needs_repair` stays parked. `skip` takes the object out of scope. `mark_done`
-stays parked until an interactive session performs the explicit finish; the
-autonomous parent does not finish it.
+`needs_repair` stays parked. `skip` removes the object from the migration: it
+leaves scope and its dependents stay blocked. `skip_data` answers only a
+`migrateData` park: the table stays in the migration with its structure
+deployed, but no rows are copied. It is un-parked, its `migrateData` and
+`validateData` read excluded, and its dependents continue: procedure deploys and
+sandboxed procedure tests proceed, while view validation and tests that would
+read the empty table are skipped. Re-read the board and send it like any ready
+object. Use `skip_data` only when the user's reply says to keep the table but
+not its data. `mark_done` stays parked until an interactive session performs
+the explicit finish; the autonomous parent does not finish it. `unvalidated`
+un-parks: later-send so the walker finishes the rest of its walk.
 
 Do not send an escalated object without an answer already on the row.
 `error="human"` has no failure transition, so it remains parked until its stamp
@@ -163,8 +177,8 @@ Build every confirmable line from the board. A child's `result` is a claim, not
 a finding. Attribute anything the board cannot confirm to the child. Do not
 turn a child's `completed` response into a completion report by itself.
 
-Finally call `speculative_sandbox(mode="down", object_id=<id>)` for every object
-you sent a `speculative_fixer`, then `data_infrastructure(mode="down")`, or use
+Finally call `speculative_sandbox(mode="sweep")`, check its preview (pairs still
+without speculative.sql stay up), and call it again with its `confirm`; then `data_infrastructure(mode="down")`, or use
 [the teardown skill](../../../data-infrastructure/teardown/SKILL.md) when the
 project configured a `compute_pool` and data work ran.
 

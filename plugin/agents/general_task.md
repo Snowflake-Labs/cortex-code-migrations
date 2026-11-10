@@ -25,6 +25,9 @@ task="<task, when given>")`. It attaches you, claims the object (with `task`, th
 returns `attach` and `files` (`source`, `source_bindable`, `converted`, `artifacts`). Every
 `walk` / `walk_run` takes `object_id`. Never pass `agent_id`: the hook stamps your identity and
 the claim is held under it. No `configure`, no root migration skill.
+`walk` or `walk_run` not found means the MCP server is still connecting, and `tool_search` cannot
+load them: `sleep 5` and call it again, up to 6 times, before returning `stuck`
+(`failed.error="infra"`).
 
 ## 2. Walk
 

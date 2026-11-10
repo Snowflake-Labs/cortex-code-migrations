@@ -1058,7 +1058,7 @@ def _same_names(a, b):
 def check_sinks(source, models, out_root):
     """One obligation per sink transform: some model writes its table with its write mode."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    import hop_write_deps  # noqa: E402  (sibling script; only Hop states sinks this way)
+    import hop_write_deps  # noqa: E402  (sibling script; Hop and Pentaho state sinks this way)
 
     led = Ledger("SINKS", "declared table sink -> a model writing it that way")
     writes = {}
@@ -1119,8 +1119,8 @@ def _describe(sink):
 
 
 def _declares_sinks(source, platform):
-    return bool(source) and (norm(platform or "") in ("hop", "apachehop")
-                             or str(source).casefold().endswith(".hpl"))
+    return bool(source) and (norm(platform or "") in ("hop", "apachehop", "pentaho", "pentahodataintegration")
+                             or str(source).casefold().endswith((".hpl", ".ktr")))
 
 
 def main(argv):

@@ -49,6 +49,15 @@ Instead of Steps 1–3, a data validation workflow can check the view:
 - An orchestrated run only records the attempt. Once `job_status` shows it
   finished, stamp the outcome with Step 4b.
 
+## Re-check an override-accepted view
+
+When the user asks to revalidate a view whose diverge was override-accepted
+(e.g. after a compare fix), call
+`validate_data(mode="revalidate", where="id = '<object_id>'")`. It compares
+afresh, honours no acceptance, and lists the ones it dropped in
+`revoked_acceptances`. A `diverged` with `previously_accepted: true` goes back
+to `test_case_verifier`.
+
 ## Step 1: Row Count Comparison
 
 ```

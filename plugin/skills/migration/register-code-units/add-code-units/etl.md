@@ -16,8 +16,8 @@ straight to Step 5 without calling `ask_user_question`.
 
 ETL belongs in the project from register onward. SSIS and Informatica PowerCenter
 land in `source/_etl/` via `scai code add`. Every other ETL platform — Talend, Alteryx,
-Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory, or anything else the
-user names — lands in `source/_etl_aifirst/<platform>/`, and its units are registered
+Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory, or anything
+else the user names — lands in `source/_etl_aifirst/<platform>/`, and its units are registered
 in the Code Unit Registry with `kind: etl` and `source.objectType: workflow` via the
 MCP `create_registry_unit` tool. The two roots stay apart because the native
 `EtlFileClassifier` owns `source/_etl/` and only understands SSIS `.dtsx` and
@@ -32,8 +32,11 @@ card, so never ask a standalone ETL yes/no. Ask which platform via `ask_user_que
 >
 > 1. **SSIS** — `.dtsx` packages (converted natively)
 > 2. **Informatica Power Center** — XML repo export (converted natively)
-> 3. **Another ETL platform** — Talend, Alteryx, Informatica Cloud / IICS, DataStage,
->    Pentaho, Azure Data Factory, or something else (routes through AI-First)
+> 3. **Apache Hop or Pentaho**: Hop `.hpl` / `.hwf`, Pentaho `.ktr` / `.kjb` (AI-First
+>    approach, not native support: converted end to end, then validated against the
+>    original)
+> 4. **Another ETL platform**: Talend, Alteryx, Informatica Cloud / IICS, DataStage,
+>    Azure Data Factory, or something else (AI-First approach, not native support)
 
 - **SSIS / Informatica Power Center:** ask for the folder path and
   compare it to `<INPUT_PATH>`:
@@ -58,8 +61,11 @@ card, so never ask a standalone ETL yes/no. Ask which platform via `ask_user_que
   `code add` arranges the packages into `source/_etl/`. Confirm they landed there
   before continuing.
 
-- **Another ETL platform:**
-  1. Ask which platform. Accept a free-form name if it is not in the list. Store the
+- **Apache Hop or Pentaho / Another ETL platform:**
+  1. For **Apache Hop or Pentaho**, take the platform from the files (`.hpl` / `.hwf`
+     are `hop`, `.ktr` / `.kjb` are `pentaho`) or ask which one; when the folder holds
+     both, register each set separately. Otherwise ask which platform. Accept a free-form
+     name if it is not in the list. Store the
      lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `hop`, `adf`, …).
      For Hop, `hop` and `apacheHop` are the same intake: the helper vendors under
      `source/_etl_aifirst/hop/` and enumerates `units[].platform` as `apacheHop`.

@@ -178,7 +178,7 @@ transition_status(status="escalate", task="<the task it keeps returning on>",
 
 `asks` is required. `alreadyEscalated` means the open row for that object and task was reused with this call's reason and asks: still one question for the user. Then one transcript line and back to 2a/2b. Do not number the choices or wait for a chat answer.
 
-Never settle an open row from a child's output or your own diagnosis. The autonomous parent may relay an explicit user reply from this Cortex conversation with `status='answer'`; walkers cannot answer. Relay the user's words verbatim, matched to the open row they answer, as [Escalate and terminate](references/escalate-and-terminate.md) shows. When `answered` shows a new row — a person's, or a reply you relayed — later-send with `guidance:` if the resolution was `guidance` or `decompose`. `needs_repair` stays parked. `skip` / object-level outcomes stay parked for the interactive session. Do not send again without an answer already on the row.
+Never settle an open row from a child's output or your own diagnosis. The autonomous parent may relay an explicit user reply from this Cortex conversation with `status='answer'`; walkers cannot answer. Relay the user's words verbatim, matched to the open row they answer, as [Escalate and terminate](references/escalate-and-terminate.md) shows. When `answered` shows a new row — a person's, or a reply you relayed — later-send with `guidance:` if the resolution was `guidance` or `decompose`. `needs_repair` stays parked. `skip` / object-level outcomes stay parked for the interactive session. `skip_data`: re-read. Do not send again without an answer already on the row.
 
 A transient failure whose condition has cleared is a 2d `reset`, not an answer.
 
@@ -235,7 +235,7 @@ the active wave, so when the status payload carries a `wave`, name it and
 
 Build every line the board can confirm from the board. If you cannot tell how many resets there were, say what you saw instead of a number.
 
-Then `speculative_sandbox(mode="down", object_id=<id>)` for every object you sent a `speculative_fixer`.
+Then `speculative_sandbox(mode="sweep")`, check its preview, and call it again with its `confirm`.
 
 After the wave, call `migration_status(mode="next_objects")` (the summary lacks the wave hint). On a `next_pending_wave`, call bare `configure()` to move there (`Wave <N> is finished; moved to wave <M>.`) and continue from Step 1; `configure(wave=<M>)` picks another wave.
 

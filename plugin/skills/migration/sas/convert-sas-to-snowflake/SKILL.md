@@ -132,19 +132,26 @@ prerequisites for step transitions -- context pressure does not exempt them. Fil
 **Pre-check:** if `<output_dir>/conversion_state.json` exists, offer **Resume** from
 `current_step` or **Restart** (delete state, start fresh).
 
-Ask in ONE prompt:
-1. SAS code source (file, directory or paste) and output directory
-2. Target schema (`DATABASE.SCHEMA`) and validation schema (writable scratch)
-3. Migration mode: **1:1 Direct** (default, one `.sql` per SAS file) or **Optimize & Consolidate**
-4. Validation depth: **T1** compile (no credits) / **T2** + unit test on test data / **T3** + end-to-end
-   on full data / none
-5. Data questions for the chosen depth (`workflows/validation-pipeline.md` §Step 1 inputs): where
-   the source tables live, DDL files, test data, SAS outputs to compare against, full-data location
-6. External sources found in Step 2.5 (asked in this same prompt when present)
+Ask everything in one upfront round, before any work, as consecutive `ask_user_question` calls
+(max 4 questions each). Never drop a question to fit a call -- add a call. No other questions
+follow except the Step 4/Step 10 stops in interactive mode.
+
+- **Call A:** SAS source + output dir; target and validation (writable scratch) schemas; mode
+  (**1:1 Direct** default / **Optimize & Consolidate**); depth (**T1** compile, no credits / **T2** +
+  unit test on test data / **T3** + end-to-end on full data / none).
+- **Call B (depth T2/T3 only), defaults in bold:**
+  1. Source tables: in Snowflake at `<schema>` / **not in Snowflake**
+  2. DDL: file path (`.sql` CREATE TABLEs or `table,column,type` CSV) / **none -- infer from SAS**
+  3. Test data: tables or stage path / **synthetic**
+  4. SAS outputs to compare: path or tables / **none -- LLM trace**
+- **Call C (only when applicable):** Step 2.5 external-source mapping; T3 full-data location.
+  Merge into Call B if the total stays <= 4.
 
 Write `conversion_state.json` (`metadata`: output_dir, target_schema, validation_schema,
-migration_mode, `validation_selections`, timestamps, `current_step: "1"`) and the first
-`checkpoint_log.jsonl` line before Step 2.
+migration_mode, `validation_selections` per `workflows/validation-pipeline.md`, timestamps,
+`current_step: "1"`) and the first `checkpoint_log.jsonl` line, then run
+`python3 tool/sql_check.py selections --state <output_dir>/conversion_state.json`. Non-zero exit
+lists missing answers: ask them now (still Step 1) and re-run before Step 2.
 
 ### Step 2: Load References
 

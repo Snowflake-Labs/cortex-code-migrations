@@ -98,7 +98,7 @@ tables:
     columnNamesToPartitionBy: [ ... ]
     executionTimeoutMinutes: 90   # > observed boundary-analysis duration
 ```
-Also consider a cheaper partition key / larger partitions so NTILE boundary analysis finishes sooner. See [workflow-config-reference.md](./workflow-config-reference.md).
+Also consider a cheaper partition key / larger partitions so NTILE boundary analysis finishes sooner. On **Redshift** with a **single** numeric or date/time partition column, experimental `boundaryDiscoveryMode: approximate` (or `quick`) can shorten Analyze — tell the user it is experimental and subject to change. See [workflow-config-reference.md](./workflow-config-reference.md#experimental-boundary-discovery-modes-redshift).
 
 **Operational workaround** (in-flight workflow without resubmitting YAML): update `EXECUTION_TIMEOUT_MINUTES` on the `TASK_QUEUE` row and re-queue if already `failed`.
 

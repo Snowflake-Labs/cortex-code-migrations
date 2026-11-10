@@ -17,12 +17,12 @@ Read the registry entry and retain:
 |---|---|
 | `id` | `{ETL_ID}` in CLI and registry filters |
 | `files.artifacts.path` | `{ARTIFACTS_PATH}`; the YAML is written under `{ARTIFACTS_PATH}/etl-test/` |
-| `source.platform`, else `extensions.sourcePlatform` | Source platform (`apacheHop` for Apache Hop, which may be recorded only on the extension) |
+| `source.platform`, else `extensions.sourcePlatform` | Source platform (`apacheHop` for Apache Hop, `pentaho` for Pentaho; either may be recorded only on the extension) |
 | `files.source.path` | Source definition filename |
 
 The machine enforces the `deploy` precondition.
 
-## Step 0b: Platforms without a native executor (Apache Hop, …)
+## Step 0b: Platforms without a native executor (Apache Hop, Pentaho, …)
 
 When the platform is neither `ssis` nor `informatica` (for example `apacheHop`), the source
 side runs through a launcher the user owns. `.scai/settings/test_config.yaml` must declare it
@@ -74,6 +74,27 @@ would otherwise be used.
 
 The launcher writes Hop's full output to `hop.log` beside the unit's `status.json` (its path is
 the status file's `log_path`); read it first when the source side reports FAILED.
+
+**Pentaho Data Integration (Kettle):** scai ships the launcher (`pentaho_run_launcher.py`): `.ktr`
+transformations run with `pan.sh`, `.kjb` jobs with `kitchen.sh`. Ask the user only how their PDI is
+reached: a long-lived container (`PDI_CONTAINER`, default `pdi`; the job is copied in with `docker cp`
+and run with `docker exec`) or a local install (`PDI_HOME`, the `data-integration` directory holding
+`pan.sh`). PDI's connection variables (`${MSSQL_HOST}` and so on inside the `.ktr`) come from the
+user's `kettle.properties` under `KETTLE_HOME`, not from this file; do not invent them.
+
+```yaml
+external_command:
+  side: source
+  timeout_seconds: 600                # PDI takes 20-30 s to start under amd64 emulation
+  writes_to: <snowflake | source>
+  command: [python3, "{launchers_dir}/pentaho_run_launcher.py", --job, "{job}", --params, "{params_file}", --status, "{status_file}", --timeout, "{timeout}", --unit, "{unit_id}"]
+  env:                                # the child does not inherit the harness environment
+    PDI_CONTAINER: <container name>   # or PDI_HOME: <data-integration directory>
+    PDI_OPTIONS: <optional, e.g. -Duser.timezone=UTC>
+```
+
+The launcher writes PDI's full output to `pdi.log` beside the unit's `status.json`. Validate with
+`scai test etl-validate --platform pentaho`.
 
 **Any other platform:** ask the user for the launcher command that runs their pipeline against
 its own database, in the same shape (`command: [<launcher>, --job, "{job}", ...]`, optionally a

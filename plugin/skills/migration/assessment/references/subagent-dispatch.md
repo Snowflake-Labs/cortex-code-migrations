@@ -7,12 +7,13 @@ When `data_lineage.dispatch` is true and `staged_pbits` is non-empty, dispatch
 is **three steps**: enrichment first, then the remaining fan-out, then
 business use cases alone. When dispatch is false or `staged_pbits` is empty,
 skip the first step: send the fan-out in one message, then business use cases
-alone once it has returned. After each dispatch message, wait
-for its agents in the same turn with `agent_output(agent_id=<id>, wait=true)`;
-do not end the turn. Before waiting, tell the user what is running, where to
-watch it and how completion is signalled. Write one line each time a wait
-returns: the analyses that finished, or what is still running (see SKILL.md
-Step 5).
+alone once it has returned. After each dispatch message, call
+`hub(mode="wait", confirm=true, cursor=<last>)`. Do not call
+`agent_output(wait=true)`, and do not end the turn. Ending the turn exits a
+headless session and kills every child. Before waiting, tell the user what is
+running, where to watch it and how completion is signalled. Write one line each
+time a wait returns: the analyses that finished, or what is still running (see
+SKILL.md Step 5).
 
 ## Contents
 
@@ -26,6 +27,8 @@ Step 5).
 
 - Never dispatch an excluded analysis, a `review_mode: skip` analysis, or conversion issues when `conversion_issues.run` is false.
 - Every child calls `configure(project_dir=...)`; MCP state is not inherited.
+  A child that cannot load the tool, or whose call fails, stops and returns
+  `error` saying so; it never continues without it.
 - Tell every child it is non-interactive and must not ask questions.
 - Each child writes only its own artifacts; never registry/source/other-child
   output.
@@ -41,9 +44,10 @@ Step 5).
 }
 ```
 
-Data Lineage adds `manifest`; business use cases add `wave_plan` and
-`top_use_cases`. The parent waits for these returns in the same turn as the
-dispatch message.
+Data Lineage adds `manifest`; business use cases add `wave_plan`, `coverage` and
+`top_use_cases`. After the dispatch message, call
+`hub(mode="wait", confirm=true, cursor=<last>)`. Do not end the parent turn.
+The parent reports each analysis as it finishes (see SKILL.md Step 5).
 
 ## Core assessment runners
 
@@ -122,6 +126,28 @@ the first command. ASM0045 is error, not skipped. Do not upload the ZIP.
 
 ### SSIS
 
+SSIS runs in up to three dispatches, so that no agent holds more packages
+than it can read in full:
+
+1. **Generate**, in the fan-out, always `review_mode=generate-only`.
+2. **Review batches**, only when the snapshot's `etl.review_mode` is
+   `auto-review-all`. As soon as the generate child returns `ok`, run
+   `scai assessment etl summary` from the project root and take every
+   package listed `PENDING` under "AI Analysis per Package". Split those paths,
+   in listed order, into batches of at most **10 packages**, and send one
+   review child per batch, one at a time: send the next batch only after the
+   previous review child has returned. With no PENDING packages, go straight
+   to the summary.
+3. **Summary**, alone, once every review child has returned.
+
+The fan-out is not complete until the last SSIS dispatch has returned.
+Never run two review children at once: each `etl update` rewrites the whole
+assessment JSON, and parallel reviewers each hold their own context, which
+exhausts a laptop's memory on a large estate. Each child saves its packages
+with `etl update`, so never merge their outputs yourself.
+
+Generate:
+
 ```text
 Read and follow plugin/skills/migration/assessment/etl-assessment/SKILL.md.
 You are a non-interactive sub-agent. Do not ask questions.
@@ -132,19 +158,52 @@ a checkout and a packaged plugin, and the sub-agent runs from project_dir,
 where no relative ai project exists.
 Context: project_dir, output_dir=<project_dir>/artifacts/assessment/etl,
 etl_replatform_sources_path, ssis_target=dbt|scripting,
-review_mode=generate-only|auto-review-all,
+review_mode=generate-only,
 etl_assessment_skill_dir=<absolute directory containing etl-assessment/SKILL.md>.
 Call configure(project_dir, etl_ssis_target=<ssis_target>). Locate newest ETL.Elements.*.csv and
 ETL.Issues.*.csv; auto-detect replatform sources when context is empty. From
 the project root run scai assessment etl generate. Render DAG HTML from the
 newest dag_model_*.json with:
 uv run --project "<etl_assessment_skill_dir>" python "<etl_assessment_skill_dir>/scripts/dag_renderer/render_dags.py" "$dag_model"
-Never pass project_dir as --project. For auto-review-all classify every
-package and produce ai_ssis_summary.html. Review the packages yourself, one at
-a time; never split them across sub-agents, background jobs or parallel
-`scai assessment etl update` calls. Return the common JSON contract for
+Never pass project_dir as --project. Return the common JSON contract for
 etl-assessment with the newest etl_assessment_analysis_*.json and package
 counts.
+```
+
+Review batch (one per batch of at most 10 package paths):
+
+```text
+Read and follow plugin/skills/migration/assessment/etl-assessment/SKILL.md.
+You are a non-interactive sub-agent. Do not ask questions.
+Context: project_dir, ssis_target=dbt|scripting, review_mode=review-batch,
+package_paths=[<relative package path>, ...],
+etl_assessment_skill_dir=<absolute directory containing etl-assessment/SKILL.md>.
+Call configure(project_dir, etl_ssis_target=<ssis_target>). For each path in
+package_paths, in order: run scai assessment etl scan-package '<path>', read
+its whole output, write that package's analysis from it, and run
+scai assessment etl update for that path only. Never run pending, never touch
+a package outside package_paths, never reuse text from another package, and
+never shorten, grep or skip scan output. If update refuses an analysis,
+rescan that package and rewrite it. If you cannot finish every path, return
+error naming the paths still PENDING. Return the common JSON contract for
+etl-assessment with the newest etl_assessment_analysis_*.json and
+done/pending counts for package_paths.
+```
+
+Summary:
+
+```text
+Read and follow plugin/skills/migration/assessment/etl-assessment/SKILL.md.
+You are a non-interactive sub-agent. Do not ask questions.
+Context: project_dir, output_dir=<project_dir>/artifacts/assessment/etl,
+ssis_target=dbt|scripting, review_mode=summary-only,
+etl_assessment_skill_dir=<absolute directory containing etl-assessment/SKILL.md>.
+Call configure(project_dir, etl_ssis_target=<ssis_target>). Run Step 4 of the
+child skill: scai assessment etl summary, write
+<output_dir>/ai_ssis_summary.html, and register it with
+scai assessment etl ai-summary. Then run scai assessment etl stats. Return
+the common JSON contract for etl-assessment with the newest
+etl_assessment_analysis_*.json and total/done/pending counts from stats.
 ```
 
 ### Informatica
@@ -282,17 +341,26 @@ race another child's registry write.
 Read and follow plugin/skills/migration/assessment/business-use-cases/SKILL.md
 in assessment mode.
 You are a non-interactive sub-agent. Do not ask questions.
-Context: project_dir.
-Call configure(project_dir). From project_dir run scai assessment waves
-candidates, adjudicate every candidate with the scai assessment waves query
-tools, run the coverage pass, and write
-artifacts/assessment/waves/business-use-cases.json. Run scai assessment waves
-use-cases and fix every ASM0050 problem it lists, at most three rounds. When a
-use case is deployable, run scai assessment waves plan with no options. Never
-invent a code unit id. Never ask for a wave size, prioritization patterns or an
-ordering. Return the skill's JSON: use-cases.json as output_json,
-wave-plan.json as wave_plan, and at most three top_use_cases copied from those
-files.
+Context:
+- project_dir: <abs_path>
+- assessment_skill_dir: <abs_path to the directory the assessment SKILL.md lives in>
+Call configure(project_dir); if it cannot be called, return error and stop.
+From project_dir run scai assessment waves coverage to size the workload; when
+it reports mode "large", follow references/large-workloads.md (waves cluster,
+a structural dry run, narratives per bin). Otherwise run scai assessment waves
+candidates (again with --limit 500 when truncated) and adjudicate every
+candidate with the scai assessment waves query tools. Always run the coverage
+pass until waves coverage reports meetsTarget, then write
+artifacts/assessment/waves/business-use-cases.json and check it with
+business-use-cases/scripts/compose_use_cases.py check, run through
+uv run --project <assessment_skill_dir>. Run scai assessment waves use-cases and
+fix every ASM0050 problem it lists, at most three rounds. When a use case is
+deployable, run scai assessment waves plan with no options. Never invent a code
+unit id. Never ask for a wave size, prioritization patterns or an ordering.
+Return the skill's JSON: use-cases.json as output_json, wave-plan.json as
+wave_plan, coverage copied from coverage.json, and at most three top_use_cases
+copied from those files. Return error, not ok, when the coverage target is not
+met or a step was skipped.
 ```
 
 ### 6.8 Common rules for every dispatch
@@ -319,5 +387,5 @@ files.
 6. **Business use cases last and alone.** Dispatch `business-use-cases` only
    after every other agent has returned, in a message of its own.
 
-Do not end your turn after the dispatch message: wait for every launched agent
-with `agent_output(agent_id=<id>, wait=true)` in the same turn.
+After the dispatch message, call `hub(mode="wait", confirm=true, cursor=<last>)`.
+Do not call `agent_output(wait=true)`, and do not end the turn.

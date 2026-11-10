@@ -30,6 +30,15 @@ The machine reads live `DATA_MIGRATION.TABLE_PROGRESS` — there is no registry 
 
 Then `migration_status(mode="next_task", object_ids=["<id>"])`.
 
+## When the data cannot be loaded
+
+A load that cannot succeed is an escalation on `migrateData`, not a stamp. The person answering chooses between two resolutions:
+
+- `skip` removes the table from the migration. It leaves scope, and every object that depends on it stays blocked.
+- `skip_data` keeps the table. Its structure stays deployed, but its rows are not copied. The answer excludes this table's data tasks (`extensions.taskExclusions`). The table continues its walk, and each dependent gate follows its declared `onDependencyExcluded`. Procedure deploys and sandboxed procedure tests proceed. View checks, function and BTEQ tests, and interactive procedure tests would read the empty table, so they are skipped.
+
+Only a person's answer applies `skip_data`. A walker never applies it itself.
+
 A judgment you made in the converted file (meanings vs compile) is a `note` after
 the fix, not a live `ALTER` and not a re-dispatch of the same workflow.
 

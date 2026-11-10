@@ -28,7 +28,10 @@ This sub-skill expects:
 ### Prerequisites
 
 - **MUST be called AFTER dbt-test-gen** — tests must exist before fixing begins. The parent skill (stabilization/SKILL.md) enforces this via the phase workflow. If the project status is `pending` instead of `dbt-tested`, STOP and return to the parent skill to run test generation first.
-- `dbt-snowflake` installed and available on PATH
+- `{SKILL_DIR}` is the parent `etl-stabilization/` directory (the one containing `pyproject.toml`).
+- `dbt-snowflake` is declared by the `{SKILL_DIR}/dbt-runtime/` uv project — every dbt command below
+  runs as `uv run --project {SKILL_DIR}/dbt-runtime dbt ...`, which resolves dbt from that environment.
+  No manual `pip install` is required.
 - `dbt compile` needs no warehouse, but it is only a syntactic pre-filter — it cannot tell a correct fix from a wrong one (see Step 2.3)
 - **A warehouse is required to actually verify a fix.** The convergence gate is the source-derived semantic tests, which must execute. Without a warehouse, nodes can only be recorded with status `unverified` (plus a reason), never as fixed.
 
@@ -42,8 +45,8 @@ This sub-skill expects:
    a. Fix `dbt_project.yml` — replace placeholder values (YOUR_PROJECT_NAME → derive from folder name or source definition; YOUR_PROFILE_NAME → use a sensible default based on the Snowflake connection)
    b. Fix macro syntax — resolve `!!!RESOLVE EWI!!!` markers in `macros/*.sql`, fix unclosed blocks
    c. Fix `sources.yml` — if source definitions reference non-existent schemas or tables, update to match the test environment
-   d. After each fix, attempt `dbt parse` to validate
-6. Run `dbt compile --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt`; parse errors to identify failing nodes
+   d. After each fix, attempt `uv run --project {SKILL_DIR}/dbt-runtime dbt parse --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt` to validate
+6. Run `uv run --project {SKILL_DIR}/dbt-runtime dbt compile --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt`; parse errors to identify failing nodes
 7. Build fixing plan: bootstrap fixes first (already applied above) → model compilation errors → EWI markers → complex transformations
 8. Present summary (total nodes, passing/failing, error types, recommended order)
 9. ⚠️ **STOPPING POINT** (interactive mode): confirm with user. Autonomous agents: skip and proceed.
@@ -120,7 +123,7 @@ So verify in two stages:
 spending a warehouse round-trip.
 
 ```bash
-dbt compile --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
+uv run --project {SKILL_DIR}/dbt-runtime dbt compile --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
 ```
 
 **Stage 2 — source-derived semantic tests (the actual gate).** When a warehouse is configured, build the
@@ -129,8 +132,8 @@ the node is fixed.**
 
 ```bash
 # Drop the node's target objects first - see the stale-state warning below
-dbt build --select <node_name> --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
-dbt test --select <node_name> --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
+uv run --project {SKILL_DIR}/dbt-runtime dbt build --select <node_name> --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
+uv run --project {SKILL_DIR}/dbt-runtime dbt test --select <node_name> --project-dir <DBT_PROJECT_PATH> --profiles-dir ~/.dbt
 ```
 
 ⚠️ **Drop and recreate the node's target objects before each attempt.** If a build FAILS, the previous

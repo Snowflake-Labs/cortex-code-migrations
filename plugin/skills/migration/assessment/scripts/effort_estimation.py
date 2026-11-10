@@ -17,12 +17,15 @@
 
 from __future__ import annotations
 
+import html
 import json
 import math
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from snowconvert_reports.issue_docs import ISSUE_DOCUMENTATION_URL_JS
 
 _HOURS_PER_WORK_DAY = 8.0
 
@@ -35,6 +38,21 @@ _OVERRIDES_INFO_ICON = (
     "An override is one rate you have changed. Snowflake's own figure is kept alongside it, "
     "so every total can be compared against the unedited estimate — and a single override "
     "can be cleared by emptying its cell."
+    "</span></span>"
+)
+
+# What the effort estimate's object count covers. Overview's Total Objects counts
+# every object the waves analysis saw, so the two numbers differ; this names the gap.
+PRICED_OBJECTS_HINT = (
+    "Priced objects are the in-scope objects found in the source that the effort "
+    "estimate counts. The total object count on the Overview also includes missing "
+    "references, out-of-scope objects, indexes, workflows and scripts with no rate "
+    "card, which the estimate leaves out."
+)
+
+_PRICED_OBJECTS_INFO_ICON = (
+    '<span class="info-icon" style="margin-left:4px;">i<span class="tooltip">'
+    f"{html.escape(PRICED_OBJECTS_HINT)}"
     "</span></span>"
 )
 
@@ -102,6 +120,9 @@ class CalculatorRow:
     dynamic_sql_unit_hours: Optional[float] = None
     # Present on a Code Conversion row. Absent on v1 artifacts and on every other row.
     repetition: Optional[Dict[str, Any]] = None
+    # SSIS Package and Informatica Mapping Code Conversion rows only: the EWI groups
+    # at full price, with no discount. Absent on older artifacts and every other row.
+    ewi_groups: Optional[List[Dict[str, Any]]] = None
 
 
 def load_effort_assessment(path: Path) -> Optional[Dict[str, Any]]:
@@ -149,6 +170,7 @@ EFFORT_MIXIN_JS = r"""
       "Stored Procedures": "stored procedure",
       "SSIS Packages": "package",
       "Informatica PowerCenter Mappings": "mapping",
+      "BTEQ Scripts": "BTEQ script",
     };
     if (known[objectType]) return known[objectType];
     var raw = String(objectType || "object").trim();
@@ -167,6 +189,8 @@ EFFORT_MIXIN_JS = r"""
       'stroke-linejoin="round"><path d="' + path + '"/></svg>'
     );
   }
+
+  /*__ISSUE_DOCUMENTATION_URL_JS__*/
 
   window.__EFFORT_MIXIN__ = {
     data() {
@@ -280,6 +304,12 @@ EFFORT_MIXIN_JS = r"""
       effortSummary() {
         return baseline.summary || {};
       },
+      // An artifact written before fully_converted counted converted objects in its
+      // shares, which is not "fully converted": those shares render as unknown.
+      effortSharesKnown() {
+        const ddl = this.effortSummary.ddl_summary || {};
+        return Object.values(ddl).every((stats) => stats && "fully_converted" in stats);
+      },
     },
     methods: {
       effortHours(value) {
@@ -320,6 +350,9 @@ EFFORT_MIXIN_JS = r"""
       effortPercent(fraction) {
         const value = typeof fraction === "number" && isFinite(fraction) ? fraction : 0;
         return (value * 100).toFixed(1) + "%";
+      },
+      effortShare(fraction) {
+        return this.effortSharesKnown ? this.effortPercent(fraction) : "\u2014";
       },
       effortCount(value) {
         return typeof value === "number" ? value.toLocaleString() : "0";
@@ -535,11 +568,34 @@ EFFORT_MIXIN_JS = r"""
         reader.readAsText(file);
         event.target.value = "";
       },
+      /** The groups the View EWI Breakdown modal lists: a discounted row's
+       *  repetition groups, else the full-price groups SSIS and Informatica
+       *  rows publish. Empty when the row has neither, which hides the button. */
+      effortEwiGroups(row) {
+        if (!row) return [];
+        var groups = row.repetition ? row.repetition.groups : row.ewi_groups;
+        return Array.isArray(groups) ? groups : [];
+      },
+      /** The breakdown's Dynamic SQL line, from the shared module so the
+       *  dashboard lists the same objects and hours; null hides it. */
+      effortEwiDynamicSql(row) {
+        return row ? shared.dynamicSqlBreakdown(row) : null;
+      },
+      /** Whether a row opens View EWI Breakdown: it has groups, or objects
+       *  priced on its Dynamic SQL column. */
+      effortHasEwiBreakdown(row) {
+        return this.effortEwiGroups(row).length > 0 || this.effortEwiDynamicSql(row) !== null;
+      },
       effortOpenEwiBreakdown(row) {
         this.effortEwiBreakdownRow = row;
       },
       effortCloseEwiBreakdown() {
         this.effortEwiBreakdownRow = null;
+      },
+      /** Docs page for an EWI group's code, the same link object details use;
+       *  empty for the "No EWI" group, which stays plain text. */
+      effortEwiDocUrl(code) {
+        return code ? issueDocumentationUrl(code) : "";
       },
       // The report's own Discovery tab, Optimization Opportunities panel: the
       // effort table and Discovery are one page, so this switches tabs, no popup.
@@ -550,7 +606,7 @@ EFFORT_MIXIN_JS = r"""
     },
   };
 })();
-"""
+""".replace("/*__ISSUE_DOCUMENTATION_URL_JS__*/", ISSUE_DOCUMENTATION_URL_JS)
 
 # Every block below is a plain (non-f) string, interpolated whole into the
 # renderers' f-strings. f-string interpolation runs once, so Vue's `{{ }}` inside
@@ -561,11 +617,11 @@ _EFFORT_KPI_CARDS_HTML = """
         <div class="effort-cards">
             <div class="effort-card">
                 <div class="effort-card-num">{{ effortCount(effortSummary.ddl_objects) }}</div>
-                <div class="effort-card-lbl">Total DDL Objects</div>
+                <div class="effort-card-lbl">Priced Objects/*__PRICED_OBJECTS_INFO_ICON__*/</div>
             </div>
             <div class="effort-card">
-                <div class="effort-card-num">{{ effortPercent(effortSummary.ddl_auto_pct) }}</div>
-                <div class="effort-card-lbl">DDL Auto-Converted</div>
+                <div class="effort-card-num">{{ effortShare(effortSummary.ddl_auto_pct) }}</div>
+                <div class="effort-card-lbl">DDL Fully Converted</div>
             </div>
             <div class="effort-card">
                 <div class="effort-card-num">{{ effortHours(effortRollup.custom.total) }} h</div>
@@ -578,7 +634,7 @@ _EFFORT_KPI_CARDS_HTML = """
                 <div v-if="effortCodeChanged" class="effort-sf-note">Snowflake: {{ effortHours(effortRollup.sf.code) }} h</div>
             </div>
         </div>
-"""
+""".replace("/*__PRICED_OBJECTS_INFO_ICON__*/", _PRICED_OBJECTS_INFO_ICON)
 
 _EFFORT_BAND_LEGEND_HTML = """
         <div class="effort-band-legend">
@@ -746,9 +802,9 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                                 <div class="effort-comments-body">
                                     {{ row.comments }}
                                     <span v-if="row.repetition" style="display:block;margin-top:4px;">{{ effortGroupingNote(row) }}</span>
-                                    <span v-if="row.automation_pct !== null" class="effort-sf-note">{{ effortPercent(row.automation_pct) }} auto-converted</span>
+                                    <span v-if="row.automation_pct !== null" class="effort-sf-note">{{ effortShare(row.automation_pct) }} fully converted</span>
                                     <button
-                                        v-if="row.repetition && row.repetition.groups && row.repetition.groups.length"
+                                        v-if="effortHasEwiBreakdown(row)"
                                         type="button"
                                         class="effort-ewi-link"
                                         @click="effortOpenEwiBreakdown(row)"
@@ -843,12 +899,23 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="group in effortEwiBreakdownRow.repetition.groups"
+                            <tr v-for="group in effortEwiGroups(effortEwiBreakdownRow)"
                                 :key="(group.code || 'none') + '-' + group.band">
-                                <td>{{ group.code || 'No EWI' }}</td>
-                                <td>{{ group.band }}</td>
+                                <td>
+                                    <a v-if="effortEwiDocUrl(group.code)" :href="effortEwiDocUrl(group.code)"
+                                       target="_blank" rel="noopener noreferrer"
+                                       class="effort-ewi-doc-link">{{ group.code }}</a>
+                                    <template v-else>{{ group.code || 'No EWI' }}</template>
+                                </td>
+                                <td>{{ effortBandLabel(group.band) }}</td>
                                 <td class="num">{{ effortCount(group.count) }}</td>
                                 <td class="num">{{ effortHours(group.hours) }}</td>
+                            </tr>
+                            <tr v-if="effortEwiDynamicSql(effortEwiBreakdownRow)">
+                                <td class="effort-ewi-tip" title="Objects with SSC-EWI-0030, SSC-EWI-0125, SSC-EWI-0126 or SSC-EWI-0129, priced at the Dynamic SQL rate instead of a complexity band">Dynamic SQL</td>
+                                <td class="effort-muted">N/A</td>
+                                <td class="num">{{ effortCount(effortEwiDynamicSql(effortEwiBreakdownRow).count) }}</td>
+                                <td class="num">{{ effortHoursOrNa(effortEwiDynamicSql(effortEwiBreakdownRow).hours) }}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -865,10 +932,10 @@ _OVERVIEW_EFFORT_CARD_TOTAL_HTML = """
                 </div>
                 <div class="effort-card">
                     <div class="effort-card-num">{{ effortHours(effortRollup.custom.code) }} h</div>
-                    <div class="effort-card-lbl">Code Conversion Effort · {{ effortCount(effortSummary.ddl_objects) }} objects · {{ effortPercent(effortSummary.ddl_auto_pct) }} auto-converted · includes unit testing</div>
+                    <div class="effort-card-lbl">Code Conversion Effort · {{ effortCount(effortSummary.ddl_objects) }} priced objects/*__PRICED_OBJECTS_INFO_ICON__*/ · {{ effortShare(effortSummary.ddl_auto_pct) }} fully converted · includes unit testing</div>
                     <div v-if="effortCodeChanged" class="effort-sf-note">Snowflake: {{ effortHours(effortRollup.sf.code) }} h</div>
                 </div>
-"""
+""".replace("/*__PRICED_OBJECTS_INFO_ICON__*/", _PRICED_OBJECTS_INFO_ICON)
 
 _OVERVIEW_FIXED_BUDGET_VALUE_HTML = """
                     <div style="font-size: 1.6rem; font-weight: 800; color: #102E46; margin-top: 4px;">{{ effortHours(effortRollup.custom.fixed_budget) }} h</div>
@@ -1022,7 +1089,7 @@ def _render_fixed_budget_info_icon(
     header = (
         f"<div style='margin-bottom:8px;font-weight:600;'>"
         f"{_esc(workload_size_label(workload_tier, small_max, medium_max))} · "
-        f"{total_objects:,} objects"
+        f"{total_objects:,} priced objects"
         f"</div>"
     )
     tooltip_lines = header + "".join(
@@ -1040,12 +1107,13 @@ def render_overview_section_b_html(assessment: Dict[str, Any]) -> str:
     """Section B on Overview: effort summary for SQL Server DDL + fixed budgets."""
     s = assessment["summary"]
     ddl = s.get("ddl_summary", {})
+    shares_known = _publishes_fully_converted(ddl)
     ddl_rows = ""
     for obj_type in sorted(ddl.keys()):
         if obj_type in _DDL_EXCLUDED_DISPLAY_TYPES:
             continue
         st = ddl[obj_type]
-        pct = f"{st['pct_auto'] * 100:.1f}%"
+        pct = _ddl_share_cell(st, shares_known)
         bands = st.get("bands") or {}
         ddl_rows += f"""
         <tr>
@@ -1075,19 +1143,6 @@ def render_overview_section_b_html(assessment: Dict[str, Any]) -> str:
         f"{_esc(workload_size_label(workload_tier, small_max, medium_max))}</div>"
     )
 
-    # One metric among several, so it carries the shared card styling rather than a
-    # colour and type size that would read as the section's headline.
-    automation_card = ""
-    hours_saved = s.get("hours_saved_by_automation", 0)
-    if hours_saved > 0:
-        auto_pct = s.get("automation_savings_pct", 0) * 100
-        rewrite_hours = s.get("manual_rewrite_hours", 0)
-        automation_card = f"""
-                <div class="effort-card">
-                    <div class="effort-card-num">{hours_saved:,.0f} h</div>
-                    <div class="effort-card-lbl">Saved by automation · {auto_pct:.0f}% of the {rewrite_hours:,.0f} h a manual rebuild would cost</div>
-                </div>"""
-
     return f"""
             <h2 id="effort-estimates" style="font-size: 1.5rem; font-weight: 700; color: #102E46; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                 <span style="background: #E0F2FE; color: #0284C7; padding: 4px 10px; border-radius: 6px; font-size: 0.9rem;">Section B</span>
@@ -1103,7 +1158,6 @@ def render_overview_section_b_html(assessment: Dict[str, Any]) -> str:
 
             <div class="effort-cards">
 {_OVERVIEW_EFFORT_CARD_TOTAL_HTML}
-                {automation_card}
                 <div style="background: white; padding: 18px; border-radius: 12px; border-top: 4px solid #FF9F36; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
                     <div style="font-size: 0.78rem; color: #64748B; font-weight: 600; text-transform: uppercase; display: flex; align-items: center;">
                         Fixed Budget{fixed_info_icon}
@@ -1124,7 +1178,7 @@ def render_overview_section_b_html(assessment: Dict[str, Any]) -> str:
                             <th class="ctr">High</th>
                             <th class="ctr">Medium</th>
                             <th class="ctr">Low</th>
-                            <th class="ctr">% Auto-Converted</th>
+                            <th class="ctr">% Fully Converted</th>
                         </tr>
                     </thead>
                     <tbody>{ddl_rows}</tbody>
@@ -1148,7 +1202,7 @@ def _new_ddl_row() -> Dict[str, int]:
     """Column accumulator for the DDL table's TOTALS row."""
     return {
         "total": 0,
-        "success": 0,
+        "fully_converted": 0,
         "lines_of_code": 0,
         "critical": 0,
         "high": 0,
@@ -1157,6 +1211,20 @@ def _new_ddl_row() -> Dict[str, int]:
         "issues_high": 0,
         "issues_critical": 0,
     }
+
+
+def _publishes_fully_converted(ddl_summary: Dict[str, Dict[str, Any]]) -> bool:
+    """Whether the artifact's shares count fully converted objects.
+
+    An artifact written before ``fully_converted`` derived ``pct_auto`` from
+    converted objects, so its shares are shown as unknown rather than relabelled.
+    """
+    return all("fully_converted" in stats for stats in ddl_summary.values())
+
+
+def _ddl_share_cell(st: Dict[str, Any], shares_known: bool) -> str:
+    """One type's % Fully Converted cell."""
+    return f"{st['pct_auto'] * 100:.1f}%" if shares_known else "\u2014"
 
 
 def _ddl_effort_cell(obj_type: str) -> str:
@@ -1198,6 +1266,7 @@ def _render_ddl_assessment_table(
     an em dash there and ``ddl_summary``'s plain classification.
     """
     splits = _dynamic_sql_splits(calculator_rows or [])
+    shares_known = _publishes_fully_converted(ddl_summary)
     rows_html = ""
     displayed_types: List[str] = []
     totals = _new_ddl_row()
@@ -1215,7 +1284,7 @@ def _render_ddl_assessment_table(
             dynamic_sql_cell = "\u2014"
         for column in totals:
             totals[column] += bands.get(column, 0) if column in _BANDS else st.get(column, 0)
-        pct = f"{st['pct_auto'] * 100:.1f}%"
+        pct = _ddl_share_cell(st, shares_known)
         effort = _ddl_effort_cell(obj_type)
         displayed_types.append(obj_type)
         rows_html += f"""
@@ -1235,7 +1304,11 @@ def _render_ddl_assessment_table(
             <td style="color:#64748B;font-size:0.8rem;">{_esc(st.get('notes', ''))}</td>
         </tr>"""
     total_dynamic_sql = "\u2014" if dynamic_sql_total is None else f"{dynamic_sql_total:,}"
-    total_pct = f"{(totals['success'] / totals['total'] * 100):.1f}%" if totals["total"] else "—"
+    total_pct = (
+        f"{(totals['fully_converted'] / totals['total'] * 100):.1f}%"
+        if totals["total"] and shares_known
+        else "—"
+    )
     # Always the true sum of the rows displayed above so TOTALS never understates
     # what's visibly listed in this table.
     types_literal = _js_str_array(displayed_types)
@@ -1358,8 +1431,7 @@ def _render_effort_formulas_legend(
                 Low = minor findings only, or none. Conversion status does not set the band.</p>
                 {automation_note}
                 <p><strong>Fixed Budget:</strong> data migration setup and project-phase lines are left for you to fill in —
-                Snowflake publishes no figure for those yet. Workload size still labels the phase rows —
-                Small (≤{summary.get('workload_small_max', 500):,} objects), Medium ({summary.get('workload_small_max', 500) + 1:,}–{summary.get('workload_medium_max', 1500):,}), Large (&gt;{summary.get('workload_medium_max', 1500):,}).</p>
+                Snowflake publishes no figure for those yet.</p>
                 <p><strong>Sources:</strong> conversion statistics — per-object conversion status and issue severities.</p>
             </div>
         </details>"""
@@ -1382,11 +1454,11 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
                 {EFFORT_PREVIEW_BADGE_HTML}
             </h1>
             <p class="effort-lead">
-                This estimate reflects the total human-hours required for the migration. Using the
-                output of our deterministic conversion engine, we categorized each object into
-                Critical, High, Medium, or Low complexity based on flagged issues. Standard Snowflake
-                baseline effort estimates are automatically applied per object type, but these rates
-                are fully customizable to fit your team's specific baseline.
+                This estimate reflects the total human-hours required for the migration using AIM.
+                Using the output of our deterministic conversion engine, we categorized each object
+                into Critical, High, Medium, or Low complexity based on flagged issues. Standard
+                Snowflake baseline effort estimates are automatically applied per object type, but
+                these rates are fully customizable to fit your team's specific baseline.
             </p>
         </div>
 
@@ -1418,7 +1490,7 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
                     <th class="ctr">High</th>
                     <th class="ctr">Medium</th>
                     <th class="ctr">Low</th>
-                    <th class="ctr">% Auto-Conv.</th>
+                    <th class="ctr">% Fully Conv.</th>
                     <th class="num">Lines of Code</th>
                     <th class="ctr">High findings</th>
                     <th class="ctr">Critical findings</th>

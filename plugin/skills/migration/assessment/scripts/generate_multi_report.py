@@ -37,9 +37,9 @@ import sys
 import tempfile
 import traceback
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _scripts_dir = str(Path(__file__).resolve().parent)
 if _scripts_dir not in sys.path:
@@ -1265,6 +1265,16 @@ def build_version_label(plugin_version: Optional[str] = None) -> str:
     return ""
 
 
+def generated_at_label(when: Optional[datetime] = None) -> str:
+    """When this HTML was written, for the journey hero beside the build pill."""
+    stamp = when or datetime.now(timezone.utc)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    else:
+        stamp = stamp.astimezone(timezone.utc)
+    return f"Generated {stamp.strftime('%Y-%m-%d %H:%M')} UTC"
+
+
 def generate_multi_report(
     output_file: Path,
     exclusion_json: Path = None,
@@ -1638,6 +1648,7 @@ def generate_multi_report(
         data_migration_readiness=data_migration_readiness,
         assessment_name=resolve_assessment_name(project_dir),
         build_version=build_version_label(plugin_version),
+        generated_at=generated_at_label(),
         initial_active_tab=initial_active_tab,
         initial_discovery_tab=initial_discovery_tab,
         project_dir=project_dir,
@@ -1702,6 +1713,7 @@ def generate_html_template(
     data_migration_readiness: Any = None,
     assessment_name: str = "",
     build_version: str = "",
+    generated_at: str = "",
     ssis_registry_packages: Optional[List[Dict[str, str]]] = None,
 
     initial_active_tab: str = "journey",
@@ -1895,6 +1907,11 @@ def generate_html_template(
         if build_version
         else ''
     )
+    generated_at_pill_html = (
+        f'<span class="journey-pill" v-pre>{html_escape_module.escape(generated_at)}</span>'
+        if generated_at
+        else ''
+    )
     assessment_title_prefix = f'{safe_assessment_name} — ' if safe_assessment_name else ''
     assessment_name_html = (
         f'<span class="status-badge-neutral" v-pre>{safe_assessment_name}</span>'
@@ -2004,15 +2021,9 @@ def generate_html_template(
         if has_waves and waves_info
         else ""
     )
-    etl_nav_sublist = (
-        '<div v-if="activeTab === \'etl\'" class="nav-sublist">'
-        '<a @click="scrollToSection(\'#informatica-executive-summary\', \'etl\')" class="nav-sublink">AI Summary</a>'
-        '<a @click="scrollToSection(\'#informatica-metrics\', \'etl\')" class="nav-sublink">Key Metrics</a>'
-        '<a @click="scrollToSection(\'#informatica-workflow-classification\', \'etl\')" class="nav-sublink">Workflow Classification</a>'
-        '<a @click="scrollToSection(\'#informatica-component-breakdown\', \'etl\')" class="nav-sublink">Component Breakdown</a>'
-        '</div>'
-        if has_informatica
-        else ""
+    etl_nav_sublist = build_etl_nav_sublist(
+        has_ssis=has_ssis,
+        has_informatica=has_informatica,
     )
 
     # Overview tab HTML
@@ -2138,7 +2149,7 @@ def generate_html_template(
     """
 
     journey_steps = [
-        ('business-use-cases', 'Planning',
+        ('business-use-cases', 'Wave Planning',
          'Review the business use cases found in the workload, and the objects none of them include. Each use case can migrate on its own. Lineage and the deployment plan are in the assessment report in the app.'),
         ('overview', 'Code/ETL Conversion',
          'Convert your database code and ETL pipelines to Snowflake. Review conversion readiness, dependencies, object exclusions, and dynamic SQL.'),
@@ -2188,7 +2199,7 @@ def generate_html_template(
                 <div class="journey-card" @click="activeTab = '{tab}'">
                     <div class="journey-badge">{step}</div>
                     <div class="journey-card-body">
-                        <h3>{title}</h3>
+                        <h3>{title}{' <span class="nav-preview-badge">Preview</span>' if tab == 'business-use-cases' else ''}</h3>
                         <p>{desc}</p>
                     </div>
                     <span class="journey-cta">
@@ -2214,9 +2225,11 @@ def generate_html_template(
         archive_path = (project_dir / ".scai" / "reports" / "conversion-reports.zip").resolve()
         safe_archive_href = html_escape_module.escape(archive_path.as_uri(), quote=True)
         journey_download_html = f"""
-                    <a class="journey-download" href="{safe_archive_href}" download="conversion-reports.zip">
-                        Download conversion reports
-                    </a>
+            <div class="journey-footer">
+                <a class="journey-download" href="{safe_archive_href}" download="conversion-reports.zip">
+                    Download conversion reports
+                </a>
+            </div>
         """
     journey_overview_html = f"""
         <!-- Migration Journey Overview (entry point) -->
@@ -2230,12 +2243,13 @@ def generate_html_template(
                 <div class="journey-actions">
                     <span class="journey-pill">Source platform: {safe_source_dialect}</span>
                     {build_version_pill_html}
-                    {journey_download_html}
+                    {generated_at_pill_html}
                 </div>
             </div>
             <div class="journey-grid">
                 {journey_cards_html}
             </div>
+            {journey_download_html}
         </div>
     """
 
@@ -2494,7 +2508,7 @@ def generate_html_template(
             <!-- Exclusion Report Tab -->
             <div class="tab-content" :class="{{active: activeTab === 'exclusion'}}">
                 <!-- Executive Summary -->
-                <section id="executive-summary" style="margin-bottom: 48px;">
+                <section id="exclusion-executive-summary" style="margin-bottom: 48px;">
                     <div style="margin-bottom: 32px;">
                         <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
                             Object Exclusion Analysis
@@ -2854,7 +2868,7 @@ def generate_html_template(
                                         legend: {{ display: false }},
                                         tooltip: {{ callbacks: {{ label: function(c) {{
                                             var text = formatValue(Number(c.raw) || 0);
-                                            return mode === 'percent' ? text : text + ' occurrences';
+                                            return mode === 'percent' ? text : text + ' unresolved occurrences';
                                         }} }} }},
                                         datalabels: {{
                                             display: true,
@@ -2895,7 +2909,7 @@ def generate_html_template(
                             <button type="button" id="dsql-pat-obj" onclick="toggleDynamicSqlPatternView('objects')"
                                     style="padding:4px 12px;border-radius:6px;border:1px solid #29B5E8;
                                            background:#29B5E8;color:white;font-size:0.82rem;cursor:pointer;">
-                                Occurrence Count
+                                Unresolved Occurrence Count
                             </button>
                             <button type="button" id="dsql-pat-pct" onclick="toggleDynamicSqlPatternView('percent')"
                                     style="padding:4px 12px;border-radius:6px;border:1px solid #E2E8F0;
@@ -2912,7 +2926,7 @@ def generate_html_template(
             <!-- Dynamic SQL Report Tab -->
             <div class="tab-content" :class="{active: activeTab === 'dynamic-sql'}">
                 <!-- Executive Summary -->
-                <section id="executive-summary" style="margin-bottom: 48px;">
+                <section id="dynamic-sql-executive-summary" style="margin-bottom: 48px;">
                     <div style="margin-bottom: 32px;">
                         <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
                             Dynamic SQL Analysis
@@ -2923,14 +2937,14 @@ def generate_html_template(
                     </div>
                     <div class="metrics-row">
                         <div class="metric-item">
-                            <div class="metric-label">Total occurrences</div>
+                            <div class="metric-label">Unresolved occurrences</div>
                             <div class="metric-value">{{ totalOccurrences }}</div>
-                            <div class="metric-sub">Dynamic SQL instances detected</div>
+                            <div class="metric-sub">Unresolved dynamic SQL instances</div>
                         </div>
                         <div class="metric-item">
                             <div class="metric-label">Analyzed</div>
                             <div class="metric-value">{{ analyzedOccurrencesCount }}</div>
-                            <div class="metric-sub">Reviewed occurrences</div>
+                            <div class="metric-sub">Reviewed unresolved occurrences</div>
                         </div>
                         <div class="metric-item" v-if="pendingOccurrencesCount > 0">
                             <div class="metric-label">Pending</div>
@@ -2940,7 +2954,7 @@ def generate_html_template(
                         <div class="metric-item">
                             <div class="metric-label">Code units</div>
                             <div class="metric-value">{{ uniqueCodeUnits }}</div>
-                            <div class="metric-sub">With reviewed occurrences</div>
+                            <div class="metric-sub">With reviewed unresolved occurrences</div>
                         </div>
                         <div class="metric-item">
                             <div class="metric-label">High priority</div>
@@ -2955,7 +2969,7 @@ def generate_html_template(
                         <thead class="bg-sf-blue text-white">
                             <tr>
                                 <th class="p-3 text-left">Category</th>
-                                <th class="p-3 text-center">Occurrences</th>
+                                <th class="p-3 text-center">Unresolved occurrences</th>
                                 <th class="p-3 text-center">Code Units</th>
                                 <th class="p-3 text-center">Percentage</th>
                             </tr>
@@ -2977,7 +2991,7 @@ def generate_html_template(
                         <thead class="bg-sf-blue text-white">
                             <tr>
                                 <th class="p-3 text-left">Type</th>
-                                <th class="p-3 text-center">Occurrences</th>
+                                <th class="p-3 text-center">Unresolved occurrences</th>
                                 <th class="p-3 text-center">Code Units</th>
                                 <th class="p-3 text-center">Percentage</th>
                             </tr>
@@ -3034,14 +3048,14 @@ def generate_html_template(
                                     Showing {{ filteredCodeUnits.length }} of {{ uniqueCodeUnits }} code units
                                 </span>
                                 <span v-if="pendingOccurrencesCount > 0" class="text-xs dsq-count-note">
-                                    {{ pendingOccurrencesCount }} pending occurrence{{ pendingOccurrencesCount === 1 ? '' : 's' }} hidden
+                                    {{ pendingOccurrencesCount }} pending unresolved occurrence{{ pendingOccurrencesCount === 1 ? '' : 's' }} hidden
                                 </span>
                             </div>
 
                             <div class="dsq-thead" role="row">
                                 <div class="dsq-cell">Name</div>
                                 <div class="dsq-cell">Complexity</div>
-                                <div class="dsq-cell">Occurrences</div>
+                                <div class="dsq-cell">Unresolved occurrences</div>
                                 <div class="dsq-cell">File</div>
                             </div>
 
@@ -3092,8 +3106,8 @@ def generate_html_template(
                                     <div class="dsq-codeunit-grid">
                                         <div class="dsq-kvs dsq-kvs-compact">
                                             <div class="dsq-k">Complexity</div><div class="dsq-v">{{ selectedCodeUnit.maxComplexity }}</div>
-                                            <div class="dsq-k">Analyzed occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
-                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-k">Pending occurrences</div>
+                                            <div class="dsq-k">Analyzed unresolved occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
+                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-k">Pending unresolved occurrences</div>
                                             <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-v">{{ selectedCodeUnit.pendingCount }}</div>
                                             <div class="dsq-k">Filename</div>
                                             <div class="dsq-v dsq-vpath" :title="selectedCodeUnit.filename">{{ selectedCodeUnit.filename }}</div>
@@ -3235,8 +3249,8 @@ def generate_html_template(
                                             <div class="dsq-codeunit-grid">
                                                 <div class="dsq-kvs dsq-kvs-compact">
                                             <div class="dsq-k">Complexity</div><div class="dsq-v">{{ selectedCodeUnit.maxComplexity }}</div>
-                                            <div class="dsq-k">Analyzed occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
-                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-k">Pending occurrences</div>
+                                            <div class="dsq-k">Analyzed unresolved occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
+                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-k">Pending unresolved occurrences</div>
                                             <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-v">{{ selectedCodeUnit.pendingCount }}</div>
                                                     <div class="dsq-k">Filename</div>
                                                     <div class="dsq-v dsq-vpath" :title="selectedCodeUnit.filename">{{ selectedCodeUnit.filename }}</div>
@@ -3521,7 +3535,13 @@ def generate_html_template(
         .effort-ewi-modal-body {{
             flex: 1 1 auto; min-height: 0; overflow: auto; padding: 16px;
         }}
-        .effort-ewi-modal .effort-table th.effort-ewi-tip {{
+        .effort-ewi-doc-link {{
+            color: #0C7AA6; text-decoration: none;
+        }}
+        .effort-ewi-doc-link:hover {{
+            text-decoration: underline;
+        }}
+        .effort-ewi-modal .effort-table .effort-ewi-tip {{
             cursor: help; text-decoration: underline dotted; text-underline-offset: 3px;
         }}
         .effort-table tr.effort-row-overridden td {{ background: #FFFDF5; }}
@@ -3674,6 +3694,16 @@ def generate_html_template(
         .nav-sublist {{
             padding: 4px 0 8px 0;
         }}
+        .nav-subhead {{
+            display: block;
+            padding: 8px 16px 2px 24px;
+            margin: 0 16px;
+            color: #2A3342;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }}
         .nav-sublink {{
             display: block;
             min-height: 30px;
@@ -3757,19 +3787,23 @@ def generate_html_template(
             font-size: 0.85rem;
             font-weight: 600;
         }}
+        .journey-footer {{
+            display: flex;
+            justify-content: flex-start;
+            margin-top: 8px;
+        }}
         .journey-download {{
             display: inline-flex;
             align-items: center;
-            background: #0284C7;
-            color: #FFFFFF;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            font-weight: 700;
+            color: #64748B;
+            padding: 4px 0;
+            font-size: 0.85rem;
+            font-weight: 500;
             text-decoration: none;
         }}
         .journey-download:hover {{
-            background: #0369A1;
+            color: #0284C7;
+            text-decoration: underline;
         }}
         .journey-grid {{
             display: flex;
@@ -6380,7 +6414,7 @@ def generate_html_template(
                 </a>
                 {discovery_nav_html}
                 <a class="nav-section" @click="selectSection(planningTabs, 'business-use-cases')">
-                    <span>Planning</span>
+                    <span>Wave Planning</span> <span class="nav-preview-badge">Preview</span>
                 </a>
                 <div class="nav-group" v-show="planningTabs.includes(activeTab)">
                     <a @click="activeTab = 'business-use-cases'" class="nav-link" data-tab="business-use-cases" :class="{{active: activeTab === 'business-use-cases'}}">
@@ -7821,6 +7855,63 @@ def print_usage():
     print("      --output report.html")
 
 
+_SSIS_ETL_NAV_LINKS = (
+    ("#executive-summary", "AI Summary"),
+    ("#metrics", "Key Metrics"),
+    ("#package-summary", "Package Classification"),
+    ("#not-supported", "Component Conversion Breakdown"),
+)
+_INFORMATICA_ETL_NAV_LINKS = (
+    ("#informatica-executive-summary", "AI Summary"),
+    ("#informatica-metrics", "Key Metrics"),
+    ("#informatica-workflow-classification", "Workflow Classification"),
+    ("#informatica-component-breakdown", "Component Breakdown"),
+)
+
+
+def _etl_nav_sublinks(links: Tuple[Tuple[str, str], ...]) -> str:
+    return "".join(
+        f'<a @click="scrollToSection(\'{anchor}\', \'etl\')" class="nav-sublink">{label}</a>'
+        for anchor, label in links
+    )
+
+
+def build_etl_nav_sublist(*, has_ssis: bool, has_informatica: bool) -> str:
+    if not has_ssis and not has_informatica:
+        return ""
+    groups: List[str] = []
+    if has_ssis and has_informatica:
+        groups.append(
+            '<div class="nav-subhead">SSIS</div>' + _etl_nav_sublinks(_SSIS_ETL_NAV_LINKS)
+        )
+        groups.append(
+            '<div class="nav-subhead">Informatica</div>'
+            + _etl_nav_sublinks(_INFORMATICA_ETL_NAV_LINKS)
+        )
+    elif has_ssis:
+        groups.append(_etl_nav_sublinks(_SSIS_ETL_NAV_LINKS))
+    else:
+        groups.append(_etl_nav_sublinks(_INFORMATICA_ETL_NAV_LINKS))
+    inner = "".join(groups)
+    return f'<div v-if="activeTab === \'etl\'" class="nav-sublist">{inner}</div>'
+
+
+def discover_ssis_json(project_dir: Path) -> Optional[Path]:
+    etl_dir = project_dir / "artifacts" / "assessment" / "etl"
+    if etl_dir.is_dir():
+        matches = [p for p in etl_dir.glob("etl_assessment_analysis_*.json") if p.is_file()]
+        if matches:
+            matches.sort(key=lambda p: p.name, reverse=True)
+            return matches[0]
+    for candidate in (
+        project_dir / "assessment" / "ssis" / "etl_assessment_analysis.json",
+        project_dir / "assessment" / "etl_assessment_analysis.json",
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
@@ -7979,16 +8070,10 @@ def main():
                 args.waves_json = matches[-1]  # latest by timestamp
                 print(f"Using waves JSON: {args.waves_json}", file=sys.stderr)
         if not args.ssis_json:
-            # Check common locations for SSIS analysis output
-            candidates = [
-                args.project_dir / "assessment" / "ssis" / "etl_assessment_analysis.json",
-                args.project_dir / "assessment" / "etl_assessment_analysis.json",
-            ]
-            for candidate in candidates:
-                if candidate.is_file():
-                    args.ssis_json = candidate
-                    print(f"Using SSIS JSON: {args.ssis_json}", file=sys.stderr)
-                    break
+            discovered = discover_ssis_json(args.project_dir)
+            if discovered:
+                args.ssis_json = discovered
+                print(f"Using SSIS JSON: {args.ssis_json}", file=sys.stderr)
         if not args.anti_patterns_json:
             ap_dir = args.project_dir / "artifacts" / "assessment"
             if ap_dir.is_dir():

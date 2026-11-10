@@ -61,7 +61,7 @@ The setup response carries `workflow_path` (`artifacts/data_validation/workflows
 1. Read `workflow_path`.
 2. **Display** the workflow: the full YAML for a small or medium file; for a large one the path, `validationConfiguration`, sync block, `tables:` count and names, with the rest on request. Say when setup **reused** an existing file.
 3. **Summarize:** table count, validation mode/sync, effective validation toggles (`schema_validation`, `metrics_validation`, `row_validation`, `continue_on_failure`), which levels will run (e.g. schema + row; metrics off unless enabled), `partition_key_findings`, and `doctor_findings`.
-   - Setup runs `scai data doctor --config <workflow_path> --analyze-partition-keys`, the same probe migration setup runs. `doctor_findings.failures` are problems in this workflow or the infrastructure it needs: show them and resolve them with the user before run. `doctor_findings.warnings` are advisory. `doctor_note` means the doctor could not run, so there are no findings to read.
+   - Setup runs `scai data doctor --config <workflow_path> --analyze-partition-keys`, as migration setup does. Resolve `doctor_findings.failures` (this workflow or its infrastructure) with the user before run; `warnings` are advisory; `doctor_note` means the doctor could not run.
 4. **Small default run: do not ask.** Skip the question in step 5 when **both** hold:
    - the user said to go with the defaults (or just to run it), **or** `.scai/config/plugin.yml` records `data_orchestrator_placement: direct` (a small SQL Server source);
    - there are no `doctor_findings.failures`, no `Partition prune:` finding, no unapplied user-requested edit, and no agent-only blocker (step 8) that needs a value from the user.
@@ -88,7 +88,7 @@ The setup response carries `workflow_path` (`artifacts/data_validation/workflows
    - Write them into `workflow_path`, re-display the changed sections, and only then accept “Proceed” / confirmation to run.
    - **Do not** call `validate_data(mode="run")` while a user-requested edit is still unapplied.
    - **Never flip metrics on for "Full" mode** (Step 1.B): leave `metricsValidation: false` as setup wrote it unless the user asked for metrics.
-10. **Pre-run verification (hard gate).** Before calling `validate_data(mode="run")`, **re-read `workflow_path`** and confirm every user-requested edit from steps 6/9 is actually written to the file, `metricsValidation` matches the agreed value, and (for non-Snowflake L3) object-store strategies include `extraction.externalStage`. If a requested edit is missing, apply it now; do not run until the on-disk YAML matches what the user asked for. Then, unless step 4 applies, get **explicit confirmation** to run with the final workflow and continue to Step 3.
+10. **Pre-run verification (hard gate).** Before calling `validate_data(mode="run")`, **re-read `workflow_path`** and confirm every user-requested edit from steps 6/9 is actually written to the file, `metricsValidation` matches the agreed value, and (for non-Snowflake L3) object-store strategies include `extraction.externalStage`. If a requested edit is missing, apply it now; do not run until the on-disk YAML matches what the user asked for. `validate_data(mode="check", workflow_path=...)` must pass (fix `errors`, `doctor_failures`). Unless step 4 applies, get **explicit confirmation** to run with the final workflow and continue to Step 3. Run's `config_check.drift` not `unchanged`: tell the user.
 
 **Do not weaken L3 heuristically.** Do not infer exclusions from column names or source/target type pairs. Validate the configured columns and report mismatches. Any deterministic normalization or exclusion belongs in product configuration, not agent guesswork. One such exclusion is built in: L3 leaves source LOB columns out unless `includeLobColumnsInRowValidation` is `true`. If the user asks why a LOB column has no L3 result, say so, and offer the key; do not turn it on unasked.
 
@@ -211,7 +211,7 @@ On **Yes** (or no response), call `data_infrastructure(mode="down")` and relay t
 
 ```
 - [ ] Workflow generated (Step 1) and shown with the update question, or summarized in one line on a small default run (Step 2)
-- [ ] On-disk YAML re-read and matches every requested edit before validate_data(mode="run") (Step 2, step 10)
+- [ ] On-disk YAML re-read, matches every requested edit, and passes mode="check" before run (Step 2, step 10)
 - [ ] Monitor armed with the run's watch command; stalls diagnosed; verdict read from `terminal.detail.completion` (Step 4)
 - [ ] Finished-but-pending anomaly checked (Step 4.B — never "passed" with tables still Pending)
 - [ ] Error-first summary presented; re-validation menu offered when eligible, before teardown (Step 5)

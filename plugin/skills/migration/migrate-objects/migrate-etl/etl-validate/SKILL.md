@@ -170,6 +170,8 @@ The class is the CLI's verdict on *what* failed, and it decides what happens nex
 `comparison` goes to `validateEtlRepair`; every other class stops with its reason, because the
 converted code was not shown to be wrong.
 
+An SSIS source run whose error message contains `expected_failure.message` on the package source is a designed outcome. The runner marks that source branch successful and continues the comparison. When the comparison passes, the registry stamp is `completed`. Leave that package on the completed path. Do not send it to repair, and do not stop with `needs-user`.
+
 ## Step 3: Confirm stamp, then advance
 
 **Do not** invent a green or red outcome from narration. Re-read the unit via `query_registry` / `migration_status` and confirm the dispatched field matches the CLI summary. Then call `transition_status` so `TASK_EVENTS` get an `advanced` row (the CLI stamp alone is Path B — silent for the event log). `{TASK}` is the dispatched task (`etlValidate` or `validateEtlValidate`):
@@ -181,6 +183,8 @@ converted code was not shown to be wrong.
   Never pass a different `error` (`sql` included); for `validateEtlValidate` the server refuses to replace the CLI's class. For a class other than `comparison`, the response names the stop and its next step; relay it and stop. Do not start a repair yourself.
 
 If the CLI exited non-zero but the stamp is missing (registry write failed), say so explicitly and do **not** advance green — ask the user to re-run or investigate the registry write error.
+
+If tables matched but the stamp reads `failed` with `error: "production_run"`, the Snowflake re-run after the comparison failed, so the package is **not** validated. Surface `details.productionRun.error` and advance `outcome="failed"` with no `error`, like any other stamped class. The machine refuses `completed` while that failure stands; only a CLI re-run clears it.
 
 ## Step 4: Exclusion
 

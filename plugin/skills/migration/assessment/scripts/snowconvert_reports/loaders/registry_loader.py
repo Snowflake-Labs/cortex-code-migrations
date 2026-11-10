@@ -149,6 +149,9 @@ def load_registry_entries(
     return entries if keep_temp_table_stubs else drop_temp_table_stubs(entries)
 
 
+entry_full_name = _entry_full_name
+
+
 def build_id_to_name_map(entries: list[dict]) -> dict[str, str]:
     """Build a registry-ID -> ``[DB].[Schema].[Name]`` lookup."""
     mapping: dict[str, str] = {}

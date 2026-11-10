@@ -21,7 +21,8 @@ When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, t
 | `output_dir` | yes | where `ai_ssis_summary.html` is written; the CLI writes the assessment JSON to `<project_dir>/artifacts/assessment/etl/` regardless |
 | `etl_replatform_sources_path` | no | absolute path to the SSIS `.dtsx` source directory; falls back to auto-detection per [Step 1](#step-1-locate-input-files-auto-detected) |
 | `etl_assessment_skill_dir` | yes | absolute directory containing this SKILL.md. It lives under the installed plugin root at `skills/migration/assessment/etl-assessment`. Pass it to `uv run --project`. Never pass `project_dir`. |
-| `review_mode` | yes | `generate-only`, `auto-review-all`, or `skip` |
+| `review_mode` | yes | `generate-only`, `review-batch`, `summary-only`, `auto-review-all`, or `skip` |
+| `package_paths` | with `review-batch` | the relative package paths this agent reviews, at most 10 |
 | `ssis_target` | yes when SSIS is in scope | `dbt` or `scripting`. Persist it and use it for Step 3 and Step 4. |
 
 **On entry:** call the `configure` MCP tool with `project_dir` and, when `ssis_target` is present, `etl_ssis_target=<ssis_target>`. Snowflake credentials are not required — `scai assessment etl generate` reads converted CSVs and SSIS `.dtsx` sources.
@@ -29,7 +30,9 @@ When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, t
 **Branching by `review_mode`:**
 
 - `generate-only` — run Steps 1–2 (locate inputs + generate JSON). Return the `etl_assessment_analysis.json` path; do not run per-package analysis or the AI summary.
-- `auto-review-all` — run all four steps (locate inputs, generate, analyze every package per [references/analyze_ssis_package.md](references/analyze_ssis_package.md), draft the AI HTML summary, register it). Stop only when `stats` reports no pending packages.
+- `review-batch` — run Step 3 for `package_paths` only, as [references/analyze_ssis_package.md](references/analyze_ssis_package.md) § Batch mode says. Do not generate, do not run `pending`, do not write the AI summary. Return `ok` only when every path in `package_paths` is DONE.
+- `summary-only` — run Step 4 only, then `scai assessment etl stats`, and report its total, done and pending counts.
+- `auto-review-all` — direct entry only; the parent assessment never sends it. Run all four steps (locate inputs, generate, analyze every package per [references/analyze_ssis_package.md](references/analyze_ssis_package.md), draft the AI HTML summary, register it). Stop only when `stats` reports no pending packages.
 - `skip` — return immediately with `"status": "skipped"`.
 
 **On completion**, return **JSON only**:
@@ -74,6 +77,8 @@ On `skip`: `"status": "skipped"`, `"output_json": null`. On failure: `"status": 
      ran out of memory and froze the machine.
    - A large estate takes a long time. That is expected. Progress is saved after every `update`,
      so a later run resumes from `pending`.
+   - In `review-batch` mode the loop is your `package_paths`, and the parent sends the batches one
+     after another, never side by side.
 
 4. **Follow ONLY Provided Analysis Methods**
    - Use ONLY the workflow in [references/analyze_ssis_package.md](references/analyze_ssis_package.md)

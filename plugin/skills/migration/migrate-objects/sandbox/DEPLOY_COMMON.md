@@ -59,6 +59,15 @@ verbatim and stop, never retry with `--allow-existing-data`. Snowflake is
 untouched — that is the later `deploy` task. CREATE is skipped when the object
 already exists.
 
+**Live source write.** When a token still resolves to the live database
+(self-mapped or unbound) the tool runs nothing and returns
+`source_write_refused` with each `targets[]` server, database and tables. AIM
+never loads into or clears a source database it did not create, and no one can
+allow it: there is no override. Tell the user which database it is, offer the
+only fixes (bind the token to an empty database in database-bindings.yaml, or
+use testbed test data so AIM creates an isolated `AIMSBX_TB_*` copy, then call
+`configure` again), and return `stuck` until the binding is fixed.
+
 Do **not** pass `--profile` or `--database-bindings` — the tool injects them.
 Do **not** call `deploy`. Schema/ETL/BTEQ units and units with no source come
 back as `skipped`, not failed.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit CUR write edges from Hop transforms that write a database table.
+"""Emit CUR write edges from Hop transforms (and Pentaho steps) that write a database table.
 
 WHY THIS IS A SCRIPT AND NOT SKILL PROSE
 ----------------------------------------
@@ -42,7 +42,7 @@ Not in scope: Formula owning-table, bulk loaders, ExecSql,
 `tablename_in_field=Y` (dynamic table name — skipped, not guessed).
 
 Usage:
-  hop_write_deps.py --source <pipeline.hpl>
+  hop_write_deps.py --source <pipeline.hpl | transformation.ktr>
 
 Prints a JSON array to stdout:
   [{"schema": "dbo", "table": "DeprecatedTasks", "relationTypes": ["INSERT"],
@@ -64,6 +64,12 @@ UPDATE = "UPDATE"
 DELETE = "DELETE"
 MERGE_VERB = "MERGE"
 _VERB_ORDER = (INSERT, UPDATE, DELETE, MERGE_VERB)
+
+
+# Hop calls a step <transform>; Pentaho (Kettle, which Hop forked) calls it <step>. The sink plugin
+# ids (TableOutput, InsertUpdate, Update, Delete, SynchronizeAfterMerge, DimensionLookup,
+# CombinationLookup) and their <connection>/<schema>/<table>/<lookup> layout are the same in both.
+_STEP_TAGS = frozenset({"transform", "step"})
 
 
 def _local(tag: str) -> str:
@@ -135,7 +141,7 @@ def write_targets(source: Path | str) -> list[dict[str, object]]:
     root = ET.parse(path).getroot()
     by_key: dict[tuple[str, str, str], dict[str, object]] = {}
     for el in root.iter():
-        if _local(el.tag) != "transform":
+        if _local(el.tag) not in _STEP_TAGS:
             continue
         kind = _child_text(el, "type")
         sink = _SINKS.get(kind)
@@ -229,7 +235,7 @@ def sink_writes(source: Path | str) -> list[dict[str, object]]:
     root = ET.parse(Path(source)).getroot()
     out: list[dict[str, object]] = []
     for el in root.iter():
-        if _local(el.tag) != "transform":
+        if _local(el.tag) not in _STEP_TAGS:
             continue
         kind = _child_text(el, "type")
         sink = _SINKS.get(kind)
@@ -258,12 +264,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="hop_write_deps.py",
         description=(
-            "List Hop table sinks (TableOutput, InsertUpdate, Update, Delete, "
+            "List Hop / Pentaho table sinks (TableOutput, InsertUpdate, Update, Delete, "
             "SynchronizeAfterMerge, DimensionLookup, CombinationLookup) as "
             "write-deps for update_registry(field=dependencies.dependsOn)."
         ),
     )
-    parser.add_argument("--source", required=True, help="Hop .hpl (or .hwf) path")
+    parser.add_argument("--source", required=True, help="Hop .hpl (or .hwf) or Pentaho .ktr path")
     args = parser.parse_args(argv)
     path = Path(args.source)
     if not path.is_file():

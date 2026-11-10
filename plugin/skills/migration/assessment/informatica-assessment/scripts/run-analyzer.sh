@@ -57,7 +57,7 @@ python_is_311() {
 run_python() {
   local exe="$1"
   shift
-  exec "$exe" "$@" -X utf8 -m informatica_assessment_analyzer "${ANALYZER_ARGS[@]}"
+  exec "$exe" "$@" -X utf8 -m informatica_assessment_analyzer ${ANALYZER_ARGS[@]+"${ANALYZER_ARGS[@]}"}
 }
 
 ANALYZER_ARGS=("$@")
@@ -65,7 +65,7 @@ ANALYZER_ARGS=("$@")
 shopt -s nullglob
 for name in py python python3; do
   IFS=':' read -r -a path_dirs <<< "${PATH:-}"
-  for dir in "${path_dirs[@]}"; do
+  for dir in ${path_dirs[@]+"${path_dirs[@]}"}; do
     [ -n "$dir" ] || continue
     for candidate in "$dir/$name" "$dir/$name.exe"; do
       [ -x "$candidate" ] || continue
@@ -76,8 +76,8 @@ for name in py python python3; do
       case "$name" in
         py) prefix=(-3) ;;
       esac
-      if python_is_311 "$candidate" "${prefix[@]}"; then
-        run_python "$candidate" "${prefix[@]}"
+      if python_is_311 "$candidate" ${prefix[@]+"${prefix[@]}"}; then
+        run_python "$candidate" ${prefix[@]+"${prefix[@]}"}
       fi
     done
   done
@@ -97,7 +97,7 @@ done
 search_roots=()
 [ -n "${LOCALAPPDATA:-}" ] && search_roots+=("$LOCALAPPDATA/snowflake-cortex" "$LOCALAPPDATA/cortex")
 search_roots+=("$HOME_DIR/.snowflake/cortex")
-for root in "${search_roots[@]}"; do
+for root in ${search_roots[@]+"${search_roots[@]}"}; do
   [ -d "$root" ] || continue
   found="$(find "$root" -maxdepth 6 \( -path '*reladiff-runtime*' -name 'python' -o -path '*reladiff-runtime*' -name 'python.exe' \) -print -quit 2>/dev/null || true)"
   if [ -n "$found" ] && [ -x "$found" ] && python_is_311 "$found"; then
@@ -118,7 +118,7 @@ if [ -z "$uv" ]; then
   done
 fi
 if [ -n "$uv" ]; then
-  exec "$uv" run --project "$SKILL_ROOT" python -X utf8 -m informatica_assessment_analyzer "${ANALYZER_ARGS[@]}"
+  exec "$uv" run --project "$SKILL_ROOT" python -X utf8 -m informatica_assessment_analyzer ${ANALYZER_ARGS[@]+"${ANALYZER_ARGS[@]}"}
 fi
 
 fail

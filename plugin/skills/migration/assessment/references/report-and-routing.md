@@ -75,12 +75,15 @@ The common path is:
 scai assessment report \
   --plugin-version "<plugin_version>" \
   --project-dir "<project_dir>" \
-  --output "<project_dir>/assessment/multi_report.html" \
   [--ssis-json "<path>" when SSIS succeeded] \
   [--informatica-json "<path>" when Informatica succeeded]
 ```
 
-The command also writes a PDF of every tab beside the HTML (`multi_report.pdf`, or the `-o` stem with a `.pdf` extension). It needs Google Chrome, Microsoft Edge, or Chromium on the machine.
+Leave `--output` unset so the CLI names the file
+`{customer}_migration_plan_{yyyyMMdd_HHmmss}.html` under `assessment/`. The
+command also writes a PDF of every tab beside the HTML (same stem, or the `-o`
+stem with a `.pdf` extension). It needs Google Chrome, Microsoft Edge, or
+Chromium on the machine.
 
 `<plugin_version>` is the trimmed text of the plugin's `VERSION` file. It names
 the build on the report when `AIM_APP_VERSION` is unset.
@@ -109,7 +112,7 @@ scai assessment report \
   --snowconvert-reports-dir "<path>" \
   --ssis-json "<path>" \
   --informatica-json "<path>" \
-  --output "<path>/multi_report.html"
+  --output "<path>/{customer}_migration_plan_{yyyyMMdd_HHmmss}.html"
 ```
 
 An explicitly supplied source overrides discovery. A partial assessment passes

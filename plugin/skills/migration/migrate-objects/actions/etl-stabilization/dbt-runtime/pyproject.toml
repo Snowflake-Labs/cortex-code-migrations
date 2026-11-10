@@ -1,0 +1,17 @@
+[project]
+name = "stabilization-dbt-runtime"
+version = "1.0.0"
+description = "dbt CLI environment for the etl-stabilization dbt-test-gen and dbt-fixer sub-skills"
+requires-python = ">=3.11"
+# Kept out of the parent stabilization package so its scripts never install dbt. Pinned to the
+# dbt line testing-infrastructure/test-runner runs (its pyproject.toml), below the 2.x CLI.
+dependencies = [
+    "dbt-core>=1.12.4,<1.13",
+    "dbt-snowflake>=1.12,<1.13",
+]
+
+[tool.uv]
+package = false
+# dbt-core 1.12 requires this sdist, whose build downloads a binary from github.com for five
+# platforms only; dbt runs it solely under the opt-in --use-v2-parser, which no sub-skill passes.
+override-dependencies = ["dbt-core-experimental-parser; sys_platform == 'never'"]

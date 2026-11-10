@@ -27,8 +27,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .data_types_scan import TypeUsage, aggregate_usage, scan_ddl
-from .loaders.registry_loader import iter_in_scope_non_missing, load_registry_entries
+from .data_types_scan import ScannedTable, TypeUsage, aggregate_usage, scan_ddl_columns
+from .loaders.registry_loader import (
+    entry_full_name,
+    iter_in_scope_non_missing,
+    load_registry_entries,
+)
 from .testing_readiness import normalize_dialect
 from .type_coverage import TypeCoverage, coverage_for
 
@@ -84,13 +88,13 @@ def _resolve(project_root: Path, raw_path: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def _scan_tables(tables: list[dict], project_root: Path) -> list[tuple[str, ...]]:
-    """Column types per table, one entry per table the scan could read.
+def _scan_tables(tables: list[dict], project_root: Path) -> list[ScannedTable]:
+    """Columns per table, one entry per table the scan could read.
 
     A table whose DDL is missing, unreadable, or yields no recognizable column
     contributes no entry: it lowers scan coverage rather than inventing a type.
     """
-    scanned: list[tuple[str, ...]] = []
+    scanned: list[ScannedTable] = []
     for entry in tables:
         path = _resolve(project_root, _source_path(entry))
         if path is None:
@@ -99,9 +103,9 @@ def _scan_tables(tables: list[dict], project_root: Path) -> list[tuple[str, ...]
             ddl = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        types = scan_ddl(ddl)
-        if types:
-            scanned.append(types)
+        columns = scan_ddl_columns(ddl)
+        if columns:
+            scanned.append(ScannedTable(name=entry_full_name(entry), columns=columns))
     return scanned
 
 

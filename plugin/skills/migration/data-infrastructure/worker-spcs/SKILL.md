@@ -71,7 +71,6 @@ Record that exact version tag (e.g., `1.11.1`). Use it as `<version>` in all sub
 - `<source_type>`, `<host>`, `<port>`, `<database>` — from the project's scai source connection
 - `<warehouse>` — from the parent skill's Question 2
 - `<replica_count>` — the instance count the user provides in Step 4
-- `<driver-download-host>` — **(Oracle/Teradata only)** the hostname of the NuGet driver download endpoint; ask the user for this value if they are on Oracle or Teradata
 
 Affinity binds this worker to the workflow it should process — see the [Affinity Reference](../references/affinity-reference.md) for the model (and which affinity each orchestrator serves). The automatic `scai data worker setup` path uses the project's stable default. The custom service-spec path below needs an explicit label because `AGENT_AFFINITY` must exactly match the workflow.
 
@@ -114,13 +113,14 @@ Note the exact secret names — they are referenced in Step 4.
 
 > **Non-SPCS / local workers:** Snowflake Secrets above apply to SPCS container services only. For external vaults, AWS Secrets Manager REST providers, or `$(...)` command substitution in worker TOML, see [Advanced: Secrets management](../references/worker-config-reference.md#advanced-secrets-management).
 
-**Oracle and Teradata only:** The container requires outbound network access for two destinations: the source database host and the NuGet driver download endpoint. Ask the user to provide an `EXTERNAL_ACCESS_INTEGRATION` covering both. If they do not have one, show:
+**Oracle and Teradata only:** The container requires outbound network access to the source database host. Neither needs a NuGet driver endpoint. Oracle needs no other host: the worker uses `oracledb` thin mode and installs no client. Teradata also needs PyPI, because the worker pip-installs `teradatasql` at runtime: `pypi.org:443` and `files.pythonhosted.org:443`. Ask the user to provide an `EXTERNAL_ACCESS_INTEGRATION` covering these hosts. If they do not have one, show:
 
 ```sql
 CREATE NETWORK RULE <project>_DRIVER_EGRESS
   TYPE = HOST_PORT
   MODE = EGRESS
-  VALUE_LIST = ('<driver-download-host>:443', '<host>:<port>');
+  -- Oracle:   VALUE_LIST = ('<host>:<port>');
+  VALUE_LIST = ('<host>:<port>', 'pypi.org:443', 'files.pythonhosted.org:443');
 
 CREATE EXTERNAL ACCESS INTEGRATION <project>_DRIVER_ACCESS
   ALLOWED_NETWORK_RULES = (<project>_DRIVER_EGRESS)
@@ -157,11 +157,8 @@ CREATE SERVICE <metadata_database>.DATA_MIGRATION.DATA_EXCHANGE_SERVICE
             AGENT_AFFINITY: <label>
           resources:
             requests:
-              memory: 10G
-              cpu: 6
-            limits:
-              memory: 10G
-              cpu: 6
+              memory: 2Gi
+              cpu: 0.1
           secrets:
             - snowflakeSecret: <project>_SOURCE_USERNAME
               envVarName: DATA_SOURCE_USERNAME
@@ -172,11 +169,10 @@ CREATE SERVICE <metadata_database>.DATA_MIGRATION.DATA_EXCHANGE_SERVICE
   MAX_INSTANCES = <replica_count>;
 ```
 
-**Resource sizing:** The `memory: 10G / cpu: 6` values above match the `CPU_X64_M` instance family. Adjust to match your actual compute pool instance family — larger instance families support higher values.
+**Resource sizing:** The `memory: 2Gi / cpu: 0.1` values above match `scai data worker setup` (`SpcsServiceSpec` defaults; no resource limits). A `CPU_X64_S` pool can schedule them. Raise the request only if the user has a measured need; a `cpu: 6` request needs `CPU_X64_M`.
 
-**Pool fit:** with `cpu: 6`, each replica takes a whole `CPU_X64_M` node, so the pool's `MAX_NODES` must be at
-least the replica count plus one for the orchestrator. Keep the pool at `MIN_NODES = 1` and
-`AUTO_SUSPEND_SECS = 60` (see [Sizing a pool that also runs SPCS workers](../compute-pool-setup/SKILL.md#sizing-a-pool-that-also-runs-spcs-workers)).
+**Pool fit:** with the `scai` request, the orchestrator and two or three workers share one or two nodes.
+Keep the pool at `MIN_NODES = 1` and `AUTO_SUSPEND_SECS = 60` (see [Sizing a pool that also runs SPCS workers](../compute-pool-setup/SKILL.md#sizing-a-pool-that-also-runs-spcs-workers)).
 Adding replicas beyond what the source can serve raises the bill without speeding up the load.
 
 **Oracle/Teradata:** Add `EXTERNAL_ACCESS_INTEGRATIONS = (<project>_DRIVER_ACCESS)` on the line before `MIN_INSTANCES`.

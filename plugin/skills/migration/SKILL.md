@@ -1,6 +1,6 @@
 ---
 name: migration
-description: End-to-end database migration and data validation to Snowflake. Orchestrates migrations from source connection through conversion (including ETL jobs from Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory, and other ETL platforms alongside SSIS and Informatica PowerCenter), and project-based in-warehouse validation between Snowflake tables. Triggers: migrate, migration, migrate to snowflake, migrate ETL, migrate Talend, migrate Alteryx, migrate Informatica Cloud, migrate IICS, migrate DataStage, migrate Pentaho, migrate ADF, migrate Azure Data Factory, migrate other ETL, convert ETL, Snowflake to Snowflake validation, validate Snowflake tables, compare Snowflake databases.
+description: End-to-end database migration and data validation to Snowflake. Orchestrates migrations from source connection through conversion (including ETL jobs from Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory, and other ETL platforms through the AI-First approach, alongside natively supported SSIS and Informatica PowerCenter), and project-based in-warehouse validation between Snowflake tables. Triggers: migrate, migration, migrate to snowflake, migrate ETL, migrate Talend, migrate Alteryx, migrate Informatica Cloud, migrate IICS, migrate DataStage, migrate Apache Hop, migrate Hop, migrate Pentaho, migrate ADF, migrate Azure Data Factory, migrate other ETL, convert ETL, Snowflake to Snowflake validation, validate Snowflake tables, compare Snowflake databases.
 license: Proprietary. See License-Skills for complete terms
 ---
 
@@ -116,13 +116,13 @@ Each sub-skill handles its own internal routing based on the full `routing` obje
 These answer common questions about project state without loading a sub-skill:
 
 - **"What is the current state?"** — Call `migration_status(mode="summary")`, construct the narrative summary (as in Step 1), and present the progress checklist.
-- **"What should I work on next?"** — Call `migration_status(mode="my_objects_summary")` to get per-`(task, object_type)` counts plus `errored_count` and `done_count`. Present the list and **ask the user what they want to work on — do not pick for them**. When the user picks a group, drill down with `migration_status(mode="my_objects_details", group=<id>)`.
+- **"What should I work on next?"** — Call `migration_status(mode="my_objects_summary")` to get per-`(task, object_type)` counts plus `errored_count` and `done_count`. Present the list and **ask the user what they want to work on — do not pick for them**. A group with `writesSource` is blocked: it would delete rows in the live source database it names, and nothing can allow that. Never recommend it, list it first or call it a copy; offer rebinding it to an empty database or testbed test data instead. When the user picks a group, drill down with `migration_status(mode="my_objects_details", group=<id>)`.
 
 - **"Can I change conversion settings?"** / **"I picked defaults but need a conversion flag"** — Load `./convert/SKILL.md` → "Changing Conversion Settings Later". The same project keeps working: no new project or re-import.
 
 - **"How do I extend / customize the migration plugin?"** / **"How do I override task X?"** — Load `./extensibility/TASKS.md` for the full reference: overridable task ids, per-task contracts, the project-local + `$AIM_SKILL_EXT_DIR` paths, and registering code units with `kind=custom` plus a free-form `customKind` discriminator. Optionally call `migration_status(mode='extensions')` to show which overrides are active.
 
-- **"My migration also has FiveTran / SSAS / dbt / Airflow / Oracle PACKAGE bodies / scripts the engine doesn't generate"** / **"How do I track <non-built-in asset> in the migration?"** — Load `./setup/discover-extras/SKILL.md`. Registers each asset as a code unit with `kind=custom` and a `customKind` discriminator, then writes a `.scai/skills/<customKind>.md` cookbook with the customer so every object of that kind runs the same playbook (see `./extensibility/TASKS.md` → "Custom code units"). **Do not** list ETL platforms this migration converts (SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory) here — those go through **setup → register local ETL → convert**, not `discover-extras`.
+- **"My migration also has FiveTran / SSAS / dbt / Airflow / Oracle PACKAGE bodies / scripts the engine doesn't generate"** / **"How do I track <non-built-in asset> in the migration?"** — Load `./setup/discover-extras/SKILL.md`. Registers each asset as a code unit with `kind=custom` and a `customKind` discriminator, then writes a `.scai/skills/<customKind>.md` cookbook with the customer so every object of that kind runs the same playbook (see `./extensibility/TASKS.md` → "Custom code units"). **Do not** list ETL platforms this migration converts (SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory) here — those go through **setup → register local ETL → convert**, not `discover-extras`.
 
 ---
 
@@ -138,8 +138,8 @@ Match the user's request to the most relevant skill and load it.
 - If no skill matches, fall back to the section below.
 
 **ETL routing (do not shortcut):** any request to convert or migrate ETL jobs — SSIS,
-Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho,
-Azure Data Factory, or "some other ETL platform" — flows through **setup → register local
+Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop,
+Pentaho, Azure Data Factory, or "some other ETL platform" — flows through **setup → register local
 ETL → convert**, not `discover-extras`. `discover-extras` is for orchestration or engine-gap
 assets the user *doesn't* want converted (Airflow DAGs, Fivetran connectors, SSAS cubes,
 custom scripts). Never route a convert-my-ETL ask to `discover-extras` and never register
@@ -148,6 +148,17 @@ those ETL jobs as `customKind` cookbooks.
 - **Informatica PowerCenter** (on-prem repo XML export) → converted natively via the normal
   convert path.
 - **Informatica Cloud / IICS** → AI-First via convert Step 4.5. Do not confuse the two.
+- **Supported ETL platforms come in two kinds.** *Natively supported:* SSIS and
+  Informatica PowerCenter, converted by SnowConvert's own ETL converters. *AI-First
+  approach (not native):* Apache Hop (`.hpl` / `.hwf`) and Pentaho (`.ktr` / `.kjb`),
+  which go end to end through the plugin (register, convert, deploy, two-sided
+  `etl-validate`, DVF and repair), and Talend, Alteryx, Informatica Cloud / IICS,
+  DataStage, Azure Data Factory and any other ETL platform, through convert Step 4.5. When
+  you name an AI-First platform to the user, say it is an AI-First conversion, not native
+  support. AI-First is a model-assisted attempt at an end-to-end conversion, not native
+  support: coverage is narrower than SSIS and Informatica PowerCenter, steps with no
+  SnowConvert equivalent are written by a model or flagged for review, and each converted
+  job must pass validation before it is trusted.
 - Local `.dtsx`, PowerCenter XML repo export, or any unsupported ETL platform is **not**
   `project_type: code_conversion_only`. `code-conversion-only` is Sybase / Spark /
   Databricks / Greenplum / Netezza / Vertica / Hive / DB2 SQL. If the user has ETL to
@@ -208,7 +219,7 @@ those ETL jobs as `customKind` cookbooks.
 
 ### Customization
 - **task-overrides** — replace the skill that runs for any built-in task with the user's own `SKILL.md`, scoped to the project or to a global directory via `$AIM_SKILL_EXT_DIR`. Triggers: "extend the plugin", "customize task X", "swap out the skill for Y", "override registerCode/convertCode/deploy/...". Reference: `./extensibility/TASKS.md`
-- **discover-extras** — register assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PACKAGE bodies, custom shell scripts) as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved `databaseObject` / `script` / `etl` / `custom` set) so they flow through orchestration alongside built-in units. Triggers: "I have FiveTran / SSAS / dbt / a script that touches the database", "register custom asset", "track <non-built-in> in the migration". **Not** for ETL the user wants converted: SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, and Azure Data Factory go through **setup → register → convert** (native or AI-First Step 4.5). Skill: `./setup/discover-extras/SKILL.md`. Reference: `./extensibility/TASKS.md` (Custom code units).
+- **discover-extras** — register assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PACKAGE bodies, custom shell scripts) as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved `databaseObject` / `script` / `etl` / `custom` set) so they flow through orchestration alongside built-in units. Triggers: "I have FiveTran / SSAS / dbt / a script that touches the database", "register custom asset", "track <non-built-in> in the migration". **Not** for ETL the user wants converted: SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, and Azure Data Factory go through **setup → register → convert** (native for SSIS and Informatica PowerCenter, AI-First Step 4.5 for the rest). Skill: `./setup/discover-extras/SKILL.md`. Reference: `./extensibility/TASKS.md` (Custom code units).
 
 ## Fallback
 

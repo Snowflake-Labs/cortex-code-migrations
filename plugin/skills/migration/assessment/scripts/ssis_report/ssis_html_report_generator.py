@@ -127,7 +127,6 @@ class HTMLReportGenerator:
         self,
         json_path: str,
         executive_summary_path: str = None,
-        ai_estimation_enabled: bool = False,
         registry_packages: Optional[List[Dict[str, str]]] = None,
     ):
         """
@@ -136,14 +135,12 @@ class HTMLReportGenerator:
         Args:
             json_path: Path to etl_assessment_analysis.json (contains AI analysis)
             executive_summary_path: Optional path to executive summary text file
-            ai_estimation_enabled: Whether to show AI effort estimation (default: False)
             registry_packages: Optional SSIS packages from the code unit registry
                 (``{"path", "status"}``); those missing from the JSON are counted
                 and listed with their conversion status.
         """
         self.json_path = Path(json_path)
         self.executive_summary_path = Path(executive_summary_path) if executive_summary_path else None
-        self.ai_estimation_enabled = ai_estimation_enabled
         
         # Load data - AI analysis is now included in the main JSON
         with open(self.json_path, 'r', encoding='utf-8') as f:
@@ -553,17 +550,6 @@ class HTMLReportGenerator:
             if unassessed_count else "SSIS packages found"
         )
 
-        # Conditionally include AI Effort card
-        ai_effort_card = ""
-        if self.ai_estimation_enabled:
-            ai_effort_card = f"""
-                <div class="metric-card">
-                    <div class="metric-label">Estimated AI Effort</div>
-                    <div class="metric-value">{summary.get('estimated effort hours', 0):,}</div>
-                    <div class="metric-description">AI migration hours estimate</div>
-                </div>
-            """
-        
         return f"""
         <section id="metrics" class="section">
             <h2>Key Metrics</h2>
@@ -603,7 +589,6 @@ class HTMLReportGenerator:
                     <div class="metric-value">{summary.get('control flow components', 0):,}</div>
                     <div class="metric-description">Workflow and orchestration tasks</div>
                 </div>
-                {ai_effort_card}
             </div>
         </section>
         """
@@ -822,7 +807,6 @@ class HTMLReportGenerator:
                 classification = 'Unclassified'
             flags = package.get('flags', {})
             has_scripts = flags.get('has_scripts', False)
-            effort = ai_analysis.get('estimated_effort_hours', 'N/A')
             package_name = package.get('name', 'N/A')
             package_path = package.get('path', 'N/A')
             
@@ -867,10 +851,7 @@ class HTMLReportGenerator:
                 package_name_html = f'<a href="{detail_filename}" target="_blank" style="text-decoration: none;"><span style="display: inline-block; background: #f3f4f6; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500; color: #1f2937;">{display_name} ↗</span></a>'
             else:
                 package_name_html = f'<span style="display: inline-block; background: #f3f4f6; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500;">{display_name}</span>'
-            
-            # Conditionally include effort column
-            effort_cell = f'<td style="text-align: center; font-weight: 500;">{effort}</td>' if self.ai_estimation_enabled else ''
-            
+
             # Get AI analysis text for tooltip
             ai_analysis_text = ai_analysis.get('analysis', '').strip()
             
@@ -902,7 +883,6 @@ class HTMLReportGenerator:
                 <td><span style="display: inline-block; background: #f3f4f6; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500;">{classification}</span></td>
                 <td style="text-align: center;"><span style="display: inline-block; background: #f3f4f6; color: {complexity_color}; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500;">{complexity}</span></td>
                 <td style="text-align: center;">{indicators_html if indicators_html else '<span style="color: #d1d5db;">—</span>'}</td>
-                {effort_cell}
             </tr>
             """
         
@@ -972,11 +952,10 @@ class HTMLReportGenerator:
             <table id="packageTable">
                 <thead>
                     <tr>
-                        <th style="width: {'32%' if not self.ai_estimation_enabled else '30%'};">Package Name</th>
-                        <th style="width: {'28%' if not self.ai_estimation_enabled else '24%'};">Classification</th>
-                        <th style="width: {'20%' if not self.ai_estimation_enabled else '16%'}; text-align: center;">Complexity</th>
-                        <th style="width: {'20%' if not self.ai_estimation_enabled else '15%'}; text-align: center;">Indicators</th>
-                        {'<th style="width: 15%; text-align: center;">AI Effort (hrs)</th>' if self.ai_estimation_enabled else ''}
+                        <th style="width: 32%;">Package Name</th>
+                        <th style="width: 28%;">Classification</th>
+                        <th style="width: 20%; text-align: center;">Complexity</th>
+                        <th style="width: 20%; text-align: center;">Indicators</th>
                     </tr>
                 </thead>
                 <tbody id="packageTableBody">
@@ -1479,7 +1458,6 @@ class HTMLReportGenerator:
             classification = 'Unclassified'
         flags = package_csv_row.get('flags', {})
         has_scripts = flags.get('has_scripts', False)
-        effort = ai_analysis_obj.get('estimated_effort_hours', 'N/A')
         ai_analysis = ai_analysis_obj.get('analysis', '')
         
         metrics = package_json_data.get('metrics', {})
@@ -1734,7 +1712,6 @@ class HTMLReportGenerator:
                     <div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: {comp_style['color']}; opacity: 0.8; margin-bottom: 0.375rem;">Complexity</div>
                     <div style="font-size: 1rem; font-weight: 600; color: {comp_style['color']};">{complexity}</div>
                 </div>
-                {'<div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: 1rem 1.25rem;"><div style="font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: #1e40af; opacity: 0.8; margin-bottom: 0.375rem;">AI Effort Estimate</div><div style="font-size: 1rem; font-weight: 600; color: #1e40af;">' + str(effort) + ' hours</div></div>' if self.ai_estimation_enabled else ''}
             </div>
         </section>
         

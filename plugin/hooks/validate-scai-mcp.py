@@ -236,6 +236,13 @@ def _version_core(text: str) -> Optional[Tuple[int, ...]]:
     return tuple(int(part) for part in match.group(1).split("."))
 
 
+def is_development_build(version: str) -> bool:
+    """Local and ``make temp`` builds are stamped 0.0.0 on the dev channel
+    (``scripts/publish.sh``); no release is ever numbered 0.0.0."""
+    core = _version_core(version)
+    return core is not None and not any(core)
+
+
 def _older_than(current: str, minimum: str) -> bool:
     left = _version_core(current)
     right = _version_core(minimum)
@@ -245,6 +252,20 @@ def _older_than(current: str, minimum: str) -> bool:
     left = left + (0,) * (width - len(left))
     right = right + (0,) * (width - len(right))
     return left < right
+
+
+def unstamped_build_warning(version: str, *, min_file: Path) -> Optional[str]:
+    """The note SessionStart logs, instead of failing, when *version* is an unstamped local build."""
+    if not is_development_build(version) or not min_file.is_file():
+        return None
+    minimum = min_file.read_text(encoding="utf-8").strip()
+    if not minimum:
+        return None
+    return (
+        f"scai {version} is a local build with no version stamp, so plugin minimum {minimum} "
+        "is not checked. The Code Unit Registry check still applies. To check the minimum too, "
+        f"publish scai with --version {minimum} or newer."
+    )
 
 
 def assessment_venv(home: Optional[Path] = None, environ: Optional[dict] = None) -> Path:
@@ -311,7 +332,8 @@ def install_gate(version: str, *, venv: Path, min_file: Path, min_cur_file: Opti
 
     A missing assessment venv is not a failure: the first report creates it.
     A venv without pip is the ASM0028 failure from locked-down machines.
-    ``min-scai-version`` in the plugin root is the oldest scai this plugin may drive.
+    ``min-scai-version`` in the plugin root is the oldest scai this plugin may drive;
+    a development build (0.0.0, dev channel) is not held to it.
     ``min-cur-version`` is the oldest Code Unit Registry it may drive: a version number cannot tell,
     since develop builds are numbered as a prerelease of the last release on a newer registry.
     An unreadable registry version is not a failure; the MCP server then stamps no apacheHop.
@@ -328,7 +350,7 @@ def install_gate(version: str, *, venv: Path, min_file: Path, min_cur_file: Opti
                 "fails with ASM0028. Delete that folder or repair pip.",
             )
 
-    if min_file.is_file() and version != "unknown version":
+    if min_file.is_file() and version != "unknown version" and not is_development_build(version):
         minimum = min_file.read_text(encoding="utf-8").strip()
         if minimum and _older_than(version, minimum):
             return (
@@ -395,6 +417,9 @@ def main() -> int:
     if install is not None:
         report(*install)
         return 1
+    warning = unstamped_build_warning(version, min_file=_PLUGIN_ROOT / "min-scai-version")
+    if warning:
+        report("WARNING", warning)
     return 0
 
 

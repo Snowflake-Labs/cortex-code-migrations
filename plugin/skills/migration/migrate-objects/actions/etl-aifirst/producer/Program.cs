@@ -100,6 +100,7 @@ internal static class Program
   {
     // A real exit code, unlike Assemblies/CmdRunner/Program.cs:34 which is `void Main` and
     // therefore exits 0 after a crash (ENG-009). A callable migrator has to be able to fail.
+    EngineIdGeneratorGuard.Install();
     var noShim = Array.IndexOf(args, "--no-shim") >= 0;
     var novelOrchestration = Array.IndexOf(args, "--novel-orchestration") >= 0;
     var relineage = Array.IndexOf(args, "--relineage") >= 0;

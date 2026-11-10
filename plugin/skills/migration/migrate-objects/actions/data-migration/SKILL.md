@@ -81,6 +81,7 @@ The same `where` maps to the same `artifacts/data_migration/workflows/<hash>.yam
 1. Read `workflow_path`.
 2. **Display** the workflow: the full YAML for a small or medium file; for a large one the path, `tables:` count, `defaultTableConfiguration` and table names, with the rest on request. Say whether setup reused the file (`workflow_reused`).
 3. **Summarize:** table count, type, sync, extraction, target, and any `partition_key_findings`, `doctor_findings` and `computed_column_findings`. Resolve `doctor_findings.failures` with the user before run (`warnings` are advisory; `doctor_note` means the doctor could not run). **Incremental with no `sync_strategy`:** recommend one [per table](./references/workflow-config-reference.md#recommending-a-strategy-per-table) and confirm each.
+   - `computed_column_findings` (any source dialect) need no workflow edit: never add one to `excludeSourceColumns` or `columnNameMappings`. Each names the deployed target the load sees. `kind: virtual`: the target defines the columns `AS (<expr>)`, so the load leaves them out and Snowflake computes them. `kind: flagged`: the converted `CREATE TABLE` under `snowflake/` left them out under an `SSC-FDM-0048` comment, so the load skips them and the finding's `view` (`<table>_View`) computes them. Every other column, including a computed one the target holds as an ordinary column, gets the source's values, as does every column of a table data migration creates itself.
 4. **Small default run: do not ask.** Skip the question in step 5 when **both** hold:
    - the user said to go with the defaults (or just to run it), **or** `.scai/config/plugin.yml` records `data_orchestrator_placement: direct` (a small SQL Server source);
    - there are no `doctor_findings.failures`, no `Partition prune:` finding, no sync strategy still to choose, no unapplied user-requested edit, and no agent-only blocker (step 8) that needs a value from the user.
@@ -100,16 +101,20 @@ The same `where` maps to the same `artifacts/data_migration/workflows/<hash>.yam
    - Resolve `partition_key_findings` other than a `Partition prune:` row (confirm that in step 7) and `columnNamesToPartitionBy` per `edit_hints`. An omitted key is allowed (the orchestrator infers one, or extracts a small table whole); a table that fails naming `columnNamesToPartitionBy` needs a key, never `[]`. Prefer an explicit key for large tables, by dialect as in [Partition sizing and key selection](./references/workflow-config-reference.md#partition-sizing-and-key-selection); for low-cardinality prune columns, a [composite key](./references/workflow-config-reference.md#composite-partition-keys).
 
      **Show the table's columns first**, in the message before you write `columnNamesToPartitionBy`: the pick, why it beats the others, and the columns (from DDL or `query_source`; wide tables: candidates only, the rest on request), per [Showing the columns behind a key](./references/workflow-config-reference.md#showing-the-columns-behind-a-key).
-   - Resolve `computed_column_findings` (SQL Server COMPUTED columns): drop each listed column from the table's column list / `columnNameMappings`; the target column is redefined or recomputed post-migration.
    - **Preliminary type:** add `whereClauseCriteria: "<row predicate>"` per table or in `defaultTableConfiguration` when missing.
    - Required **extraction strategy** fields (`extraction.strategy`, `externalStage`, worker TOML cross-refs for `unload` / `write_nos` / `dbms_cloud` / `tpt`).
    - **Iceberg target:** ask the user for every `<PLACEHOLDER>` setup left in `icebergConfig` ([IcebergConfig](./references/workflow-config-reference.md#icebergconfig)); `run` refuses the workflow until none is left.
    - Tell the user what you changed and why before confirming.
-9. Unless step 4 applies, get **explicit confirmation** to run with the final workflow, then continue to Step 3.
+9. **Check (hard gate):** after the last edit, also on a small default run, `migrate_data(mode="check", workflow_path=...)` must pass; else fix its `errors` and `doctor_failures` and re-check.
+10. Unless step 4 applies, get **explicit confirmation** to run with the final workflow, then continue to Step 3. If run's `config_check.drift` is not `unchanged`, tell the user.
 
 #### Never write `columnNamesToPartitionBy: []`
 
 An explicit `[]` turns partitioning off: the whole table moves as one long serial unit, however large. Write it only when the user **explicitly** asks for a single partition after hearing that cost, and never in `defaultTableConfiguration` (every table without its own key) unless they asked for exactly that.
+
+#### Experimental `boundaryDiscoveryMode` (Redshift only)
+
+Never set it on a non-Redshift source. On Redshift, leave it unset (`accurate`) unless the user accepts an experimental mode, per [Experimental boundary discovery modes](./references/workflow-config-reference.md#experimental-boundary-discovery-modes-redshift).
 
 ---
 
@@ -221,4 +226,4 @@ Return control to the parent skill.
 
 ## Reference
 
-[Workflow config](./references/workflow-config-reference.md), [extraction strategies](./references/extraction-strategies-reference.md), [Iceberg setup](./references/iceberg-setup-reference.md), [background monitoring](./references/background-monitoring.md), [task model](./references/task-model-reference.md), [troubleshooting](./references/troubleshooting-reference.md), [advanced operations](../../../data-infrastructure/references/advanced-operations-reference.md), [data doctor](../../../data-infrastructure/references/data-doctor-reference.md).
+Beyond those linked above: [Iceberg setup](./references/iceberg-setup-reference.md), [task model](./references/task-model-reference.md), [data doctor](../../../data-infrastructure/references/data-doctor-reference.md).

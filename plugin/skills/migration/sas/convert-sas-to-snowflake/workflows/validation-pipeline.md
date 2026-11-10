@@ -18,17 +18,23 @@ Tools (stdlib Python, print only findings + one summary line — never `cat` the
 
 ## Step 1 inputs (asked once, with the other Step 1 questions — see SKILL.md)
 
-| Question | Answer feeds |
-|---|---|
-| Validation depth: **T1** compile only (no credits) / **T2** + unit test on test data / **T3** + end-to-end on full data / none | which tiers run; no further consent prompts |
-| Where do the source tables live in Snowflake? (schemas, or "not in Snowflake") | registry probe |
-| DDL for inputs/outputs? (`.sql` CREATE TABLEs or `table,column,type` CSV) | `tables.py import-ddl` |
-| Test data for T2? (tables, or CSV/parquet on a stage) — else synthetic | T2 seeding |
-| SAS outputs to compare against? (tables/CSVs produced by SAS on the same inputs) — else LLM trace | T2/T3 baseline |
-| T3 only: full-data location per input, and SAS full-run outputs if any | `tables.py update --full-data-fqn / --sas-output-fqn` |
+Questions are asked in SKILL.md Step 1 (Call B/C); this maps each answer to its use.
 
-Anything not supplied is inferred and **named as inferred in the report**. Credit-using tiers
-(T2, T3) were approved by this answer; do not re-prompt per phase.
+| `validation_selections` key | Answer feeds |
+|---|---|
+| `depth` | which tiers run; no further consent prompts |
+| `source_location` | registry probe (skipped when `not_in_snowflake`) |
+| `ddl` | `user:<path>` → `tables.py import-ddl` first, infer only uncovered tables; `infer` → `references/schema-inference.md` |
+| `test_data` | T2 seeding (`synthetic` → `references/synthetic-data-rules.md`) |
+| `baseline` | T2/T3 baseline (`trace` → LLM trace) |
+| T3 full-data location | `tables.py update --full-data-fqn / --sas-output-fqn` |
+
+Infer, synthesize or trace **only when the user chose that option**; a missing answer is a skill
+error (`sql_check.py selections` fails), not an inferred value. Name every inferred input in the
+report. Credit-using tiers (T2, T3) were approved by the depth answer; do not re-prompt per phase.
+
+`render-ddl` heads `source_table_ddl.sql` with `-- DDL source: user|inferred|mixed` (from each row's
+`columns_from`).
 
 ---
 
@@ -52,9 +58,11 @@ Gate passes at `errors=0`. Record `gates.static_check`.
 1. Locations given → `tables.py probe tables.json --schemas DB.SCH[,…]` prints ONE query; run it,
    save its single JSON cell to `<out>/probe_result.json`, then `tables.py ingest tables.json
    probe_result.json --schemas …`. Inputs not found are marked `not_found`; bare names shared by
-   two librefs are reported `ambiguous` — ask once, then `tables.py update … --fqn`.
-2. DDL given → `tables.py import-ddl tables.json <file>`.
-3. Remaining inputs with no columns → infer per `references/schema-inference.md`, recorded with
+   two librefs are reported `ambiguous` — resolve with the Step 1 library mapping (no new prompt);
+   if still ambiguous, bind the first libref (`tables.py update … --fqn`) and list it as a report
+   assumption.
+2. DDL given (`ddl: user:<path>`) → `tables.py import-ddl tables.json <file>`.
+3. Remaining inputs with no columns (`ddl: infer`, or tables the user file missed) → infer per `references/schema-inference.md`, recorded with
    `tables.py update --batch rows.jsonl --by convert` (one write). Add every WORK intermediate the
    SQL creates as `"role": "intermediate"`. Rows with `"macro_name": true` are name patterns
    (`LIB.T&SUFFIX`): bind the resolved name with `tables.py update … --fqn` before probing or seeding.
@@ -180,7 +188,9 @@ For each failure, in plan order (the first blocker of the earliest file first):
 `conversion_state.json` (fields read by Step 10 and on resume):
 ```json
 {
-  "validation_selections": {"depth": "T1|T2|T3|none", "test_data": "user|synthetic", "baseline": "sas_outputs|trace"},
+  "validation_selections": {"depth": "T1|T2|T3|none", "source_location": "<DB.SCHEMA>|not_in_snowflake",
+                            "ddl": "user:<path>|infer", "test_data": "user:<location>|synthetic",
+                            "baseline": "sas_outputs:<location>|trace"},
   "gates": {"static_check": "PASSED|BLOCKED", "t1_compile": "PASSED|BLOCKED|SKIPPED",
             "t2_unit": "PASSED|BLOCKED|SKIPPED", "t3_e2e": "PASSED|BLOCKED|SKIPPED"},
   "trace_progress": {"files_traced": [], "files_remaining": []}

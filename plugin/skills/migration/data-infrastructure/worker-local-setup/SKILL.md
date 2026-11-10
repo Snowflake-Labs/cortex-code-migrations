@@ -17,7 +17,7 @@ Prerequisites depend on the **source dialect** and the **extraction strategy** c
 
 ### SQL Server — `regular` (`odbc` method)
 
-`scai` installs the Data Exchange Worker with Microsoft's native `mssql-python` driver (the worker's `sqlserver` extra), which bundles its own ODBC binaries. On Windows, Linux and macOS 15 or later the worker then reads SQL Server with no ODBC driver installed on the host. Skip the ODBC pre-flight below and continue to Step 1 only when none of the cases below applies.
+`scai` installs the Data Exchange Worker with Microsoft's native `mssql-python` driver (the worker's `sqlserver` extra), which bundles its own ODBC binaries. On Windows, Linux and macOS 15 or later the worker then reads SQL Server with no ODBC driver installed on the host. Skip the ODBC pre-flight below and continue to Step 1 only when none of the cases below applies; on macOS, run its OpenSSL check even then.
 
 The Microsoft ODBC Driver for SQL Server (`msodbcsql18`, with unixODBC on Linux and macOS) is still required, so run the pre-flight below, when:
 
@@ -42,13 +42,13 @@ Do not use `odbcinst -q -d` for this on Linux: once a user-level install (route 
 - A `FAILED:` line saying a variable is already set in the environment: the real environment beats `.env`, so the user must set it as the line says where it is defined, then restart the app.
 - Any other `FAILED:` line: the driver is missing or broken; continue below.
 
-**On macOS**, run:
+**On macOS**, run this, adding `--driver` when a case above applies (it also checks that an ODBC Driver for SQL Server is registered):
 
 ```bash
-odbcinst -q -d 2>/dev/null | grep -i "ODBC Driver"
+python3 "<worker_local_setup_skill_dir>/scripts/check_openssl_macos.py"
 ```
 
-If it returns a driver name (e.g. `[ODBC Driver 18 for SQL Server]`), the driver is present — continue to Step 1.
+The SQL Server driver, `mssql-python`'s bundled copy too, loads OpenSSL from Homebrew's `openssl` alias and rejects OpenSSL 4. The check only reads. On `OK:` continue to Step 1. On an OpenSSL `FAILED:` line, do not start the worker: give the user the exact commands it names to run themselves (no `sudo`), then re-run the check; never run them yourself, as they change the user's Homebrew. On a driver `FAILED:` line, continue below.
 
 **Otherwise** the driver is missing. **Do not start the local worker.** Never run `sudo` or an interactive installer yourself.
 
@@ -77,7 +77,7 @@ After a user-level install, if `scai data worker start` still fails its doctor w
 > brew update
 > HOMEBREW_ACCEPT_EULA=Y brew install msodbcsql18
 > ```
-> The `brew tap` step may ask you to confirm adding a third-party repository — this is expected.
+> The `brew tap` step may ask you to confirm adding a third-party repository — this is expected. If `brew install` refuses the formula as untrusted, run the `brew trust` command it prints (e.g. `brew trust --formula microsoft/mssql-release/msodbcsql18`), then install again.
 >
 > **macOS — without Homebrew:**
 > Download and install the `.pkg` from the [Microsoft ODBC Driver download page](https://learn.microsoft.com/sql/connect/odbc/download-odbc-driver-for-sql-server). Choose the macOS package matching your architecture (`arm64` for Apple Silicon, `x86_64` for Intel).
@@ -88,7 +88,7 @@ After a user-level install, if `scai data worker start` still fails its doctor w
 > ```
 > Then resume the setup.
 
-Once the user confirms the driver is installed, re-run the check and continue.
+Once the user confirms the driver is installed, re-run the check and continue: installing `msodbcsql18` can move Homebrew's `openssl` alias to OpenSSL 4. No macOS step needs `sudo`; never ask for one, or for links you do not name.
 
 ### PostgreSQL — `pg_copy` or `odbc`
 
@@ -199,11 +199,12 @@ Tell the user:
 
 ## Step 3 — Verify the Worker Is Running
 
-On this machine, read the `up` response: `status` is `ready`, `worker` is `started` and `worker_placement` is `local`. Relay its `cost_reminder`. Any other `status` carries a `message` and `remediation`: follow them. On another host, `--detach` exiting 0 means the worker is polling for tasks.
+On this machine, read the `up` response: `status` is `ready`, `worker` is `started` (or `already_running`, a worker scai started earlier for this project) and `worker_placement` is `local`. Relay its `cost_reminder`. Any other `status` carries a `message` and `remediation`: follow them. On another host, `--detach` exiting 0 means the worker is polling for tasks.
 
 If the worker fails to start, check:
 - **SQL Server only:** the doctor's *SQLServer driver* row. It passes whenever `mssql-python` is installed, which is not enough on its own: when it fails, or on macOS 14 or earlier, with `bcp` or `cet_as`, or with an `extra_options` keyword `mssql-python` does not accept, the ODBC driver must be installed (`odbcinst -q -d | grep -i "ODBC Driver"`, or `install_odbc_user.py --check` after a user-level install) — if missing, follow the pre-flight instructions in the Prerequisites section above
 - Source database credentials in the TOML config
+- On macOS, your own ODBC probe with `Server=localhost` can fail with TCP error `0x2AF9` where `127.0.0.1` works: probe `127.0.0.1`. The worker already connects to `127.0.0.1` for `localhost`, so leave the TOML as it is
 - Network connectivity to the source database from the host
 - Snowflake connection details in `~/.snowflake/config.toml` (or `%USERPROFILE%\.snowflake\config.toml` on Windows)
 

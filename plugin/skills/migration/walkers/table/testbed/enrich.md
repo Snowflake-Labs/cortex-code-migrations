@@ -31,6 +31,7 @@ a routine came from that routine's predicate or join: find it with `source_evide
 | `enum_domain` (undeclared) | `value/inferred_enum.md`, covering every value in the row's `mined_values` (what routines write or test); unclassifiable residue → `value/flag_for_llm.md` |
 | `check` / lookup floors | `value/must_include.md` |
 | column null semantics | `value/null_fraction_override.md` |
+| `calendar_column` | `value/derivation.md`, only for a column whose value is a function of the row's run-date column (`columns[0]`) under a convention the workload states; leave every other row unanswered |
 
 **Cross-table rows.** `mine` tags each `branch_predicate` row that names another table with
 `cross_table`; follow the tag, never re-derive it from other tables' DDL:

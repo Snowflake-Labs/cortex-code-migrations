@@ -286,4 +286,8 @@ close-out, even if you said it before: the autonomous run starts right after.
 > migration) is designed to be multi-user, with multiple engineers
 > working through waves in parallel.
 
-Then return to the parent migration skill.
+**In AIM (`shown_on_card`) with `run_mode` `autonomous`:** end the turn
+after the close-out. Do not return to the parent migration skill or load
+another skill: AIM starts the autonomous run in its own chat.
+
+Otherwise, return to the parent migration skill.
