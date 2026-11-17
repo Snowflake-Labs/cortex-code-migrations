@@ -8,10 +8,10 @@ This guide helps users understand how to effectively use the SnowConvert Assessm
 
 The SnowConvert Assessment Skill analyzes your database migration workload using SnowConvert output files. It helps you:
 
-- **Find business use cases** - Identify the outcomes your workload delivers (reports, marts, feeds) and plan one migration wave per use case, its objects in dependency order
+- **Find business use cases** - Identify the outcomes your workload delivers (reports, marts, feeds). Objects still get size-based wave numbers and ranks.
 - **Identify exclusions** - Find temporary, staging, and deprecated objects that may not need migration
 - **Surface migration optimization opportunities** - Group SnowConvert findings into performance, architecture/security, and behavior/semantic risk buckets (SQL Server)
-- **Analyze complexity** - Assess Dynamic SQL patterns and SSIS packages for migration effort
+- **Analyze complexity** - Assess Dynamic SQL patterns, and SSIS packages or Informatica PowerCenter workflows, for migration effort
 - **Map data lineage** - See sources, pipelines, targets, and reports; include Power BI `.pbit` files when you have a reporting layer to enrich the graph
 - **Generate reports** - Create interactive HTML reports for stakeholders
 
@@ -35,7 +35,7 @@ Before using this skill, ensure you have:
    - `ObjectReferences.csv` - Object dependencies
    - `TopLevelCodeUnits.csv` - Object metadata
    - `Issues.csv` - For Dynamic SQL analysis (optional)
-   - `ETL.Elements.csv` and `ETL.Issues.csv` - For SSIS analysis (optional)
+   - `ETL.Elements.csv` and `ETL.Issues.csv` - Enrich the SSIS or Informatica analysis (optional). The ETL packages and workflows themselves come from the code unit registry that `scai code add` writes
 
 2. **Python 3.11+** installed
 
@@ -85,6 +85,14 @@ wave size or priorities. Each use case becomes one wave, and its objects deploy
 in dependency order. The top three are shown in chat; the dashboard's
 **Wave Planning** section (Preview) lists every use case with its narrative, counts and
 deployment stages.
+
+The converted code is enough. For a more complete result you can also provide,
+when the assessment asks, a scheduler export (Control-M, cron) for Informatica,
+SQL Server Agent jobs for SSIS, and an object usage summary from your query
+logs. They show which jobs really run and which outputs are still read, so
+more use cases are confirmed instead of proposed. The Wave Planning section
+lists what was provided and what each missing input would add. All of them are
+optional, and none is copied into the results.
 
 **Start with a different use case:**
 ```
@@ -188,6 +196,12 @@ Analyze Dynamic SQL patterns in my codebase
 Assess my SSIS packages for migration complexity
 ```
 
+```
+Assess my Informatica PowerCenter workflows
+```
+
+A project has one ETL platform, SSIS or Informatica PowerCenter. The assessment runs `scai assessment etl generate` once for it, then reviews each package or workflow with the `scai assessment etl` commands and writes its results to `artifacts/assessment/etl/`.
+
 **Data Lineage with Power BI:**
 ```
 Include my Power BI reports — here's the folder with the .pbit templates
@@ -269,7 +283,7 @@ the tab.
 | **Object Exclusion** | Temporary, staging, deprecated objects identified |
 | **Optimization Opportunities** | Performance, architecture/security, and behavior/semantic findings grouped by priority (SQL Server) |
 | **Dynamic SQL** | Patterns found with complexity scores |
-| **SSIS** | Package classifications and migration effort |
+| **ETL Report** | SSIS package or Informatica workflow classifications, complexity and the AI summary |
 | **Effort Estimates** | Hours for code conversion and testing, priced per object by complexity, plus workload tier and phase budgets. Editable — change an hours-per-object rate and every total updates (SQL Server, Redshift, Teradata, and Oracle; Informatica mappings are a row on those projects, the same as SSIS packages) |
 | **Data Migration & Validation** | Data type coverage for your source platform, per-table readiness, topology and validation guidance, plus reviewed inventory SQL (SQL Server and Redshift) |
 | **Testing** | Procedure/function and ETL readiness ladders — what is testable now, and what each object still needs first |

@@ -4,7 +4,7 @@ Use this guide to **draft** an AI summary that gives a high-level, decision-read
 
 ### Conversion Mode Awareness
 
-The assessment output JSON includes `metadata.conversion_mode` ("dbt" or "scripting"). **You MUST adapt all target references based on this mode:**
+The parent passes the conversion target as `informatica_target` ("dbt" or "scripting"); the assessment JSON records it as `summary.conversion_mode`. **You MUST adapt all target references based on this mode:**
 
 - **dbt mode:** Use "dbt models", "dbt project", "ref()", "Snowflake Tasks calling dbt"
 - **scripting mode:** Use "stored procedures", "CALL statements", "Snowflake Scripting", "Snowflake Tasks with inline SQL". **Zero dbt references allowed.**
@@ -17,38 +17,27 @@ Use this command to extract all signals in one place. It returns a well‑format
 2) Classification counts
 3) Top‑level summary (workflows, mappings, components, EWIs, FDMs)
 
-Windows (PowerShell):
-
-```powershell
-& "<SKILL_DIR>\scripts\run-analyzer.ps1" informatica <JSON_PATH> summary
-```
-
-macOS and Linux:
+Run it from the project root:
 
 ```bash
-"<SKILL_DIR>/scripts/run-analyzer.sh" informatica <JSON_PATH> summary
+scai assessment etl summary --platform informatica
 ```
 
-If the launcher exits non-zero, stop. Do not write the summary HTML.
+If the command exits non-zero, stop. Do not write the summary HTML.
 
 ### Step: Draft AI Summary (HTML)
 Add this step after completing workflow analysis:
 
 1. Review the output signals (classifications, complexity, custom transforms, sources/targets).
 2. Write a medium AI summary in HTML using the template below.
-3. Save it as `ai_informatica_summary.html` so it can be embedded into the Informatica report later.
-4. Update the assessment JSON to point to the summary HTML:
-Windows (PowerShell):
-
-```powershell
-& "<SKILL_DIR>\scripts\run-analyzer.ps1" informatica <JSON_PATH> ai-summary ai_informatica_summary.html
-```
-
-macOS and Linux:
+3. Save it as `<project_dir>/artifacts/assessment/etl/ai_informatica_summary.html`, beside the assessment JSON, so the report can embed it.
+4. Register the summary in the assessment JSON:
 
 ```bash
-"<SKILL_DIR>/scripts/run-analyzer.sh" informatica <JSON_PATH> ai-summary ai_informatica_summary.html
+scai assessment etl ai-summary --platform informatica "<project_dir>/artifacts/assessment/etl/ai_informatica_summary.html"
 ```
+
+Pass the absolute path. The command records it relative to the assessment JSON, which is where the report looks for it.
 
 ### What to Look For
 Do not state effort hours in the summary. The Effort Estimates calculator owns effort, and the report shows it on the Effort Estimates tab.

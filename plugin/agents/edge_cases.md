@@ -12,7 +12,8 @@ stub already exists; you write rows only.
 
 `object_name`, `signature` (parameters in order), `source_code` (a path, or the SQL inline),
 `project_dir`, `referenced_tables`, and usually `key_samples`: rows of real key values that already pass
-the object's own predicates. A `cover` list means cover mode.
+the object's own predicates. A `cover` list means cover mode. When the seed already wrote rows you also get
+`already_covered`: those rows with their category. Do not repeat them; add rows they do not cover.
 
 ## A row must reach data
 
@@ -27,6 +28,10 @@ A row the source rejects, or one that returns nothing, is vacuous: there is noth
    `DECIMAL(p,s)` (or an intermediate) cannot hold, no empty name fed to `QUOTENAME` / dynamic SQL. If
    an unguarded `RIGHT`, `LEFT`, or `SUBSTRING` length is `LEN(arg) - N` or `LENGTH(arg) - N`, every
    non-null string for `arg` has length >= N (SQL Server raises on a negative length).
+   A non-null string is never longer than its parameter's declared width (`NVARCHAR(255)` holds at
+   most 255 UTF-16 units, an emoji counting 2; a `CHAR` / `VARCHAR` / `NCHAR` / `NVARCHAR` with no width holds 1): SQL Server
+   silently truncates a longer one and the converted `STRING` parameter does not, so the row cannot
+   compare.
 4. At most two rows may expect nothing (all-`null` once, one deliberate not-found). A row you cannot
    give a reason to return data is a row to leave out.
 
@@ -37,6 +42,7 @@ Build a base row from one `key_samples` key that reaches the happy path (check i
 
 - `null` (when nullable); and one row with every parameter `null`.
 - `0` for numbers; `""` for strings the object does not use as an identifier.
+- A string of exactly the declared width (`NVARCHAR(255)`: 255 ASCII characters), never one longer.
 - The declared type's exact min / max where the arithmetic holds them (`MONEY` max is
   `922337203685477.5807`; a larger literal makes the source raise); the declared precision limit
   (`999999.99` for `DECIMAL(8,2)` when nothing multiplies it further).

@@ -12,7 +12,8 @@ YAML stub already exists; you write rows only.
 
 `object_name`, `signature` (parameters in order), `source_code` (a path, or the SQL inline),
 `project_dir`, `referenced_tables`, and usually `key_samples`: rows of real key values that already pass
-the object's own predicates. A `cover` list means cover mode.
+the object's own predicates. A `cover` list means cover mode. When the seed already wrote rows you also get
+`already_covered`: those rows with their category. Do not repeat them; add rows they do not cover. You may also get `unseeded_branches`: the mined branch arms no seeded row reaches, which are yours to reach first.
 
 ## Rows
 
@@ -24,6 +25,10 @@ Write rows that:
   input). Never aim for an error the engine raises instead (an overflow, a conversion): it is vacuous,
   with nothing to compare. If an unguarded `RIGHT`, `LEFT`, or `SUBSTRING` length is `LEN(arg) - N` or
   `LENGTH(arg) - N`, give `arg` no non-null string shorter than N.
+  A non-null string is never longer than its parameter's declared width (`NVARCHAR(255)` holds at
+  most 255 UTF-16 units, an emoji counting 2; a `CHAR` / `VARCHAR` / `NCHAR` / `NVARCHAR` with no width holds 1): SQL Server
+  silently truncates a longer one and the converted `STRING` parameter does not, so the row cannot
+  compare.
 
 The code picks the branch; the data decides whether the row returns anything. Every key in a row (ids,
 codes, names, statuses, date windows) must exist and pass that branch's predicates: take keys from

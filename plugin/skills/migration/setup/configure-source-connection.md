@@ -32,10 +32,32 @@ connections used for data migration and validation.
 If `progress_setup` already returned a connection picker as `next_prompt`
 (`write_to` is `source_connection`), ask that prompt as given — it already
 says we will extract all objects from the picked connection's database.
-Submit the chosen name with `progress_setup(answers={"source_connection": "<name>"})`.
-If they pick **Create a new connection**, do not write `source_connection`;
-create a connection with the per-dialect sub-skill below, then call
-`configure(source_connection=<name>)` with the new name.
+When the user already supplied host, port, and database (including user-sim
+answers), run `scai connection list -l <dialect>` first. Reuse a listed name
+only when `server_url`, `port`, and `database` all match those values. If the
+only listed connection differs on port or database, answer **Something else**
+(`source_connection`: `other`) / **Create a new connection** and create a new
+connection with the per-dialect sub-skill — do not bind the project to a stale
+profile.
+
+Submit a matching existing name with
+`progress_setup(answers={"source_connection": "<name>"})` only after you
+confirmed the profile matches. Either way, the transcript must show
+`scai connection add-sql-server` (when you created one) and
+`configure(source_connection=<name>)` returning `connection_test: ok` for the
+source. Picking a name via `progress_setup` alone does not satisfy the source
+test when no `configure(source_connection=...)` ran in this session.
+
+When the user corrects a saved connection's details (database, host, port,
+user or password), update that profile in place. Re-run its
+`scai connection add-<dialect>` command under the same name with every field
+and `--replace --json`. Confirm `"success":true` before
+`configure(source_connection=<name>)`. A `CNX0002` error means nothing was
+saved. Do not re-test the old profile.
+
+If they pick **Something else** or **Create a new connection**, do not write
+`source_connection`; create a connection with the per-dialect sub-skill below,
+then call `configure(source_connection=<name>)` with the new name.
 
 Otherwise, call `configure(needs_source_connection=true)` to list existing
 connections for the configured dialect. Safe to repeat — it only reads.

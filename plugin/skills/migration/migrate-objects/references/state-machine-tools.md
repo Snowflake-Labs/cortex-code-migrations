@@ -65,9 +65,9 @@ The authoritative contract is the `answerWith` field of
 | `decompose` | Clears the task stamp, as `guidance` does. |
 | `skip` | A person's only, with `reason`: retires the object as skipped (`inScope=false` plus `extensions.skipped` = who, why, when, task), supersedes its claim and never marks it done. A live walker's object needs `reclaim=true`. `finish` reports it `skipped` and refuses `force`; counts report it as `objects_skipped`. Its dependents stay blocked. |
 | `skip_data` | Answers only a `migrateData` escalation. The table stays in scope with its structure deployed but no rows copied: `extensions.taskExclusions` excludes its `migrateData` and `validateData`, the walk continues, and each dependent gate follows its declared `onDependencyExcluded`. |
-| `needs_repair` | Leaves the object parked. It drops out of the open queue but still reads `needsHuman`, so it is never re-offered as work. |
-| `mark_done` | Records the decision only. Finishing is a separate, explicit `finish` call. |
-| `unvalidated` | At `captureBaseline`/`runTests` only, with `reason`, and never from a hail_mary: nothing about the object can be tested. Both read passed over, so `finish` needs no force; it counts as `unvalidated`, never tested. |
+| `needs_repair` | Leaves the object parked. It drops out of the open queue but still reads `needsHuman`, so it is never re-offered as work. A person's later answer at that task still settles the park (a hail_mary's does not). |
+| `mark_done` | Accepts a failed `validateData`, `validateView` or `runTests` as it is: the walk reads it as accepted, never passed, and moves on. A newer run or escalation on the task undoes it. Refused on any other task, and for an agent in the AIM app, where the user gives it on the escalation card. It settles a `needs_repair` park only where the task reads failed or completed; objects whose task has not run are listed under `notDone` and stay parked. |
+| `unvalidated` | At `captureBaseline`/`runTests`, `validateView`, or `etlValidate`/`validateEtlValidate` only, with `reason`, and never from a hail_mary: nothing about the object can be tested (no observable output, a view the test data never reaches, an ETL unit with no comparison pair). Those tasks read passed over, so `finish` needs no force; it counts as `unvalidated`, never tested or validated. |
 
 Who may answer: an interactive session directly. Under `subagent_mode`, the
 autonomous parent may relay an explicit user reply from its own conversation,
@@ -128,7 +128,8 @@ person's call only: refused for every agent under `subagent_mode`.
 Last resort. Stamps `extensions.preconditionBypass.<task> = true`. Only for tasks
 that declare preconditions; bypassing any other task is refused. A bypassed task
 is surfaced distinctly, never as satisfied. Prefer resolving the blocker, and use
-it only when the user explicitly insists.
+it only when the user explicitly insists. It is refused, recording nothing, while
+an escalation parks the task: answer or `reset` that instead.
 
 ### `reset`
 
@@ -159,7 +160,7 @@ Does not move the machine. Needs `AIM_HAIL_MARY=on|full`.
 Under `subagent_mode` the parent session may call only `reset`, `escalate`, and
 `answer` to relay an explicit user reply. It cannot `begin`, `finish`, `advance`,
 `started`, `bypass`, `note`, `review`, `override_accept_case`, `invalidate`, or
-`skip`, and it never finishes a `mark_done`.
+`skip`, and it never gives a `mark_done`.
 
 ## `migration_status`
 

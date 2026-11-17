@@ -56,7 +56,8 @@ One fragment per prompt type, passed inline as `enrich`'s `fragments` map
 
 **Table names.** Copy a row's `table` / `right_table` verbatim: the 3-part
 `database.schema.table` (`defaultdb.dbo.Tasks`). The prompts' examples show `SCHEMA.TABLE`;
-a 2-part name fails `TBD0014` and discards the whole document.
+a 2-part name fails `TBD0014` and discards the whole document. Copy `column` /
+`right_column` verbatim too.
 
 **Order.** Author `fk_chains`, `correlated_groups` and `temporal_alignment` first; every other
 type must agree with them (`anti_join_tables` needs an FK the table already has or that

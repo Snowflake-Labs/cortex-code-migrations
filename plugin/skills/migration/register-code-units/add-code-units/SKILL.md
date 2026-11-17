@@ -59,6 +59,56 @@ SELECT * FROM sales.public.customers WHERE active = 1;
 
 > **T-SQL note:** T-SQL files do not need this step — the engine has a native T-SQL splitter. Skip Step 2 for T-SQL source files.
 
+### Step 2b: Give SQL Server files their database
+
+**SQL Server only; skip for every other dialect and for dbt.** An object belongs to the database
+named by the `USE` in effect where it is defined. A file with no `USE` puts its objects in
+`defaultdb`, where same-named objects from different databases collide and cross-database
+references (`SALES.dbo.ORDERS`) find no unit. Give `code add` each file's database instead:
+`--database <NAME>` for the whole input, or `--database-map <FILE>` per path. It writes the
+`USE` into the engine's copy only (the user's files and `artifacts/source_raw/` stay as they were)
+and records the assignment under `.scai/code-add/`.
+
+1. Count the files that already name their database:
+   `grep -rliE '^[[:space:]]*USE[[:space:]]' <INPUT_PATH> | wc -l` against the `.sql` count (UTF-16
+   files do not match `grep`; check those by opening them). If every file has one, skip to Step 3. A file's own `USE` always wins over an assignment.
+2. Collect the evidence for the rest, never guessing a name:
+   - **Layout:** top-level folders or file-name prefixes per database (`<DB>/…`, `<DB>_db__…`), or a
+     `.sqlproj` (the engine binds those itself; leave them unassigned).
+   - **References:** the first part of three-part names in the code
+     (`grep -rhoiE '\[?[A-Za-z_][A-Za-z0-9_]*\]?\.\[?[A-Za-z_][A-Za-z0-9_]*\]?\.\[?[A-Za-z_][A-Za-z0-9_]*' <INPUT_PATH> | cut -d. -f1 | sort | uniq -c`),
+     SSIS connection `Initial Catalog` values, deploy scripts, and the source connection's databases
+     when one is configured.
+3. Classify the input and act:
+   - **S1, layout names the databases:** each folder or prefix matches a database the references or
+     the source name. Write the map (one rule per folder or prefix, first match wins) to
+     `.scai/config/database-map.json` (not under `artifacts/`, which a failed add only cleans when it
+     was empty), e.g. `{"databases": [{"path": "**/SALES_ARCHIVE_db__*", "database":
+     "SALES_ARCHIVE"}, {"path": "SALES", "database": "SALES"}]}`. Put the narrower
+     rules first. Show the user the folder → database table and ask with `ask_user_question` to
+     confirm or correct it.
+   - **One database, flat dump:** ask for the database's name and pass `--database <NAME>`. The
+     answer is a name: when the evidence suggests names (a three-part-name prefix, the source
+     connection's databases), offer them as `ask_user_question` options; when it suggests none,
+     ask in a plain message and wait for the typed name, as Step 1 asks for the path. Leaving the
+     files without a database is never the only option offered: it puts them in `defaultdb`.
+   - **S2, several databases, no layout:** propose what the references support, file by file, and
+     ask. Never assign a database the evidence does not name.
+   - **S6, a deployment merged or renamed databases** (folders say `STAGE` but file prefixes say
+     `STAGE` and `STAGE_JL`): ask which model is migrated, the original databases (prefix
+     rules) or the deployed ones (folder rules). Code that references the deployed names binds
+     only under the deployed model; copies that collide inside a merged database are then S4.
+   - **S5, environment copies** (`SALES_DEV`, `SALES_QA`, `SALES_PROD`): ask whether to migrate one
+     environment (map only its folder and leave the others out of the input) or all of them as
+     separate databases.
+4. Check the plan without changing anything:
+   `scai code add -i <INPUT_PATH> --database-map .scai/config/database-map.json --dry-run --json`.
+   `result.databaseAssignments` lists each file's `database` and `source` (`map`, `option`, or
+   `file` for its own `USE`; `assignedDatabase` then names the assignment it overrode). `ADD0026`
+   means a rule matched no file, `ADD0033` that an earlier rule takes every file it matches: fix
+   the pattern or move the narrower rule first, never drop the rule silently. Then run Step 3 with
+   the same option.
+
 ### Step 3: Add Code to Project
 
 Use the path returned by `split_code` (or `<INPUT_PATH>` directly if no file needed tags).
@@ -68,6 +118,8 @@ Launch this call as the next section says: `run_in_background=true`, or set the 
 ```bash
 scai code add -i <INPUT_PATH> --json
 ```
+
+With Step 2b's assignment, add the same `--database <NAME>` or `--database-map <FILE>`.
 
 **dbt projects use this form instead** — always, with no exceptions:
 
@@ -138,19 +190,10 @@ or a job that ended with no envelope at all — find out why before you say anyt
    a fix to the files it names) rather than a retry. Do not continue to the next step, and
    do not treat the import as done.
 
-**If the failure is `CVT0008` with a `Duplicate resolution` entry in `error.details`**, the input
-defines the same object in more than one file and nothing was added. The entry names, per object,
-the file `--dedup keep-first` would keep and the files it would leave out. Which definition to add
-is the user's call, never yours:
-
-1. Show the user each object with its kept and skipped files, in the entry's own words.
-2. Ask with `ask_user_question`: keep the listed file of each object, or fix the input themselves.
-3. Only when they choose to keep the listed files, rerun the same command with
-   `--dedup keep-first` added. Report each file in the envelope's `result.duplicatesSkipped`
-   (`path`, `inputPaths`, `keptPath`, `keptInputPath`) as left out.
-
-Never add `--dedup keep-first` on your own. When the entry says no file can be chosen (`ADD0019`
-or `ADD0021` with the flag), the user has to remove the extra copies; tell them which files.
+**If the failure is `ADD0029` or `CVT0008` with a `Duplicate groups` entry in `error.details`**,
+the input defines the same object in more than one file and nothing was added. Go to
+[Duplicated objects](#duplicated-objects). Never add `--keep` or `--dedup keep-first` to get past it
+on your own.
 
 **If the failure is `ADD0007` after an earlier `scai code add` in this project failed**, and
 `migration_status` reports no registered code units, the files it lists are most likely what
@@ -159,6 +202,47 @@ file. Keep them. Rerun the same command with `--overwrite` added, which replaces
 run's output, and tell the user in one line that you are doing so. Never delete files from
 `source/` or `artifacts/` yourself to clear the way. When the project already has registered
 units, the files may be code the user added before: ask before you add `--overwrite`.
+
+### Duplicated objects
+
+`ADD0029` and `CVT0008` carry `error.details["Duplicate groups"]`: per object, its `id`, `database`,
+`databaseStatus` (`unknown` when the copies collide only because no file named a database) and
+`copies`, each with `path` (in `source/`), `origin` (`input` or `project`), `inputs` (input file,
+`database`, `databaseSource`), `contentHash`, `lines` and `differingLines` against the first copy.
+Classify every group from that evidence and the input layout, then propose one action per group:
+
+| Situation | Evidence | Action |
+|---|---|---|
+| S1/S2 different databases | `databaseStatus: unknown`; the copies' input paths sit in different database folders or prefixes, or references name different databases | **Assign databases** (Step 2b) and rerun. Every copy becomes its own unit. |
+| S3 byte-identical copies | equal `contentHash` | Same database: `code add` already keeps one. Different databases: assign databases; both stay. |
+| S4 versions of one object in one database | known `database`, or a user-confirmed single database; old script, `_v2`, backup, ALTER script | **Keep one**, chosen by the user: the version deployed on the source when there is a connection (`query_source`), else the user's pick. |
+| S5 environment copies | database names with environment suffixes, near-identical content | Ask: migrate one environment, or all as separate databases. |
+| S6 merged or renamed databases | folder and file-prefix databases disagree | Ask which database model is migrated; inside a merged database, S4 applies. |
+| S8 a later add brings a copy of an object already in the project | `ADD0007` on the registered file, or a copy with `origin: project` | Different database: assign it; it becomes a new unit. Same database: S4. A new copy arranged onto the registered file stops with `ADD0007`: replace it only with the user's consent (`--overwrite`), as the `ADD0007` rule says. A copy under another name keeps the registered one with `--keep source/<path>`. |
+
+1. Show the user each group in a short table: object, database, each copy's input file, database
+   and `differingLines`, and your classification.
+2. Ask with `ask_user_question`. The options must include **"These are different databases (assign
+   databases)"** and **"These are environments of one system"**; offer **"Keep one copy"** only for
+   groups classified S4, naming the copy for each.
+3. Apply the answer and rerun the same command:
+   - assign databases → Step 2b's `--database-map`;
+   - keep one → `--keep <INPUT_PATH>` per object (the copy's `inputs[].path`, relative to the input
+     root; `source/<path>` for a copy already in the project). Use `--dedup keep-first` only when
+     the user explicitly chooses "keep the first file of every object".
+4. Report each file in `result.duplicatesSkipped` (`path`, `inputPaths`, `keptPath`,
+   `keptInputPath`, `policy`) as left out, and `result.decisionRecord`, where the choice is kept.
+
+`ADD0030` means a `--keep` named no copy, two different copies, or would drop a copy the project
+already registered: show the reason and ask again. A `--keep not applied` entry in `error.details`
+names a `--keep` that matched no copy while other objects stayed undecided. `ADD0019` / `ADD0021` with `--dedup keep-first`
+mean no copy can be chosen from the input: tell the user which files to remove.
+
+**When nobody can answer** (an autonomous or headless run, a walker or Hail Mary agent, or no
+`ask_user_question`): apply only S1 database assignments whose evidence is unambiguous (every
+folder or prefix matches a database the references or the source name) and S3 identical-copy
+handling. Never pass `--keep` or `--dedup keep-first`, and never treat an automated reply as the
+user's choice of a copy. Stop and report the groups still blocked, with their evidence.
 
 ### Step 4: Import ETL
 
@@ -233,6 +317,9 @@ artifacts/BI/PowerBI/    Same relative layout as `source/BI/PowerBI/`
 | Issue | Solution |
 |-------|----------|
 | "conflicting files" error | Use `--overwrite` flag to replace existing files |
+| `ADD0029` database unknown | The copies collide in `defaultdb`: give the files their databases (Step 2b), see [Duplicated objects](#duplicated-objects) |
+| `ADD0026` database map rule matches no file | Fix the rule's pattern (relative to the input root) |
+| `ADD0033` database map rule is shadowed | An earlier rule takes all its files: put the narrower rule first |
 | `ADD0010: Source files must contain SC tags` | The arrange engine found no `/* <sc-...> */` boundary tags. For a **dbt project**, re-run with `--code-already-split` (required on every dbt add). For a non-dbt source, run Step 2 (`split_code`) first and pass the returned `artifacts/source_split/` path. |
 | No `.sql` files found after add | Verify input path contains valid SQL files |
 | Unexpected file arrangement | Check `artifacts/source_raw/` for the original copies |
@@ -248,6 +335,8 @@ verify a count you just computed for them:
       — a timeout or a background launch is neither; wait for the job as Step 3 says
 - [ ] `filesCopied` matches the SQL files in the input path
 - [ ] `.sql` files are present under `source/`
+- [ ] SQL Server: every file without its own `USE` got a database (Step 2b), or the user chose to
+      leave the input in one unnamed database
 - [ ] If Power BI was imported: files exist in both `source/BI/PowerBI/` and `artifacts/BI/PowerBI/`
 
 Stop and ask only when a check fails: say which one, and what you propose to do

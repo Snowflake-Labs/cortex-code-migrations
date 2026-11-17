@@ -71,6 +71,14 @@ ALTER COMPUTE POOL <COMPUTE_POOL_NAME> RESUME;
 
 Then re-verify.
 
+**An `IDLE` pool with no service on it suspends itself.** Snowflake counts a pool as inactive when no service or
+job runs on it, whether or not one has ever run, so a new pool goes from `IDLE` to `SUSPENDED` about
+`AUTO_SUSPEND_SECS` (60s) after it is ready. That is expected: continue with Step 4, and
+`data_infrastructure(mode="up")` resumes it. A pool state read here is stale a minute later: before telling the
+user the pool is `IDLE`, billing, or worth suspending, run `DESCRIBE COMPUTE POOL <COMPUTE_POOL_NAME>;` again in
+that turn and report what it shows (`num_services`, `state`). Offer to suspend it only when that fresh read shows
+it is not `SUSPENDED`.
+
 ## Step 4 — Grant USAGE to the Migration Role
 
 The role that will run the migration needs USAGE on the compute pool:

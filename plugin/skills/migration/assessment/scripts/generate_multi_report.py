@@ -46,6 +46,7 @@ if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 from snowconvert_reports.console_utils import DONE  # noqa: E402
+from snowconvert_reports.ewi_heatmap import EWI_HEATMAP_CSS  # noqa: E402
 from snowconvert_reports.services.assessment_metadata import (  # noqa: E402
     resolve_assessment_name,
 )
@@ -1428,6 +1429,7 @@ def generate_multi_report(
     if BUSINESS_USE_CASES_SUPPORT:
         wave_plan_artifact = None
         use_case_effort_artifact = None
+        use_case_context_artifact = None
         use_cases_body = None
         if use_cases_json:
             print(f"Loading business use cases from {use_cases_json}...")
@@ -1440,12 +1442,15 @@ def generate_multi_report(
             else:
                 plan_path = Path(use_cases_json).parent / "wave-plan.json"
                 effort_path = Path(use_cases_json).parent / "use-case-effort.json"
+                context_path = Path(use_cases_json).parent / "use-case-context.json"
                 wave_plan_artifact = _optional_report_json(plan_path)
                 use_case_effort_artifact = _optional_report_json(effort_path)
+                use_case_context_artifact = _optional_report_json(context_path)
                 use_cases_body = render_business_use_cases_html(
                     use_cases_artifact,
                     wave_plan_artifact,
                     use_case_effort_artifact,
+                    use_case_context_artifact,
                 )
                 has_business_use_cases = True
         if use_cases_body is None:
@@ -1453,7 +1458,11 @@ def generate_multi_report(
         business_use_cases_html = _planning_tab("business-use-cases", use_cases_body)
         pending_objects_html = _planning_tab(
             "pending-objects",
-            render_pending_objects_html(wave_plan_artifact, use_case_effort_artifact),
+            render_pending_objects_html(
+                wave_plan_artifact,
+                use_case_effort_artifact,
+                use_case_context_artifact,
+            ),
         )
 
     if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns and not effort_estimates_json and not workload_insights_json and not has_data_lineage and not has_business_use_cases:
@@ -1617,6 +1626,7 @@ def generate_multi_report(
         has_informatica=has_informatica,
         informatica_json=informatica_json if has_informatica else None,
         informatica_source_dir=informatica_source_dir,
+        informatica_registry_dir=registry_dir,
         output_file=output_file,
         dynamic_sql_meta=dynamic_sql_meta,
         exclusion_summary=exclusion_summary,
@@ -1679,6 +1689,7 @@ def generate_html_template(
     has_informatica: bool,
     informatica_json: Path,
     informatica_source_dir: Path,
+    informatica_registry_dir: Path,
     output_file: Path,
     dynamic_sql_meta: Dict,
     exclusion_summary: Dict,
@@ -2001,13 +2012,11 @@ def generate_html_template(
         effort_nav_link = (
             '<a @click="activeTab = \'effort-estimates\'" class="nav-link" '
             'data-tab="effort-estimates" :class="{active: activeTab === \'effort-estimates\'}">'
-            'Effort Estimates <span class="nav-preview-badge">Preview</span></a>'
+            'Effort Estimates</a>'
         )
         effort_nav_sublist = (
             '<div v-if="activeTab === \'effort-estimates\'" class="nav-sublist">'
             '<a @click="scrollToSection(\'#effort-calculator\', \'effort-estimates\')" class="nav-sublink">Calculator</a>'
-            '<a @click="scrollToSection(\'#effort-ddl-assessment\', \'effort-estimates\')" class="nav-sublink">DDL Assessment</a>'
-            '<a @click="scrollToSection(\'#effort-top-issues\', \'effort-estimates\')" class="nav-sublink">Top Issues</a>'
             '</div>'
         )
 
@@ -2299,7 +2308,7 @@ def generate_html_template(
     informatica_js = ""
     informatica_css = ""
     if has_informatica and INFORMATICA_SUPPORT and informatica_json:
-        informatica_content, informatica_js, informatica_css = generate_informatica_html_content(informatica_json, output_html_path=output_file, source_dir=informatica_source_dir)
+        informatica_content, informatica_js, informatica_css = generate_informatica_html_content(informatica_json, output_html_path=output_file, source_dir=informatica_source_dir, registry_dir=informatica_registry_dir)
         informatica_html = informatica_content
     else:
         informatica_html = ""
@@ -3450,11 +3459,11 @@ def generate_html_template(
         .effort-table td.ctr, .effort-table th.ctr {{ text-align: center; }}
         .effort-table.compact th, .effort-table.compact td {{ padding: 0.5rem 0.6rem; font-size: 0.8rem; }}
         .effort-table.sticky thead th {{ position: sticky; top: 0; z-index: 1; }}
-        .effort-table tr.effort-total td {{ background: #F8FAFC; font-weight: 700; color: #1E252F; }}
+        .effort-table tr.effort-total td {{ background: #E0F2FE; font-weight: 700; color: #102E46; }}
         /* The grouping note is a full sentence. Cap the column so it wraps
            instead of stretching the calculator across the page. */
         .effort-table td.effort-comments {{ color: #64748B; font-size: 0.85rem; }}
-        .effort-comments-body {{ width: 56ch; max-width: 56ch; overflow-wrap: break-word; }}
+        .effort-comments-body {{ max-width: 56ch; overflow-wrap: break-word; }}
         /* Interactive effort calculator: editable per-band rates and their paired
            Snowflake values. */
         .effort-band-legend {{ display: flex; flex-wrap: wrap; gap: 4px 18px; margin-bottom: 12px; color: #5D6A85; font-size: 0.8rem; line-height: 1.5; }}
@@ -3493,10 +3502,20 @@ def generate_html_template(
         .effort-badge {{ background: #E0F2FE; color: #0369A1; border-radius: 999px; padding: 3px 10px; font-size: 0.78rem; font-weight: 600; }}
         .effort-notice {{ color: #0369A1; background: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 6px; padding: 8px 12px; font-size: 0.82rem; margin: 0 0 12px; }}
         .effort-warning {{ color: #92400E; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 6px; padding: 8px 12px; font-size: 0.82rem; margin: 0 0 12px; }}
-        .effort-input {{ width: 84px; text-align: right; padding: 4px 6px; border: 1px solid #CBD5E1; border-radius: 4px; font-size: 0.85rem; font-family: inherit; color: #1E252F; background: #FFFFFF; }}
+        .effort-input {{ width: 4.5rem; height: 24px; box-sizing: border-box; text-align: right; padding: 2px 6px; border: 1px solid #CBD5E1; border-radius: 4px; font-size: 0.85rem; font-family: inherit; color: #1E252F; background: #FFFFFF; }}
+        /* Option C: a light box around each editable number, inset from the cell. */
+        .effort-sheet td:has(> .effort-input) {{ padding: 0; }}
+        .effort-sheet td:has(> .effort-input) > span {{ display: block; padding: 2px 8px; }}
+        .effort-sheet .effort-input {{
+            width: calc(100% - 8px); min-width: 0; height: 24px; margin: 3px 4px;
+            display: block; box-sizing: border-box; border: 0; border-radius: 0;
+            padding: 2px 6px; background: #FFFFFF; box-shadow: inset 0 0 0 1px #CBD5E1;
+        }}
         .effort-input:focus {{ outline: 2px solid #93C5FD; outline-offset: 0; border-color: #005C8F; }}
+        .effort-sheet .effort-input:focus {{ outline: 2px solid #005C8F; outline-offset: 0; box-shadow: none; }}
         .effort-input:disabled {{ background: #F1F5F9; color: #94A3B8; cursor: not-allowed; }}
         .effort-input-error {{ border-color: #DC2626; background: #FEF2F2; }}
+        .effort-sheet .effort-input.effort-input-error {{ box-shadow: inset 0 0 0 1px #DC2626; background: #FEF2F2; }}
         .effort-error {{ display: block; color: #B91C1C; font-size: 0.72rem; margin-top: 2px; }}
         .effort-sf-note {{ display: block; color: #64748B; font-size: 0.72rem; font-weight: 400; margin-top: 2px; white-space: nowrap; }}
         .effort-ewi-link {{
@@ -3541,16 +3560,56 @@ def generate_html_template(
         .effort-ewi-doc-link:hover {{
             text-decoration: underline;
         }}
-        .effort-ewi-modal .effort-table .effort-ewi-tip {{
+        .effort-ewi-tip {{
             cursor: help; text-decoration: underline dotted; text-underline-offset: 3px;
         }}
         .effort-table tr.effort-row-overridden td {{ background: #FFFDF5; }}
         .effort-table tr.effort-row-overridden:hover td {{ background: #FEF9E7; }}
-        /* The rate row belongs to the count row above it, so the border between
-           them is dropped and only the pair is separated from the next object type. */
-        .effort-table tr.effort-rate-row td {{ padding-top: 0; border-bottom-width: 2px; }}
-        .effort-table tr.effort-rate-row {{ background: #FBFDFF; }}
-        .effort-rate-lbl {{ color: #94A3B8; font-size: 0.72rem; white-space: nowrap; }}
+        /* Spreadsheet lines: lines of one object type sit tight, and a heavier rule
+           separates each object type from the next. */
+        .effort-sheet {{ border-collapse: collapse; table-layout: fixed; width: 100%; }}
+        .effort-sheet td {{ vertical-align: middle; padding: 3px 8px; }}
+        .effort-sheet thead th, .effort-sheet thead th.num, .effort-sheet thead th.ctr {{ text-align: center; white-space: nowrap; }}
+        .effort-sheet th, .effort-sheet td {{ border-right: 1px solid #CBD5E1; }}
+        .effort-sheet tr > :first-child {{ border-left: 1px solid #CBD5E1; }}
+        .effort-sheet tbody tr.effort-line-first td {{ border-top: 2px solid #CBD5E1; }}
+        .effort-sheet td.effort-line-total {{ font-weight: 600; font-variant-numeric: tabular-nums; }}
+        /* Narrow enough that Comments keeps a readable measure on a laptop; below
+           the table's min-width the wrapper scrolls sideways instead of squeezing. */
+        .effort-sheet {{ min-width: 1080px; }}
+        .effort-col-type {{ width: 180px; }}
+        .effort-col-category {{ width: 110px; }}
+        .effort-col-count {{ width: 95px; }}
+        .effort-col-rate {{ width: 115px; }}
+        .effort-col-fixed {{ width: 105px; }}
+        .effort-col-grouping {{ width: 100px; }}
+        .effort-col-total {{ width: 105px; }}
+        .effort-sheet thead th {{ padding: 8px; }}
+        /* Print fits the calculator to the page width: every column, Comments
+           included, stays on the page instead of running off its right edge. */
+        @media print {{
+            .effort-table-wrap:has(> .effort-sheet) {{ overflow: visible; }}
+            .effort-sheet {{ min-width: 0; width: 100%; }}
+            .effort-sheet th, .effort-sheet td {{ font-size: 0.62rem; padding: 2px 4px; }}
+            .effort-sheet thead th, .effort-sheet thead th.num, .effort-sheet thead th.ctr {{ white-space: normal; padding: 4px; }}
+            .effort-sheet tr {{ break-inside: avoid; page-break-inside: avoid; }}
+            .effort-col-type {{ width: 13%; }}
+            .effort-col-category {{ width: 10%; }}
+            .effort-col-count {{ width: 7%; }}
+            .effort-col-rate {{ width: 10%; }}
+            .effort-col-fixed {{ width: 9%; }}
+            .effort-col-grouping {{ width: 8%; }}
+            .effort-col-total {{ width: 9%; }}
+            .effort-sheet .effort-comments-body {{ max-width: none; font-size: 0.6rem; }}
+            .effort-sheet .effort-ewi-link {{ font-size: 0.6rem; }}
+            .effort-sheet .effort-sf-note {{ white-space: normal; font-size: 0.56rem; }}
+            .effort-sheet .effort-input {{ font-size: inherit; height: auto; padding: 1px 3px; }}
+            .effort-section-toggle {{ padding: 4px 6px; font-size: 0.66rem; }}
+        }}
+        .effort-sheet td.effort-type-cell {{ vertical-align: middle; }}
+        .effort-sheet td.effort-comments {{ vertical-align: top; }}
+        .effort-comments-body {{ font-size: 0.78rem; color: #475569; line-height: 1.45; white-space: normal; }}
+        .effort-comment-note {{ display: block; margin-top: 4px; color: #64748B; }}
         /* Section banner: the only divider in the table, so a reader can tell at a
            glance which pricing rule the rows below it follow. */
         .effort-table th.effort-section {{
@@ -3566,22 +3625,12 @@ def generate_html_template(
         .effort-section-toggle:hover {{ background: #CDEBFB; }}
         .effort-chevron {{ display: inline-flex; color: #64748B; }}
         .effort-section-blurb {{ font-weight: 400; color: #64748B; }}
-        /* Trailing edge, so the figure lands near the Est. Hours column it sums and
-           stays readable when the section is closed. */
-        .effort-section-total {{
-            margin-left: auto; display: flex; align-items: baseline; gap: 8px;
-            font-variant-numeric: tabular-nums;
+        /* The subtotal sits in the Total hours column, so it reads as the sum of that
+           column's lines; the banner title spans the columns to its left. */
+        .effort-table th.effort-section-total {{
+            text-align: right; padding: 9px 8px; color: #102E46;
+            font-weight: 700; font-variant-numeric: tabular-nums;
         }}
-        /* A flat section's own column headers. Lighter than the table head so they
-           read as scoped to the section rather than as a second table. */
-        .effort-table th.effort-subhead {{
-            text-align: left; background: #F8FAFC; color: #64748B; font-size: 0.74rem;
-            font-weight: 600; padding: 6px 14px; border-bottom: 1px solid #E2E8F0;
-            white-space: nowrap;
-        }}
-        /* Comes after the subhead rule so Critical / High / Medium / Low center
-           in their cells. The later left alignment would otherwise win. */
-        .effort-table th.effort-subhead.ctr {{ text-align: center; }}
         .effort-table tr.effort-total td {{ border-top: 2px solid #CBD5E1; }}
         .effort-muted {{ color: #64748B; font-size: 0.85rem; }}
         .nav-preview-badge {{
@@ -3685,9 +3734,9 @@ def generate_html_template(
             background: #D6E6FF;
             color: #1A6CE7;
         }}
-        /* The badge row would otherwise let the flex label give way to the badge.
-           Effort Estimates is the longest Code/ETL label and sits close enough
-           to the sidebar edge that a wider font fallback would wrap it. */
+        /* Effort Estimates is the longest Code/ETL label and sits close enough
+           to the sidebar edge that a wider font fallback would wrap it, and the
+           fixed row height would clip the second line. */
         .nav-link[data-tab="effort-estimates"] {{
             white-space: nowrap;
         }}
@@ -5332,6 +5381,9 @@ def generate_html_template(
         /* Informatica report styles (scoped to #informatica-report) */
 {informatica_css}
 
+        /* EWI heatmap (shared by the SSIS and Informatica reports) */
+{EWI_HEATMAP_CSS}
+
         /* Anti-patterns report styles (scoped to #anti-patterns-report) */
 {anti_patterns_css}
 
@@ -6421,7 +6473,7 @@ def generate_html_template(
                         Business use cases
                     </a>
                     <a @click="activeTab = 'pending-objects'" class="nav-link" data-tab="pending-objects" :class="{{active: activeTab === 'pending-objects'}}">
-                        Pending objects
+                        Other objects
                     </a>
                 </div>
                 <a class="nav-section" @click="selectSection(codeEtlTabs, '{default_tab}')">
@@ -7896,20 +7948,43 @@ def build_etl_nav_sublist(*, has_ssis: bool, has_informatica: bool) -> str:
     return f'<div v-if="activeTab === \'etl\'" class="nav-sublist">{inner}</div>'
 
 
-def discover_ssis_json(project_dir: Path) -> Optional[Path]:
+def _discover_etl_json(
+    project_dir: Path, *, artifact_glob: str, legacy_name: str, legacy_folder: str
+) -> Optional[Path]:
+    """Newest timestamped artifact under artifacts/assessment/etl/, else a legacy assessment/ path."""
     etl_dir = project_dir / "artifacts" / "assessment" / "etl"
     if etl_dir.is_dir():
-        matches = [p for p in etl_dir.glob("etl_assessment_analysis_*.json") if p.is_file()]
+        matches = [p for p in etl_dir.glob(artifact_glob) if p.is_file()]
         if matches:
             matches.sort(key=lambda p: p.name, reverse=True)
             return matches[0]
     for candidate in (
-        project_dir / "assessment" / "ssis" / "etl_assessment_analysis.json",
-        project_dir / "assessment" / "etl_assessment_analysis.json",
+        project_dir / "assessment" / legacy_folder / legacy_name,
+        project_dir / "assessment" / legacy_name,
     ):
         if candidate.is_file():
             return candidate
     return None
+
+
+def discover_ssis_json(project_dir: Path) -> Optional[Path]:
+    """The SSIS assessment JSON that `scai assessment etl generate` wrote last."""
+    return _discover_etl_json(
+        project_dir,
+        artifact_glob="etl_assessment_analysis_*.json",
+        legacy_name="etl_assessment_analysis.json",
+        legacy_folder="ssis",
+    )
+
+
+def discover_informatica_json(project_dir: Path) -> Optional[Path]:
+    """The Informatica assessment JSON that `scai assessment etl generate` wrote last."""
+    return _discover_etl_json(
+        project_dir,
+        artifact_glob="informatica_assessment_analysis_*.json",
+        legacy_name="informatica_assessment_analysis.json",
+        legacy_folder="informatica",
+    )
 
 
 def main():
@@ -8117,16 +8192,9 @@ def main():
                         file=sys.stderr,
                     )
         if not args.informatica_json:
-            # Check common locations for Informatica analysis output
-            candidates = [
-                args.project_dir / "assessment" / "informatica" / "informatica_assessment_analysis.json",
-                args.project_dir / "assessment" / "informatica_assessment_analysis.json",
-            ]
-            for candidate in candidates:
-                if candidate.is_file():
-                    args.informatica_json = candidate
-                    print(f"Using Informatica JSON: {args.informatica_json}", file=sys.stderr)
-                    break
+            args.informatica_json = discover_informatica_json(args.project_dir)
+            if args.informatica_json:
+                print(f"Using Informatica JSON: {args.informatica_json}", file=sys.stderr)
 
     if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.effort_estimates_json and not args.workload_insights_json and not args.data_lineage_json and not args.use_cases_json and not args.registry_dir:
         print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --effort-estimates-json, --workload-insights-json, --data-lineage-json, --use-cases-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)

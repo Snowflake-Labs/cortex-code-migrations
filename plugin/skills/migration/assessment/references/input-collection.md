@@ -75,12 +75,104 @@ Record every returned `pbit_files[].path` as a project-relative path in
 
 ### 5.1 Business use cases
 
-Nothing to collect. Business use cases always run, after the other analyses:
-each use case becomes one migration wave, and its objects deploy in
-dependency order inside it. **Do not ask for a wave size, prioritization
+Waves need nothing from the user. Business use cases always run, after the other analyses.
+`scai assessment waves` assigns every deployable object a wave number and rank
+in category packs of about 100–200 objects. Use cases stay a catalog until a
+later change rewrites waves for a selected use case. **Do not ask for a wave size, prioritization
 patterns or a wave ordering.** An `assessment_options` value from an older
 session may still carry `custom_wave_size`, `prioritize` or
 `dependency_order`; ignore those tokens.
+
+The converted code alone produces a catalog. Three optional inputs make it more
+complete by showing what runs and what is read, so use cases are confirmed
+instead of proposed from structure: the scheduler that runs the ETL, SQL Server
+Agent jobs, and query logs. Ask each question that applies once, with the other
+input questions. They are optional: never block the assessment on them, never
+search for files, and never answer for the user. Skipping, or choosing later, is
+not a failure: the report lists the input as not provided and says what it would
+add.
+
+For every file the user provides, record its absolute path and nothing else.
+Never copy, rename or move it under the project, and do not read it here: the
+business use cases agent reads it in place. Do not repeat these questions
+at completion; the results summary already names what was and was not provided.
+
+#### 5.1a Scheduler (when Informatica is in scope)
+
+Ask only when Informatica is in scope (5.3b). Ask even if SSIS is also in scope.
+
+> Disclaimer: the export is read only to see which workflows run, how often and
+> in what order. Commands, passwords and connection strings are not copied into
+> any result.
+>
+> A scheduler export shows which Informatica workflows really run, so use cases
+> can be confirmed against live jobs instead of proposed from structure. Do you
+> have the scheduler that runs them (Control-M job definitions, a crontab,
+> Autosys, Airflow DAGs)?
+> 1. Skip for this run
+> 2. I have the files
+> 3. Tell me what to ask for, I'll provide them later
+
+Map to `skip`, `have_files` or `later`.
+
+- `have_files`: collect absolute paths of the export files or a folder of them.
+  Empty paths are invalid; ask again or let the user choose skip/later.
+- `later`: in the same turn say: "Ask the scheduler's owner for the job
+  definitions of the folders that run these workflows, as XML or JSON, with each
+  job's name, what it runs, its schedule, the jobs it waits for, and whether it
+  is held or disabled. Remove passwords and connection strings first; the
+  assessment does not need them. Re-run assessment and choose **I have the
+  files**." The assessment continues now and does not wait.
+
+#### 5.1b SQL Server Agent jobs (when SSIS is in scope)
+
+Ask only when SSIS is in scope (5.3a).
+
+> Disclaimer: the export is read only to see which packages run and when.
+> Commands, passwords and connection strings are not copied into any result.
+>
+> SQL Server Agent jobs show which SSIS packages run, on what schedule, and
+> whether the job is enabled, so use cases can be confirmed against live jobs.
+> How do you want to handle them?
+> 1. Skip for this run
+> 2. I have the job scripts or the query result
+> 3. Give me the query, I'll provide the file later
+
+- `have_files`: collect absolute paths of job scripts (`.sql` from SSMS, Script
+  Job as CREATE) or the CSV from the query.
+- `later`: paste `business-use-cases/references/sql-agent-jobs.sql` unchanged,
+  then say: "Have a DBA review and run it; it only reads `msdb`. Export the
+  result as CSV with headers and blank any `command` value that holds a secret.
+  Re-run assessment and choose **I have the job scripts or the query result**."
+  The assessment continues now and does not wait.
+
+#### 5.1c Query logs (every dialect)
+
+Ask for every dialect.
+
+> Disclaimer: the summary is used to see which objects are read. No statement
+> text is needed, and none is stored.
+>
+> Query logs show which tables and views are still read, by how many users and
+> when last, the strongest sign that an outcome is real and still used. The full
+> log is not needed: one row per object is enough, with its name and any of
+> reads, distinct users and last access. Do you have an object usage summary?
+> 1. Skip for this run
+> 2. I have the file
+> 3. Tell me where to get it, I'll provide it later
+
+The Discovery exports (5.7) are not a usage summary: they hold no object names.
+Do not offer them here.
+
+- `have_files`: collect absolute paths of the summary (CSV or similar). Reject a
+  raw log that is statement text only; ask for the aggregate instead.
+- `later`: in the same turn say: "The source depends on the database: for
+  Teradata, the DBQL object table aggregated by object; for SQL Server, index
+  usage statistics (they reset when the instance restarts) or an Extended Events
+  capture summarized by object; for Redshift, scan history aggregated by table.
+  Have a DBA run it off-peak and export aggregates only: no statement text and
+  no user names, only a count of users. Re-run assessment and choose **I have the
+  file**." The assessment continues now and does not wait.
 
 ### 5.2 Dynamic SQL review
 
@@ -98,7 +190,12 @@ Do not dispatch when `run` is false; synthesize a skipped result. A yes still re
 
 ### 5.3 ETL/SSIS review
 
-When ETL CSVs are present, always generate baseline JSON. Use
+A project has one ETL platform: SSIS when its ETL sources are `.dtsx`
+packages, Informatica PowerCenter when they are PowerCenter `.xml` exports.
+Collect inputs for that platform only; the assessment runs one
+`scai assessment etl generate` for it.
+
+For SSIS, always generate baseline JSON. Use
 `auto-review-all` when `assessment_options` contains `ssis`; otherwise use
 `generate-only`. Do not ask again.
 
@@ -118,14 +215,14 @@ Record `ssis.target` as `dbt` or `scripting`. Pass it to the SSIS child as `ssis
 
 ### 5.3b Informatica PowerCenter target
 
-When Informatica is in scope, ask exactly once and never default:
+When Informatica is in scope, first look for a target the project already recorded: `etl_informatica_target` restored by `configure`. If one exists, reuse it, tell the user which target the assessment will frame, and do not ask, so a re-assessment never contradicts an earlier one. Otherwise ask exactly once and never default:
 
 > Which conversion target for Informatica PowerCenter?
 > 1. **dbt** — mappings become dbt models orchestrated by Snowflake Tasks
 > 2. **scripting** — mappings become Snowflake Scripting procedures
 
-Record `informatica.target` as `dbt` or `scripting`. Informatica always uses
-`review_mode: auto-review-all`; do not ask the ETL analysis-depth question,
+Record `informatica.target` as `dbt` or `scripting`. When you asked for it, call `configure(etl_informatica_target=<target>)` at once, because `scai assessment etl generate` reads the target from `.scai/config/plugin.yml` and uses `dbt` without it. Then read `etl_informatica_target` from `<project_dir>/.scai/config/plugin.yml`: a session whose `subagent_mode` latch makes `configure` attach-only reports it not applied and leaves it unwritten. If the file does not record the chosen target, do not dispatch the Informatica children. Fail the Informatica row with `error: "Informatica target not recorded: plugin.yml has <stored or none>, expected <target>"`, and tell the user how to record it: end the subagent session with `configure(subagent_mode=false)` (this takes the project out of autonomous mode, and is allowed only when no walkers are running and no claims are open), then call `configure(etl_informatica_target=<target>)`. Pass the target to every Informatica child as `informatica_target`. Informatica always reviews every workflow
+(`review_mode: auto-review-all`); do not ask the ETL analysis-depth question,
 default to `generate-only`, or allow `skip` after Informatica is in scope.
 
 ### 5.4–5.6 No-input analyses
@@ -346,7 +443,17 @@ Keep this in working context only; never write it to disk:
 assessment_inputs:
   project_dir: <abs>
   output_dir_assessment: <project_dir>/assessment
-  business_use_cases: {}
+  business_use_cases:
+    context:                          # include only the kinds that were asked
+      scheduler:                      # Informatica in scope
+        mode: have_files | skip | later
+        paths: [<abs path>, ...]
+      agent_jobs:                     # SSIS in scope
+        mode: have_files | skip | later
+        paths: [<abs path>, ...]
+      usage:                          # every dialect
+        mode: have_files | skip | later
+        paths: [<abs path>, ...]
   exclusion: {}
   effort_estimate: {}
   anti_patterns: {}
@@ -364,6 +471,7 @@ assessment_inputs:
     etl_replatform_sources_path: <abs or empty>
   informatica:
     target: dbt | scripting
+    output_dir: <project_dir>/artifacts/assessment/etl
     review_mode: auto-review-all
   data_lineage:
     dispatch: true | false

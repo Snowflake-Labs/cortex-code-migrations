@@ -23,6 +23,17 @@ Tell the user:
 - `configure()` called at session start — validates the source connection and, for Oracle/Teradata, seeds the driver cache via [`../../connection/references/driver-bootstrap.md`](../../connection/references/driver-bootstrap.md)
 - Network access to source database
 
+## Before extract — confirm the source profile
+
+Run `scai connection list -l <dialect> --json` (or the table form) and compare
+the bound `source_connection` to the host, port, and database the user already
+supplied in this session. If the port or database differs, do **not** wait for
+the user to re-run a password prompt. Create a new matching connection with the
+per-dialect skill (reference the password env var by name; never paste it),
+`configure(source_connection=<new-name>)` until `connection_test: ok`, then
+extract. Asking the user to re-enter credentials is only for when no password
+is available in the environment and the CLI cannot prompt.
+
 ## Workflow
 
 ### Step 1: Extract all objects from the connection's database

@@ -40,6 +40,14 @@ choice needs each table's columns, so it is made per table when the workflow is 
 (`migrate_data(mode="setup")`); see the data-migration action's Step 2a. Do not ask it here unless
 the user volunteers one, in which case pass it as `sync_strategy=` to `migrate_data(mode="setup")`.
 
+**Existing-target adoption is also not asked here.** If the user mentions that the target tables already
+hold rows another tool loaded, explain the options (adopt and reload what differs, adopt and only
+report, or plain reload) and, on their choice, pass `adoption=true` (with optional `adoption_check`
+`metrics`|`row` and `adoption_on_mismatch` `reload`|`report`) together with `sync_strategy=checksum|watermark`
+to `migrate_data(mode="setup")`. It never applies to `none`, `full-replace` or Iceberg targets, and
+setup refuses those combinations. Never turn it on for the user, and never from an autonomous walker
+unless the parent step passed it. See the data-migration action's Step 2.
+
 For a full or preliminary load into native tables the wizard then asks what a re-run does to the rows
 already in the target: `full-replace` (delete them before loading) or `none` (append). Neither is
 right for every user, so present both as the machine gives them and let the user pick; Iceberg targets
@@ -97,6 +105,9 @@ The choices persist to `plugin.yml` as `data_migration_type`,
 `data_validation_type`, and
 `data_validation_sync_strategy`. `data_migration_sync_strategy` is set by the re-run question or an
 explicit `migrate_data(mode="setup", sync_strategy=...)`.
+Adoption of an existing target persists as `data_migration_adoption` (`verify`, or `off` once dropped),
+`data_migration_adoption_check` and `data_migration_adoption_on_mismatch`, only through an explicit
+`migrate_data(mode="setup", adoption=...)`.
 
 ## Changing an existing choice
 

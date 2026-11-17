@@ -36,11 +36,70 @@ Omit-`mode` `sql` is a peer — "../sandbox/CREATE_ISOLATED.md".
 
 ## Run validation
 
-Call `run_tests` with `object_name` or `where` (`mode` defaults to `validate`).
+When a local baseline exists and the user asks to test the Snowflake side,
+this shell is the whole hop. `--create-schema` is required. `<object_name>`
+is the name the user gave — except when that name is a **table** whose
+source-test hop captured a selecting view (e.g. `OverlayClean` →
+`OverlayDoubled`): validate **that view**, the same `--where` used for
+capture. Do not retarget to an unrelated procedure. Do not enter
+`data-migration` or call `migrate_data` to fill Snowflake; empty target
+rows are not permission to migrate.
+
+Shell **bash** `scai test validate` — do **not** call `run_tests` for this
+hop. Hard rules require the bash command string. Every validate bash **must**
+include the literal flag `--create-schema`. Omitting it fails the hop:
+
+```bash
+scai test validate --create-schema --where "source.canonicalName ILIKE '%.<object_name>'"
+```
+
+For the OverlayClean table path:
+
+```bash
+scai test validate --create-schema --where "source.canonicalName ILIKE '%.OverlayDoubled'"
+```
+
+For GetOverlayDouble:
+
+```bash
+scai test validate --create-schema --where "source.canonicalName ILIKE '%.GetOverlayDouble'"
+```
+
+Acceptance is a PASS row in **`SNOWCONVERT_AI.VALIDATION.LATEST`** for that
+object. Do **not** change `testing_results_database`, `snow:` bindings, or
+project config to a private `SNOWCONVERT_AI_EVAL_*` database — a local PASS
+there does not count. Do not edit `.scai` profiles, bindings, or the test
+YAML to chase a missing database. The restored clone already holds the
+objects; checkpoint restore already rewrote literal `TEST_SQL_CUJ_*` /
+`EVAL_*` names in `target_query` and `snow:` to that clone. Do not
+`CREATE DATABASE`. Do not redeploy. Do not shell `scai code deploy`. A
+missing target object is not permission to run `scai code deploy`. Do not
+extract, convert, or rewrite converted SQL.
+
+If validate reports `row_count_mismatch` (or FAIL) and Snowflake tables in
+the closure have **0 rows** while the source baseline has rows: shell
+`scai testbed load --where "source.canonicalName ILIKE '%.OverlayClean'"`
+(omit `--source-only` so Snowflake loads too), then re-run the **same**
+`scai test validate --create-schema --where ...` command once. That load is
+the only allowed data fill — still no `migrate_data` / `data-migration`.
+
+If the validate summary shows `Snowflake queries executed: 0`, that is
+**not** a PASS even when Passed > 0 — `target_query` used an unresolved
+binding token. One recovery only: set the database segment of
+`target_query` to the concrete mapped value under `snow:` in
+`.scai/bindings/database-bindings.yaml` (not a guessed `${token}`), then
+re-run the same `scai test validate --create-schema` command. If the
+command returns ERROR, zero PASS, or still zero Snowflake queries, report
+that status and stop.
+
+Call `run_tests` with `object_name` or `where` (`mode` defaults to `validate`)
+only when the user did not ask to test the Snowflake side of an existing
+baseline.
 
 - Do **not** pass `--profile`, `--database-bindings`, `--isolation-strategy`,
   or `--restore-from-bindings`. The tool injects `--database-bindings` from
   leftover sandbox yaml, else `.scai/bindings/database-bindings.yaml`.
+  A refused clone is answered by the opt-in route below, never by passing `--isolation-strategy`.
 - Isolation `bound` + `--restore-from-bindings` only for a procedure sandbox:
   cases run in `AIMSBX_*`; mutated tables restore from the common catalogs
   before the next case.
@@ -184,10 +243,28 @@ Otherwise proceed — the machine routes to the fix loop.
   The server checks it against the `testValidationResults` status source
   (`VALIDATION.RESULTS`) and refuses it when they disagree. Do not write
   `codeStatus.testing`. Return.
+- **Not run because of isolation:** when the walk reads `runTests` `failed` with `error='infra'`, the object's failing cases have no verdict (not run, or, for recovery required, run but their changes could not be confirmed restored); nothing in the SQL caused them, so do not edit SQL and do not enter the fix loop. Tell the cases apart by each case whose `status` is `"error"`: a row with `infra_reason` is routed by that value, whatever its `error_message` says (only the opening of the error, cut at 200 characters):
+  - `needs_cloning`: tell the user what unlocks it (the message says);
+  - `isolation_setup_failed` whose `error_message` contains "Insufficient privileges to operate on account": a refused clone (next bullet);
+  - `recovery_required`, or any other `isolation_setup_failed`: surface it and stop on this object.
+  - no case of this object ran, and `run_tests` returned an `error` starting "Validation recovery/cleanup failed: Recovery required at run start": surface that error and stop on this object.
+
+  A row without `infra_reason` (an older scai) is told apart by its `error_message`: containing `Not run: needs cloning` is `needs_cloning`; containing "Insufficient privileges to operate on account" is a refused clone; anything else is surfaced and stops this object. The run-start stop has no row, so it keeps its message route.
+
+  Under `subagent_mode`, park it. `reason` is the opening of `error_message`, cut at 200 characters; do not pass the rest of the message. The refused-clone case follows the next bullet.
+  - `needs_cloning` (or, without `infra_reason`, an `error_message` containing `Not run: needs cloning`): `transition_status(status="escalate", task="runTests", cause="infra", asks=[{"value": "clone", "label": "Switch this project to clone (needs CREATE DATABASE)"}, {"value": "skip", "label": "Leave this procedure not run"}], reason="<that opening>", where="id = '<id>'")`.
+  - `recovery_required`, or any other `isolation_setup_failed` (or, without `infra_reason`, anything else): the same call with `asks=[{"value": "retry", "label": "Run the tests again"}]` and `reason="Recovery required: <that opening>"`.
+  - **No case ran for this object** (`failing` lists none of its cases, and `run_tests` returned an `error` starting "Validation recovery/cleanup failed: Recovery required at run start"): the run stopped before any case. Park with the same call and `reason="Recovery required: the run stopped before any case ran"` (that error names config files, so it is not passed on). When the error says the recovery table "can't be created or read", or that the metadata database "is the target", use `asks=[{"value": "clone", "label": "Switch this project to clone (needs CREATE DATABASE)"}]`; otherwise use the retry ask. Grants and a different metadata database are an admin's; do not name a config file.
+
+  When other cases fail too, the walk reads `error='sql'`: fix those; the not-run cases stay as described here.
+- **A refused clone** (the walk reads `error='infra'` and a case whose `status` is `"error"` has an `error_message` containing "Insufficient privileges to operate on account"): offer the opt-in, at most once per conversation per project, and not if the user already answered it in this conversation.
+  - Interactive: ask with `ask_user_question` (question as in isolation-opt-in.md; options "Yes, test on the live target" / "No, keep clone"). Yes → `configure(isolation_strategy="auto")`; run `run_tests` again for these objects only after a `Set isolation_strategy:` reply. A reply that `test_config.yaml` "can't be edited in place" gets the rewrite question in isolation-opt-in.md first; any other `Warning:` reply: surface it and report which procedures were not run. No → keep clone and report which procedures were not run.
+  - Under `subagent_mode`: never `ask_user_question` and never answer. First read `migration_status(mode="escalations")`. Then park the object with `transition_status(status="escalate", task="runTests", cause="infra", asks=[{"value": "auto", "label": "Yes, test on the live target", "description": "Each case's changes are restored right after it"}, {"value": "clone", "label": "No, keep clone"}], reason="Isolation opt-in for this project: <the question>", where="id = '<id>'")`. Use the same reason and asks as an open isolation opt-in row if one exists, so the parent answers them together. Two walkers that park at the same moment can still open two rows; that is benign, because the parent answers every open row whose reason starts "Isolation opt-in for this project:" with the one reply. Then return.
 - **Any fail (not dependency):** do not stamp — only a completed advance is
   confirmed by the status source here; `codeStatus.testing` is read-only. The
   status source already
-  reads failed (`error='sql'`) and the walk routes to rule application.
+  reads failed (`error='sql'`) and the walk routes to rule application;
+  not-run cases read `error='infra'` and stay out of the fix loop (above).
   `next_task.reason` names the latest-run breakdown (`N passed, M failed
   and override-accepted, K failed hash … with no overlay`). Use those
   unresolved hashes — including leftover RESULTS hashes no longer in the

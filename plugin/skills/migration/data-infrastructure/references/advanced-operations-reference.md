@@ -4,7 +4,7 @@
 overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
 project's.
 
-Use this when a customer asks about **protecting the source**, **bounded migration dry-runs**, **incremental validation**, **re-validating failed partitions**, **throttling concurrent tasks**, **custom L3 normalization**, or **why checksum/incremental sync missed a change**. These are optional — default migrate/validate flows do not require them.
+Use this when a customer asks about **protecting the source**, **bounded migration dry-runs**, **adopting a target another tool already loaded**, **incremental validation**, **re-validating failed partitions**, **throttling concurrent tasks**, **custom L3 normalization**, or **why checksum/incremental sync missed a change**. These are optional — default migrate/validate flows do not require them.
 
 **Related references:** [Metadata storage mode (Hybrid vs standard)](./metadata-storage-mode-reference.md), [DM workflow config](../../migrate-objects/actions/data-migration/references/workflow-config-reference.md), [DV workflow config](../../setup/data-validation/references/workflow-config-reference.md), [validate_tables.md](../../validate-objects/actions/validate_tables.md).
 
@@ -96,6 +96,24 @@ preflightKeepSchema: false   # true = leave PREFLIGHT_<id> for manual inspection
 7. For the real migration, turn `preflight` off (or generate a new workflow without it) before the production load, and keep the first full load on `synchronization.strategy: none`.
 
 See [workflow-config-reference.md](../../migrate-objects/actions/data-migration/references/workflow-config-reference.md#preflight-bounded-dry-run).
+
+---
+
+## Adopting a target another tool already loaded
+
+**When the customer asks:** the Snowflake tables were already loaded by another tool (or a hand-run `COPY`, or an interrupted load) and they want DMVF to take over incremental sync without remigrating; or an incremental run reloaded, or duplicated, rows that were already there.
+
+**What it is:** the optional `synchronization.adoption` block on `checksum` / `watermark`. Each partition with no baseline whose rows already exist in the target is checked against the source (L2 metrics, or an exact row hash) and, when it matches, keeps its rows and gets its baseline with no data moved. A mismatch is reloaded (`onMismatch: reload`, default) or only reported in `ADOPTION_REPORT` (`onMismatch: report`). Native targets only; never Iceberg.
+
+**Agent guidance:**
+
+1. **Never choose it for the user.** Explain adopt-and-reload vs adopt-and-report vs plain reload, then record the answer: `migrate_data(mode="setup", sync_strategy="checksum"|"watermark", adoption=true, adoption_check=..., adoption_on_mismatch=...)`. Setup refuses it for `none`, `full-replace` and Iceberg, and records it in plugin.yml (`data_migration_adoption*`).
+2. Set the per-table `strategy` / `watermarkColumn` afterwards, and `comparisonConfiguration.relativeTolerance` (`1e-6`) for float or decimal columns. Teradata `check: row` needs `hashMd5Function: <DATABASE>.HASH_MD5` only when the UDF is outside the worker's default database.
+3. `resetPartitions` re-checks instead of reloading while adoption is set; to force a full reload use `adoption=false`.
+4. A reported partition is reported on every run until the target is fixed or `onMismatch` becomes `reload`; read `ADOPTION_REPORT` in `<metadata_database>.DATA_MIGRATION`.
+5. Autonomous walkers never enable it themselves: only a recorded `data_migration_adoption` or an explicit parent-step `adoption=true`; otherwise escalate a populated target.
+
+Full field reference: [workflow-config-reference.md](../../migrate-objects/actions/data-migration/references/workflow-config-reference.md#adopting-an-existing-target-synchronizationadoption).
 
 ---
 

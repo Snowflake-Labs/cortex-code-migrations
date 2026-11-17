@@ -26,7 +26,7 @@ Tell the user:
 |-----------|----------|-------------|
 | `-s, --source-connection` | Yes | Friendly name for this source connection |
 | `--auth` | Yes | `service-account` |
-| `--project-id` | Yes | GCP project ID that owns the datasets and runs the queries |
+| `--project` | Yes | GCP project ID that owns the datasets and runs the queries |
 | `--dataset` | No | Default dataset to scope discovery to (all datasets in the project if omitted) |
 | `--credentials-file` | Yes | Path to the service account JSON key file |
 | `--location` | No | Dataset location / region (e.g. `US`, `EU`, `us-central1`) |
@@ -65,7 +65,7 @@ Options:
 scai connection add-bigquery \
   -s <CONNECTION_NAME> \
   --auth service-account \
-  --project-id <GCP_PROJECT_ID> \
+  --project <GCP_PROJECT_ID> \
   --dataset <DATASET> \
   --credentials-file <PATH_TO_SERVICE_ACCOUNT_JSON> \
   --location <LOCATION>
@@ -114,7 +114,7 @@ Then return to the calling skill.
 
 | Action | Command |
 |--------|---------|
-| Add connection | `scai connection add-bigquery -s NAME --auth service-account --project-id PROJECT --credentials-file KEY.json` |
+| Add connection | `scai connection add-bigquery -s NAME --auth service-account --project PROJECT --credentials-file KEY.json` |
 | Test connection | `configure(source_connection=NAME)` (runs the test internally) |
 | List connections | `scai connection list -l bigquery --json` |
 | Set default | `scai connection set-default -l bigquery -s NAME` |

@@ -47,7 +47,7 @@ If `configure()` does not already have source_language configured, use the CLI d
 
 If the user says "PostgreSQL & Based Languages" but does not specify one, ask whether they mean PostgreSQL, Greenplum, or Netezza.
 
-> **Note on PostgreSQL, IBM DB2, BigQuery, and Azure Synapse:** New PostgreSQL, DB2, BigQuery, and Azure Synapse projects default to `project_type: full_migration` and are routed through `setup/SKILL.md`. They appear in this skill only for **legacy** projects whose `project.yml` already has `project_type: code_conversion_only` persisted from before full-pipeline support shipped. If you reach this skill for PostgreSQL, DB2, BigQuery, or Azure Synapse, the legacy project configuration is being honored.
+> **Note on conversion dialects:** New projects for every conversion dialect (including Sybase, Spark, Databricks, Greenplum, Netezza, Vertica, Hive, and Druid) default to `project_type: full_migration` and are routed through `setup/SKILL.md`. They appear in this skill only for **legacy** projects whose `project.yml` already has `project_type: code_conversion_only` persisted from before arrange/split + CUR shipped for that dialect. If you reach this skill for those sources, the legacy project configuration is being honored.
 
 ## Workflow
 

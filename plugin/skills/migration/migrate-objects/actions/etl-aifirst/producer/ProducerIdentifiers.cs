@@ -45,13 +45,72 @@ internal sealed class ProducerExecuteDbtProjectStatementGenerator : IExecuteDbtP
     bool useScopeHostParam = false,
     string? scopeHostParameterName = null,
     IReadOnlyList<string>? selectClauses = null) =>
-    this.inner.GenerateExecuteDbtProjectStatement(
-      ProducerIdentifiers.DbtProjectName(projectName),
+    this.CallInner(
+      projectName,
       context,
       hasVariables,
       variableScope,
       target,
       useScopeHostParam,
       scopeHostParameterName,
-      selectClauses);
+      selectClauses,
+      passRunId: false);
+
+  public ISqlStatement GenerateExecuteDbtProjectStatement(
+    string projectName,
+    IOrchestratorTaskTranslationContext context,
+    bool hasVariables,
+    string variableScope,
+    string target,
+    bool useScopeHostParam,
+    string? scopeHostParameterName,
+    IReadOnlyList<string>? selectClauses,
+    bool passRunId) =>
+    this.CallInner(
+      projectName,
+      context,
+      hasVariables,
+      variableScope,
+      target,
+      useScopeHostParam,
+      scopeHostParameterName,
+      selectClauses,
+      passRunId);
+
+  private ISqlStatement CallInner(
+    string projectName,
+    IOrchestratorTaskTranslationContext context,
+    bool hasVariables,
+    string variableScope,
+    string target,
+    bool useScopeHostParam,
+    string? scopeHostParameterName,
+    IReadOnlyList<string>? selectClauses,
+    bool passRunId)
+  {
+    string name = ProducerIdentifiers.DbtProjectName(projectName);
+    if (!passRunId)
+    {
+      return this.inner.GenerateExecuteDbtProjectStatement(
+        name,
+        context,
+        hasVariables,
+        variableScope,
+        target,
+        useScopeHostParam,
+        scopeHostParameterName,
+        selectClauses);
+    }
+
+    return ((dynamic)this.inner).GenerateExecuteDbtProjectStatement(
+      name,
+      context,
+      hasVariables,
+      variableScope,
+      target,
+      useScopeHostParam,
+      scopeHostParameterName,
+      selectClauses,
+      passRunId);
+  }
 }

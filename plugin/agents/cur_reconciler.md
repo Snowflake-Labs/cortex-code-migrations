@@ -39,8 +39,8 @@ by CUR but might be present in the source directories.
 3. If you find the missing DDL, author a real unit per authoring.md, then
    continue to **Bindable references**.
 4. No file, several files, or an ambiguous identity → `escalate` with
-   `asks` of register / stub / out of scope. Do not guess. Do not mint a
-   stub.
+   `asks` of register / stub. Do not guess. Do not mint a stub. Skipping
+   the object is the person's own "Skip this object" on the card, not an ask.
 
 ## Bindable references
 
@@ -121,6 +121,39 @@ reference is sqlFixLoop — return `deferred` and name it in `unresolved`.
    identities, edges, graph consequences, file evidence, and changed status.
 
 Don't guess if you can't find evidence. Escalate if needed.
+
+## dbt consolidation retarget
+
+Input: a mapping of old dbt project path -> new path, with the affected unit
+ids (see `dbt-quality/references/registry-consolidation.md`). A patch key is a
+dotted object path, so it cannot address one `parts[]` element such as
+`parts[0]`. A patch replaces the whole `parts` array.
+
+For each affected unit:
+
+1. Read it: `query_registry(where="id = '<id>'", fields="id,parts")`.
+2. Copy the full `parts` array. In each dbt part (`target.format` is `dbt`)
+   whose `target.path` is an old path, set `target.path` to the new path (keep
+   the trailing `/`) and `target.modelName` to the model under
+   `models/<dataflow>/` in the new project. Leave other parts and fields as they
+   are.
+3. Write it, one call per set of units that share the same new `parts`, or one
+   call per unit when they differ:
+
+   ```text
+   update_registry(
+     objects="<unit id>",
+     patch={"parts": [<full updated parts array>]},
+     reason="dbt consolidation: <old> -> <new>")
+   ```
+
+4. Verify: `query_registry(where="kind = 'etl'", fields="id,parts")` shows no dbt
+   target under an old path, and every new `target.path` holds `dbt_project.yml`.
+
+Do not delete old folders. The caller deletes them after you return `repaired`.
+
+To drop a registered backup or build copy, ask the user first. Then call
+`update_registry(objects="<ids>", field="inScope", status="false")`.
 
 ## Return
 

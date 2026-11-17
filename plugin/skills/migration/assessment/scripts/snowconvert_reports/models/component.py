@@ -23,11 +23,7 @@ from .etl_issue import Issue
 
 @dataclass
 class Component:
-    """A component from ETL.Elements.csv with attached issues.
-
-    Used by both SSIS (scai_assessment_analyzer) and Informatica
-    (informatica_assessment_analyzer).
-    """
+    """A component from ETL.Elements.csv with attached issues."""
 
     full_name: str
     file_name: str

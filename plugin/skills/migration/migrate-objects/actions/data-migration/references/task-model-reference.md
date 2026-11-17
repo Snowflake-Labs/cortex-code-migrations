@@ -137,6 +137,8 @@ Procedures live in the migration metadata schema (default `<metadata_database>.D
 
 `source_table_fqn` must match the identifier inside `Table[...]` in task scopes.
 
+Pause or resume a whole workflow with `migrate_data(mode="pause")` / `mode="resume"`, not by calling the procedures: those modes run `scai data migrate pause|resume`, and the plugin records the hold so `job_status` reports the job `paused` rather than stalled. The table-scoped procedures have no plugin mode; a job with a paused table is not reported paused.
+
 ## Priority system
 
 Lower number = higher priority. Fan-out / strategy tasks ≈ 1; extraction spread across 2–3; default ≈ 3.

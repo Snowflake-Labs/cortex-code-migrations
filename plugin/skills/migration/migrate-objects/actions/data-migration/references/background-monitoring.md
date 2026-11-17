@@ -68,15 +68,41 @@ Read the event line's `phase` to decide what happened:
 | `failure` | First partition failure, job still running | Warn the user; keep watching |
 | `stalled`, `detail.stall_reason: "infrastructure_down"` | The orchestrator or worker the job needs is down, local or SPCS; `detail.infrastructure` names it, with `exit_status` and `log_tail` for a local process this session started | Tell the user which process is down, with its last log line when there is one, and offer `detail.remediation` (see [Health monitoring](#health-monitoring)). Do not cancel or re-dispatch: keep watching, the job carries on once the process is back |
 | `stalled`, `detail.stall_reason: "unclaimed"` | 2 minutes with the `WORKFLOW` row still `pending` — no orchestrator has claimed it | Run the stall diagnosis in [Health monitoring](#health-monitoring): a stopped or still-starting orchestrator, one bound to another affinity, or one busy initializing another workflow. Report what it finds; keep watching. A 30-minute `stalled` still follows, keeping `unclaimed` while the row stays `pending` |
-| `stalled`, `detail.stall_reason: "no_change"` | 30 minutes with no change | Warn the user, run the stall diagnosis in [Health monitoring](#health-monitoring), keep watching. If `summary` names a workflow status (e.g. `(workflow status Unknown)`), the workflow may be paused or cancelled — see below |
+| `stalled`, `detail.stall_reason: "no_change"` | 30 minutes with no change | Warn the user, run the stall diagnosis in [Health monitoring](#health-monitoring), keep watching. If `summary` names a workflow status (e.g. `(workflow status Unknown)`), the workflow may have been cancelled — see below |
 | `relay_error` | The relay's own status query failed | Note it; the relay retries |
 
-A paused or cancelled workflow produces no terminal record. Neither state is a member of
-the CLI's workflow-status enum, so the status call reports `Unknown` and the relay keeps the
-job `inProgress` rather than guessing. A stall whose `summary` carries an unclassifiable
+A paused workflow is not stalled. Once its `WORKFLOW` row reads `paused` — paused by
+`migrate_data(mode="pause")` or anywhere else — the relay sends no `stalled` event for it, its
+`summary` starts with `workflow paused`, and `job_status` reports it `status: "paused"`
+(`polled_status` keeps what the last poll read). It is still live: keep the watch, and see
+[Pausing and resuming](#pausing-and-resuming).
+
+A cancelled workflow produces no terminal record. Cancelled is not a member of the CLI's
+workflow-status enum, so the status call reports `Unknown` and the relay keeps the job
+`inProgress` rather than guessing. A stall whose `summary` carries an unclassifiable
 workflow status is therefore the only signal you get: confirm with
 `scai data migrate list` before continuing to wait, and tell the user rather than watching a
 job that has already stopped.
+
+### Pausing and resuming
+
+Offer a pause when the user wants the job to stop working against the source for now —
+a busy window on the source, a load to make room for — without throwing away what it
+already did. Pause only when the user asks or agrees; never to answer a stall.
+
+- `migrate_data(mode="pause", job_id=<monitor.job_id>)` runs `scai data migrate pause` on the
+  job's workflow: it takes no new tasks, and what it loaded stays. Only a `pending` or
+  `running` workflow can be paused; scai's refusal comes back as the error.
+- `migrate_data(mode="resume", job_id=<monitor.job_id>)` carries it on and returns a `monitor`
+  block, as `run` does; re-arm the watch from it. The stall clock starts again from the
+  resume.
+- With one live job of this kind, `job_id` may be omitted; `workflow_name` names a
+  workflow instead.
+- A `run` over objects whose workflow is paused starts nothing and returns
+  `status: "paused"`: resume that workflow, or cancel it.
+- A paused job still counts as running. Pausing does not stop the orchestrator or worker
+  costing compute, and `data_infrastructure(mode="down")` refuses while it is live;
+  `down` with `force=true` cancels it, as it cancels a running one.
 
 ### Phase C — On `terminal`
 
@@ -163,7 +189,7 @@ When **`reports`** is present, also scan `details.reports.files.errors` — any 
 - Preprocessing incomplete: <preprocessed>/<total> tables
 ```
 
-On **Warning** or **Critical**, point to [Troubleshooting Reference](./troubleshooting-reference.md) (stale `TASK_QUEUE` tasks, worker DB mismatch, affinity). Do **not** auto-cancel the workflow — offer: keep waiting, open troubleshooting, or pause/teardown if the user wants to stop cost.
+On **Warning** or **Critical**, point to [Troubleshooting Reference](./troubleshooting-reference.md) (stale `TASK_QUEUE` tasks, worker DB mismatch, affinity). Do **not** auto-cancel the workflow — offer: keep waiting, open troubleshooting, or teardown if the user wants to stop cost (a paused job does not stop it — see [Pausing and resuming](#pausing-and-resuming)).
 
 Fold the worst severity seen while waiting into the SKILL.md Step 6 report's **Infrastructure** or **Load** only if it was never surfaced to the user.
 

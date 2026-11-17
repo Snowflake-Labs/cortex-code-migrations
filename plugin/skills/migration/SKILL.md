@@ -160,9 +160,11 @@ those ETL jobs as `customKind` cookbooks.
   SnowConvert equivalent are written by a model or flagged for review, and each converted
   job must pass validation before it is trusted.
 - Local `.dtsx`, PowerCenter XML repo export, or any unsupported ETL platform is **not**
-  `project_type: code_conversion_only`. `code-conversion-only` is Sybase / Spark /
-  Databricks / Greenplum / Netezza / Vertica / Hive / DB2 SQL. If the user has ETL to
-  convert, follow **setup → convert**, not `code-conversion-only`.
+  `project_type: code_conversion_only`. `code-conversion-only` is only for **legacy**
+  projects whose `project.yml` still has that type; new conversion-dialect projects
+  (including Sybase / Spark / Databricks / Greenplum / Netezza / Vertica / Hive / Druid)
+  are `full_migration`. If the user has ETL to convert, follow **setup → convert**,
+  not `code-conversion-only`.
 
 ### SAS (Preview — parallel track, not SnowConvert)
 - **sas** (Preview) — SAS → Snowflake: assess portfolios, convert `.sas` programs, or load `.sas7bdat` from a stage → `./sas/SKILL.md`
@@ -212,6 +214,11 @@ those ETL jobs as `customKind` cookbooks.
 
 ### Object metadata
 - **tag-objects** — tag or untag code units with the user's own labels (`extensions.tags`), and find objects by tag. Triggers: "tag this table", "label these objects", "untag", "which objects are tagged" → `./tag-objects/SKILL.md`
+
+### dbt project quality
+Use the dbt-quality workflow for an existing dbt project or estate with the migration MCP's `dbt_quality_audit` and `dbt_quality_repair` tools and the `scai dbt-quality` CLI. Audits are local and static; repairs require a reviewed dry run, approval before apply, and the selected verification gate. For converting or repointing dbt for Snowflake, use `./dbt/SKILL.md`; it runs automatically after `scai code add`. User guide (install, configuration, CI, limits): `./dbt-quality/README.md`; every rule: `scai dbt-quality rules`.
+- **dbt-quality** — audit, lint, or health-check a dbt project or several projects; HTML quality report; validate one model or schema file; explain a rule; mark findings in the files (`annotate`); repair findings using reviewed plans; set up editor tasks. Triggers: "audit my dbt project", "dbt anti-patterns", "review the converted dbt output", "validate this model", "lint this dbt file", "SSC-EWI-DBT", "fix dbt-quality findings", "repair converted dbt" → `./dbt-quality/SKILL.md`
+- **dbt-standards** — choose which dbt-quality rules to enforce, rule by rule from the project's own findings (keep, waive for paths, tune a threshold, disable, migration mode), and record the choices in `.dbt-quality.yml` after the user approves a diff; never edits models. Triggers: "tune dbt-quality rules", "too many dbt-quality findings", "set up .dbt-quality.yml", "waive / disable a dbt-quality rule", "lift_and_shift / native mode" → `./dbt-standards/SKILL.md`
 
 ### Rules
 - **rule-engine** — search, apply, and manage migration rules → `./migrate-objects/rule-engine/SKILL.md`

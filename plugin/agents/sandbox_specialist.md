@@ -58,10 +58,12 @@ the prompt names.
 - **The snapshot must match the rows.** Tests restore from a snapshot of this pair once it is
   latched. Mutating `query_source` into AIMSBX latches it; after any `sql_execute` DML, refresh it
   yourself: `deploy(sandbox=true, mode=redeploy_object, restore_from="sandbox")`.
-  `mode=reload_tables` reloads the generated CSVs and wipes all prior AIMSBX DML.
+  `mode=reload_tables` reloads the generated CSVs (or, on `source_database`, the live source
+  rows) and wipes all prior AIMSBX DML.
 - **`notes` for anything you changed:** what, where, and its inverse (drop this AIMSBX pair or
-  reload the generated CSVs; for a pin, the path, before → after, and that the next convert
-  overwrites it). A pin requires `notes`.
+  `deploy(sandbox=true, mode=reload_tables)`, which restores the generated CSVs or, on
+  `source_database`, the live source rows; for a pin, the path, before → after, and that the
+  next convert overwrites it). A pin requires `notes`.
 
 ## Act
 

@@ -1,10 +1,12 @@
 ---
 name: synthetic-seeder
 description: >
-  Generate two-sided synthetic data tests (source + Snowflake) for migrated stored
-  procedures and functions. Derives test scenarios from source SQL branch analysis,
-  writes step-based validation YAML artifacts, and enriches them with isolation metadata.
-  Use when generating or refreshing test cases for a migrated object.
+  Write step-based test YAML for migrated stored procedures and functions after
+  testbed rows already exist. Derives scenarios from source SQL branch analysis
+  and enriches the YAML with isolation metadata.
+  Use when generating or refreshing test cases, not when generating the testbed
+  rows. That is testbed-generator (mine, validate, enrich, compile, generate).
+  Do not enter this skill for "generate synthetic data".
   Delegates object repair to migrate-object. Triggers: generate tests, create tests,
   write test YAML, test generation, synthetic tests.
 parent_skill: baseline-capture
@@ -36,6 +38,7 @@ converted code. Each test is a step-based YAML artifact directly consumable by
 - Fix test SQL if Snowflake execution fails (up to 3 retries)
 
 **This skill does NOT:**
+- Generate testbed rows, CSVs, or the manifest. That is `testbed-generator`. If the user asked only to generate synthetic data and `testbed/generate/generate-summary.json` is absent, leave this skill and run `testbed-generator`.
 - Repair the migrated object — delegate failures caused by object bugs to `migrate-object`
 - Run `uv run migrate` or `run_migration_tests` — test execution is handled by `scai test capture` + `scai test validate`
 - Generate tests for TABLEs or VIEWs (procedures and functions only)
@@ -392,10 +395,10 @@ Test generation complete for <object_name>:
 
   Artifacts: <project_dir>/<files.artifacts.path>/test/
 
-  Next: run `scai test capture` and `scai test validate` to execute the tests.
+  Next: run `scai test capture --keep-baselines` and `scai test validate` to execute the tests.
 ```
 
-> **Note (when called from `migrate-objects/baseline-capture/SKILL.md`):** the caller loads `baseline-capture/CAPTURE.md` immediately after this skill returns to run `scai test capture` and upload baselines. The migrate-object loop then runs `scai test validate` each iteration. Do not run capture/validate yourself in that flow — just report completion so the parent can continue.
+> **Note (when called from `migrate-objects/baseline-capture/SKILL.md`):** the caller loads `baseline-capture/CAPTURE.md` immediately after this skill returns to run `scai test capture --keep-baselines` and upload baselines. The migrate-object loop then runs `scai test validate` each iteration. Do not run capture/validate yourself in that flow — just report completion so the parent can continue.
 
 ---
 

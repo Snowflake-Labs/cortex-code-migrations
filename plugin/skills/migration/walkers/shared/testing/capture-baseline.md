@@ -11,7 +11,7 @@ row for the object whose `ROW_COUNTS` sum > 0) and replies with the next step.
 A case the source rejects for its inputs (an overflow, a value it refuses), or one that returns no rows or only
 NULLs, tests nothing: the reply lists it in `vacuous` instead of failing on it, and `runTests` skips the ones that
 errored. An error the object raises on purpose (SQL Server error number ≥ 50000, unless it re-raises an engine error) is not vacuous: it is
-compared, and the converted object must raise too. A reply with `regenerate` (over a third vacuous) → add rows that cover them once per
+compared, and the converted object must raise too. A seeded boundary or not-found row marked `tolerates_source_error` in its `.seed.json` that makes the source raise is an expected source error, not a failure to fix. A reply with `regenerate` (over a third vacuous) → add rows that cover them once per
 [generate-test-cases §7](generate-test-cases.md#7-cover-vacuous-rows-once), then carry on with the step it
 returned. An error that names the environment (a missing object, a privilege, the connection) is still a failure.
 A vacuous reason starting `source_defect:` (*insert into T omits key column C with no IDENTITY/DEFAULT*) is a source

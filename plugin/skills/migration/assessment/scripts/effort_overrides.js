@@ -59,7 +59,28 @@
 
   /** A banded row prices counted objects per band; a flat row is one budget. */
   function isBandedRow(row) {
-    return isPlainObject(row && row.band_counts) && isPlainObject(row.band_rates);
+    return (
+      !isCriticalSplit(row) &&
+      isPlainObject(row && row.band_counts) &&
+      isPlainObject(row.band_rates)
+    );
+  }
+
+  /**
+   * Critical objects at the Critical rate, plus one budget for every other object
+   * of the type. It carries band counts and rates but is not banded: only the
+   * Critical band is charged per object.
+   */
+  function isCriticalSplit(row) {
+    return !!row && row.pricing === "critical_split";
+  }
+
+  /** Rows whose hours come from an object count rather than a band split. */
+  function isCountedRow(row) {
+    return (
+      !!row &&
+      (row.pricing === "flat_total" || row.pricing === "per_object" || isCriticalSplit(row))
+    );
   }
 
   /**
@@ -106,7 +127,7 @@
    * something is typed into it.
    */
   function isEditableRow(row) {
-    if (row && (row.pricing === "flat_total" || row.pricing === "per_object")) {
+    if (isCountedRow(row)) {
       return numberOr(row.quantity, 0) > 0;
     }
     if (isBandedRow(row)) {
@@ -216,6 +237,9 @@
 
   /** Which bands of a row a user may edit: the ones its objects can land in. */
   function editableBands(row) {
+    if (isCriticalSplit(row)) {
+      return ["critical"];
+    }
     return isBandedRow(row) ? EDITABLE_BANDS.slice() : [];
   }
 
@@ -316,6 +340,40 @@
           is_editable: editable,
           is_unestimated: false,
           editable_bands: EDITABLE_BANDS.slice(),
+        });
+      }
+
+      if (isCriticalSplit(row)) {
+        const quantity = numberOr(row.quantity, 0);
+        const candidate = rateOverrides[row.key];
+        const edits = isPlainObject(candidate) ? { critical: candidate.critical } : null;
+        const customRates = ratesFor(row, editable ? edits : null);
+        const overriddenBands =
+          customRates.critical !== snowflakeRateFor(row, "critical") ? ["critical"] : [];
+        const budgetCandidate = flatOverrides[row.key];
+        const storedBudget =
+          editable && isNumber(budgetCandidate) ? round4(budgetCandidate) : null;
+        const snowflakeBudget = numberOr(row.flat_hours, 0);
+        const budget = storedBudget !== null ? storedBudget : snowflakeBudget;
+        const budgetOverridden = storedBudget !== null && storedBudget !== snowflakeBudget;
+        const overridden = overriddenBands.length > 0 || budgetOverridden;
+        const criticalHours = row.repetition
+          ? priceRepetition(row, customRates)
+          : numberOr(row.band_counts && row.band_counts.critical, 0) * customRates.critical;
+        return Object.assign({}, row, {
+          custom_band_rates: customRates,
+          custom_estimated_hours: overridden
+            ? round4(criticalHours + (quantity > 0 ? budget : 0))
+            : row.estimated_hours,
+          custom_flat_hours: budget,
+          custom_dynamic_sql_unit_hours: null,
+          is_dynamic_sql_overridden: false,
+          is_flat_overridden: budgetOverridden,
+          is_overridden: overridden,
+          overridden_bands: overriddenBands,
+          is_editable: editable,
+          is_unestimated: false,
+          editable_bands: ["critical"],
         });
       }
 
@@ -485,11 +543,14 @@
     return row && row.pricing === "per_object";
   }
 
-  const GROUP_SHAPES = ["flat_total", "per_object", "banded", "flat"];
+  const GROUP_SHAPES = ["flat_total", "critical_split", "per_object", "banded", "flat"];
 
   function shapeOf(row) {
     if (isFlatTotal(row)) {
       return "flat_total";
+    }
+    if (isCriticalSplit(row)) {
+      return "critical_split";
     }
     if (isPerObject(row)) {
       return "per_object";
@@ -519,7 +580,7 @@
   const SECTION_DEFS = [
     {
       key: CONVERSION,
-      title: "Code conversion and testing",
+      title: "Code conversion and testing \u2014 using AIM",
       blurb: "flat budgets, then hours per object by complexity",
       shape: "mixed",
       match: isConversion,
@@ -543,10 +604,154 @@
     if (isBandedRow(row)) {
       return bandedObjectCount(row) === 0;
     }
-    if (row && (row.pricing === "flat_total" || row.pricing === "per_object")) {
+    if (isCountedRow(row)) {
       return numberOr(row.quantity, 0) === 0;
     }
     return false;
+  }
+
+  const BAND_LABELS = {
+    critical: "Critical",
+    high: "High",
+    medium: "Medium",
+    low: "Low",
+  };
+
+  /**
+   * Hours one band of a row contributes. Unedited, the groups' published hours are
+   * summed so the lines add up to the artifact's total to the cent; once edited,
+   * the band is repriced with the same discount the row total uses.
+   */
+  function bandLineHours(row, band) {
+    const rates = row.custom_band_rates || row.band_rates || {};
+    if (!row.repetition) {
+      return round4(numberOr(row.band_counts[band], 0) * numberOr(rates[band], 0));
+    }
+    const groups = (row.repetition.groups || []).filter(function (group) {
+      return group.band === band;
+    });
+    if (!row.is_overridden) {
+      return round4(
+        groups.reduce(function (total, group) {
+          return total + numberOr(group.hours, 0);
+        }, 0),
+      );
+    }
+    return priceRepetition(
+      { repetition: Object.assign({}, row.repetition, { groups: groups }) },
+      rates,
+    );
+  }
+
+  function bandLine(row, band) {
+    const rates = row.custom_band_rates || row.band_rates || {};
+    return {
+      id: row.key + ":" + band,
+      category: BAND_LABELS[band],
+      cell: "unit",
+      band: band,
+      count: numberOr(row.band_counts[band], 0),
+      unit_hours: numberOr(rates[band], 0),
+      sf_unit_hours: snowflakeRateFor(row, band),
+      unit_changed: (row.overridden_bands || []).indexOf(band) >= 0,
+      fixed_hours: null,
+      sf_fixed_hours: null,
+      fixed_changed: false,
+      total: bandLineHours(row, band),
+    };
+  }
+
+  /**
+   * The spreadsheet lines one applied row renders as. Every line's total follows
+   * from its own cells, and a row's lines add up to its custom total, so both
+   * renderers show the same reproducible arithmetic.
+   *
+   * `cell` names the one input a line exposes: "unit" edits hours per object,
+   * "fixed" edits a budget, and "dynamic" edits the Dynamic SQL rate. A null
+   * cell value renders as not applicable.
+   */
+  function displayLines(row) {
+    if (!row) {
+      return [];
+    }
+    if (isCriticalSplit(row)) {
+      const quantity = numberOr(row.quantity, 0);
+      const critical = numberOr(row.band_counts && row.band_counts.critical, 0);
+      return [
+        bandLine(row, "critical"),
+        {
+          id: row.key + ":non_critical",
+          category: "Non-critical",
+          cell: "fixed",
+          band: null,
+          count: quantity - critical,
+          unit_hours: null,
+          sf_unit_hours: null,
+          unit_changed: false,
+          fixed_hours: numberOr(row.custom_flat_hours, 0),
+          sf_fixed_hours: numberOr(row.flat_hours, 0),
+          fixed_changed: !!row.is_flat_overridden,
+          total: quantity > 0 ? numberOr(row.custom_flat_hours, 0) : 0,
+        },
+      ];
+    }
+    if (isBandedRow(row)) {
+      const lines = [];
+      if (hasDynamicSqlColumn(row)) {
+        const rate = numberOr(row.custom_dynamic_sql_unit_hours, 0);
+        lines.push({
+          id: row.key + ":dynamic_sql",
+          category: "Dynamic SQL",
+          cell: "dynamic",
+          band: null,
+          count: row.dynamic_sql_count,
+          unit_hours: rate,
+          sf_unit_hours: snowflakeRateFor(row, null),
+          unit_changed: !!row.is_dynamic_sql_overridden,
+          fixed_hours: null,
+          sf_fixed_hours: null,
+          fixed_changed: false,
+          total: round4(row.dynamic_sql_count * rate),
+        });
+      }
+      EDITABLE_BANDS.forEach(function (band) {
+        lines.push(bandLine(row, band));
+      });
+      return lines;
+    }
+    const base = {
+      id: row.key + ":all",
+      band: null,
+      unit_changed: false,
+      fixed_changed: false,
+      sf_unit_hours: null,
+      sf_fixed_hours: null,
+      total: row.custom_estimated_hours,
+    };
+    if (row.pricing === "per_object") {
+      return [
+        Object.assign(base, {
+          category: "All objects",
+          cell: "unit",
+          count: numberOr(row.quantity, 0),
+          unit_hours: row.custom_flat_hours,
+          sf_unit_hours: snowflakeRateFor(row, null),
+          unit_changed: !!row.is_overridden,
+          fixed_hours: null,
+        }),
+      ];
+    }
+    return [
+      Object.assign(base, {
+        category: isFlatTotal(row) ? "All objects" : null,
+        cell: "fixed",
+        count: isFlatTotal(row) ? numberOr(row.quantity, 0) : null,
+        unit_hours: null,
+        fixed_hours: row.custom_flat_hours,
+        sf_fixed_hours: snowflakeRateFor(row, null),
+        fixed_changed: !!row.is_overridden,
+      }),
+    ];
   }
 
   /**
@@ -829,6 +1034,8 @@
     EDITABLE_BANDS: Object.freeze(EDITABLE_BANDS.slice()),
     validateRateInput: validateRateInput,
     isBandedRow: isBandedRow,
+    isCriticalSplit: isCriticalSplit,
+    displayLines: displayLines,
     hasDynamicSqlColumn: hasDynamicSqlColumn,
     dynamicSqlBreakdown: dynamicSqlBreakdown,
     editableBands: editableBands,
