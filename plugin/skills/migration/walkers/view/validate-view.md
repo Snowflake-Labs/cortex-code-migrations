@@ -31,6 +31,7 @@ returns the next step. No `query_source`, `sql_execute`, shell, or retry loop.
 | `error`, `side=snow` (compile error, missing column) | `walk(action="done", failed="sql")`. |
 | `error`, `class=missing_object` (42S02) | `walk(action="lookup", name="<name>")`: no row, not `onDependsOn`, or not `bindable` → `cur_reconciler`, then `walk(action="next")`. Not `done` → blocked, as above. `done` (a missing AIMSBX table) → `sandbox_specialist` (`task=validateView`). |
 | `same_error`, `empty` | `sandbox_specialist` (`task=validateView`): the fixture trips one edge on both sides, or never reaches the view. Do not edit WAVE_SRC or a table CSV. |
+| `same_error`, `empty` again after the specialist's pass, or it reports no legal fixture reaches the view | `walk(action="escalate")` with asks offering `unvalidated`, a person's call you never make. Never `walk done` on it: a view nothing compared is not validated. |
 | `error`, `class=infra`, or the tool itself fails | `walk(action="done", failed="infra")`. |
 | `error`, `side=source` | `walk(action="escalate")` with `text`. |
 

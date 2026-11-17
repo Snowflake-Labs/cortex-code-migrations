@@ -12,7 +12,8 @@ stub already exists; you write rows only.
 
 `object_name`, `signature` (parameters in order), `source_code` (a path, or the SQL inline),
 `project_dir`, `referenced_tables`, and usually `key_samples`: rows of real key values that already pass
-the object's own predicates. A `cover` list means cover mode.
+the object's own predicates. A `cover` list means cover mode. When the seed already wrote rows you also get
+`already_covered`: those rows with their category. Do not repeat them; add rows they do not cover.
 
 ## Rows
 
@@ -29,6 +30,10 @@ the object's own predicates. A `cover` list means cover mode.
   the engine rejects (an overflow, a conversion) is vacuous: it tests nothing. If an unguarded
   `RIGHT`, `LEFT`, or `SUBSTRING` length is `LEN(arg) - N` or `LENGTH(arg) - N`, give `arg` no
   non-null string shorter than N.
+  A non-null string is never longer than its parameter's declared width (`NVARCHAR(255)` holds at
+  most 255 UTF-16 units, an emoji counting 2; a `CHAR` / `VARCHAR` / `NCHAR` / `NVARCHAR` with no width holds 1): SQL Server
+  silently truncates a longer one and the converted `STRING` parameter does not, so the row cannot
+  compare.
 
 ## Work: four turns
 

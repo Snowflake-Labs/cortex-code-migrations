@@ -29,10 +29,6 @@ from snowconvert_reports.issue_docs import ISSUE_DOCUMENTATION_URL_JS
 
 _HOURS_PER_WORK_DAY = 8.0
 
-# Shares the ``.nav-preview-badge`` CSS class defined in generate_multi_report.py's
-# stylesheet (embedded in the same HTML page) so the badge markup is defined once.
-EFFORT_PREVIEW_BADGE_HTML = '<span class="nav-preview-badge">Preview</span>'
-
 _OVERRIDES_INFO_ICON = (
     '<span class="info-icon" style="margin-left:4px;">i<span class="tooltip">'
     "An override is one rate you have changed. Snowflake's own figure is kept alongside it, "
@@ -47,13 +43,29 @@ PRICED_OBJECTS_HINT = (
     "Priced objects are the in-scope objects found in the source that the effort "
     "estimate counts. The total object count on the Overview also includes missing "
     "references, out-of-scope objects, indexes, workflows and scripts with no rate "
-    "card, which the estimate leaves out."
+    "card, which the estimate leaves out. Units registered but not yet converted get "
+    "no hours until they are converted."
+)
+
+# Sub-line under Priced Objects. ``pending_count`` is absent on artifacts written
+# before it existed, which shows no line.
+_PENDING_SUBLINE_HTML = (
+    '<div v-if="effortSummary.pending_count > 0" class="effort-sf-note">'
+    "{{ effortCount(effortSummary.pending_count) }} not converted yet \u2014 not estimated"
+    "</div>"
 )
 
 _PRICED_OBJECTS_INFO_ICON = (
     '<span class="info-icon" style="margin-left:4px;">i<span class="tooltip">'
     f"{html.escape(PRICED_OBJECTS_HINT)}"
     "</span></span>"
+)
+
+# Shared by the calculator Grouping header and the EWI-breakdown Grouping header.
+GROUPING_COLUMN_TIP = (
+    "The first object with a given EWI is charged the full rate for its complexity. "
+    "Each additional object with that EWI is grouped and charged 0.25× that rate. "
+    "Some EWIs are not grouped."
 )
 
 EFFORT_DISCLAIMER_HTML = (
@@ -220,9 +232,8 @@ EFFORT_MIXIN_JS = r"""
     },
     mounted() {
       this._effortEwiOnKeyDown = (event) => {
-        if (event && event.key === "Escape" && this.effortEwiBreakdownRow) {
-          this.effortCloseEwiBreakdown();
-        }
+        if (!event || event.key !== "Escape") return;
+        if (this.effortEwiBreakdownRow) this.effortCloseEwiBreakdown();
       };
       window.addEventListener("keydown", this._effortEwiOnKeyDown);
     },
@@ -246,9 +257,6 @@ EFFORT_MIXIN_JS = r"""
       },
       effortIconReset() {
         return _svg('M3.5 7.5h5.5a2.75 2.75 0 1 1 0 5.5H6M3.5 7.5 6 5M3.5 7.5 6 10');
-      },
-      effortBands() {
-        return shared.EDITABLE_BANDS;
       },
       effortApplied() {
         return shared.applyOverrides(
@@ -276,15 +284,11 @@ EFFORT_MIXIN_JS = r"""
               || section.extraRows.length;
           });
       },
-      // Columns between Objects and Est. Hours: Dynamic SQL, then one per band.
-      // A flat row's single budget spans all of them.
-      effortRateColumns() {
-        return this.effortBands.length + 1;
-      },
-      // Component, object type, quantity, the rate columns, hours, comments.
-      // Derived so a new band cannot leave a spanning cell one column short.
+      // Object type, Category, # objects, Hours/object, Base hours, Grouping,
+      // Total hours, Comments: the one grid every section shares. A computed value,
+      // so the template's `effortColumnCount - 2` reads a number, not a function.
       effortColumnCount() {
-        return 5 + this.effortRateColumns;
+        return 8;
       },
       effortHasOverrides() {
         return this.effortRollup.overridden_count > 0;
@@ -313,16 +317,30 @@ EFFORT_MIXIN_JS = r"""
     },
     methods: {
       effortHours(value) {
-        if (typeof value !== "number" || !isFinite(value)) return "N/A";
+        if (typeof value !== "number" || !isFinite(value)) return "\u2014";
         return value.toLocaleString(undefined, {
           minimumFractionDigits: 1,
           maximumFractionDigits: 1,
         });
       },
-      // The * points at the Comments sentence below: a rate typed on a
-      // discounted row is still discounted the way that sentence says.
-      effortRateLabel(row) {
-        return row && row.repetition ? "h / object*" : "h / object";
+      /** The spreadsheet lines a row renders as, from the shared module so the
+       *  dashboard lays out the same cells and totals. */
+      effortLines(row) {
+        return shared.displayLines(row);
+      },
+      /** Grouping applies when C# published repetition groups on this object type. */
+      effortGroupingApplies(row) {
+        return !!(row && row.repetition);
+      },
+      effortGroupingLabel(row) {
+        return this.effortGroupingApplies(row) ? "Yes" : "No";
+      },
+      effortComments(row) {
+        if (row && row.pricing === "critical_split") {
+          return "Critical: hours × objects, with EWI grouping. Non-critical: one budget for the type.";
+        }
+        var text = (row && row.comments) || "";
+        return String(text).replace(/^(critical split|flat total|per object);\s*/i, "");
       },
       effortGroupingNote(row) {
         var repetition = row && row.repetition;
@@ -332,16 +350,20 @@ EFFORT_MIXIN_JS = r"""
         var singular = _groupingSingular(row.object_type);
         var factor = repetition.discount_factor;
         var rest = " Each additional " + singular + " with that EWI is charged " + factor + "× that rate.";
-        if (count === 1) {
-          return "* The first " + singular + " with a given EWI is charged the full rate for its complexity." + rest;
+        var note = count === 1
+          ? "The first " + singular + " with a given EWI is charged the full rate for its complexity." + rest
+          : "The first " + count + " " + _groupingPlural(singular) + " with a given EWI are charged the full rate for their complexity." + rest;
+        var exceptions = (baseline.repetition && baseline.repetition.non_repetitive_codes) || [];
+        if (exceptions.length) {
+          note += " Some EWIs are not grouped.";
         }
-        return "* The first " + count + " " + _groupingPlural(singular) + " with a given EWI are charged the full rate for their complexity." + rest;
+        return note;
       },
       effortHoursOrNa(value) {
-        return value === null || value === undefined ? "N/A" : this.effortHours(value);
+        return value === null || value === undefined ? "\u2014" : this.effortHours(value);
       },
       effortCompact(value) {
-        return value === null || value === undefined ? "N/A" : String(value);
+        return value === null || value === undefined ? "\u2014" : String(value);
       },
       effortDaysLabel(hours) {
         const days = shared.hoursToDays(hours);
@@ -363,18 +385,6 @@ EFFORT_MIXIN_JS = r"""
       effortBandLabel(band) {
         return band.charAt(0).toUpperCase() + band.slice(1);
       },
-      effortBandCount(row, band) {
-        return row.band_counts ? row.band_counts[band] || 0 : 0;
-      },
-      effortBandRate(row, band) {
-        return row.custom_band_rates ? row.custom_band_rates[band] : null;
-      },
-      effortSfBandRate(row, band) {
-        return row.band_rates ? row.band_rates[band] : null;
-      },
-      /** Whether one band's rate differs from Snowflake's. Per cell, not per row:
-       *  editing Critical must not annotate High, Medium and Low, which still hold
-       *  Snowflake's own rates. */
       effortMenuPick(action) {
         this.effortMenuOpen = false;
         if (action === 'download') {
@@ -388,6 +398,9 @@ EFFORT_MIXIN_JS = r"""
           ? 'Clears every override and returns to the published estimate'
           : 'Nothing to reset — every rate is already Snowflake\u2019s';
       },
+      effortIsFlat(section) {
+        return section && section.shape === "flat";
+      },
       effortSectionOpen(section) {
         // Read, do not probe -- see applyOverrides in effort_overrides.js.
         return this.effortCollapsed[section.key] !== true;
@@ -398,10 +411,6 @@ EFFORT_MIXIN_JS = r"""
         const next = Object.assign({}, this.effortCollapsed);
         next[section.key] = this.effortCollapsed[section.key] !== true;
         this.effortCollapsed = next;
-      },
-      effortBandChanged(row, band) {
-        const bands = row.overridden_bands || [];
-        return bands.indexOf(band) >= 0;
       },
       /** Identifies one editable cell: a band of a banded row, or a flat row's budget. */
       effortCellKey(row, band) {
@@ -415,16 +424,17 @@ EFFORT_MIXIN_JS = r"""
         if (draft !== undefined) {
           return draft;
         }
-        const value = band
-          ? this.effortBandRate(row, band)
-          : (row.band_counts ? row.custom_dynamic_sql_unit_hours : row.custom_flat_hours);
+        // A band-less cell is the Dynamic SQL rate on a row with that column, else
+        // the row's budget or per-object rate.
+        let value;
+        if (band) {
+          value = row.custom_band_rates ? row.custom_band_rates[band] : null;
+        } else if (shared.hasDynamicSqlColumn(row)) {
+          value = row.custom_dynamic_sql_unit_hours;
+        } else {
+          value = row.custom_flat_hours;
+        }
         return value === null || value === undefined ? "" : String(value);
-      },
-      effortHasDynamicSql(row) {
-        return shared.hasDynamicSqlColumn(row);
-      },
-      effortDynamicSqlCount(row) {
-        return typeof row.dynamic_sql_count === "number" ? row.dynamic_sql_count : 0;
       },
       effortOnInput(row, band, raw) {
         // The draft is exactly what the user typed, so re-rendering never moves
@@ -481,32 +491,6 @@ EFFORT_MIXIN_JS = r"""
         const list = Array.isArray(types) ? types : [];
         if (list.length <= 1) return list[0] || "";
         return list.slice(0, -1).join(", ") + " or " + list[list.length - 1];
-      },
-      effortDdlTableTotalChanged(types) {
-        return this.effortDdlTableTotal(types) !== this.effortDdlTableTotalSf(types);
-      },
-      effortDdlTableTotal(types) {
-        const rollup = this.effortRollup;
-        return (Array.isArray(types) ? types : []).reduce((sum, type) => {
-          const entry = rollup.ddl_by_type[type];
-          return sum + (entry ? entry.custom : 0);
-        }, 0);
-      },
-      effortDdlTableTotalSf(types) {
-        const rollup = this.effortRollup;
-        return (Array.isArray(types) ? types : []).reduce((sum, type) => {
-          const entry = rollup.ddl_by_type[type];
-          return sum + (entry ? entry.sf : 0);
-        }, 0);
-      },
-      effortDdlCell(type) {
-        const entry = this.effortRollup.ddl_by_type[type];
-        if (!entry) return { custom: 0, sf: 0, changed: false };
-        return {
-          custom: entry.custom,
-          sf: entry.sf,
-          changed: entry.custom !== entry.sf,
-        };
       },
       effortResetAll() {
         this.effortRateOverrides = {};
@@ -592,6 +576,41 @@ EFFORT_MIXIN_JS = r"""
       effortCloseEwiBreakdown() {
         this.effortEwiBreakdownRow = null;
       },
+      /** Whether this EWI group is charged with grouping. Full-price groups
+       *  (the exceptions) stay at the band rate for every object. */
+      effortEwiGroupingLabel(group) {
+        if (!group) return "\u2014";
+        return group.full_price ? "No" : "Yes";
+      },
+      /** Why Hours is not Objects × Rate on a grouped EWI. Empty when they match. */
+      effortEwiHoursTip(row, group) {
+        if (!group || group.full_price) return "";
+        var repetition = (row && row.repetition) || {};
+        var first = Number(repetition.first_full_price_count);
+        if (!isFinite(first) || first < 1) first = 1;
+        var count = Number(group.count) || 0;
+        var head = Math.min(count, first);
+        var tail = count - head;
+        if (tail === 0) return "";
+        var rate = this.effortEwiGroupRate(row, group);
+        var rateText = String(Math.round(rate * 10000) / 10000);
+        var first = head === 1
+          ? "The first object is charged " + rateText + " h."
+          : "The first " + head + " objects are charged " + rateText + " h each.";
+        var rest = "The other " + tail + (tail === 1 ? " object is" : " objects are") +
+          " charged " + repetition.discount_factor + "\u00d7 that rate.";
+        return first + " " + rest + " So Hours is not " + count + " \u00d7 " + rateText + " h.";
+      },
+      effortEwiGroupRate(row, group) {
+        var rates = row && (row.custom_band_rates || row.band_rates);
+        if (!rates || !group) return null;
+        var rate = rates[group.band];
+        return typeof rate === "number" && isFinite(rate) ? rate : null;
+      },
+      effortEwiDynamicSqlRate(row) {
+        var rate = row && row.custom_dynamic_sql_unit_hours;
+        return typeof rate === "number" && isFinite(rate) ? rate : null;
+      },
       /** Docs page for an EWI group's code, the same link object details use;
        *  empty for the "No EWI" group, which stays plain text. */
       effortEwiDocUrl(code) {
@@ -618,6 +637,7 @@ _EFFORT_KPI_CARDS_HTML = """
             <div class="effort-card">
                 <div class="effort-card-num">{{ effortCount(effortSummary.ddl_objects) }}</div>
                 <div class="effort-card-lbl">Priced Objects/*__PRICED_OBJECTS_INFO_ICON__*/</div>
+                /*__PENDING_SUBLINE__*/
             </div>
             <div class="effort-card">
                 <div class="effort-card-num">{{ effortShare(effortSummary.ddl_auto_pct) }}</div>
@@ -634,7 +654,9 @@ _EFFORT_KPI_CARDS_HTML = """
                 <div v-if="effortCodeChanged" class="effort-sf-note">Snowflake: {{ effortHours(effortRollup.sf.code) }} h</div>
             </div>
         </div>
-""".replace("/*__PRICED_OBJECTS_INFO_ICON__*/", _PRICED_OBJECTS_INFO_ICON)
+""".replace("/*__PRICED_OBJECTS_INFO_ICON__*/", _PRICED_OBJECTS_INFO_ICON).replace(
+    "/*__PENDING_SUBLINE__*/", _PENDING_SUBLINE_HTML
+)
 
 _EFFORT_BAND_LEGEND_HTML = """
         <div class="effort-band-legend">
@@ -696,112 +718,111 @@ _EFFORT_TOOLBAR_HTML = """
         </p>
 """
 
-# Rows are grouped into two sections, each with its own subtotal: code conversion
-# and testing, then the fixed budgets. Code conversion leads with its flat
-# budgets and then the counted object types. A banded object type occupies two
-# table rows — the band object counts, then the editable hours-per-object beneath
-# each count. Code Conversion rows open their EWI groups in a modal; those
-# published hours are what add up to the row. Code Conversion rows group objects
-# that share an EWI; the Comments cell says so, because count times the band
-# rate is a different number.
-#
-# The shared column names stay in one header over the table. Inside code
-# conversion, the flat budgets restate Migration Component, Line Item, Objects,
-# Base effort (h), Est. Hours and Comments, and the counted rows then print
-# "Objects by complexity · hours per object" with Critical, High, Medium and Low.
-# The fixed-budget section restates its own middle column, so one budget is not
-# labelled with those bands.
-# The fixed-budget section's subtotal is the grand total less conversion and
-# testing, so the sections always add up even when the summary counts a flat
-# budget that no calculator row carries.
+# One spreadsheet on one grid: every section shares the same eight columns, so a
+# fixed budget's Base hours and Total hours sit under the same columns as the
+# conversion lines' figures. Each open section has its own header row above its
+# banner; a collapsed one shows only its banner. A fixed-budget section spans its
+# header and lines across the columns it does not use: Object type covers the first
+# four, Base hours covers two.
+# Conversion: one line per priced category. Each object type expands into the lines
+# it is priced by -- Dynamic SQL then the four bands for banded rows, Critical then
+# Non-critical for tables and views, one line otherwise. Cells a line does not use
+# read a dash. Object type, Grouping and Comments span the lines of their object
+# type. Sections keep their collapsible banner with the subtotal, so collapsing one
+# never hides the figure it reports. The fixed-budget section's subtotal is the grand
+# total less conversion and testing, so the sections always add up even when the
+# summary counts a flat budget that no calculator row carries.
 _EFFORT_CALCULATOR_TABLE_HTML = """
         <div class="effort-table-wrap">
-            <table class="effort-table">
-                <thead>
-                    <tr>
-                        <th>Migration Component</th>
-                        <th>Object Type</th>
-                        <th class="num">Objects</th>
-                        <th :colspan="effortRateColumns"></th>
-                        <th class="num">Est. Hours</th>
-                        <th>Comments</th>
+            <table class="effort-table effort-sheet">
+                <colgroup>
+                    <col class="effort-col-type">
+                    <col class="effort-col-category">
+                    <col class="effort-col-count">
+                    <col class="effort-col-rate">
+                    <col class="effort-col-fixed">
+                    <col class="effort-col-grouping">
+                    <col class="effort-col-total">
+                    <col class="effort-col-comments">
+                </colgroup>
+                <tbody v-for="section in effortSections" :key="section.key">
+                    <tr v-if="!effortIsFlat(section) &amp;&amp; effortSectionOpen(section)">
+                        <th class="effort-ewi-tip" title="The kind of object being priced, such as Stored Procedures, Views or Tables. An object type can have several lines below it.">Object type</th>
+                        <th class="effort-ewi-tip" title="Which pricing line this is within the object type: Dynamic SQL, a complexity band (Critical, High, Medium or Low), Critical or Non-critical, or All objects.">Category</th>
+                        <th class="num effort-ewi-tip" title="How many objects this line prices. A dash means the line is a fixed budget, so no object count applies."># objects</th>
+                        <th class="num effort-ewi-tip" title="Hours to migrate one object on this line. Total hours is # objects times this, except where Grouping is Yes and repeated EWIs are discounted.">Hours/object</th>
+                        <th class="num effort-ewi-tip" title="A budget for the whole line, not per object. The # objects count does not multiply it.">Base hours</th>
+                        <th class="ctr effort-ewi-tip" title="/*__GROUPING_COLUMN_TIP__*/">Grouping</th>
+                        <th class="num effort-ewi-tip" title="Hours this line adds to its section total: # objects times Hours/object after any grouping discount, or the Base hours budget.">Total hours</th>
+                        <th class="effort-ewi-tip" title="How the object type is priced, with links to the EWI Breakdown or Optimization Opportunities where they apply.">Comments</th>
                     </tr>
-                </thead>
-                <tbody>
-                  <template v-for="section in effortSections" :key="section.key">
-                    <!-- The subtotal sits in the header rather than under the rows, so
-                         collapsing a section never hides the figure it reports. -->
+                    <tr v-if="effortIsFlat(section) &amp;&amp; effortSectionOpen(section)">
+                        <th class="effort-ewi-tip" colspan="4" title="The budget line being priced, such as UAT, Integration Testing or Data Migration.">Object type</th>
+                        <th class="num effort-ewi-tip" colspan="2" title="A budget for the whole line, not per object. The # objects count does not multiply it.">Base hours</th>
+                        <th class="num effort-ewi-tip" title="Hours this line adds to its section total. For a fixed budget, this is the Base hours.">Total hours</th>
+                        <th class="effort-ewi-tip" title="How the line is priced, with a link to Optimization Opportunities where it applies.">Comments</th>
+                    </tr>
                     <tr>
-                        <th class="effort-section" :colspan="effortColumnCount" scope="colgroup">
+                        <th class="effort-section" :colspan="effortColumnCount - 2" scope="colgroup">
                             <button type="button" class="effort-section-toggle"
                                     :aria-expanded="effortSectionOpen(section) ? 'true' : 'false'"
                                     @click="effortToggleSection(section)">
                                 <span class="effort-chevron" aria-hidden="true"
                                       v-html="effortSectionOpen(section) ? effortChevronDown : effortChevronRight"></span>
                                 <span>{{ section.title }}</span>
-                                <span class="effort-section-blurb">{{ section.blurb }}</span>
-                                <span class="effort-section-total">
-                                    {{ effortHours(section.subtotal.custom) }} h
-                                    <span v-if="effortSubtotalChanged(section)" class="effort-sf-note">Snowflake: {{ effortHours(section.subtotal.sf) }}</span>
-                                </span>
                             </button>
                         </th>
+                        <th class="effort-section effort-section-total" scope="colgroup">
+                            {{ effortHours(section.subtotal.custom) }}
+                            <span v-if="effortSubtotalChanged(section)" class="effort-sf-note">Snowflake: {{ effortHours(section.subtotal.sf) }}</span>
+                        </th>
+                        <th class="effort-section" scope="colgroup"></th>
                     </tr>
-                    <template v-for="group in section.groups" :key="group.shape">
-                    <tr v-if="effortSectionOpen(section) &amp;&amp; group.shape === 'banded'">
-                        <th class="effort-subhead" colspan="3"></th>
-                        <th class="effort-subhead ctr" rowspan="2">Dynamic SQL</th>
-                        <th class="effort-subhead ctr" :colspan="effortBands.length">Objects by complexity · hours per object</th>
-                        <th class="effort-subhead" colspan="2"></th>
-                    </tr>
-                    <tr v-if="effortSectionOpen(section) &amp;&amp; group.shape === 'banded'">
-                        <th class="effort-subhead" colspan="3"></th>
-                        <th class="effort-subhead ctr" v-for="band in effortBands" :key="band">{{ effortBandLabel(band) }}</th>
-                        <th class="effort-subhead" colspan="2"></th>
-                    </tr>
-                    <tr v-if="effortSectionOpen(section) &amp;&amp; group.shape !== 'banded'">
-                        <th class="effort-subhead">Migration Component</th>
-                        <th class="effort-subhead">Line Item</th>
-                        <th class="effort-subhead num">{{ group.shape === 'flat' ? 'Basis' : 'Objects' }}</th>
-                        <th class="effort-subhead num" :colspan="effortRateColumns">{{ group.shape === 'per_object' ? 'Hours per object' : (group.shape === 'flat_total' ? 'Base effort (h)' : 'Budget (hours)') }}</th>
-                        <th class="effort-subhead num">Est. Hours</th>
-                        <th class="effort-subhead">Comments</th>
-                    </tr>
-                    <template v-for="row in group.rows" :key="row.key">
-                        <tr v-if="effortSectionOpen(section)" :class="{'effort-row-overridden': row.is_overridden}">
-                            <td :rowspan="row.band_counts ? 2 : 1">{{ row.component }}</td>
-                            <td :rowspan="row.band_counts ? 2 : 1">{{ row.object_type }}</td>
-                            <td class="num">{{ effortQuantity(row.quantity) }}</td>
-                            <template v-if="row.band_counts">
-                                <td v-if="effortHasDynamicSql(row)" class="num">{{ effortCount(effortDynamicSqlCount(row)) }}</td>
-                                <td v-else class="num effort-muted">—</td>
-                                <td class="num" v-for="band in effortBands" :key="band">
-                                    {{ effortCount(effortBandCount(row, band)) }}
+                    <template v-if="effortSectionOpen(section)">
+                    <template v-for="row in section.rows" :key="row.key">
+                        <tr v-for="(line, index) in effortLines(row)" :key="line.id"
+                            :class="{'effort-row-overridden': row.is_overridden, 'effort-line-first': index === 0}">
+                            <template v-if="index === 0">
+                                <td :rowspan="effortLines(row).length" :colspan="effortIsFlat(section) ? 4 : 1" class="effort-type-cell">
+                                    {{ row.object_type }}
+                                    <span v-if="row.is_overridden &amp;&amp; !row.is_unestimated" class="effort-sf-note">Snowflake: {{ effortHoursOrNa(row.estimated_hours) }} h</span>
                                 </td>
                             </template>
-                            <td v-else class="num" :colspan="effortRateColumns">
-                                <input type="text" inputmode="decimal" class="effort-input"
+                            <td v-if="!effortIsFlat(section)" class="effort-category">{{ line.category || '\u2014' }}</td>
+                            <td v-if="!effortIsFlat(section)" class="num">{{ line.count === null ? '\u2014' : effortCount(line.count) }}</td>
+                            <td v-if="!effortIsFlat(section)" class="num">
+                                <input v-if="row.is_editable &amp;&amp; (line.cell === 'unit' || line.cell === 'dynamic')"
+                                       type="text" inputmode="decimal" class="effort-input"
+                                       :class="{'effort-input-error': effortCellError(row, line.band)}"
+                                       :value="effortInputValue(row, line.band)"
+                                       :aria-label="'Hours per object for ' + row.object_type + ' ' + (line.category || '')"
+                                       :title="'Hours to migrate one ' + (line.category || '') + ' object'"
+                                       @input="effortOnInput(row, line.band, $event.target.value)"
+                                       @blur="effortOnBlur(row, line.band)">
+                                <span v-else>{{ (line.cell === 'unit' || line.cell === 'dynamic') ? effortInputValue(row, line.band) : '\u2014' }}</span>
+                                <span v-if="effortCellError(row, line.band)" class="effort-error">{{ effortCellError(row, line.band) }}</span>
+                                <span v-else-if="line.unit_changed" class="effort-sf-note">Snowflake: {{ effortCompact(line.sf_unit_hours) }}</span>
+                            </td>
+                            <td :colspan="effortIsFlat(section) ? 2 : 1" class="num">
+                                <input v-if="row.is_editable &amp;&amp; line.cell === 'fixed'"
+                                       type="text" inputmode="decimal" class="effort-input"
                                        :class="{'effort-input-error': effortCellError(row, null)}"
                                        :value="effortInputValue(row, null)"
-                                       :disabled="!row.is_editable"
-                                       :aria-label="row.pricing === 'per_object' ? ('Hours per object for ' + row.object_type) : ('Budget hours for ' + row.component + ' ' + row.object_type)"
-                                       :title="row.pricing === 'per_object' ? 'Hours to handle one object. The row total is this rate times the object count.' : (row.pricing === 'flat_total' ? 'One budget for every object of this type. The count does not multiply it.' : (row.is_unestimated ? 'Snowflake publishes no figure for this line — enter your own budget' : 'Enter your own budget for this line'))"
+                                       :aria-label="'Base hours for ' + row.component + ' ' + row.object_type"
+                                       :title="row.is_unestimated ? 'Snowflake publishes no figure for this line — enter your own budget' : 'One budget for this line. The object count does not multiply it.'"
                                        @input="effortOnInput(row, null, $event.target.value)"
                                        @blur="effortOnBlur(row, null)">
+                                <span v-else>{{ line.cell === 'fixed' ? effortInputValue(row, null) : '\u2014' }}</span>
                                 <span v-if="effortCellError(row, null)" class="effort-error">{{ effortCellError(row, null) }}</span>
-                                <span v-else-if="row.is_unestimated" class="effort-sf-note">Snowflake: not estimated</span>
-                                <span v-else-if="row.is_overridden" class="effort-sf-note">Snowflake: {{ effortCompact(row.pricing === 'per_object' ? row.unit_hours : row.flat_hours) }}</span>
+                                <span v-else-if="line.cell === 'fixed' &amp;&amp; row.is_unestimated" class="effort-sf-note">Please provide user input.</span>
+                                <span v-else-if="line.fixed_changed" class="effort-sf-note">Snowflake: {{ effortCompact(line.sf_fixed_hours) }}</span>
                             </td>
-                            <td class="num" style="font-weight:600;" :rowspan="row.band_counts ? 2 : 1">
-                                {{ effortHoursOrNa(row.custom_estimated_hours) }}
-                                <!-- Suppressed on an unpriced line: this note could only ever read
-                                     "Snowflake: N/A", which the input's own note already said better. -->
-                                <span v-if="row.is_overridden &amp;&amp; !row.is_unestimated" class="effort-sf-note">Snowflake: {{ effortHoursOrNa(row.estimated_hours) }}</span>
-                            </td>
-                            <td class="effort-comments" :rowspan="row.band_counts ? 2 : 1">
+                            <td v-if="index === 0 &amp;&amp; !effortIsFlat(section)" class="ctr" :rowspan="effortLines(row).length">{{ effortGroupingLabel(row) }}</td>
+                            <td class="num effort-line-total">{{ effortHoursOrNa(line.total) }}</td>
+                            <td v-if="index === 0" class="effort-comments" :rowspan="effortLines(row).length">
                                 <div class="effort-comments-body">
-                                    {{ row.comments }}
-                                    <span v-if="row.repetition" style="display:block;margin-top:4px;">{{ effortGroupingNote(row) }}</span>
+                                    {{ effortComments(row) }}
+                                    <span v-if="row.repetition" class="effort-comment-note">{{ effortGroupingNote(row) }}</span>
                                     <span v-if="row.automation_pct !== null" class="effort-sf-note">{{ effortShare(row.automation_pct) }} fully converted</span>
                                     <button
                                         v-if="effortHasEwiBreakdown(row)"
@@ -818,52 +839,25 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                                 </div>
                             </td>
                         </tr>
-                        <tr v-if="effortSectionOpen(section) &amp;&amp; row.band_counts" class="effort-rate-row"
-                            :class="{'effort-row-overridden': row.is_overridden}">
-                            <td class="num effort-rate-lbl">{{ effortRateLabel(row) }}</td>
-                            <td v-if="effortHasDynamicSql(row)" class="num">
-                                <input type="text" inputmode="decimal" class="effort-input"
-                                       :class="{'effort-input-error': effortCellError(row, null)}"
-                                       :value="effortInputValue(row, null)"
-                                       :disabled="!row.is_editable"
-                                       :aria-label="'Hours per dynamic SQL ' + row.object_type"
-                                       :title="row.is_editable ? 'Hours to migrate one object with dynamic SQL, charged instead of its complexity band' : 'No objects of this type in this workload'"
-                                       @input="effortOnInput(row, null, $event.target.value)"
-                                       @blur="effortOnBlur(row, null)">
-                                <span v-if="effortCellError(row, null)" class="effort-error">{{ effortCellError(row, null) }}</span>
-                                <span v-else-if="row.is_dynamic_sql_overridden" class="effort-sf-note">Snowflake: {{ effortCompact(row.dynamic_sql_unit_hours) }}</span>
-                            </td>
-                            <td v-else class="num effort-muted">—</td>
-                            <td class="num" v-for="band in effortBands" :key="band">
-                                <input type="text" inputmode="decimal" class="effort-input"
-                                       :class="{'effort-input-error': effortCellError(row, band)}"
-                                       :value="effortInputValue(row, band)"
-                                       :disabled="!row.is_editable"
-                                       :aria-label="'Hours per ' + effortBandLabel(band) + ' ' + row.object_type"
-                                       :title="row.is_editable ? 'Hours to migrate one ' + effortBandLabel(band) + ' object' : 'No objects of this type in this workload'"
-                                       @input="effortOnInput(row, band, $event.target.value)"
-                                       @blur="effortOnBlur(row, band)">
-                                <span v-if="effortCellError(row, band)" class="effort-error">{{ effortCellError(row, band) }}</span>
-                                <span v-else-if="effortBandChanged(row, band)" class="effort-sf-note">Snowflake: {{ effortCompact(effortSfBandRate(row, band)) }}</span>
-                            </td>
-                        </tr>
                     </template>
-                    </template>
-                    <template v-if="effortSectionOpen(section)">
-                        <tr v-for="extra in section.extraRows" :key="extra.label">
-                            <td colspan="2">{{ extra.label }}</td>
-                            <td class="num effort-muted">Flat budget</td>
-                            <td class="num effort-muted" :colspan="effortRateColumns">N/A</td>
-                            <td class="num" style="font-weight:600;">{{ effortHours(extra.hours) }}</td>
-                            <td class="effort-muted">Priced as a flat budget; not editable</td>
-                        </tr>
-                    </template>
-                    <tr v-if="effortSectionOpen(section) &amp;&amp; section.zeroTypes.length">
+                    <tr v-for="extra in section.extraRows" :key="extra.label" class="effort-line-first">
+                        <td :colspan="effortIsFlat(section) ? 4 : 1">{{ extra.label }}</td>
+                        <td v-if="!effortIsFlat(section)">\u2014</td>
+                        <td v-if="!effortIsFlat(section)">\u2014</td>
+                        <td v-if="!effortIsFlat(section)" class="num">\u2014</td>
+                        <td :colspan="effortIsFlat(section) ? 2 : 1" class="num">{{ effortHours(extra.hours) }}</td>
+                        <td v-if="!effortIsFlat(section)" class="ctr">No</td>
+                        <td class="num effort-line-total">{{ effortHours(extra.hours) }}</td>
+                        <td>Priced as a flat budget; not editable</td>
+                    </tr>
+                    <tr v-if="section.zeroTypes.length">
                         <td class="effort-muted" :colspan="effortColumnCount">
                             No {{ effortZeroNote(section.zeroTypes) }} in this workload.
                         </td>
                     </tr>
-                  </template>
+                    </template>
+                </tbody>
+                <tbody>
                     <tr class="effort-total">
                         <td :colspan="effortColumnCount - 2">TOTAL MIGRATION EFFORT</td>
                         <td class="num">
@@ -895,6 +889,8 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                                 <th class="effort-ewi-tip" title="Error Warning Issues generated during code conversion">EWI code</th>
                                 <th>Complexity</th>
                                 <th class="num">Objects</th>
+                                <th class="num">Hours/object</th>
+                                <th class="ctr effort-ewi-tip" title="/*__GROUPING_COLUMN_TIP__*/">Grouping</th>
                                 <th class="num">Hours</th>
                             </tr>
                         </thead>
@@ -909,12 +905,21 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                                 </td>
                                 <td>{{ effortBandLabel(group.band) }}</td>
                                 <td class="num">{{ effortCount(group.count) }}</td>
-                                <td class="num">{{ effortHours(group.hours) }}</td>
+                                <td class="num">{{ effortCompact(effortEwiGroupRate(effortEwiBreakdownRow, group)) }}</td>
+                                <td class="ctr">{{ effortEwiGroupingLabel(group) }}</td>
+                                <td class="num">
+                                    <span v-if="effortEwiHoursTip(effortEwiBreakdownRow, group)"
+                                          class="effort-ewi-tip"
+                                          :title="effortEwiHoursTip(effortEwiBreakdownRow, group)">{{ effortHours(group.hours) }}</span>
+                                    <template v-else>{{ effortHours(group.hours) }}</template>
+                                </td>
                             </tr>
                             <tr v-if="effortEwiDynamicSql(effortEwiBreakdownRow)">
                                 <td class="effort-ewi-tip" title="Objects with SSC-EWI-0030, SSC-EWI-0125, SSC-EWI-0126 or SSC-EWI-0129, priced at the Dynamic SQL rate instead of a complexity band">Dynamic SQL</td>
-                                <td class="effort-muted">N/A</td>
+                                <td class="effort-muted">\u2014</td>
                                 <td class="num">{{ effortCount(effortEwiDynamicSql(effortEwiBreakdownRow).count) }}</td>
+                                <td class="num">{{ effortCompact(effortEwiDynamicSqlRate(effortEwiBreakdownRow)) }}</td>
+                                <td class="ctr">\u2014</td>
                                 <td class="num">{{ effortHoursOrNa(effortEwiDynamicSql(effortEwiBreakdownRow).hours) }}</td>
                             </tr>
                         </tbody>
@@ -922,7 +927,7 @@ _EFFORT_CALCULATOR_TABLE_HTML = """
                 </div>
             </div>
         </div>
-"""
+""".replace("/*__GROUPING_COLUMN_TIP__*/", html.escape(GROUPING_COLUMN_TIP))
 
 _OVERVIEW_EFFORT_CARD_TOTAL_HTML = """
                 <div class="effort-card">
@@ -1147,7 +1152,6 @@ def render_overview_section_b_html(assessment: Dict[str, Any]) -> str:
             <h2 id="effort-estimates" style="font-size: 1.5rem; font-weight: 700; color: #102E46; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                 <span style="background: #E0F2FE; color: #0284C7; padding: 4px 10px; border-radius: 6px; font-size: 0.9rem;">Section B</span>
                 Estimated effort to migrate
-                {EFFORT_PREVIEW_BADGE_HTML}
             </h2>
             {EFFORT_DISCLAIMER_HTML}
             <p style="color: #64748B; font-size: 0.95rem; margin-bottom: 20px; line-height: 1.6;">
@@ -1198,21 +1202,6 @@ def render_overview_section_b_html(assessment: Dict[str, Any]) -> str:
     """
 
 
-def _new_ddl_row() -> Dict[str, int]:
-    """Column accumulator for the DDL table's TOTALS row."""
-    return {
-        "total": 0,
-        "fully_converted": 0,
-        "lines_of_code": 0,
-        "critical": 0,
-        "high": 0,
-        "medium": 0,
-        "low": 0,
-        "issues_high": 0,
-        "issues_critical": 0,
-    }
-
-
 def _publishes_fully_converted(ddl_summary: Dict[str, Dict[str, Any]]) -> bool:
     """Whether the artifact's shares count fully converted objects.
 
@@ -1223,156 +1212,8 @@ def _publishes_fully_converted(ddl_summary: Dict[str, Dict[str, Any]]) -> bool:
 
 
 def _ddl_share_cell(st: Dict[str, Any], shares_known: bool) -> str:
-    """One type's % Fully Converted cell."""
-    return f"{st['pct_auto'] * 100:.1f}%" if shares_known else "\u2014"
-
-
-def _ddl_effort_cell(obj_type: str) -> str:
-    """Per-type Effort (h) cell, bound to the override roll-up for that type."""
-    key = _js_str(obj_type)
-    return (
-        "{{ effortDdlCell(" + key + ").custom ? "
-        "effortHours(effortDdlCell(" + key + ").custom) : '\u2014' }}"
-        '<span v-if="effortDdlCell(' + key + ').changed" class="effort-sf-note">'
-        "Snowflake: {{ effortHours(effortDdlCell(" + key + ").sf) }}</span>"
-    )
-
-
-def _dynamic_sql_splits(rows: List[CalculatorRow]) -> Dict[str, CalculatorRow]:
-    """Code Conversion rows with a Dynamic SQL column, keyed by the DDL type they price."""
-    return {
-        row.ddl_type: row
-        for row in rows
-        if row.bucket == "conversion"
-        and row.ddl_type
-        and row.dynamic_sql_count is not None
-        and row.band_counts is not None
-    }
-
-
-def _render_ddl_assessment_table(
-    ddl_summary: Dict[str, Dict[str, Any]],
-    calculator_rows: Optional[List[CalculatorRow]] = None,
-) -> str:
-    """Per-object-type conversion detail: inventory, bands, findings, and hours.
-
-    The band columns count *objects* and the issue columns count *occurrences*,
-    which is why the two do not agree: one object carrying three critical findings
-    is a single critical object. Only the band columns feed the estimate.
-
-    A type whose calculator row has a Dynamic SQL column shows that row's split:
-    its dynamic SQL objects on their own column and out of the bands, so the
-    row's counts are the ones its Effort was priced from. Every other type shows
-    an em dash there and ``ddl_summary``'s plain classification.
-    """
-    splits = _dynamic_sql_splits(calculator_rows or [])
-    shares_known = _publishes_fully_converted(ddl_summary)
-    rows_html = ""
-    displayed_types: List[str] = []
-    totals = _new_ddl_row()
-    dynamic_sql_total: Optional[int] = None
-    for obj_type in sorted(ddl_summary.keys()):
-        if obj_type in _DDL_EXCLUDED_DISPLAY_TYPES:
-            continue
-        st = ddl_summary[obj_type]
-        split = splits.get(obj_type)
-        bands = (split.band_counts if split else st.get("bands")) or {}
-        if split:
-            dynamic_sql_total = (dynamic_sql_total or 0) + split.dynamic_sql_count
-            dynamic_sql_cell = f"{split.dynamic_sql_count:,}"
-        else:
-            dynamic_sql_cell = "\u2014"
-        for column in totals:
-            totals[column] += bands.get(column, 0) if column in _BANDS else st.get(column, 0)
-        pct = _ddl_share_cell(st, shares_known)
-        effort = _ddl_effort_cell(obj_type)
-        displayed_types.append(obj_type)
-        rows_html += f"""
-        <tr>
-            <td>{_esc(obj_type)}</td>
-            <td class="ctr">{st['total']:,}</td>
-            <td class="ctr">{dynamic_sql_cell}</td>
-            <td class="ctr">{bands.get('critical', 0):,}</td>
-            <td class="ctr">{bands.get('high', 0):,}</td>
-            <td class="ctr">{bands.get('medium', 0):,}</td>
-            <td class="ctr">{bands.get('low', 0):,}</td>
-            <td class="ctr">{pct}</td>
-            <td class="num">{st['lines_of_code']:,}</td>
-            <td class="ctr">{st['issues_high']:,}</td>
-            <td class="ctr">{st['issues_critical']:,}</td>
-            <td class="num" style="font-weight:600;">{effort}</td>
-            <td style="color:#64748B;font-size:0.8rem;">{_esc(st.get('notes', ''))}</td>
-        </tr>"""
-    total_dynamic_sql = "\u2014" if dynamic_sql_total is None else f"{dynamic_sql_total:,}"
-    total_pct = (
-        f"{(totals['fully_converted'] / totals['total'] * 100):.1f}%"
-        if totals["total"] and shares_known
-        else "—"
-    )
-    # Always the true sum of the rows displayed above so TOTALS never understates
-    # what's visibly listed in this table.
-    types_literal = _js_str_array(displayed_types)
-    total_effort_cell = (
-        "{{ effortHours(effortDdlTableTotal(" + types_literal + ")) }}"
-        '<span v-if="effortDdlTableTotalChanged(' + types_literal + ')" class="effort-sf-note">'
-        "Snowflake: {{ effortHours(effortDdlTableTotalSf(" + types_literal + ")) }}</span>"
-    )
-    rows_html += f"""
-        <tr class="effort-total">
-            <td>TOTALS</td>
-            <td class="ctr">{totals['total']:,}</td>
-            <td class="ctr">{total_dynamic_sql}</td>
-            <td class="ctr">{totals['critical']:,}</td>
-            <td class="ctr">{totals['high']:,}</td>
-            <td class="ctr">{totals['medium']:,}</td>
-            <td class="ctr">{totals['low']:,}</td>
-            <td class="ctr">{total_pct}</td>
-            <td class="num">{totals['lines_of_code']:,}</td>
-            <td class="ctr">{totals['issues_high']:,}</td>
-            <td class="ctr">{totals['issues_critical']:,}</td>
-            <td class="num">{total_effort_cell}</td>
-            <td></td>
-        </tr>"""
-    return rows_html
-
-
-def _render_top_issues_section(top_issues: List[Dict[str, Any]]) -> str:
-    """Top DDL issues section, worst severity first; empty if there are no issues.
-
-    The order is the artifact's own -- C# selects the most frequent codes and emits them
-    severity-first, so neither renderer needs a severity comparator of its own.
-    """
-    if not top_issues:
-        return ""
-
-    issues_html = ""
-    for issue in top_issues:
-        issues_html += f"""
-        <tr>
-            <td>{_esc(issue['code'])}</td>
-            <td>{_esc(issue.get('name', ''))}</td>
-            <td class="ctr">{_esc(issue.get('severity', '—'))}</td>
-            <td class="ctr">{issue['occurrences']:,}</td>
-        </tr>"""
-
-    return f"""
-        <div class="print-omit">
-        <h2 id="effort-top-issues" style="font-size:1.35rem;font-weight:700;color:#102E46;margin:32px 0 12px;">Top issues (DDL)</h2>
-        <p class="effort-lead">The conversion issue codes that occur most across DDL objects, listed
-        most severe first — a critical code hit a dozen times needs attention before a low one hit
-        hundreds.</p>
-        <div class="effort-table-wrap">
-            <table class="effort-table">
-                <thead><tr>
-                    <th>Issue Code</th>
-                    <th>Name</th>
-                    <th class="ctr">Severity</th>
-                    <th class="ctr">Occurrences</th>
-                </tr></thead>
-                <tbody>{issues_html}</tbody>
-            </table>
-        </div>
-        </div>"""
+    """One type's % Fully Converted cell. A type with nothing priced has no share."""
+    return f"{st['pct_auto'] * 100:.1f}%" if shares_known and st["total"] else "\u2014"
 
 
 def _repeated_ewi_legend(repetition: Dict[str, Any]) -> str:
@@ -1440,10 +1281,6 @@ def _render_effort_formulas_legend(
 def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
     """Full effort page aligned with the migration assessment workbook sections."""
     summary = assessment["summary"]
-    ddl = summary.get("ddl_summary", {})
-    top_issues = assessment.get("top_issues", [])
-
-    issues_section = _render_top_issues_section(top_issues)
     formulas_legend = _render_effort_formulas_legend(summary, assessment.get("repetition"))
 
     return f"""
@@ -1451,7 +1288,6 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
         <div style="margin-bottom: 24px;">
             <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 8px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
                 Migration effort estimates
-                {EFFORT_PREVIEW_BADGE_HTML}
             </h1>
             <p class="effort-lead">
                 This estimate reflects the total human-hours required for the migration using AIM.
@@ -1477,31 +1313,6 @@ def render_effort_tab_html(assessment: Dict[str, Any]) -> str:
 {_EFFORT_BAND_LEGEND_HTML}
 {_EFFORT_TOOLBAR_HTML}
 {_EFFORT_CALCULATOR_TABLE_HTML}
-
-        <h2 id="effort-ddl-assessment" style="font-size:1.35rem;font-weight:700;color:#102E46;margin:32px 0 12px;">Conversion detail by object type</h2>
-        <p style="color:#64748B;font-size:0.9rem;margin-bottom:12px;">Band columns count objects; the two findings columns count issue occurrences, so one object with several critical findings appears once as Critical but several times under Critical findings.</p>
-        <div class="effort-table-wrap">
-            <table class="effort-table compact">
-                <thead><tr>
-                    <th>Object Type</th>
-                    <th class="ctr">Objects</th>
-                    <th class="ctr">Dynamic SQL</th>
-                    <th class="ctr">Critical</th>
-                    <th class="ctr">High</th>
-                    <th class="ctr">Medium</th>
-                    <th class="ctr">Low</th>
-                    <th class="ctr">% Fully Conv.</th>
-                    <th class="num">Lines of Code</th>
-                    <th class="ctr">High findings</th>
-                    <th class="ctr">Critical findings</th>
-                    <th class="num">Effort (h)</th>
-                    <th>Priced as</th>
-                </tr></thead>
-                <tbody>{_render_ddl_assessment_table(ddl, assessment.get("calculator_rows"))}</tbody>
-            </table>
-        </div>
-
-        {issues_section}
 
         {formulas_legend}
     </div>

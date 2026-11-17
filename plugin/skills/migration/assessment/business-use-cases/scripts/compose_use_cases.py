@@ -38,11 +38,20 @@ MAX_LIST_ITEMS = 5
 MAX_LIST_ITEM_LENGTH = 240
 
 NARRATIVE_FIELDS = ("whyFound", "howFound", "enablesOnSnowflake")
-UNIQUE_FIELDS = ("whyFound", "enablesOnSnowflake")
+UNIQUE_FIELDS = ("purpose", "whyFound", "howFound", "enablesOnSnowflake")
+PURPOSE_SENTENCES = 2
+# `waves catalog` adds it to every proposal, so it may repeat across use cases.
+PROPOSAL_QUESTION = (
+    "Confirm with the customer that this outcome is still used: the drop holds no export, report, "
+    "schedule or log that shows it."
+)
 TEXT_FIELDS = ("name", "purpose", *NARRATIVE_FIELDS)
 STATUSES = ("confirmed", "proposed")
 CONFIDENCES = ("high", "medium", "low")
-ORIGINS = ("seed", "anchor", "onDemand")
+ORIGINS = ("seed", "anchor", "onDemand", "aiAnalysis")
+AI_ANALYSIS = "aiAnalysis"
+# What would confirm a use case and the drop does not hold, in the order the Planning page lists it.
+MISSING_EVIDENCE = ("bi", "scheduler", "usage", "loader", "exit")
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 # A name or a narrative that describes the clustering instead of the outcome.
 TOKEN_NAME = re.compile(r"\bdata\s*\(", re.IGNORECASE)
@@ -52,16 +61,38 @@ TOOL_PHRASES = (
     "structural dry run",
     "layer prefix",
     "bin-",
-    "sandbox share",
     "roots that share",
     "subject words",
     "ends of flow",
     "binning",
 )
+# Claims true of any workload on any platform; they say nothing about this use case.
+GENERIC_PHRASES = (
+    "single source of truth",
+    "data-driven",
+    "actionable insights",
+    "real-time insights",
+    "faster insights",
+    "modern data platform",
+    "cloud-native",
+    "seamless",
+    "unlock",
+    "scalability",
+    "scalable",
+    "better performance",
+    "improved performance",
+    "democratiz",
+)
 # Evidence must cite a file that was read: a path, or a file name with a source extension.
 SOURCE_FILE = re.compile(
     r"[\w$.-]+/[\w$.-]+|\b[\w$-]+\.(?:xml|sql|dtsx|bteq|btq|ddl|tpt|prm|par|sh|ksh|py|pbix|twbx?|rdl|json)\b",
     re.IGNORECASE,
+)
+# A table, view, schema, script or job the reader cannot know. Allowed only when
+# the same sentence says what it is (the file, the feed, the report, …).
+OBJECT_NAME = re.compile(
+    r"\b(?:[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+|[A-Z]{2,}[A-Za-z0-9]*(?:_[A-Za-z0-9]+)*"
+    r"|[A-Z][A-Za-z0-9]*\.[A-Za-z_][\w$]*|M_vw\w+|usp_\w+|wf_\w+)\b"
 )
 SHARED_SENTENCE_WORDS = 6
 STATUS_ORDER = {"proposed": 0, "confirmed": 1}
@@ -101,7 +132,6 @@ def fact_sheet(bin_: dict[str, Any]) -> dict[str, Any]:
         "rootCount": bin_.get("rootCount", 0),
         "objectCount": metrics.get("objectCount", 0),
         "newObjects": bin_.get("newObjects", 0),
-        "sandboxShare": bin_.get("sandboxShare", 0),
         "suggestedStatus": bin_.get("suggestedStatus"),
         "suggestedConfidence": bin_.get("suggestedConfidence"),
         "metrics": metrics,
@@ -269,14 +299,87 @@ def _analysis(problems: list[str], where: str, use_case: dict[str, Any]) -> None
     name = str(use_case.get("name") or "")
     if TOKEN_NAME.search(name):
         problems.append(f"{where}.name: '{name}' names a token or a schema, not an outcome")
+    clustering_fields: set[str] = set()
     for field in TEXT_FIELDS:
         text = str(use_case.get(field) or "").lower()
         found = [phrase for phrase in TOOL_PHRASES if phrase in text]
         if found:
+            clustering_fields.add(field)
             problems.append(f"{where}.{field}: describes the clustering ({', '.join(found)}), not the outcome")
+        generic = [phrase for phrase in GENERIC_PHRASES if phrase in text]
+        if generic:
+            problems.append(
+                f"{where}.{field}: generic ({', '.join(generic)}); say what this use case's people can do"
+            )
+    purpose = str(use_case.get("purpose") or "")
+    sentences = [part for part in re.split(r"(?<=[.!?])\s+", purpose.strip()) if len(part.split()) >= 3]
+    if purpose.strip() and len(sentences) < PURPOSE_SENTENCES:
+        problems.append(
+            f"{where}.purpose: {len(sentences)} sentence; say what it is, what it does in the system "
+            "and what it resolves for the business"
+        )
     evidence = use_case.get("evidence")
     if isinstance(evidence, list) and evidence and not any(SOURCE_FILE.search(str(item)) for item in evidence):
         problems.append(f"{where}.evidence: cites no source file; name a workflow, mapping or view file you read")
+    for field in TEXT_FIELDS:
+        if field == "name" or field in clustering_fields:
+            continue
+        _unexplained_names(problems, f"{where}.{field}", str(use_case.get(field) or ""), name)
+
+
+_BEFORE_NAME = re.compile(
+    r"(?:named|called|the (?:file|table|view|schema|report|feed|job|script|procedure|workflow|mapping|package))\s+$",
+    re.IGNORECASE,
+)
+_AFTER_NAME = re.compile(
+    r"^\s*,?\s*(?:which is|that is|that holds|that writes|that reads|that the)\b",
+    re.IGNORECASE,
+)
+
+
+def _introduced(sentence: str, name: str) -> bool:
+    """True when this sentence says what `name` is, not when it only lists it."""
+    pattern = re.compile(rf"{re.escape(name)}\b", re.IGNORECASE)
+    match = pattern.search(sentence)
+    if not match:
+        return False
+    return bool(_BEFORE_NAME.search(sentence[: match.start()]) or _AFTER_NAME.match(sentence[match.end() :]))
+
+
+def _unexplained_names(problems: list[str], where: str, text: str, use_case_name: str) -> None:
+    """A report reader does not know CDS_Output; the sentence must say what it is."""
+    remaining = text
+    if use_case_name:
+        remaining = re.sub(re.escape(use_case_name), " ", remaining, flags=re.IGNORECASE)
+    found: list[str] = []
+    for match in OBJECT_NAME.finditer(remaining):
+        name = match.group(0)
+        if name.upper() in {"SQL", "ETL", "BTEQ", "XML", "JSON", "CSV", "AHUB"}:
+            continue
+        start = remaining.rfind(".", 0, match.start()) + 1
+        end = remaining.find(".", match.end())
+        sentence = remaining[start : end if end != -1 else None]
+        lowered = sentence.lower()
+        if _introduced(sentence, name):
+            continue
+        found.append(name)
+    if found:
+        shown = ", ".join(list(dict.fromkeys(found))[:4])
+        problems.append(
+            f"{where}: unexplained name ({shown}); say what it is in the same sentence, "
+            "or drop the name and describe the thing"
+        )
+
+
+def missing_evidence(problems: list[str], at: str, use_case: dict[str, Any]) -> None:
+    """An aiAnalysis use case names what would confirm it; any use case may."""
+    kinds = use_case.get("missingEvidence") or []
+    if not isinstance(kinds, list) or any(kind not in MISSING_EVIDENCE for kind in kinds) or len(set(kinds)) != len(kinds):
+        problems.append(f"{at}.missingEvidence: distinct items, each one of {', '.join(MISSING_EVIDENCE)}")
+    elif use_case.get("origin") == AI_ANALYSIS and not kinds:
+        problems.append(
+            f"{at}.missingEvidence: an aiAnalysis use case names what would confirm it, one or more of {', '.join(MISSING_EVIDENCE)}"
+        )
 
 
 def check(document: dict[str, Any]) -> list[str]:
@@ -315,13 +418,11 @@ def check(document: dict[str, Any]) -> list[str]:
             if use_case.get(field) not in allowed:
                 problems.append(f"{at}.{field}: one of {', '.join(allowed)}")
         seeds = use_case.get("seedIds") or []
-        members = use_case.get("memberIds") or []
         if not 1 <= len(seeds) <= MAX_SEEDS:
             problems.append(f"{at}.seedIds: {len(seeds)}, must be 1–{MAX_SEEDS}")
-        if len(members) > MAX_MEMBERS:
-            problems.append(f"{at}.memberIds: {len(members)}, at most {MAX_MEMBERS}")
         _items(problems, f"{at}.evidence", use_case.get("evidence"))
         _items(problems, f"{at}.openQuestions", use_case.get("openQuestions"))
+        missing_evidence(problems, at, use_case)
         if any("Placeholder" in str(use_case.get(field) or "") for field in TEXT_FIELDS):
             placeholders.add(i)
         else:
@@ -337,6 +438,20 @@ def check(document: dict[str, Any]) -> list[str]:
                     problems.append(f"useCases[{i}].{field}: repeats a sentence of useCases[{owners[sentence]}]: \"{sentence}\"")
                 else:
                     owners.setdefault(sentence, i)
+    questions: dict[str, int] = {}
+    for i, use_case in enumerate(use_cases):
+        if i in placeholders:
+            continue
+        for item in use_case.get("openQuestions") or []:
+            key = " ".join(re.findall(r"[a-z0-9]+", str(item).lower()))
+            if not key or key == " ".join(re.findall(r"[a-z0-9]+", PROPOSAL_QUESTION.lower())):
+                continue
+            if key in questions and questions[key] != i:
+                problems.append(
+                    f"useCases[{i}].openQuestions: repeats a consideration of useCases[{questions[key]}]: \"{item}\""
+                )
+            else:
+                questions.setdefault(key, i)
     if placeholders:
         problems.append(f"{len(placeholders)} use case(s) still carry placeholder text from the dry run")
     return problems

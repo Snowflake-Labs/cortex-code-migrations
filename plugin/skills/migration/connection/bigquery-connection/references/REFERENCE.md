@@ -10,7 +10,7 @@ Detailed reference for Google BigQuery connection options, authentication, extra
 |-----------|------|-------------|
 | Connection name | `-s, --source-connection` | Unique identifier for this connection |
 | Authentication | `--auth` | Authentication method: `service-account` |
-| Project ID | `--project-id` | GCP project ID that owns the datasets and runs the queries |
+| Project ID | `--project` | GCP project ID that owns the datasets and runs the queries |
 | Credentials file | `--credentials-file` | Path to the service account JSON key file |
 
 ### Optional Parameters
@@ -34,7 +34,7 @@ The only supported authentication method for BigQuery in MVP.
 scai connection add-bigquery \
   -s my-bigquery \
   --auth service-account \
-  --project-id my-gcp-project \
+  --project my-gcp-project \
   --dataset analytics \
   --credentials-file /secure/path/sa-key.json \
   --location US
@@ -133,7 +133,7 @@ When `require_partition_filter` is set, the leading key must be the partition co
 
 **Solutions:**
 1. Verify `--credentials-file` points to a readable service account JSON key
-2. Confirm the key belongs to the same project as `--project-id`
+2. Confirm the key belongs to the same project as `--project`
 
 ### Access Denied (403)
 

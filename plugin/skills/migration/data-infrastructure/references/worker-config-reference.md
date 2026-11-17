@@ -170,6 +170,16 @@ Also ensure ODBC/driver hostnames resolve from inside the container. `scai data 
 automates image build, service creation, and connectivity checks — use it instead of manual container
 wiring when possible.
 
+**Pre-created egress objects (`--skip-egress`):** when the customer creates the secret, network rule and
+external access integration themselves (IaC, restricted roles), `worker setup --skip-egress` creates none
+of them. By default it expects `SNOWCONVERT_AI.PUBLIC.<SOURCE>_SECRET`, `SNOWCONVERT_AI.PUBLIC.<SOURCE>_EGRESS_RULE`
+and `SCAI_EAI_<SOURCE>_SNOWCONVERT_AI` (`<SOURCE>` such as `SQLSERVER`; a custom `--service-name` puts
+`<SERVICE>_` before it). Name their own objects with `--external-access-integration <NAME>` and
+`--source-secret <SECRET_FQN>` (`DATABASE.SCHEMA.NAME`) (unquoted identifiers, only with `--skip-egress`). The secret is
+`TYPE = PASSWORD` with the source login's `USERNAME` and `PASSWORD` (the client id and secret for Azure AD).
+The integration must allow the source `host:port` and the driver download hosts in its network rule and
+list the secret in `ALLOWED_AUTHENTICATION_SECRETS`.
+
 ## Advanced: Teradata extraction (workflow YAML)
 
 `scai data worker generate-config --extraction-strategy write_nos --object-store s3|gcs|azure` writes `write_nos_location_scheme` (a real `/s3/`, `/gs/`, or `/az/`), `write_nos_location_host = "<LOCATION_HOST>"`, and `write_nos_location_container = "<PREFIX>"` beside `connection_name`. `worker start` copies those allow-listed keys into the hydrated source section. Do not put them on the snowct connection profile.
@@ -273,6 +283,25 @@ base_url = "https://vault.example.com/v1/secret/data/dea"
 Reference resolved values in connection string fields using the provider scheme (for example `vault://path/to/secret#field`).
 
 **Command substitution** — embed `$(...)` recipes in connection fields (for example `$( aws secretsmanager get-secret-value ... )#password`). Gated by `SECRET_MANAGERS_ALLOW_CMD_SUBSTITUTION=true` (default `false`).
+
+**Azure Key Vault** — use the `az` recipe. `--query value -o tsv` prints the raw secret value; `#field` projects a field from a JSON value, and fields of one secret share one `az` call per cache TTL:
+
+```toml
+[connections.source.sqlserver]
+username = "$( az keyvault secret show --vault-name dmvf-prod-kv --name sqlserver-migrator --query value -o tsv )#username"
+password = "$( az keyvault secret show --vault-name dmvf-prod-kv --name sqlserver-migrator --query value -o tsv )#password"
+
+[connections.target.snowflake_password]
+password = "$( az keyvault secret show --vault-name dmvf-prod-kv --name snowflake-worker-password --query value -o tsv )"
+```
+
+The snippet shows only the secret fields. `[connections.source.sqlserver]` also needs `host` and `database`; `[connections.target.snowflake_password]` also needs `account`, `user`, `role`, `warehouse`, `database` and `schema`.
+
+- The Azure CLI must be on `PATH` and logged in as the worker's OS user before it starts: `az login --identity --allow-no-subscriptions` (managed identity) or `az login --service-principal … --allow-no-subscriptions`. Without the flag, an identity that holds only a Key Vault role fails with `No subscriptions found`. The CLI does not log in from `AZURE_*` variables by itself.
+- Grant the identity **Key Vault Secrets User** on the vault or on each secret.
+- Key Vault secret names allow only letters, digits and hyphens.
+- Prefer this recipe to a REST `akv` provider with a bearer token: that token is read once at start-up and expires after about an hour.
+- Check before starting: `SECRET_MANAGERS_ALLOW_CMD_SUBSTITUTION=true python -m shared.secret_managers check --config <worker.toml> -v` prints `SecretNotFound`, `Forbidden` or `binary 'az' not found on PATH` per failing field, never a value. It does not validate the rest of the config; `data-exchange-agent doctor -c <worker.toml>` with the same environment also opens the source and Snowflake connections.
 
 > **Inline `[secret_managers]` is ignored:** Do **not** put `[secret_managers]` blocks in `dew_configuration.toml` — the worker loader ignores unrecognized top-level sections. Use `SECRET_MANAGERS_CONFIG_FILE` or the env vars below.
 

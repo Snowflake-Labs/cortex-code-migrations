@@ -30,6 +30,15 @@ both sides, then `mode=redeploy_object`, `restore_from="sandbox"`. If the
 load itself skips a closure table or fails a table load, `reload_tables`
 returns an error saying so and latches nothing; the pair stays ready.
 
+On `source_database` setup copies live source rows into the SQL Server
+tables; `reload_tables` deletes them, copies them again and reclones the
+Snowflake tables, so both halves start from the same rows.
+
+A setup reply's `rowCountMismatch` names closure tables whose two sides
+hold different rows (often no testbed CSV: Snowflake cloned the common
+rows, SQL Server has none). Before capturing a baseline, copy each from
+the common catalog into the AIMSBX table on the short side so both match.
+
 Omit `mode` on a live `ready` leftover pair still deploys tables (CSV
 reload), peer functions/views/procs, and this object on source — no DROP
 or CLONE. Snowflake CREATE of this id is `mode=redeploy_object` (after a

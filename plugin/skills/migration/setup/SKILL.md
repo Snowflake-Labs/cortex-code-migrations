@@ -16,6 +16,29 @@ For a Snowflake source, say instead that **Snowflake Validation Setup** initiali
 
 Before `progress_setup()` or any other tool in this flow, run `scai doctor`. Exit 0: continue. Any other exit: stop, show the output, and do not advance the state machine. If the `doctor` command is missing, this scai predates the check — continue; SessionStart already gated the install. Skip the command when this session already ran it and it exited 0.
 
+## Setup Completion Gates
+
+Before accepting `DONE` or reporting setup complete, verify every option the user
+already chose is persisted. In particular, an enabled local dashboard requires
+`configure(dashboard_port=-1)` (or the chosen non-null port) and a
+`dashboard_port` entry in `.scai/config/plugin.yml`. A user saying `DONE` means
+check these gates; it does not waive a missing setting.
+
+Connection setup must not put a literal password in an agent-authored message or
+tool command. Never use a literal with `--password`, `sqlcmd -P`, `docker exec`,
+`echo`, or `printf`. Never write the password characters in an assistant message,
+including a sentence that says you will not inline them. Say "the supplied password".
+Follow the connection skill's secure-input rules instead.
+
+On every `progress_setup` response, if the user enabled the dashboard and
+`.scai/config/plugin.yml` exists without `dashboard_port`, call
+`configure(dashboard_port=-1)` in that same turn. Do this before connection
+troubleshooting and before accepting `DONE`. A reply that the dashboard UI is
+not bundled (`SKIP_DASHBOARD_BUILD`) is not a skip. Call
+`configure(dashboard_port=-1)` anyway. That call records `dashboard_port` even
+when no listener starts. Do not finish by telling the user the dashboard is
+missing from the build.
+
 ## Flow
 
 Setup is driven by the **`setup` state machine** — the resolver picks
@@ -61,6 +84,8 @@ the next step automatically. The flow:
 
    When the user has **already** said the answer in conversation, record it
    instead of waiting or asking. Do not ask them to say it again.
+   Exception: the isolation opt-in is never taken from conversation; it needs
+   an explicit answer to that exact question (configure-testing.md).
    - Submit the option's `value`, never its label. If they picked
      **Something else**, submit what they typed — not `other`.
    - If they picked **Snowflake** for the dialect, omit `code_source`.
@@ -265,7 +290,15 @@ pending — do not invent completion from chat history.
 1. **Follow sub-skill instructions** — Complete each sub-skill fully before returning
 2. **Confirm transitions through the machine** — stage gates arrive as `progress_setup` prompts (`continueToMigration`, `chooseRunMode`); ask those when they come, and otherwise continue into the next sub-skill in the same turn (step 4)
 3. **A requested stop is the end of this run** — If the user asked to stop after conversion, stop when conversion is done. Do not load `../assessment/SKILL.md` and do not run `scai assessment`, even when `progress_setup` names assessment as the next task. Tell the user assessment is the next stage and wait.
-4. **Turn the local dashboard on once `plugin.yml` exists** — It does not start by itself. Call `configure(dashboard_port=-1)` so `.scai/config/plugin.yml` records the default port. Skip only when the user opts out.
+4. **Turn the local dashboard on once `plugin.yml` exists** — It does not start by itself. Call `configure(dashboard_port=-1)` so `.scai/config/plugin.yml` records the default port. Skip only when the user opts out. Verify the persisted key before accepting `DONE`.
+
+**Stop after connections (before `registerCode`)** — When the user asked to
+halt before extract/convert/deploy, you still owe **Setup Completion Gates**:
+persist `dashboard_port` when they enabled the dashboard (user-sim counts),
+and finish source setup through `configure(source_connection=...)` with
+`connection_test: ok`. Do not treat an early stop as permission to skip
+`dashboard_port` or to reuse a pre-existing SQL Server profile on the wrong
+port.
 
 ## On Completion
 

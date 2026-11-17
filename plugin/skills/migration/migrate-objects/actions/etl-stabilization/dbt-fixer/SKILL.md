@@ -68,7 +68,7 @@ After user confirms, work through failing nodes. For each node:
 
 ### Step 2.2: Analyze and Fix
 
-Analyze the error and apply a fix directly to the model file. Follow these rules:
+Analyze the error. Before a manual fix of a dbt-quality finding, read its rule (`scai dbt-quality rules --code <rule_id>`) and check its `repair` metadata. When a repair exists, follow the reviewed repair step in `../../../../dbt-quality/SKILL.md`; otherwise use its marker loop and apply a manual fix. Keep the verification below. Follow these rules:
 
 **Snowflake SQL Rules:**
 - Use Snowflake SQL dialect exclusively

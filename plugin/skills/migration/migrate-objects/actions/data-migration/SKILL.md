@@ -62,6 +62,7 @@ migrate_data(
                       "cloud_direct",   # "regular" = legacy "leave the worker as-is"
   external_stage="<DB.SCHEMA.STAGE>",  # server/cloud methods, first application only
   target_table_type="native" | "iceberg",  # iceberg: relational sources only (never an Iceberg source)
+  adoption=true | false,  # native checksum/watermark only
 )
 ```
 
@@ -74,7 +75,7 @@ The same `where` maps to the same `artifacts/data_migration/workflows/<hash>.yam
 > - **Autonomous mode** (`subagent_mode`): repair it without asking. The walker reopens `migrateData` through `task_invalidator`; the orchestrator `reset`s a parked object and later-sends the walker ([autonomous](../../autonomous/SKILL.md), 2e). The re-run replaces the rows (`full-replace` deletes them; Iceberg on `none` must be cleared first, [RUN.md](./RUN.md)), checks the count, and `note`s the repair. Never hand the user a truncate or a reload of such a table.
 > - **Interactive:** propose the reload and run it after the user agrees. Native: `TRUNCATE`. Iceberg: `DROP ICEBERG TABLE`, because `none` fails while the table exists ([RUN.md](./RUN.md)).
 >
-> Any other target may hold expected rows: **never** `TRUNCATE` or bulk-`DELETE` it without explicit user confirmation, in either mode (autonomous: escalate). Prefer `full-replace` or incremental sync afterward.
+> Any other target may hold expected rows: **never** `TRUNCATE` or bulk-`DELETE` it without explicit user confirmation, in either mode (autonomous: escalate). Prefer `full-replace` or incremental sync afterward. If another tool already loaded it, ask first, then [adopt](./references/workflow-config-reference.md#adopting-an-existing-target-synchronizationadoption).
 
 ### Step 2a: Display, optional edits, confirm
 
@@ -112,9 +113,7 @@ The same `where` maps to the same `artifacts/data_migration/workflows/<hash>.yam
 
 An explicit `[]` turns partitioning off: the whole table moves as one long serial unit, however large. Write it only when the user **explicitly** asks for a single partition after hearing that cost, and never in `defaultTableConfiguration` (every table without its own key) unless they asked for exactly that.
 
-#### Experimental `boundaryDiscoveryMode` (Redshift only)
-
-Never set it on a non-Redshift source. On Redshift, leave it unset (`accurate`) unless the user accepts an experimental mode, per [Experimental boundary discovery modes](./references/workflow-config-reference.md#experimental-boundary-discovery-modes-redshift).
+Never set Redshift `boundaryDiscoveryMode` except as [experimental modes](./references/workflow-config-reference.md#experimental-boundary-discovery-modes-redshift).
 
 ---
 

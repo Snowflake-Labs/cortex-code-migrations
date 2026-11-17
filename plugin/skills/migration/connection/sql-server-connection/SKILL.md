@@ -104,15 +104,24 @@ Options:
 scai connection add-sql-server
 ```
 
-**SQL authentication, inline.** Password is prompted securely:
+Enter the password only at the CLI's hidden prompt. If a CI runner already
+injects it through a named environment variable, keep the command text opaque:
+reference the variable (for example, `--password "$PASSWORD_ENV_VAR"`), never
+copy its value into the command. Inspect variable names only; never print the
+environment or the variable's value.
+
+**SQL authentication, inline.** Password is prompted securely. Use the port
+the user supplied (`--port`); do not assume 1433 when they named a different
+one.
 ```bash
 scai connection add-sql-server \
   -s <SOURCE_CONNECTION_NAME> \
   --auth standard \
   --server-url <SERVER_URL> \
-  --port 1433 \
+  --port <PORT> \
   --database <DATABASE> \
-  --user <USERNAME>
+  --user <USERNAME> \
+  --trust-server-certificate
 ```
 
 **Windows authentication on this host.** No username and no password:
@@ -126,6 +135,19 @@ scai connection add-sql-server \
 ```
 
 Snowpark Container Services Windows authentication is added from the reference in Step 1b. Do not add it again here.
+
+**Correcting a saved profile** (a wrong database, host, port, user or password):
+re-run the same `add-sql-server` command under the same `-s` name with every
+field, the corrected one included, plus `--replace` and `--json`. That updates
+the profile in place, so the project's `source_connection` still names it. Do
+not remove and re-add it. Without `--replace` the CLI refuses the name with
+`CNX0002` and keeps the old profile. Never pipe `add-sql-server` through `tail`
+or `head`. Read its JSON: unless it says `"success":true`, the correction was
+not saved, so surface the error instead of re-testing.
+
+Do not use `docker exec`, `sqlcmd -P`, `echo`, or `printf` with a password to
+diagnose this connection. Use `scai connection test` through `configure` below.
+When the user already supplied a database, do not enumerate databases first.
 
 ### Step 4: Save and Test Source Connection
 
@@ -161,6 +183,13 @@ Then return to the calling skill.
 
 - **NEVER** log or display passwords in plain text
 - **NEVER** include passwords in command-line arguments that might be logged
+- **NEVER** repeat a user-supplied password in a Bash tool call, including
+  `--password`, `sqlcmd -P`, `docker exec`, `echo`, or `printf`
+- **NEVER** write the password characters in an assistant message. Saying you
+  will not inline it is still a repeat when the value appears. Say "the supplied
+  password"
+- In CI, reference an existing secret environment variable by name; never
+  interpolate its value into agent-authored command text
 - Use interactive mode or credential managers to avoid password exposure
 
 ## Quick Reference
@@ -170,5 +199,6 @@ Then return to the calling skill.
 | Add connection (interactive) | `scai connection add-sql-server` |
 | Add connection (inline, SQL auth) | `scai connection add-sql-server -s NAME --auth standard --server-url HOST --database DB --user USER` |
 | Add connection (Windows auth) | `scai connection add-sql-server -s NAME --auth windows --server-url HOST --database DB` |
+| Correct a saved connection | the same `add-sql-server` command with every field, plus `--replace --json` |
 | Test connection | `configure(source_connection=NAME)` (runs the test internally) |
 | Set default | `scai connection set-default -l sqlserver -s NAME` |

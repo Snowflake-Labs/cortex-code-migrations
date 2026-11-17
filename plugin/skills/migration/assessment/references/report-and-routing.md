@@ -16,7 +16,7 @@ end-to-end path is fully defined in `SKILL.md`.
 | Intent | Skill or source |
 |---|---|
 | Business use cases, migration waves, a wave for an app, process, report or object | `business-use-cases/SKILL.md` |
-| Size-based waves on explicit request (a wave size, prioritization patterns, category order) | `waves-generator/SKILL.md` |
+| Size-based waves with a different size, prioritization patterns or mixed types | `waves-generator/SKILL.md` |
 | Temporary/staging/deprecated exclusions | `object_exclusion_detection/SKILL.md` |
 | Migration effort/hours | `effort-estimate/SKILL.md` |
 | Migration risks/anti-patterns | `anti-patterns/SKILL.md` |
@@ -76,7 +76,7 @@ scai assessment report \
   --plugin-version "<plugin_version>" \
   --project-dir "<project_dir>" \
   [--ssis-json "<path>" when SSIS succeeded] \
-  [--informatica-json "<path>" when Informatica succeeded]
+  [--informatica-json "<path>" when Informatica succeeded: the JSON path `scai assessment etl generate` printed]
 ```
 
 Leave `--output` unset so the CLI names the file
@@ -98,6 +98,9 @@ auto-discovers:
   artifacts
 - `assessment/json/sql_dynamic_analysis.json`
 - stable `artifacts/assessment/data-lineage.json`
+- newest `artifacts/assessment/etl/etl_assessment_analysis_*.json` (SSIS) or
+  `informatica_assessment_analysis_*.json` (Informatica), else the legacy
+  `assessment/ssis/` or `assessment/informatica/` file of an older project
 
 Only use explicit source flags to select nonstandard locations:
 

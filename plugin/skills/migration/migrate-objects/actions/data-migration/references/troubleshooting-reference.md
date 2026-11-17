@@ -368,6 +368,7 @@ Detail: [workflow-config-reference.md](./workflow-config-reference.md#bcp-termin
 2. **A target this project loaded itself** (see *Clearing a bad load* in [SKILL.md](../SKILL.md)): in autonomous mode, clear and reload it without asking; interactive, propose the truncate and reload and run them once the user agrees.
 3. **Any other target:** confirm with the user before any destructive action. It may hold rows that are expected or unrelated to this migration. Do not blindly `TRUNCATE` or bulk-`DELETE` it; if cleanup is required, scope it (for example delete rows loaded in a specific partition/window, or dedupe by primary key) only after explicit user approval.
 4. **Going forward:** Add `synchronization.strategy: watermark` or `checksum` (with `watermarkColumn`, `checksumExpression`, and `primaryKeyColumns` as needed) so subsequent runs are incremental. See [workflow-config-reference.md](./workflow-config-reference.md#synchronizationstrategy).
+5. **The target held another tool's rows and DMVF reloaded or duplicated them:** that is the no-adoption behaviour. If the user wants matching partitions kept, add `synchronization.adoption` (ask first; see [Adopting an existing target](./workflow-config-reference.md#adopting-an-existing-target-synchronizationadoption)).
 
 ---
 
@@ -469,6 +470,21 @@ Do **not** suggest orchestrator polling-interval env vars as a throttle mechanis
 1. Confirm sync strategy (`checksum` vs `watermark`) and whether the changed column is in the checksum input.
 2. Explain using the skipped/lossy type table — see [Advanced operations reference](../../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
 3. Offer remediation: one-time **full** run; custom **`checksumExpression`**; switch to **watermark** if appropriate.
+
+---
+
+## Adoption: partitions reloaded, reported, or not adopted
+
+**Symptom:** a workflow with `synchronization.adoption` reloaded a partition the user expected to keep, left one untouched with no baseline, or failed validation.
+
+**Cause and fix:**
+
+1. **A mismatching partition is reloaded or reported, by design.** `onMismatch: reload` (default) clears and reloads it. `onMismatch: report` loads and clears nothing, stores no baseline, marks the partition complete and writes a row to the `ADOPTION_REPORT` table in the project's data-migration metadata schema (`REASON` is `mismatch`, `no_metrics` or `check_unavailable`, with `PARTITION_NUMBER`, the source table and `TARGET_ROW_COUNT`). A reported partition is checked again on every run, so it is reported again until the target is fixed or the choice changes to `reload`. Read the table before deciding; do not `TRUNCATE` the target to "fix" it.
+2. **Matching float or decimal columns fail the check:** the default absolute tolerance is `0.001`. Set the top-level `comparisonConfiguration.relativeTolerance` (for example `1e-6`).
+3. **`check: row` settles as check-unavailable:** the platform cannot read the row hash as an unsigned number. The partition follows `onMismatch`; use `check: metrics`. On Teradata a `HASH_MD5` not found means the UDF is not in the worker's default database: set `hashMd5Function: <DATABASE>.HASH_MD5` (Teradata only; any other source rejects the key).
+4. **A re-run after `resetPartitions` re-checked instead of reloading:** adoption applies to every partition with no baseline, and a reset creates such partitions. To force a full reload, remove adoption for that run (`migrate_data(mode="setup", adoption=false, ...)`).
+5. **Configuration rejected:** adoption is valid only on `checksum` / `watermark`, never `none`, `full-replace` or an Iceberg target (a per-table `synchronization` override to one of those fails while the default carries `adoption`). A `watermark` table whose `watermarkColumn`, or a partition key, exists only in the source (such as Oracle `ORA_ROWSCN` or BigQuery `_PARTITIONTIME`) is rejected too: use a migrated column or drop adoption. `migrate_data(mode="setup")` refuses these combinations before writing; `migrate_data(mode="check")` reads the rest from `scai data doctor --config`.
+6. **Nothing adopted because the target was empty or missing:** with no rows there is nothing to adopt; the partition loads as usual.
 
 ---
 

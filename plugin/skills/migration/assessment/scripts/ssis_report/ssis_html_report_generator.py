@@ -35,6 +35,9 @@ if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 from snowconvert_reports.console_utils import DONE, WARN  # noqa: E402
+from snowconvert_reports.services.issue_effort_service import IssueEffortService  # noqa: E402
+
+from snowconvert_reports.ewi_heatmap import render_ewi_heatmap  # noqa: E402
 
 
 def _normalize_package_path(path: str) -> str:
@@ -887,7 +890,16 @@ class HTMLReportGenerator:
             """
         
         # Generate classification and complexity distribution charts (dual donut)
-        classification_dist_html = self._generate_classification_and_complexity_charts(classification_counts, complexity_counts, total_packages)
+        ewi_heatmap_html = render_ewi_heatmap(
+            self.packages,
+            severity_of=IssueEffortService.from_bundled_reference().get_severity,
+        )
+        classification_dist_html = self._generate_classification_and_complexity_charts(
+            classification_counts,
+            complexity_counts,
+            total_packages,
+            ewi_heatmap_html=ewi_heatmap_html,
+        )
         
         # Generate analysis status summary
         analysis_status_html = ""
@@ -1097,7 +1109,13 @@ class HTMLReportGenerator:
             </div>
         '''
     
-    def _generate_classification_and_complexity_charts(self, classification_counts: Dict, complexity_counts: Dict, total: int) -> str:
+    def _generate_classification_and_complexity_charts(
+        self,
+        classification_counts: Dict,
+        complexity_counts: Dict,
+        total: int,
+        ewi_heatmap_html: str = "",
+    ) -> str:
         """Generate dual donut charts for classification and complexity distribution."""
         classification_colors = {
             'Ingestion': self.COLORS['sf_blue'],
@@ -1162,6 +1180,7 @@ class HTMLReportGenerator:
                     </div>
                 </div>
             </div>
+            {ewi_heatmap_html}
         </div>
         """
     
@@ -1980,8 +1999,17 @@ class HTMLReportGenerator:
             }}
         }}
         
+        function filterEwiHeatmap() {{
+            const selected = document.getElementById('ewiSeverityFilter')?.value || '';
+            document.querySelectorAll('.ewi-heatmap-row').forEach(row => {{
+                const severity = row.getAttribute('data-severity') || '';
+                row.style.display = !selected || severity === selected ? '' : 'none';
+            }});
+        }}
+
         // Attach event listeners
         document.getElementById('packageSearch')?.addEventListener('input', filterPackages);
+        document.getElementById('ewiSeverityFilter')?.addEventListener('change', filterEwiHeatmap);
         document.getElementById('classificationFilter')?.addEventListener('change', filterPackages);
         document.getElementById('complexityFilter')?.addEventListener('change', filterPackages);
         document.getElementById('componentSearch')?.addEventListener('keyup', filterComponents);

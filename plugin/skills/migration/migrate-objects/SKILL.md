@@ -65,8 +65,12 @@ When the user decides an escalation, record it with `status='answer'` exactly as
 the `answerWith` field of `migration_status(mode="escalations")` shows.
 `guidance` (their words in `reason`, required) and `decompose` un-park the object
 for a re-run, `skip` takes it out of scope, `skip_data` (a `migrateData` park
-only) keeps the table but copies no rows, `needs_repair` leaves it parked, and
-`mark_done` only records the decision: finish it through `finishObjects`.
+only) keeps the table but copies no rows, and `needs_repair` leaves it parked.
+`mark_done` ("Accept as is") accepts a failed `validateData`, `validateView` or
+`runTests` as it is, and the walk moves past it. In the AIM app only the user gives
+it, on the escalation card; your own call is refused. Likewise `skip` is the card's
+own "Skip this object": never write an ask that offers skipping or out of scope,
+since a chosen ask records only `guidance`.
 
 Errors that can hit any task, such as Cortex Code's `sql_execute` returning
 "no query ID", are in [references/troubleshooting.md](references/troubleshooting.md).

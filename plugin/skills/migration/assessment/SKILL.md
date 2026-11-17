@@ -1,6 +1,6 @@
 ---
 name: assessment
-description: Use when assessing a SnowConvert migration workload, finding its business use cases and planning one migration wave per use case, identifying exclusions or risks, estimating effort, analyzing Dynamic SQL or ETL, reviewing SQL Server, Teradata, or Redshift discovery data, or mapping Data Lineage.
+description: Use when assessing a SnowConvert migration workload, finding its business use cases, writing size-based deployment waves, identifying exclusions or risks, estimating effort, analyzing Dynamic SQL or ETL, reviewing SQL Server, Teradata, or Redshift discovery data, or mapping Data Lineage.
 version: 0.1.0
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -12,8 +12,8 @@ license: Proprietary. See License-Skills for complete terms
 Tell the user:
 
 > **Migration Assessment** — I'll analyze your converted code to generate a
-> migration plan: the business use cases in your workload with one migration
-> wave per use case, object categorization, dynamic SQL patterns, and a
+> migration plan: the business use cases in your workload, size-based
+> deployment waves, object categorization, dynamic SQL patterns, and a
 > summary report.
 
 This is an end-to-end entry point. Given source code, drive setup, registration,
@@ -45,18 +45,41 @@ those inputs into the project.
    `progress_setup` card), skip the Step 3 confirmation — do not ask it again.
    `progress_setup` returns those answers under `answered`; when that block is
    present, the scope is settled and no scope question goes to the user.
-   Never ask for a wave size, prioritization patterns or a wave ordering: one
-   business use case is one wave, ordered by dependency inside it. Still
+   Never ask for a wave size, prioritization patterns or a wave ordering:
+   `scai assessment waves` runs with its defaults. Still
    collect only the remaining Step 4 inputs selected by those tokens. Then
    follow the Step 5 dispatch reference: when Power BI templates are staged,
    Data Lineage runs alone first; then send the other in-scope Task calls in
-   one message; business use cases run alone last. Do not prompt again until
+   one message; business use cases run last, as three agents and a merge. Do not prompt again until
    results are collected.
 6. A child failure does not block siblings. Validate each return and offer one
    retry of failed children using the same captured inputs.
 7. Present the Step 8 status table as soon as it is ready. Then ensure/open the
    live dashboard as defined in [On Completion](#on-completion). Opening the
    dashboard must not delay or hide those results.
+
+## Assessment mode
+
+Call `configure()` and read `assessment_mode` before Step 3. AIM asks it as the
+assessment card's first question:
+
+- `full`, or unset with `assessment_options` already set: follow every step
+  below.
+- `waves_only`: run only these, in order, from `<project_dir>`, with no
+  sub-agents, no further questions and no report:
+  1. `scai assessment object-exclusion`
+  2. `scai assessment waves` (size-based, no options)
+  3. Create the empty file `<project_dir>/.scai/assessment-waves-only-complete`.
+     It is the step's done signal; write it only after both commands
+     succeed. If one fails, report the error and stop without it.
+
+  Then tell the user how many waves were planned and call `progress_setup()`.
+- `skip`: AIM already turned this step off and put every in-scope object
+  with no wave in wave 1, keeping waves already planned. Do not run anything;
+  call `progress_setup()`.
+- Unset with no `assessment_options` (a client with no AIM card): ask the
+  mode with one `ask_user_question` (Full, Waves only, Skip), save it with
+  `progress_setup(answers={"assessment_mode": "<value>"})`, then follow it.
 
 ## Command reference
 
@@ -96,7 +119,7 @@ Resolve without prompting:
 | Project | `project_dir` containing `.scai/` and `registry/` |
 | SnowConvert reports | First directory that contains the needed conversion files: `<project_dir>/.scai/reports/SnowConvert/`, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. A leftover older folder can be stale if `.scai` already has the files. |
 | Dynamic SQL issues | newest `Issues.*.csv` |
-| SSIS inputs | newest `ETL.Elements.*.csv` and `ETL.Issues.*.csv`, when present |
+| ETL inputs (SSIS or Informatica) | the registry's `etl` units, plus the newest `ETL.Elements.*.csv` and `ETL.Issues.*.csv` when present |
 | Power BI templates | `<project_dir>/source/BI/PowerBI/**/*.pbit` |
 | Assessment output | `<project_dir>/assessment/` |
 
@@ -122,8 +145,8 @@ the multi-select scope question, the Conversion Issues yes/no, and the report
 name (default from `metadata_tools.py --show-assessment-name`):
 
 ```text
-Business use cases with one migration wave each, standard analyses, Data
-Lineage, and the HTML report always run.
+Business use cases, size-based waves of about 100–200 objects, standard
+analyses, Data Lineage, and the HTML report always run.
 What else do you want? Select all that apply:
 - Deep Dynamic SQL review
 - Discovery (SQL Server, Teradata, or Redshift only)
@@ -166,18 +189,25 @@ step is **three steps**:
    wait can return before that (on a timeout or another wake); if
    `data-lineage` is still running, wait again. Do not include `data-lineage`
    again.
-3. **Then business use cases.** Once every fan-out agent has returned,
-   dispatch `business-use-cases` alone and wait for it. It reads the
-   exclusion findings and Power BI dependencies the earlier steps wrote, and
-   its plan writes the registry, so it never runs beside another child.
+3. **Then business use cases**, the last part of the assessment. Once every
+   fan-out agent has returned, dispatch the **context pass** alone and wait for
+   it: it reads the code and writes `artifacts/assessment/assessment-context-ai.md`.
+   Then dispatch the **lineage search** and the **other-objects search**
+   together, both reading that file, and wait for both. Then merge their
+   drafts, build, rate and plan yourself, as subagent-dispatch.md § Business
+   use cases says. They read the exclusion findings and Power BI dependencies
+   the earlier steps wrote, and the plan writes the registry, so nothing else
+   runs beside them.
 
-SSIS with `auto-review-all` adds its review batches and summary to the
-fan-out, as subagent-dispatch.md § SSIS says: the batches run one after
-another, never side by side. Business use cases wait for them too.
+SSIS with `auto-review-all`, and Informatica always, add review batches and
+a summary to the fan-out, as subagent-dispatch.md § SSIS and § Informatica
+say. For each platform the batches run one after
+another, never side by side. The project's one ETL platform gets one
+`scai assessment etl generate`. Business use cases wait for them too.
 
 When `data_lineage.dispatch` is false, or `staged_pbits` is empty, skip the
 first step and send the fan-out in one message. Include `data-lineage` in that
-fan-out when it is in scope. Business use cases still run alone after it.
+fan-out when it is in scope. Business use cases still run last, after it.
 
 **Wait in the same turn; do not end it.** After each dispatch message, call
 `hub(mode="wait", confirm=true, cursor=<last>)`. Do not call
@@ -260,17 +290,20 @@ When Data Lineage returns a manifest, verify the manifest and
 `artifacts/assessment/powerbi/enrichment.json` exist. Do not inspect the
 registry to re-audit enrichment.
 
-Business use cases add `wave_plan`, `top_use_cases` and `coverage`. When
-`wave_plan` is not null, verify it exists; otherwise fail with
+The Business use cases row is the one you build after the merge
+(subagent-dispatch.md § Business use cases, step 5), with `wave_plan`,
+`top_use_cases`, `catalog`, `context` and `merge`. The context pass and the
+two searches are not rows of their own; a failed one is named in that row's
+summary. When `wave_plan` is not null, verify it exists; otherwise fail with
 `error: "wave plan missing"`. A `null` plan with an `ok` status means no use
-case was deployable, which its summary says. An `ok` return is complete only
+case was deployable, which its summary says. The row is complete only
 when:
 
 | Check | Failure result |
 |---|---|
-| `coverage` is present | `error: "coverage missing"` |
-| `coverage.meets_target` is true (at least 90% of objects planned, or at least 90% of what is pending is plumbing or data only) | `error: "coverage <pct> below target"` |
-| The summary admits no skipped step ("skipped the coverage pass", "did not call configure", "without the query tools") | `error: "required step skipped: <step>"` |
+| `catalog` is present | `error: "catalog missing"` |
+| `catalog.use_cases` is at least 1 | `error: "no business use cases found"` |
+| The summary admits no skipped step ("did not call configure", "skipped waves catalog", "without the query tools") | `error: "required step skipped: <step>"` |
 
 Offer the retry for any of them in Step 8.
 
@@ -285,8 +318,19 @@ offer Step 8's retry, which re-sends review batches for the PENDING packages
 only, then the summary. A review batch that returned `error` fails the row the
 same way.
 
-When Informatica returns `"ok"`, also verify
-`<project_dir>/assessment/informatica/ai_informatica_summary.html` exists and
+The informatica-assessment row comes from the Informatica summary child
+(subagent-dispatch.md § Informatica), after every review batch has returned.
+When the target was not recorded (input-collection.md § 5.3b), or any
+Informatica child returned `Informatica target not recorded`, the row is that
+error whatever `stats` shows: an earlier artifact may still be on disk.
+It is `ok` only when `scai assessment etl stats --platform informatica` shows
+0 pending workflows; run it yourself rather than trusting a child's counts.
+Otherwise fail the row with
+`error: "<n> Informatica workflows still pending AI analysis"` and offer
+Step 8's retry, which re-sends review batches while workflows are pending,
+then the summary. A generate or review batch that returned `error` fails the
+row with that error. When the row is `ok`, also verify
+`<project_dir>/artifacts/assessment/etl/ai_informatica_summary.html` exists and
 is non-empty. Otherwise fail with `error: "AI summary missing or empty"`.
 
 Create a `results` table in this order:
@@ -335,7 +379,7 @@ scai assessment report \
   --plugin-version "<plugin_version>" \
   --project-dir "<project_dir>" \
   [--ssis-json "<path>" when etl-assessment is ok, or failed only on pending packages] \
-  [--informatica-json "<path>" when informatica-assessment is ok]
+  [--informatica-json "<path the Informatica generate child returned>" when informatica-assessment is ok]
 ```
 
 Do not pass `--output` on the common path. The CLI writes
@@ -375,12 +419,26 @@ An `ok` row cites the child-generated stable
 `artifacts/assessment/data-lineage.json`.
 
 Label the first row **Business use cases**. Its summary gives the use case
-count next to the coverage from `coverage`: "<n> use cases covering
-<planned> of <objects> objects (<pct>%)", and what the rest is pending for, so
-a plan that leaves most of the workload pending is visibly incomplete. When
-much of it is pending as data only, say that those tables and views have no
+count next to what they cover, from `catalog`: "<n> use cases (<evidenced>
+evidenced, <proposals> to confirm, <ai_analysis> of them from AI analysis)
+covering <covered> of <deployable> objects". When `ai_analysis` is above zero,
+say in one plain line that those were deduced from the code of objects no
+export or report backs, and that each one lists what would confirm it, such as
+the BI layer that reads it. When `merge.dropped` is not empty, say how many AI
+suggestions were left out because a lineage use case already holds them. Then
+say why the rest is in no use case (the `estate` categories), so a plan that
+leaves most of the workload outside use cases is visibly incomplete. Those
+objects still migrate, in waves of their own under **Other objects**; never
+call them pending or failed. When
+much of it is data only, say that those tables and views have no
 loading or consuming code in the project and that their loaders should be
-requested from the customer. Then,
+requested from the customer. Then say which context the use cases were based
+on, from `context`: what was reviewed, and for every kind under `not_provided`
+that this project could have supplied, one plain line on what providing it would
+add (the scheduler export or SQL Server Agent jobs show which jobs really run;
+query logs show which outputs are still read) and that re-running the assessment
+with it makes the catalog more complete. When `context` is absent from an older
+run, say nothing about it. Then,
 when it returned `top_use_cases`, show them as a numbered list, at most three,
 in rank order.
 Each entry gives the name and its purpose in one line, then
@@ -392,12 +450,10 @@ case. Do not show wave numbers or confidence: each use case is migrated on its
 own, and confidence is internal. This is information, not a question: do not
 ask the user to choose here.
 
-When the user later asks to start with another use case, re-plan with that id
-first and every other rated id from `use-cases.json` after it, in rank order:
-
-```bash
-scai assessment waves plan --use-case <chosen-id> --use-case <next-id> ...
-```
+When the user later asks to start with another use case, keep the catalog as
+it is. Do not rewrite `planning.wave` from that selection yet: objects keep
+the size-based wave numbers from `scai assessment waves`. A later change will
+update CUR waves for a chosen use case.
 
 A request for a wave or use case around an app, a process, a report or an
 object goes to `business-use-cases/SKILL.md` in on-demand mode.
@@ -412,7 +468,10 @@ retried. Do not withhold the rest of the table.
 
 On yes, re-dispatch only failures using the original `assessment_inputs`, repeat
 validation, regenerate the report, and reprint the table. On no, retain the
-failed rows. Do not delete old timestamped artifacts.
+failed rows. Do not delete old timestamped artifacts. Never re-dispatch an
+Informatica row failed with `Informatica target not recorded` until
+`.scai/config/plugin.yml` records the target; until then tell the user to
+end the subagent session with `configure(subagent_mode=false)` (this takes the project out of autonomous mode, and is allowed only when no walkers are running and no claims are open), then call `configure(etl_informatica_target=<target>)`.
 
 ### Pre-completion check
 
@@ -430,7 +489,7 @@ Then perform On Completion. Do not stop after generating artifacts.
 | Request | Skill |
 |---|---|
 | Business use cases; a wave for an app, process, report or object | `business-use-cases/SKILL.md` |
-| Size-based waves, only when explicitly asked (a wave size, prioritization patterns, category order) | `waves-generator/SKILL.md` |
+| Size-based waves with a different size, prioritization patterns or mixed types | `waves-generator/SKILL.md` |
 | Exclusions | `object_exclusion_detection/SKILL.md` |
 | Effort | `effort-estimate/SKILL.md` |
 | Anti-patterns | `anti-patterns/SKILL.md` |

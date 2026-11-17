@@ -11,7 +11,7 @@ bindings deploy/migrate/validate run on.
 
 ## Step 1: Explain what this step configures
 
-In a sentence or two of your own, tell the user what the **sandbox profile** is: the source connection, Snowflake target connection and database bindings (source → Snowflake databases) that every deploy / migrate / validate / test run uses, so those runs hit a sandbox rather than production. They confirm it before it is saved and can change it later in Settings.
+In a sentence or two of your own, tell the user what the **sandbox profile** is: the source and Snowflake connections and database bindings (source → Snowflake databases) every deploy/migrate/validate/test run uses, so they hit a sandbox, not production. They confirm it before saving and can change it in Settings.
 
 A source connection is **required**, even for synthetic test data:
 deploy, migrate and validate read from it. Say so if asked to skip it,
@@ -62,7 +62,7 @@ mapped in `configure-source-connection.md`; Snowflake:
 `../connection/snowflake-connection/SKILL.md`), then re-read `configure()`
 and re-ask.
 
-No source connection yet: stop; setup resumes once there is one.
+No source connection yet: stop until there is one.
 
 ## Step 4: Bind each source database the code covers
 
@@ -83,9 +83,8 @@ source connection's default database (`scai connection list -l <dialect>
 Suggest a target per database: its `configure()` `snowflake_targets:` entry,
 else `snowflake_database:` for the first, else the entry's `suggestedTarget`
 (an unbound placeholder has none: the default database's name).
-When the result has `databasePrefix`, the Snowflake account is shared: every
-target, suggested or typed, must start with it, so prepend it to any that
-doesn't.
+When the result has `databasePrefix` (a shared account), every target,
+suggested or typed, must start with it: prepend it to any that doesn't.
 Then one `ask_user_question` with one question per database with code
 (`multiSelect = false`), headed by the source database: suggested target
 labelled **(recommended)**; freeform override allowed. Reject duplicate
@@ -95,24 +94,26 @@ targets; re-ask on conflict.
 
 For each target, run `SHOW DATABASES LIKE '<TARGET>'`. It exists only if a
 returned `name` equals it exactly (upper-cased if unquoted): `LIKE` ignores
-case and `_` is a wildcard. Create nothing yet; carry missing ones to the
+case and `_` is a wildcard. Create nothing yet: missing ones go to the
 recap. If the check fails, stop with remediation.
 
 For existing targets, call
 `configure(check_target_tables="<token>=<TARGET>,…", check_target_connection="<snowflake>")`
 and carry each `target_database_exists:` line to the recap: what deploy
-replaces there. On `unavailable: …`, say the check couldn't run.
+replaces there. On `unavailable: …`, say the check didn't run. Any
+target missing: add `check_create_database=true`.
 
 ## Step 6: Confirm, persist, and complete
 
 Show a recap (name, description, source connection, Snowflake connection,
-bindings file, each source database and its target, targets to create), and
+bindings file, each source database and its target, targets to create,
+warning on `create_database: denied` here and on the save option), and
 each `target_database_exists:` line that replaces something, adding "_Deploy
 overwrites these objects; their code and rows will be lost._"
 
-Per existing target that deploy replaces something in, or whose check
-couldn't run, ask a separate yes/no naming the
-database and what deploy replaces there: **Replace these objects in <DB>** /
+Per existing target deploy replaces something in, or whose check couldn't
+run, ask a separate yes/no naming the database and what deploy replaces:
+**Replace these objects in <DB>** /
 **Pick another target** (back to Step 4). Never answer it yourself: with no
 person to answer, stop and escalate it.
 
@@ -136,8 +137,8 @@ after changing the Snowflake connection or a mapping. Only after Yes:
      <token>: <TARGET_DB>
    ```
 
-   AIM reads only this file for now, so every profile points at it: edit it
-   in place. Per database with code keep its `source:` entry (a
+   AIM reads only this file, so every profile points at it: edit it in
+   place. Per database with code keep its `source:` entry (a
    placeholder's is the connection's default) and set `snow:` to the
    confirmed target. Drop `source:` and `snow:` entries for databases with
    no registered code only after the Step 4 inventory is complete; else keep
@@ -170,7 +171,7 @@ configure(sandbox_profile="<name>", source_connection="<source>",
 ## Deploy-only
 
 `migration_scope: deploy_only` has no source database; the profile is
-Snowflake-only. Run the steps above with these changes:
+Snowflake-only. The steps above change:
 
 - Steps 1 and 3: leave the source out; ask only for Snowflake.
 - Step 4: bind as usual. Keep each `source:` entry convert wrote; a

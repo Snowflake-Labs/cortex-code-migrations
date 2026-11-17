@@ -40,6 +40,7 @@ project loaded itself ([data-migration](../../migrate-objects/actions/data-migra
 table's id as `codeUnitIds` and `waiterId`, resume task `migrateData`, and the source
 and target counts as `reason`. Then `migration_status(mode="next_task")` and run
 `migrateData` again; its reload replaces the rows. Any other mismatch parks as above.
+Its escalation offers the user "Accept as is" on the card; never answer it yourself.
 
 ## Interactive (not a walker)
 

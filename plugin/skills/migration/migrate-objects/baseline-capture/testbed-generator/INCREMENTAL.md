@@ -80,6 +80,9 @@ call; retry the phase.
 6. Read `<object-artifacts>/testbed/generate-summary-view.json` and the manifest it names. Require
    this table to have a manifest CSV entry. A fresh run may write one CSV; a
    resumed run may write zero because the exact table CSV is already frozen.
+   That zero is a success, and the view's `kept_tables` names the table whose
+   existing CSV was kept unchanged; report it rather than treating zero as a
+   failure. Deleting that CSV is what makes the next generate rewrite it.
    A view with `"source": "wave"` is from the wave's first mine and counts only
    this table. More than one newly written table is an ownership violation:
    escalate rather than loading another walker's data.

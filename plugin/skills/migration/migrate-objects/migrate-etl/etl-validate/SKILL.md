@@ -197,3 +197,17 @@ tasks:
 ```
 
 A disabled task reads as **excluded** by the state machine, so the live ETL flow reaches its terminal state without running the comparison. This is **project-wide** — it disables `etlValidate` for every ETL unit and does not skip `validateEtlValidate`. Per-unit exclusion is not supported: writing `codeStatus.etlValidate=excluded` on a single entry reads back as *completed*, not excluded.
+
+## Step 5: Nothing can be compared for this unit
+
+When no comparison can ever run for one unit (the seed derived no source-to-target pair, every
+sink is outside Snowflake, the package only launches a host process), it is **not validated**, not
+passed. Never close `{TASK}` with a note and `done` that says so: the stamp would read completed.
+Escalate instead, offering `unvalidated` in the asks:
+
+`transition_status(status="escalate", task="{TASK}", where="id = '{ETL_ID}'", reason="<why nothing can be compared>", asks=[...])`
+
+Only a person answers `unvalidated` (an autonomous parent may relay their words). The answer
+records `extensions.testing.unvalidated`, the walk passes `{TASK}` over, and every count shows the
+unit as unvalidated, never validated. Guidance that says to record a unit as NOT VALIDATED is
+relayed as `resolution="unvalidated"`, not `guidance`.

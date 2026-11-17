@@ -118,7 +118,7 @@ Then repeat **Steps 4–5** (background Monitor, then present a new error-first 
 
 **If the user picks option 3:** return to Step 1 (setup) with a `where` filter scoped to failed tables when possible.
 
-**If the user picks option 5:** record the decision in two calls, scoped with `where` to the accepted tables. First `transition_status(status='escalate', task='validateData', cause='data', asks=[…], where=…)`, with asks naming the tables and mismatched levels. Then `transition_status(status='answer', task='validateData', resolution='mark_done', reason="<the user's words>", where=…)`, and follow the `next` it returns. Until the answer is recorded, the tables stay parked as needing a human decision.
+**If the user picks option 5:** record the decision in two calls, scoped with `where` to the accepted tables. First `transition_status(status='escalate', task='validateData', cause='data', asks=[…], where=…)`, with asks naming the tables and mismatched levels. In the AIM app, tell the user to choose **Accept as is** on that escalation card: the app refuses your own `mark_done`. Elsewhere, record their words with `transition_status(status='answer', task='validateData', resolution='mark_done', reason="<the user's words>", where=…)`. Until the answer is recorded, the tables stay parked as needing a human decision; once it is, each reads as accepted and its walk moves on.
 
 **If the user picks option 4 or 6:** continue to Step 6 when wave data work is done for this pass.
 

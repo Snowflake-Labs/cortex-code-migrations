@@ -112,6 +112,15 @@
   </tr>
 </table>
 
+<h3>dbt Project Quality</h3>
+<table>
+  <tr><th style="width:160px">Skill</th><th>What it does</th></tr>
+  <tr>
+    <td><strong>dbt-quality</strong></td>
+    <td>Audits a dbt project, or a folder of dbt projects such as SnowConvert output, with the <code>scai dbt-quality</code> CLI, and in a migration with the <code>dbt_quality_audit</code> tool of the migration MCP server. Writes a JSON and an HTML report, explains each rule, marks findings in the files, and checks model columns against scai DDL. Static analysis only: it does not run dbt or connect to a database. See the <a href="skills/migration/dbt-quality/README.md">dbt-quality README</a> for installation, configuration, CI gating, and limits. Run <code>scai dbt-quality rules</code> to list every rule.</td>
+  </tr>
+</table>
+
 <h3>Skill Map</h3>
 <pre>migration/                                  &larr; Root router (detects state, delegates)
 &#9500;&#9472; setup/                                    &larr; Steps 1&ndash;5 orchestration
@@ -169,6 +178,12 @@
   <li><em>"Migrate data"</em></li>
   <li><em>"Deploy and test the next function"</em></li>
   <li><em>"Capture baselines for dbo.GetCustomerOrders"</em></li>
+</ul>
+
+<h3>dbt Project Quality</h3>
+<ul>
+  <li><em>"Audit my dbt project and show the highest-priority findings"</em></li>
+  <li><em>"Why did SSC-EWI-DBTPRJ0020 fire?"</em></li>
 </ul>
 
 <h3>Rules</h3>

@@ -98,4 +98,6 @@ After the calling skill's conversion CHECKPOINT, also confirm:
 - [ ] exactly one consolidation question was asked
 - [ ] the convert flag matches the answer: `--consolidate-dbt-projects` only for package or folder consolidation; neither flag for the per-Data-Flow/per-mapping layout; `--consolidate-as-single-dbt-project` only when SSIS-only or Informatica-only chose the single dbt project
 
+- [ ] after convert, the registry check in [registry-consolidation](../dbt-quality/references/registry-consolidation.md) ran: every dbt target holds `dbt_project.yml`, and a unit targets every deployable dbt project
+
 Then return to the calling skill.

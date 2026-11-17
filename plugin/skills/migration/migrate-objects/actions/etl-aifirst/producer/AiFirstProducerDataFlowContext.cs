@@ -328,6 +328,8 @@ internal sealed class AiFirstProducerDataFlowContext : IEtlIrToDbtContext
   public string GetLineageIdForTransformation(Transformation transformation)
     => $"{this.CurrentFileName}.{transformation.Id}";
 
+  public Column? FindReceivingColumn(IEnumerable<Column>? columns, string name) => null;
+
   // ---- IEtlIrToDbtContext: expression translation (invariant 7) -----------------------------
 
   /// <summary>

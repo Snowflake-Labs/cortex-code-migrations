@@ -88,6 +88,10 @@ starts a new job. When a cancel fails, or a job is still creating its workflow, 
 returns `refused` (one reason per job left running) next to the `cancelled_jobs` it already ended, which stay
 ended. Tell the user both, then retry once the refused jobs are resolved.
 
+A paused job (`job_status` reads `status: "paused"`) counts as running here: its tasks still show in the query
+above, and `force=true` cancels it like any other. If the user paused it to carry on later, leave the
+infrastructure up and say so rather than forcing the teardown.
+
 ---
 
 ## Step 2: Tear down

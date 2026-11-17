@@ -6,6 +6,12 @@ few percent of the workload and leave the rest in pending waves. Use cases have
 to be **domain-level outcomes**, packed close to the ceiling, and every step is
 measured before any narrative is written.
 
+The landing-object path in [SKILL.md](../SKILL.md) works at any size and comes
+first: the anchors are where the data lands, each flow stops at shared sinks,
+and `waves catalog` keeps every member of a use case. Group landing objects by
+outcome there before you reach for bins. The method below is for drafts built
+from `clusters.json` bins.
+
 ## Why flow-level use cases fail here
 
 A wave pulls in what its seeds and members depend on, never what depends on
@@ -19,7 +25,7 @@ hundred, cannot reach them: the closing wave ends up with nearly everything.
 | Field | Meaning |
 |---|---|
 | `roots`, `flowEnds`, `isolatedRoots` | What needs a slot |
-| `plumbingRoots`, `plumbingRootsByReason` | Roots that should stay pending: temporary, test, deprecated, duplicate, older version, backup, platform (log, audit, error, control, batch, metadata), holding schemas (temp, hold, DBA) |
+| `plumbingRoots`, `plumbingRootsByReason` | Roots that should stay pending: the technical objects object exclusion finds (temporary, test, deprecated, duplicate, older version) |
 | `meaningfulRoots` | Roots that are not plumbing |
 | `rootsByRole` | `process`, `fed`, `consumer`, `dataOnly` (see [contract.md](contract.md)) |
 | `businessRoots` | What the use cases must place: meaningful roots that are not data only |
@@ -155,10 +161,6 @@ pending as `dataOnly` and the summary asks for their loaders.
   another system's schema is an inbound feed; say which system in `purpose`. A
   bin whose `unloadedTables` outnumber its `loadedTables` depends on loads
   outside the project; ask for them in `openQuestions`.
-- **Sandboxes.** A bin whose roots mostly sit in team sandboxes
-  (`sandboxShare` ≥ 0.5) is `proposed` / `low`: real work, rarely a production
-  outcome. Say so in the narrative and ask in `openQuestions` whether it is
-  still used.
 - **Mixed bins** (`mixed: true`) gather small subjects. Name them for what they
   share; when they share nothing, `proposed` / `medium` and say so.
 - **Bins named only by a schema** come out `proposed` / `low`. Look at their

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 from pathlib import Path
 
@@ -31,6 +32,16 @@ FOCUS_CONTEXT = 4
 # The PDF prints the most frequent pairs only; the HTML keeps every row.
 PRINT_ROWS = 10
 _QUOTED = re.compile(r"'([^']{3,})'")
+_USER_VAR = re.compile(r'"User_([^"]+)"')
+_LEAD_PANELS = ("Table", "View", "Function", "Procedure")
+_ETL_PANELS = {
+    "ssis",
+    "informatica",
+    "etl",
+    "informatica mapping",
+    "informatica workflow",
+}
+_SCRIPT_PANELS = {"script", "bteq", "btq"}
 
 
 def load_conversion_issues(path: Path | None) -> dict | None:
@@ -90,7 +101,7 @@ def _report(artifact: dict) -> str:
     share_url = SHARE_FORM_URL if artifact.get("share_url") == SHARE_FORM_URL else ""
     zip_path = _text(artifact.get("zip_path"))
     pairs = _int(artifact.get("distinct_pairs"))
-    panels = artifact.get("panels") if isinstance(artifact.get("panels"), list) else []
+    panels = order_panels(artifact.get("panels") if isinstance(artifact.get("panels"), list) else [])
 
     buttons = []
     tables = []
@@ -98,7 +109,7 @@ def _report(artifact: dict) -> str:
         if not isinstance(panel, dict):
             continue
         panel_id = _dom_id(_text(panel.get("id")) or f"panel-{index}")
-        label = _text(panel.get("label")) or panel_id
+        label = panel_label(panel)
         count = _int(panel.get("instance_count"))
         count_html = (
             f' <span class="ci-cat-count">({count:,})</span>' if index else ""
@@ -182,22 +193,111 @@ def _panel(
     """
 
 
+def original_input_heading(
+    source_language: str,
+    source_path: object = None,
+    object_types: list | None = None,
+    component: str | None = None,
+) -> str:
+    """Same title in the HTML, dashboard, and Jira CSV: Original input code ({Platform})."""
+    platform = input_platform(source_language, source_path, object_types, component)
+    return f"Original input code ({platform})" if platform else "Original input code"
+
+
+def input_platform(
+    source_language: str,
+    source_path: object = None,
+    object_types: list | None = None,
+    component: str | None = None,
+) -> str:
+    # The sample's own file decides. An object type can name "Informatica mapping" for a
+    # Teradata SQL file of the same pair, so object types only count when there is no path.
+    suffix = os.path.splitext(str(source_path or ""))[1].lower()
+    if suffix == ".xml":
+        return "Informatica"
+    if suffix == ".dtsx":
+        return "SSIS"
+    if component and "\\" in str(component):
+        return "SSIS"
+    if component:
+        return "Informatica"
+    if not source_path:
+        joined = " ".join(str(item) for item in (object_types or [])).casefold()
+        if "informatica" in joined:
+            return "Informatica"
+        if "ssis" in joined:
+            return "SSIS"
+    return str(source_language or "").strip()
+
+
+def order_panels(panels: list[object]) -> list[dict]:
+    """Summary, Table, View, Function, Procedure, other SQL objects, scripts, ETL last."""
+    typed = [panel for panel in panels if isinstance(panel, dict)]
+    summary = [panel for panel in typed if str(panel.get("id") or "").casefold() == "summary"]
+    rest = [panel for panel in typed if str(panel.get("id") or "").casefold() != "summary"]
+    return summary + sorted(rest, key=_panel_sort_key)
+
+
+def panel_label(panel: dict) -> str:
+    label = _text(panel.get("label")) or _text(panel.get("id")) or "panel"
+    if label.casefold() in {"informatica mapping", "informatica workflow"}:
+        return "Informatica"
+    return label
+
+
+def _panel_sort_key(panel: dict) -> tuple[int, str]:
+    label = panel_label(panel)
+    folded = label.casefold()
+    for index, lead in enumerate(_LEAD_PANELS):
+        if folded == lead.casefold():
+            return (index, folded)
+    if folded in _ETL_PANELS or folded.startswith("informatica "):
+        return (400, folded)
+    if folded in _SCRIPT_PANELS:
+        return (300, folded)
+    return (200, folded)
+
+
 def source_hit_index(
     source_lines: list[str],
     converted_lines: list[str],
     code: str,
     description: str,
+    component: str | None = None,
 ) -> int | None:
     """Line in the original file that the EWI is about, when it can be found."""
     for index, line in enumerate(source_lines):
         if "-- <<< EWI" in line:
             return index
+    variable = _ssis_variable_index(source_lines, converted_lines, code, description)
+    if variable is not None:
+        return variable
+    anchors = _component_indexes(source_lines, component)
     quotes = sorted(_QUOTED.findall(description), key=len, reverse=True)
     for quote in quotes:
         folded = quote.casefold()
-        for index, line in enumerate(source_lines):
-            if folded in line.casefold():
-                return index
+        matches = [index for index, line in enumerate(source_lines) if folded in line.casefold()]
+        hit = _closest(matches, anchors)
+        if hit is not None:
+            return hit
+    if "INSTR" in description.upper():
+        matches = [index for index, line in enumerate(source_lines) if "instr" in line.casefold()]
+        hit = _closest(matches, anchors)
+        if hit is not None:
+            return hit
+    if code.endswith("SSIS0013") or "PROPERTY EXPRESSION" in description.upper():
+        expr = [
+            index
+            for index, line in enumerate(source_lines)
+            if "EXPRESSION=" in line.upper()
+            or "PropertyExpression" in line
+            or "Expression=" in line
+        ]
+        hit = _closest(expr, anchors)
+        if hit is not None:
+            return hit
+    if anchors:
+        return anchors[0]
     for index, line in enumerate(converted_lines):
         if not _is_marker_for(line, code, description):
             continue
@@ -210,6 +310,61 @@ def source_hit_index(
                     return source_index
         break
     return None
+
+
+def _ssis_variable_index(
+    source_lines: list[str],
+    converted_lines: list[str],
+    code: str,
+    description: str,
+) -> int | None:
+    name = None
+    for line in converted_lines:
+        if _is_marker_for(line, code, description):
+            match = _USER_VAR.search(line)
+            if match:
+                name = match.group(1)
+            break
+    if not name:
+        for line in converted_lines:
+            match = _USER_VAR.search(line)
+            if match:
+                name = match.group(1)
+                break
+    if not name:
+        return None
+    quoted = f'"{name}"'
+    for index, line in enumerate(source_lines):
+        if "ObjectName" not in line or quoted not in line:
+            continue
+        for look in range(index, min(index + 8, len(source_lines))):
+            if "VariableValue" in source_lines[look]:
+                return look
+        return index
+    return None
+
+
+def _component_indexes(source_lines: list[str], component: str | None) -> list[int]:
+    leaf = _component_leaf(component)
+    if not leaf:
+        return []
+    return [index for index, line in enumerate(source_lines) if leaf in line]
+
+
+def _component_leaf(component: str | None) -> str:
+    if not component:
+        return ""
+    slash = component.rfind("\\")
+    dot = component.rfind(".")
+    return component[max(slash, dot) + 1 :] if max(slash, dot) >= 0 else component
+
+
+def _closest(matches: list[int], anchors: list[int]) -> int | None:
+    if not matches:
+        return None
+    if not anchors:
+        return matches[0]
+    return min(matches, key=lambda index: min(abs(index - anchor) for anchor in anchors))
 
 
 def converted_hit_indexes(lines: list[str], code: str, description: str) -> list[int]:
@@ -242,12 +397,19 @@ def _is_marker_for(line: str, code: str, description: str) -> bool:
     return True
 
 
+def _file_lang(path: object) -> str:
+    """Label for the input snippet: the source file's extension (sql, xml, dtsx...)."""
+    suffix = os.path.splitext(str(path or ""))[1].lstrip(".")
+    return suffix.upper() if suffix else "SQL"
+
+
 def _code_sample(
     view_id: str,
     heading: str,
     text: str,
     hits: list[int],
     hit_class: str,
+    lang: str = "SQL",
 ) -> str:
     lines = text.split("\n") if text else []
     start, end = focus_span(len(lines), hits)
@@ -268,7 +430,8 @@ def _code_sample(
             classes += " " + hit_class
         shown = full if index < start or index > end else ""
         attr = (" " + _vue_bind("v-show", shown)) if shown else ""
-        content = html.escape(line) if line else "&#8203;"
+        # v-pre: code such as dbt Jinja holds {{ }} that Vue would compile, and fail the whole page.
+        content = f"<span v-pre>{html.escape(line)}</span>" if line else "&#8203;"
         body.append(f'<div class="{classes}"{attr}>{content}</div>')
     if below > 0:
         body.append(
@@ -294,7 +457,7 @@ def _code_sample(
     return (
         f"<h4>{html.escape(heading)}</h4>"
         '<div class="ci-code-view">'
-        '<div class="ci-code-lang">SQL</div>'
+        f'<div class="ci-code-lang">{html.escape(lang)}</div>'
         f'<div class="ci-code-body">{"".join(body)}</div>'
         "</div>"
         + toggle
@@ -324,12 +487,19 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
         sample = row.get("sample") if isinstance(row.get("sample"), dict) else {}
         source_text = _text(sample.get("source_code"))
         converted_text = _text(sample.get("converted_excerpt"))
+        component = _text(sample.get("component"))
         source_lines = source_text.split("\n") if source_text else []
         converted_lines = converted_text.split("\n") if converted_text else []
         description = _text(row.get("description"))
-        source_hit = source_hit_index(source_lines, converted_lines, code, description)
-        source_heading = (
-            f"Original input code ({source_language})" if source_language else "Original input code"
+        source_hit = source_hit_index(
+            source_lines, converted_lines, code, description, component or None
+        )
+        source_lang = _file_lang(sample.get("source_path"))
+        source_heading = original_input_heading(
+            source_language, sample.get("source_path"), object_types, component or None
+        )
+        component_html = (
+            f"<h4>Component</h4><p>{html.escape(component)}</p>" if component else ""
         )
         badge = "ci-badge-parsing" if issue_type == "Parsing Issue" else "ci-badge-ewi"
         visible = (
@@ -364,12 +534,14 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
             + "<td colspan=\"7\">"
             + f"<h4>Problem Description</h4><p>{html.escape(_text(row.get('problem_description')))}</p>"
             + f"<h4>Recommended Fix (AI-generated — must be validated)</h4><p>{html.escape(customer_recommended_fix(row.get('recommended_fix')))}</p>"
+            + component_html
             + _code_sample(
                 detail_id + "-source",
                 source_heading,
                 source_text,
                 [] if source_hit is None else [source_hit],
                 "ci-hit-source",
+                source_lang,
             )
             + _code_sample(
                 detail_id + "-converted",
@@ -377,6 +549,7 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
                 converted_text,
                 converted_hit_indexes(converted_lines, code, description),
                 "ci-hit-converted",
+                "SQL",
             )
             + "</td></tr>"
         )
@@ -507,9 +680,9 @@ def conversion_issues_initial_panel(artifact: dict | None) -> str:
     """Panel shown on first paint. The summary panel is first when it exists."""
     panels = artifact.get("panels") if isinstance(artifact, dict) else None
     if isinstance(panels, list):
-        for panel in panels:
-            if isinstance(panel, dict):
-                return _dom_id(_text(panel.get("id")) or "summary")
+        ordered = order_panels(panels)
+        if ordered:
+            return _dom_id(_text(ordered[0].get("id")) or "summary")
     return "summary"
 
 
@@ -582,7 +755,7 @@ def _css() -> str:
         .ci-filter-item:hover { background: #eef1f5; }
         .ci-filter-clear { padding: 0.35rem 0.75rem; font-size: 0.75rem; color: #1A6CE7; cursor: pointer; border-bottom: 1px solid #eee; margin-bottom: 2px; text-align: center; }
         .ci-detail td { background: #F8FAFC; }
-        .ci-detail h4 { margin: 0.8rem 0 0.3rem; color: #102E46; font-size: 0.9rem; }
+        .ci-detail h4 { margin: 1.1rem 0 0.4rem; color: #102E46; font-size: 1.05rem; font-weight: 700; }
         .ci-detail p { margin: 0; line-height: 1.5; color: #334155; }
         .ci-detail pre { background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 8px; padding: 1rem; overflow-x: auto; font-size: 0.8rem; line-height: 1.5; white-space: pre-wrap; }
         .ci-code-view { border: 1px solid #d0d7de; border-radius: 8px; overflow: hidden; margin: 0.4rem 0; }

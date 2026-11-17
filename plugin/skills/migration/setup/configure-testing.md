@@ -37,7 +37,7 @@ In two or three sentences of your own, tell the user that we are now configuring
 
 - It runs each procedure on the source and on Snowflake and compares the results; the source is the reference, and each mismatch is a failure they can drill into.
 - It covers multiple result sets, OUTPUT/INOUT parameters and DML (table changes are compared).
-- Tests are isolated: a fresh clone of the data on Snowflake, snapshot or transactional isolation on the source.
+- Tests are isolated: by default each DML test runs on a fresh clone on Snowflake, which needs `CREATE DATABASE` (without it, procedures can be tested on the live target instead); snapshot or transactional isolation on the source.
 - Expected outputs are captured once and stored in Snowflake with the test outcomes, so fixes can be retried without re-querying the source.
 - Sources: SQL Server, Oracle, Redshift, PostgreSQL and Teradata.
 
@@ -72,28 +72,31 @@ Call `configure(ensure_metadata_schema=true)` (no other args). This:
    **auto-deploys DATA_MIGRATION / DATA_VALIDATION** via
    `scai data migrate-schema` once data migration is opted in.
 3. Re-runs `ensure_prereqs`. `clone_perms` now sees `testing_data_source`
-   is set and actually probes (was `not_applicable` before).
+   is set and probes whenever `isolation_strategy` is `clone` (the default) or
+   `auto`; the reference doc says what `info` means.
 
 ## Parse status lines and route
 
-Look at the lines in the configure response. All `ok` / `not_applicable`
-→ done; return to the parent setup skill.
+Look at the lines in the configure response. All `ok` / `not_applicable` / `info` → done; for an `info` line, tell the user once, in your own words, what the line says `auto` does instead; then return.
 
-Any failure → surface the verbatim message and **stop**. Don't try to
+- `prereq_status_clone_perms: failed("… No isolation_strategy is set yet. Only after the user answers …")` (clone probe refused, nothing recorded) → follow [isolation-opt-in.md](isolation-opt-in.md).
+
+Any other failure → surface the verbatim message and **stop**. Don't try to
 auto-fix. The user reads the relevant section of
 [../migrate-objects/references/testing-framework-perms.md](../migrate-objects/references/testing-framework-perms.md),
 applies the GRANT or fixes the connection externally, then says "done" /
 "recheck" — call `configure(ensure_metadata_schema=true)` and re-parse. Loop until
 everything is green.
 
-- `schema_status_validation: error("<msg>")` → surface `<msg>`; common cause is missing `CREATE SCHEMA on DATABASE` or `OWNERSHIP on VALIDATION`. Reference doc covers both.
+- `schema_status_validation: error("<msg>")` → surface `<msg>`; common cause is missing `CREATE SCHEMA on DATABASE` or the VALIDATION grant bundle. Reference doc covers both. Never `GRANT OWNERSHIP` on objects another role created.
 - `schema_status_dmv: error("<msg>")` → surface `<msg>`; `scai data migrate-schema` failed while installing DATA_MIGRATION / DATA_VALIDATION in the metadata database. Common cause is missing `CREATE SCHEMA` on that database.
 - `installing("…")` on any `schema_status_*` → still running, not a failure: tell the user, then call `configure()` with no arguments to keep waiting.
-- `prereq_status_clone_perms: failed("<msg>")` → surface `<msg>`; cause is missing `CREATE DATABASE ON ACCOUNT` (needed for clone-based test isolation). Reference doc has the GRANT. If the account can't grant it, ask the user to have pre-created databases named under `testing_sandbox_databases` in test_config.yaml (reference doc), then recheck.
+- `prereq_status_clone_perms: failed("<msg>")` → surface `<msg>`. When it names `isolation_strategy`, the test config holds a value the test runner refuses and no test runs until it is one of the listed values. Otherwise surface `<msg>` once and continue. If the clone can't be created, no case in the run is validated. A run of only read-only procedures needs no clone. See the reference doc. If the account can't grant CREATE DATABASE, the user can have pre-created databases named under `testing_sandbox_databases` in test_config.yaml (reference doc), then recheck.
 - `schema_status_metadata: error("...not visible...recreate_metadata_database=true")` → surface the message. Ask the user whether to restore/GRANT USAGE / repoint `metadata_database`, or start fresh. Only after they confirm starting fresh, call `configure(recreate_metadata_database=true)`. Do **not** treat this as a transient recheck.
 - `schema_status_metadata: error("...cannot tell whether...already bootstrapped...")` → surface. Pre-upgrade stamp under a non-default pin, or the latch names a different metadata database. If the user confirms the database already exists, call `configure(ensure_metadata_schema=true)` (recheck latches it). Only after they confirm starting **empty**, call `configure(recreate_metadata_database=true)`.
 - `schema_status_metadata: error("...not reachable...")` → surface. Mixed-case / quoted stored name; rename per `configure-snowflake-target.md`, do **not** recreate.
 - `schema_status_metadata: error("...could not verify...still exists...")` → surface and retry with `configure(ensure_metadata_schema=true)` once the session is healthy. Do **not** recreate; existence is unknown.
+- `schema_status_metadata: error("...upgrade every checkout sharing this metadata database...")` → AIM versions differ on a shared store: follow [Objects another role owns](../data-infrastructure/SKILL.md#objects-another-role-owns). Never repair shared tables yourself or mark that Recommended.
 - Any other `error(...)` on either block → surface, suggest `configure(ensure_metadata_schema=true)` once if transient-looking, escalate to the user if it persists.
 
 ## If the user won't pick a path
@@ -118,5 +121,6 @@ step based on the testing path:
   and binds as `source:`; elsewhere, or if that create failed, an
   extracted source is preserved and gets no rows.
 - **source-data** → data infrastructure. Autonomous skips the opt-in question
-  and always continues to source-connection + sandbox bring-up. Manual is
-  asked whether they need data migration/validation infrastructure.
+  and always continues to source-connection + sandbox bring-up. This rule
+  covers data infrastructure only, not the isolation opt-in (isolation-opt-in.md).
+  Manual is asked whether they need data migration/validation infrastructure.

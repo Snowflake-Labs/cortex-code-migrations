@@ -1,6 +1,6 @@
 ---
 name: sql-migration-waves-generator
-description: Size-based deployment waves over the registry, only when someone explicitly asks for them — a wave size, name patterns to prioritize, or category ordering. The assessment plans one wave per business use case instead (`../business-use-cases/SKILL.md`).
+description: Size-based deployment waves over the registry — defaults of about 100–200 objects ordered by category, or a size, name patterns, or mixed types the user asks for. Business use cases (`../business-use-cases/SKILL.md`) are a separate catalog.
 parent_skill: assessment
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -9,12 +9,11 @@ license: Proprietary. See License-Skills for complete terms
 
 ## Overview
 
-The assessment plans **one wave per business use case** with
-`../business-use-cases/SKILL.md`; that is the default and needs no input. This
-skill is the alternative a user asks for by name: bin-packed waves of a target
-size, optionally with name patterns pulled into the earliest waves. It runs
-`scai assessment waves` from inside a SCAI project and writes one consolidated
-JSON file.
+The assessment writes **size-based waves** with `scai assessment waves`: about
+100–200 objects per wave, ordered by category. Business use cases
+(`../business-use-cases/SKILL.md`) are a separate catalog and do not overwrite
+those registry fields. This skill is the same command when someone asks for a
+different size, name patterns in the earliest waves, or mixed types.
 
 **Use this skill only when the request says so:**
 - "Waves of 20-30 objects", "smaller batches", "at most 5 waves"
@@ -24,17 +23,16 @@ JSON file.
 Requests for a wave around an application, a process, a report or an object
 belong to `../business-use-cases/SKILL.md` in on-demand mode.
 
-## It replaces the business plan
+## It writes the registry waves
 
-`scai assessment waves` rewrites `planning.wave` on every unit it places, so it
-replaces the business-use-case plan the assessment wrote. Say so in one
-sentence before running it. To return to business waves afterwards, run
-`scai assessment waves plan` (see `../business-use-cases/SKILL.md`).
+`scai assessment waves` rewrites `planning.wave` and `planning.waveRank` on
+every unit it places. Say so in one sentence before running it with sizes or
+patterns other than the assessment defaults.
 
 ## Inputs
 
 Use only what the request states. **Do not ask for object prioritization**, a
-size or an ordering the user did not mention: the defaults apply (40-80
+size or an ordering the user did not mention: the defaults apply (100-200
 objects per wave, no patterns, category ordering). Do not prompt for paths —
 the command reads the registry of the current project.
 
@@ -55,8 +53,8 @@ scai assessment waves --no-category-waves               # mix types by dependenc
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `--min-size <N>` | 40 | Minimum target wave size for bin-packing |
-| `--max-size <N>` | 80 | Maximum wave size for bin-packing |
+| `--min-size <N>` | 100 | Minimum target wave size for bin-packing |
+| `--max-size <N>` | 200 | Maximum wave size for bin-packing |
 | `--prioritize <PATTERN>` | — | Glob for objects to place in the earliest waves (repeatable): `PKG_*`, `*OrthoContract*`, `[SCHEMA].[TABLE]` |
 | `--no-category-waves` | off | Mix all object types by dependency level instead of TABLE → VIEW → FUNCTION → PROCEDURE → ETL |
 

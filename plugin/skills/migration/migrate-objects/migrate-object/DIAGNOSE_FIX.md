@@ -47,6 +47,34 @@ Fix each failure on this object when a converted-SQL edit would match
 source. A deploy error is the context when this loop entered from a
 compile failure. Re-run tests via "./RUN_TESTS.md" as needed.
 
+### When `auditDbtQuality` failed (error `dbtQuality`)
+
+The object is an ETL unit and the failures are dbt-quality findings in its dbt models, not SQL
+test diffs. Read them:
+
+```
+query_registry(where="id = '<objectId>'", fields="extensions")
+```
+
+`extensions.tasks.auditDbtQuality.details.audit` lists `blocking` (rule, file, line, message, why)
+and the report path; the full JSON report holds every finding. Each blocking finding also has a
+`--** <rule_id> - ... **` marker above it in the model. Read each rule's remediation and examples with
+`scai dbt-quality rules --code <rule_id>` or in the `rules` map of the full JSON report. Leave the markers: the next audit
+removes those of fixed findings. Edit only the dbt models named in `blocking`:
+
+- **Column contract on a `table` or `incremental` model.** The deploy target is the converted table
+  DDL (`snowflake/**/table/*.sql`), so change the model, never the DDL. Give every output column an
+  alias that names its DDL column, add a DDL column the model leaves out, drop or rename a model
+  column the DDL lacks, and cast a column whose type or collation the automatic fix could not set
+  (a `*` or Jinja-only select, or a table name that matches more than one DDL table).
+- **Error-level finding.** Fix it as the rule's remediation says.
+- **Cross-project findings** (consolidation, shared sources, duplicate models) do not block. If
+  they show the projects should be one, tell the user: consolidation is a conversion choice
+  (`dbt-consolidation`), not a fix-loop edit.
+
+Then stamp `fixCode` completed. The machine retries `auditDbtQuality`, which audits every project
+again. Stop and escalate after three passes that leave the same blocking findings.
+
 ## Step 3: Known shortcuts
 
 Check these before inventing a new theory. A match is a fix (or a stop),

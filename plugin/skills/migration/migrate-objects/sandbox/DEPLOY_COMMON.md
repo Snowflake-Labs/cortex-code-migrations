@@ -1,7 +1,6 @@
 # Deploy to the shared source catalog
 
-Deploy an object + data to the common bindings that are shared
-by all agents.
+Deploy an object + data to the common bindings all agents share.
 
 ## Record task start
 
@@ -9,18 +8,17 @@ by all agents.
 transition_status(status="started", task="deployCommonSandbox", where="id = '<object_id>'")
 ```
 
-Do this once at entry, before the table-only data generation. Finish with
+Once at entry, before table-only data generation. Finish with
 `transition_status` after the tool succeeds (§After a successful call).
 
 ## Table-only data generation
 
-For a **table**, generate its CSV before calling `setup_sandbox`. Spawn one
-foreground `testbed_generator` subagent
-(`run_in_background=false`, `subagent_type="testbed_generator"`). You remain
-the claim holder; the helper only writes this table's CSV.
+For a **table**, generate its CSV before `setup_sandbox`. Spawn one
+foreground `testbed_generator` (`run_in_background=false`,
+`subagent_type="testbed_generator"`). You stay claim holder; helper only writes this table's CSV.
 
 ```
-Generate this table's testbed CSV, following your agent definition.
+Generate this table's testbed CSV, per your agent definition.
 
 objectId:  <objectId>
 projectDir: <projectDir>
@@ -29,8 +27,8 @@ pluginDir: <pluginDir>
 
 | Helper `result` | Do |
 |---|---|
-| `done` | Continue with `setup_sandbox`; it loads that generated CSV. |
-| `busy` | Return `partial`. Another call holds this table, or the testbed's locks stayed busy for the whole call. Do not generate the table yourself. |
+| `done` | Continue with `setup_sandbox`; it loads that CSV. |
+| `busy` | Return `partial`. Another call holds this table, or testbed locks stayed busy. Do not generate the table yourself. |
 | `escalate` | Park `deployCommonSandbox` with the helper's `reason` and `asks`, then return `stuck`. |
 
 ## All objects deployment
@@ -40,66 +38,80 @@ this object's `where`). Reconstructing the call, pass `where` with object id.
 
 This is **source-only**. It deploys the object's source DDL (`scai code deploy
 -t source`) into the shared source catalog and, for a table, runs `scai
-testbed load --source-only --where`. The loader expands `--where` along
-declared FKs with constraints on. The table and its FK descendants are
-cleared (children first) and reloaded (parents first), so a delete never
-runs while a child in that set still references it. The parents those
-tables reference are loaded only when empty and never cleared, because
-tables outside the set may still reference their rows. A sibling fact that
-only shares a parent stays out. For an extracted project where any `source:`
-binding still maps a catalog to itself (convert's default), or a selected
-object's catalog has none, the connected catalog is the customer's live source:
-the tool skips DDL and fixture loading, records the object ready, and preserves
-its rows; `mode=load_only` is refused there. A SQL Server testbed project gets an
-empty `AIMSBX_TB_*` source catalog per self-mapped entry at configure, so it loads
-there once every entry is rebound; elsewhere, or if a create failed, it stays
-preserved. The loader also refuses, before any
-delete, a table that holds rows testbed did not write: surface that refusal
-verbatim and stop, never retry with `--allow-existing-data`. Snowflake is
-untouched — that is the later `deploy` task. CREATE is skipped when the object
-already exists.
+testbed load --source-only --where` **only** when `testing_data_source` is
+`testbed` or legacy `synthetic`; both run `generateTestbed`, which writes the
+CSVs and `.scai/testbed/manifest.json`. On `source_database` the live catalog
+already has rows, so the load is skipped; a table with no rows there is a valid
+empty baseline, and the reply lists it in `emptySourceTables`. A table an
+in-scope ETL unit inserts into (`dependsOn` `INSERT`, `MERGE`, or `WRITES` on
+the unit or a part) is not probed: empty until the package runs, and
+`etlValidate` compares later. Unset skips the load with a note. When it does load, the loader
+expands `--where` along declared FKs with constraints on. The table and its FK
+descendants are cleared (children first) and reloaded (parents first), so a
+delete never runs while a child in that set still references it. Parents those
+tables reference load only when empty and are never cleared, because tables
+outside the set may still reference their rows. A sibling fact that only shares
+a parent stays out. For an extracted project where any `source:` binding still
+maps a catalog to itself (convert's default), or a selected object's catalog
+has none, the connected catalog is the customer's live source: the tool skips
+DDL and fixture loading, records the object ready, and preserves its rows;
+`mode=load_only` is refused there and whenever there are no fixtures. A SQL
+Server testbed project gets an empty `AIMSBX_TB_*` source catalog per
+self-mapped entry at configure, so it loads there once every entry is rebound;
+elsewhere, or if a create failed, it stays preserved. The loader also refuses,
+before any delete, a table that holds rows testbed did not write: surface that
+refusal verbatim and stop, never retry with `--allow-existing-data`. Snowflake
+is untouched — that is the later `deploy` task. CREATE is skipped when the
+object already exists.
 
 **Live source write.** When a token still resolves to the live database
 (self-mapped or unbound) the tool runs nothing and returns
-`source_write_refused` with each `targets[]` server, database and tables. AIM
-never loads into or clears a source database it did not create, and no one can
-allow it: there is no override. Tell the user which database it is, offer the
-only fixes (bind the token to an empty database in database-bindings.yaml, or
-use testbed test data so AIM creates an isolated `AIMSBX_TB_*` copy, then call
-`configure` again), and return `stuck` until the binding is fixed.
+`source_write_refused` with each `targets[]` server, database and tables —
+or reports `extracted live source preserved` / `existing object preserved`
+with **no rows loaded**. AIM never loads or clears a source database it did
+not create; no override. That is **not** a successful source-test load. Do
+not seed or capture yet (vacuous baselines fail the hop).
+Fix the binding: map the token to an empty / `AIMSBX_TB_*` catalog in
+`database-bindings.yaml`, or use testbed data so AIM creates an isolated
+`AIMSBX_TB_*` copy, then `configure` and retry `setup_sandbox` until it loads
+rows there. Only then continue.
 
-Do **not** pass `--profile` or `--database-bindings` — the tool injects them.
-Do **not** call `deploy`. Schema/ETL/BTEQ units and units with no source come
-back as `skipped`, not failed.
+Loading those rows does not finish a source test. When the synthetic data
+already exists and the user asked to test the object on the source, shell
+`scai test seed` and `scai test capture --keep-baselines` as well. The three commands and view-seed rule are in [SKILL.md](SKILL.md). Do not
+shell `scai test validate`.
+Do **not** pass `--profile` or `--database-bindings`; the tool injects them.
+Do **not** call `deploy`. Schema/ETL/BTEQ units and units with no source
+return `skipped`, not failed.
 
 ## If the call fails
 
 Read `failure_class` and `missing_objects` from the JSON. Do not diagnose
 past that table. Do not stamp `error=sql`. Do not DROP shared databases.
-Do not write `source_ready` by hand. Do not
-`update_registry(patch=...)` or `update_registry(unit=...)`.
+Do not write `source_ready` by hand. Do not `update_registry(patch=...)` or
+`update_registry(unit=...)`.
 
 | What the JSON says | Do |
 |---|---|
-| `failure_class=testbed_not_generated` (the table's CSV is not in the manifest yet; nothing ran) | Not a failure: do not park, do not spawn `sandbox_specialist`. Run §Table-only data generation for this table, then retry `setup_sandbox` once. |
+| `failure_class=testbed_not_generated` (CSV not in the manifest yet; nothing ran) | Not a failure: do not park, do not spawn `sandbox_specialist`. Run §Table-only data generation for this table, then retry `setup_sandbox` once. |
 | Converted compile (`failure_class=sql`, no `missing_objects`) that is not an unknown function / tokenless catalog | sqlFixLoop (`error=sql`). Do not spawn. |
 | `failure_class=missing_object` (or 42S02 / unknown function), a named id has `onDependsOn` false, `id` is null, **or** that object's SQL/CUR has no bindable catalog (`PUBLIC.X`, tokenless CREATE, empty `target.database`) | Spawn **one** foreground `cur_reconciler` (`run_in_background=false`, `subagent_type="cur_reconciler"`). Then `next_task`. Do not retry from `next_invocation`. Do not sqlFixLoop. |
 | `failure_class=missing_object`, every named id has `onDependsOn` true **and** that SQL/CUR is already bindable | The edge exists. `next_task`. `blockedOn` → `partial`. Do not spawn. Do not stamp. |
-| `failure_class=cannot_open_database` (SQL Server 4060) | The source catalog is missing, the login cannot access it, or it is unavailable; 4060 alone does not say which. Do not spawn. Testbed project: `configure` once (it binds unedited `source:` entries to empty `AIMSBX_TB_*` catalogs), then retry this call once. Still failing → park with one ask naming `cannot_open_database` and the tool's `hint`: check it exists and is online, and that the login can open it; create it, grant access, or rebind `source:`. Do not call it a bad password. |
+| `failure_class=cannot_open_database` (SQL Server 4060) | Catalog missing, login cannot open it, or it is unavailable; 4060 alone does not say which. Do not spawn. Testbed project: `configure` once (binds unedited `source:` entries to empty `AIMSBX_TB_*` catalogs), then retry this call once. Still failing → park with one ask naming `cannot_open_database` and the tool's `hint`: check it exists and is online, and that the login can open it; create it, grant access, or rebind `source:`. Do not call it a bad password. |
 | Any other `failure_class` | Spawn **one** foreground `sandbox_specialist` (`run_in_background=false`, `subagent_type="sandbox_specialist"`). Do not call `next_task` first. |
 
 Hand the child's listed fields. `cur_reconciler`: `objectIds` (this object
 plus `missing_objects[].id` when set), `reason`, evidence, `missingName`,
 `projectDir`. `sandbox_specialist`: `objectId`, `projectDir`, `pluginDir`,
-`task=deployCommonSandbox`, and the tool JSON. Do not pass `agent_id`.
-Do not tell it the verdict.
+`task=deployCommonSandbox`, and the tool JSON. Do not pass `agent_id` or
+the verdict.
 
-Wait. Then:
+Then:
 
 | Child `result` | Do |
 |---|---|
 | `repaired` / `clean` | `next_task`. `blockedOn` / `wait` → `partial` / `waiting`. Retry `setup_sandbox` once when the task is still this one and not `blocked`. |
-| `done` | `note` the child's `notes` when present (bindable pin inverse: next convert overwrites). Retry `next_invocation` once, then `next_task`. `blockedOn` → `partial`. Do not ask `next_task` first — the leftover `source_failed` watermark still reads `errored` until that retry writes `source_ready`. |
+| `done` | `note` the child's `notes` when present (bindable pin inverse: next convert overwrites). Retry `next_invocation` once, then `next_task`. `blockedOn` → `partial`. Do not ask `next_task` first — leftover `source_failed` still reads `errored` until the retry writes `source_ready`. |
 | `escalate` / `deferred` | Park with that child's `asks`. |
 | `scope_exceeded` | Park with the remaining ids. |
 | `needs_sql_fix` | `note` the child's `notes` when present. Existing sqlFixLoop, then spawn the helper again for `load_only`. |
@@ -107,13 +119,13 @@ Wait. Then:
 
 ## After a successful call
 
-Completion is read from `ORCHESTRATION.SANDBOX_EVENTS` (source ready); there
-is no registry stamp. Still advance, so `TASK_EVENTS` get an `advanced` row —
-`next_task` alone writes none:
+Completion is from `ORCHESTRATION.SANDBOX_EVENTS` (source ready); no registry
+stamp. Still advance so `TASK_EVENTS` get an `advanced` row — `next_task`
+alone writes none:
 
 ```
 transition_status(status="advance", task="deployCommonSandbox", outcome="completed", where="id = '<object_id>'")
 ```
 
-The server checks the sandbox status source. If advance refuses (`does not
-confirm completion`), wait for it and retry. Then keep going with `next_task`.
+If advance refuses (`does not confirm completion`), wait and retry. Then
+`next_task`.

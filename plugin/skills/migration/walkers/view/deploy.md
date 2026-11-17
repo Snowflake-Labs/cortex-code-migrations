@@ -1,7 +1,8 @@
 # Deploy (view)
 
 Pushes the converted view to the common Snowflake catalogs. Runs after
-`deployCommonSandbox`, before `validateView`. Run the step's `run` as given
+`deployCommonSandbox`, before `validateView` (a view with no `source`, such
+as a SnowConvert helper, skips `validateView`: nothing to compare). Run the step's `run` as given
 (op `deploy`); the active bindings substitute `<%token%>`.
 
 ## Converted-file rules

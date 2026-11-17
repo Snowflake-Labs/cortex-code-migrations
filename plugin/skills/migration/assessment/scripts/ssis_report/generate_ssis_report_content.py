@@ -262,6 +262,14 @@ def generate_ssis_html_content(
                 }
             }
 
+            function filterEwiHeatmap() {
+                const selected = document.getElementById('ewiSeverityFilter')?.value || '';
+                document.querySelectorAll('.ewi-heatmap-row').forEach(row => {
+                    const severity = row.getAttribute('data-severity') || '';
+                    row.style.display = !selected || severity === selected ? '' : 'none';
+                });
+            }
+
             function resetPackageFilters() {
                 const search = document.getElementById('packageSearch');
                 const classification = document.getElementById('classificationFilter');
@@ -276,6 +284,7 @@ def generate_ssis_html_content(
             // Expose globally for onclick handlers
             window.filterComponents = filterComponents;
             window.filterPackages = filterPackages;
+            window.filterEwiHeatmap = filterEwiHeatmap;
             window.resetPackageFilters = resetPackageFilters;
 
             // Attach event listeners for component filter
@@ -286,6 +295,7 @@ def generate_ssis_html_content(
             document.getElementById('packageSearch')?.addEventListener('input', filterPackages);
             document.getElementById('classificationFilter')?.addEventListener('change', filterPackages);
             document.getElementById('complexityFilter')?.addEventListener('change', filterPackages);
+            document.getElementById('ewiSeverityFilter')?.addEventListener('change', filterEwiHeatmap);
 
             // Initialize count displays
             window.addEventListener('load', function() {

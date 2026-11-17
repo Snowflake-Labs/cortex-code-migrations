@@ -282,6 +282,8 @@ uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/backup_unit.py {UNIT}
 
 This creates `{UNIT}/stabilization/original/` with a copy of the unit excluding the `stabilization/` sub-tree.
 
+Never register the backup as a registry target. dbt-quality skips `**/stabilization/original/**` by default. See [registry-consolidation](../../../dbt-quality/references/registry-consolidation.md).
+
 If the platform profile defines a `strip_script` (not null), run dead code stripping:
 ```bash
 uv run --project {SKILL_DIR} python {PLATFORM_DIR}/{STRIP_SCRIPT} {ORCHESTRATION_SQL_FILE}
