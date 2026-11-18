@@ -228,14 +228,31 @@ When the files are all there and the driver still fails to load, presence alone 
 ### Authentication Failures
 
 **Symptoms:**
-- "Login failed for user"
-- "Cannot open database requested by the login"
+- "Login failed for user" (error 18456), with no `Cannot open database` before it
 
 **Solutions:**
 1. Verify username and password are correct
-2. Confirm user has access to the specified database
-3. Check SQL Server authentication mode (Mixed Mode required for SQL auth)
-4. For Windows auth, verify domain connectivity
+2. Check SQL Server authentication mode (Mixed Mode required for SQL auth)
+3. For Windows auth, verify domain connectivity
+
+### Cannot open database (4060)
+
+**Symptoms:**
+- `Cannot open database "<name>" requested by the login. The login failed. Login failed for user '<user>'` (error 4060)
+
+**Cause:** The server accepted the credentials. The connection's default database is missing, offline, or the login is not mapped to it. The trailing "Login failed" is part of the 4060 text, not a wrong password. Testing the same login on another database the user isn't mapped to fails with 4060 again and proves nothing about the password.
+
+**What to do:**
+1. Tell the user the sign-in worked and the database `<name>` could not be opened. Do not ask for the password again, and do not create temporary profiles to probe other databases.
+2. Ask via `ask_user_question`: *"May I list the databases `<user>` can open on this server?"* with **List them** / **I'll type the name**. Wait for the answer.
+3. On **List them**, run this read-only query once. `--database master` opens `master` for this query only and never changes the saved profile; it works before `configure` has accepted the connection:
+   ```bash
+   scai query -s <SOURCE_CONNECTION_NAME> --database master \
+     -q "SELECT name FROM sys.databases WHERE database_id > 4 AND HAS_DBACCESS(name) = 1 ORDER BY name" --json
+   ```
+   Show the names and ask which one to use via `ask_user_question`, even when only one is listed. If the list is empty, say *No accessible database names were returned*, and explain that SQL Server shows a login only the databases its catalog permissions let it see: without `VIEW ANY DATABASE` the list can be empty even for a database the login can open. Ask for the exact database name; do not conclude that the login lacks access or ask for access to be granted.
+4. If `master` can't be opened either (4060 again), scai rejects `--database` as unknown (an older scai), or the user chose **I'll type the name**, ask for the exact database name.
+5. Correct the profile with the same `scai connection add-sql-server` command, every field, the chosen `--database`, plus `--replace --json`, as "Correcting a saved profile" in `../SKILL.md` says. Then re-run `configure(source_connection=<SOURCE_CONNECTION_NAME>)` once.
 
 ### Windows auth from WSL/Linux
 
