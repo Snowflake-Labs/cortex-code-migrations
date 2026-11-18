@@ -43,9 +43,17 @@ Add `--append` when a YAML already exists for the unit — it re-emits the table
 scai test seed --where "id = '{ETL_ID}'" --append
 ```
 
-Platform is auto-detected per unit from the registry — no `--platform` flag. On success the file is written to `artifacts/{ETL_ID}/etl-test/<name>.yml` with the execution block and table pairs filled from the CUR. When an `external_command:` section is present, the side it names is emitted as `{type: external_command, wait_seconds: <n>}` — two keys and nothing else, since the command itself lives only in `test_config.yaml` — and the other side keeps its native block. Tune `wait_seconds` per unit if one package runs longer than the shared default.
+Platform is auto-detected per unit from the registry — no `--platform` flag. On success the file is written to `artifacts/{ETL_ID}/etl-test/<name>.yml` with the execution block and table pairs filled from the CUR. When an `external_command:` section is present, the side it names is emitted as `{type: external_command, wait_seconds: <n>}` — two keys and nothing else, since the command itself lives only in `test_config.yaml` — and the other side keeps its native block. Tune `wait_seconds` per unit if one package runs longer than the shared default. Review every generated YAML as described in [After a successful seed](#after-a-successful-seed) before reporting the result.
 
 **A failed seed is not yours to replace.** When `scai test seed` exits with an error — a failed connection test such as `Cannot open database …`, for one — do not write the YAML yourself from the CUR, the package or the Snowflake catalog. Report the command and its error to the user. Re-run it only after fixing the environment properly (starting the service, selecting the right registered connection — never repointing or editing a connection just to pass the test); otherwise this is a **STOPPING POINT**: ask the user how to proceed, and leave `etlSeed` started (Step 4).
+
+### After a successful seed
+
+Open every generated ETL YAML before reporting a result. Inspect
+`comparison.tables` (SSIS / external command) or `validation.tables`
+(Informatica). The CLI's `etlTestFilesCreated` counts files; `totalTestCases`
+counts procedure test cases. Neither counts ETL table pairs. Follow Step 2
+when the table list is empty, or Step 3 when it is populated.
 
 ## Step 2: Handle a Skipped Unit
 

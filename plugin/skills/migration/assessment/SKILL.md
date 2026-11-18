@@ -146,7 +146,7 @@ name (default from `metadata_tools.py --show-assessment-name`):
 
 ```text
 Business use cases, size-based waves of about 100–200 objects, standard
-analyses, Data Lineage, and the HTML report always run.
+analyses, lineage, and the report always run.
 What else do you want? Select all that apply:
 - Deep Dynamic SQL review
 - Discovery (SQL Server, Teradata, or Redshift only)
