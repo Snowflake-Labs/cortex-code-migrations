@@ -1,23 +1,29 @@
 ---
 name: proc-test-gen
 parent_skill: etl-stabilization
-description: "Derive source-of-truth functional-equivalence assertions for ONE converted Informatica-to-Snowflake-Scripting mapping procedure (data-flow), independent of the converted SQL. Seeds input, deploys+CALLs the proc in an isolated test schema, and grades its target table against expected contents computed from the source mapping. Use when the stabilization skill invokes test generation for a scripting-flavor mapping proc."
+description: "Derive source-of-truth functional-equivalence assertions for ONE converted Snowflake Scripting mapping procedure (an Informatica mapping or an SSIS data flow), independent of the converted SQL. Seeds input, deploys+CALLs the proc in an isolated test schema, and grades its target table against expected contents computed from the source mapping. Use when the stabilization skill invokes test generation for a scripting-flavor mapping proc."
 license: Proprietary. See License-Skills for complete terms
 ---
 
 # Proc Test Generator (scripting flavor)
 
 Generate and run a functional-equivalence check for a single converted **mapping procedure** — an
-Informatica mapping converted to a standalone Snowflake Scripting stored procedure — from the original
+Informatica mapping or an SSIS data flow converted to a standalone Snowflake Scripting stored procedure — from the original
 data-flow logic in the source mapping. The expected target-table contents are computed **from the source
 mapping applied to the seeded input**, NOT from the converted SQL under repair, so the assertions are an
-independent oracle. All generated artifacts are stored in `<UNIT>/stabilization/tests/proc/<proc_name>/`.
+independent check. All generated artifacts are stored in `<UNIT>/stabilization/tests/proc/<proc_name>/`.
 
 > **Scope.** This is the data-flow counterpart to [orchestration-test-gen](../orchestration-test-gen/SKILL.md):
 > orchestration-test-gen tests control-flow *elements* of a task graph; proc-test-gen tests the *output table*
 > of one mapping proc. It is the scripting-flavor analog of dbt-test-gen. In dbt mode a mapping becomes a
 > model (tested by dbt-test-gen); in scripting mode a mapping becomes its own `kind=etl` stored procedure,
 > tested here.
+
+> **Platform.** Informatica and SSIS both convert to mapping procedures, and this skill works the same
+> for both. Read `{PLATFORM_DIR}/platform-profile.md` for the source file and its guides. For SSIS (`.dtsx`)
+> also read `{PLATFORM_DIR}/scripting-proc-guide.md` first: an SSIS data-flow proc is named after the data
+> flow (`public.Data_Flow_Task`), holds one CTE per component and has **no block markers**, so you locate,
+> edit and check it by CTE, and its Lookup, Conditional Split and Sort semantics differ from Informatica's.
 
 > **Autonomous mode:** When spawned as a team agent, skip all interactive stopping points, make reasonable
 > defaults, and document assumptions in the completion report. When done, `send_message` to `main` with your
@@ -55,8 +61,9 @@ baseline snapshot the fixer iterates on.
 
 - `session_status.json` — with `source_file_path`, the pending mapping proc unit, and `migration_object_path`
 - The converted proc `.sql` file (a `kind=etl` unit's `files.converted.path`)
-- The source mapping definition (Informatica `.xml`) at `source_file_path`
-- The block FullName(s) under repair (from the block boundary markers / scan.json)
+- The source definition at `source_file_path` (Informatica `.xml`, SSIS `.dtsx`)
+- The block FullName(s) under repair (from the block boundary markers / scan.json). An SSIS proc has no
+  markers: name the `cte_<component>` CTEs instead
 
 ### Prerequisites
 
@@ -117,10 +124,12 @@ Proc Test Gen Progress:
 2. **Read the source mapping ONCE** — from `source_file_path`, extract for this mapping: the Source /
    Source-Qualifier definitions (input table shapes + columns), the transform chain (Filter / Aggregator /
    Lookup / Joiner / Expression / Rank / Union / Router / Update-Strategy …), and the Target definition
-   (output table + column mapping). See `{PLATFORM_DIR}/{transformation_guide}` (Informatica: `mapping-guide.md`)
+   (output table + column mapping). For SSIS these are the data flow's source, transform and destination
+   components and the destination's column mapping. See `{PLATFORM_DIR}/{transformation_guide}` (Informatica: `mapping-guide.md`, SSIS: `dataflow-guide.md`)
    for element names/paths/expressions and `{PLATFORM_DIR}/element-types.md` for what each transform type does.
 3. **block-locate the proc** — run `stabilization_tools.py block-locate --json` to get the materialized block(s) and their source
-   node(s). Build a mental map of source transform → block; do not re-read per assertion.
+   node(s). Build a mental map of source transform → block; do not re-read per assertion. For an SSIS proc,
+   map each `cte_<component>` to its `.dtsx` component instead (see `scripting-proc-guide.md`).
 
 ### Phase 2: Design the input seed (ARRANGE)
 
@@ -140,7 +149,8 @@ the expected target is computed from exactly these rows.
 ### Phase 3: Compute expected target + write the batched assert
 
 Apply the **source mapping semantics** to the seeded input **by hand** to compute the expected target contents —
-do NOT read the converted SQL. Faithful Informatica semantics:
+do NOT read the converted SQL. For SSIS, use the semantics in `{PLATFORM_DIR}/scripting-proc-guide.md`
+instead of the list below. Faithful Informatica semantics:
 
 - **Lookup**: no-match → NULL for the looked-up columns.
 - **Filter**: drops rows whose predicate is not TRUE (a NULL predicate drops the row).
@@ -201,7 +211,8 @@ for proc-fixer.
 | File | When to load |
 |------|-------------|
 | [proc-assertion-patterns.md](proc-assertion-patterns.md) | Phase 3 — the target-only batched assertion shape, per-transform worked examples, and the grade-hardening robustness rules |
-| `{PLATFORM_DIR}/{transformation_guide}` (Informatica: `mapping-guide.md`) | Phase 1 — reading the source mapping structure (ports, expressions, join types, cache modes) |
+| `{PLATFORM_DIR}/{transformation_guide}` (Informatica: `mapping-guide.md`, SSIS: `dataflow-guide.md`) | Phase 1 — reading the source mapping structure (ports, expressions, join types, cache modes) |
+| `{PLATFORM_DIR}/scripting-proc-guide.md` (SSIS) | Phase 1/3 — the SSIS proc's shape, the scope to CALL with, and the SSIS semantics for the expected target |
 | `{PLATFORM_DIR}/element-types.md` | Phase 1/3 — what each transform type does (active/passive, row-count effect, Aggregator/Lookup modes) |
 | `{PLATFORM_DIR}/ewi/<CODE>.md` | when a block carries an EWI marker (resolve via `stabilization_tools.py ewi-guide-resolve`) |
 
@@ -211,7 +222,7 @@ for proc-fixer.
 
 ### Input (provided at spawn time)
 - Unit name + converted proc `.sql` path (READ-ONLY baseline)
-- Source mapping `.xml` path (READ-ONLY)
+- Source definition path, `.xml` or `.dtsx` (READ-ONLY)
 - Target table name + the block FullName(s) under repair
 - Test schema (`TEST_SCHEMA`) — pre-assigned; use for all created objects
 - Database (`DATABASE`), connection name (`CONNECTION`)

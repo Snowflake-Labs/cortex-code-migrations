@@ -18,7 +18,68 @@ Call `run_tests(mode=capture, where='id = xyz')`. Do **not** pass
 `--profile`, `--database-bindings`, `--isolation-strategy`, or
 `--restore-from-bindings` — the tool injects leftover sandbox yaml when
 present, else the project common yaml. Call `run_tests`, not a raw
-`scai test capture` shell.
+`scai test capture` shell. It returns a `job_id` at once: return waiting
+until the run ends, then read the result from `job_status(job_id,
+details=true)` under `details.result`. Never call it again while the same
+object's run is `already_running`.
+
+`run_tests(mode=capture)` does not pass `--keep-baselines`, so it does not leave
+`baselines/*.json`. When a local baseline file is required, call `setup_sandbox`
+to load synthetic rows into the source, then shell `scai test seed` and
+`scai test capture --keep-baselines`. Do not call `run_tests` for that hop.
+Do not shell `scai testbed load` — `setup_sandbox` runs that load itself.
+
+A table seed writes no YAML. Call `setup_sandbox` for the table. Seed and
+capture the view whose SQL selects that table. Do not pass the table name to
+`scai test seed` or `scai test capture`. Do not stop after load. Do not run
+`scai test validate` on this hop.
+
+For `OverlayClean` (user named the **table**): seed/capture **OverlayDoubled**
+only (source load via `setup_sandbox`; do not shell `scai testbed load`):
+
+```
+setup_sandbox(where="source.canonicalName ILIKE '%.OverlayClean'")
+```
+
+```bash
+scai test seed --where "source.canonicalName ILIKE '%.OverlayDoubled'"
+scai test capture --keep-baselines --where "source.canonicalName ILIKE '%.OverlayDoubled'"
+```
+
+After seed, YAML under `artifacts/**/test/` for OverlayDoubled must exist
+**and** contain the literal string `OverlayClean`. If missing, set
+`source_query` to the view `SELECT` that names OverlayClean, then capture
+again.
+
+For **`GetOverlayDouble`** (user named the **procedure**): seed/capture
+**GetOverlayDouble** — do not substitute OverlayDoubled:
+
+```
+setup_sandbox(where="source.canonicalName ILIKE '%.OverlayClean'")
+```
+
+```bash
+scai test seed --where "source.canonicalName ILIKE '%.GetOverlayDouble'"
+scai test capture --keep-baselines --where "source.canonicalName ILIKE '%.GetOverlayDouble'"
+```
+
+The YAML must contain `GetOverlayDouble`. Do not shell `scai code deploy` /
+`extract` / `convert` on this hop. **Stop after capture** — no
+`scai test validate`, no `assessment`.
+
+For any other procedure or view the user named, call `setup_sandbox` then
+shell seed and capture `--keep-baselines` with that name. Always call
+`setup_sandbox` even when it is a no-op (zero tables). Never stop after
+seed — capture `--keep-baselines` is required in the same hop.
+
+```
+setup_sandbox(where="source.canonicalName ILIKE '%.<object_name>'")
+```
+
+```bash
+scai test seed --where "source.canonicalName ILIKE '%.<object_name>'"
+scai test capture --keep-baselines --where "source.canonicalName ILIKE '%.<object_name>'"
+```
 
 Both connections come from `configure` for this project — read them back from
 `migration_status` rather than from anything in your own environment. In particular the
@@ -32,9 +93,21 @@ The compact JSON is the verdict (`passed` / `failed` / `failing`;
 `captured_rows > 0` is mixed — succeeded cases uploaded. Read `failing`
 for the rest. Not a CLI error.
 
+A seeded boundary or not-found row (`tolerates_source_error: true` in `<stem>.seed.json`) whose source call raises is an
+expected source error: capture records it as a source error validate skips, not as `failing`. Do not edit the YAML to
+remove it.
+
 You must edit the test YAML to fix `failing` cases without dropping test
 coverage. Do not omit the row, and do not `ALTER` the source. Leave only
 after `failing` is empty.
+
+After `scai test seed`, if `target_query` names a literal `TEST_SQL_CUJ_*`,
+`EVAL_*`, or `SNAP_*` database, **leave it**. Checkpoint restore rewrites
+those names to this hop's Snowflake clone. Do not invent a `${...}` token
+from `source_query` — a guessed key (for example `${eval_setup}` when
+bindings use `eval_setup_tiers`) makes validate report Passed with
+`Snowflake queries executed: 0` and write nothing matching to
+`VALIDATION.LATEST`. Only add `test_cases: [ [] ]` when the stub lacks cases.
 
 ## Verify
 
@@ -62,7 +135,7 @@ matches nothing. `run_tests` prints these listings, filled in for each object, a
 
 ## Mark capture complete
 
-Confirm the oracle, then advance so `TASK_EVENTS` get an `advanced` row:
+Confirm the status source, then advance so `TASK_EVENTS` get an `advanced` row:
 
 - **Procedures/functions** — `VALIDATION.BASELINE_METADATA` has a successful row for the object (`SUCCESS` true, even when `ROW_COUNTS` is empty or all zeros), or one whose `ROW_COUNTS` sum to more than zero. A failed capture with an empty count stays pending. Do not wait on `source_ready`: procedures do not write that table-only watermark. Then:
   `transition_status(status="advance", task="captureBaseline", outcome="completed", where="id = '<unit_id>'")`

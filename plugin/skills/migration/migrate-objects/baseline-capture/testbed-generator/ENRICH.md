@@ -42,10 +42,12 @@ a sibling.
 | `enum_domain` (undeclared) | `value/inferred_enum.md`; unclassifiable residue → `value/flag_for_llm.md` |
 | `check` / lookup floors | `value/must_include.md` |
 | column null semantics | `value/null_fraction_override.md` |
+| `calendar_column` | `value/derivation.md`, only for a column whose value is a function of the row's run-date column (`columns[0]`) under a convention the workload states; leave every other row unanswered |
 
 Write **structural first** (`fk_chains` → `correlated_groups` →
 `temporal_alignment` → `anti_join_tables`), then **value** (`branch_values`,
-`inferred_enum`, `must_include`, `null_fraction_override`, `predicate_fills`).
+`inferred_enum`, `must_include`, `null_fraction_override`, `predicate_fills`,
+`derivation`).
 `flag_for_llm` is a router: resolve it into one of the other types; never emit
 it.
 

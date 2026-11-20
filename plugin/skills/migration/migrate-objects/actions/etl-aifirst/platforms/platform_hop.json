@@ -1,0 +1,1677 @@
+{
+  "platform": "ApacheHop",
+  "table_version": "hop.v1",
+  "_comment": "Per-platform configuration for an Apache Hop pipeline (.hpl). Nothing here is read from a source file; every entry is a reviewable policy decision. Hop is the Kettle fork, and an .hpl is the same projection problem as a .ktr with different tags: the root is <pipeline> (not <transformation>), a unit of work is a <transform> (not a <step>), and the hops are <order>/<hop>. Like a .ktr, an .hpl carries ZERO XML attributes, so it uses the same CHILD_TEXT_XML front-end. DO NOT read this as platform_pentaho.json with words replaced: every query below names a Hop tag, the type strings are Hop plugin ids (DBLookup, CSVInput, TextFileInput2, Formula), and three readings differ on purpose -- the base port site reads NOTHING (see structure.self_def_site), TableOutput states a stream-to-column map that is read on both sides (see self_def_sites.table_output_field_map), and InputColumns come from INPUT ports rather than NONE. Measured against: Archive_DeprecatedTasks.hpl (Workload 4, TableInput -> Formula -> TableOutput) and the official apache/hop samples under ai/tests/etl-aifirst/fixtures/hop-platform/.",
+  "structure": {
+    "_comment": "CHILD_TEXT_XML, not XML: the parser is the same, the values live in child-element text. See ktrdoc.py, whose projection is format-neutral.",
+    "unsupported_body_max_chars": 4000,
+    "_unsupported_body_max_chars_comment": "Cap on the source fragment a degraded element carries into its placeholder model. A Formula transform's <formulas> and a FilterRows <compare> tree are exactly the content the placeholder exists to preserve for tier 2. MEASURED: the Formula transform in Archive_DeprecatedTasks.hpl is ~0.9 KB; the largest FilterRows in filter-rows-basic.hpl is ~2.3 KB.",
+    "document_model": {
+      "kind": "CHILD_TEXT_XML"
+    },
+    "_key_scope_comment": "DELIBERATELY NULL. An .hpl holds exactly one pipeline. Transform-name uniqueness is enforced by the Hop GUI, not by the format, and <hop><from>/<to> resolve BY NAME, so uniqueness is relied on without being guaranteed by the file. A duplicate would surface as a key collision in the identify ledger (lost > 0), not silently.",
+    "key_scope": null,
+    "detail_max_chars": 120,
+    "_attr_where_comment": "Unused: the attr site is SELF_ATTRS, whose where carries an exact source line.",
+    "attr_where_template": null,
+    "_container_comment": "The pipeline's name is <info>/<name>, not on the root.",
+    "container": {
+      "xpath": "./info",
+      "name_attr": "name"
+    },
+    "levels": [
+      {
+        "_comment": "THE PIPELINE ITSELF, swept so the fit score shows that the IR cannot represent a unit of work, its parameters, or its performance-capture settings. <info> is swept rather than the root because <info> is where the name is. An .hpl states no kind for it, so the kind is asserted by the table (provenance TABLE).",
+        "name": "pipeline",
+        "elements": "./info",
+        "key_attr": "name",
+        "kind_attr": null,
+        "kind_literal": "pipeline",
+        "role_attr": null,
+        "display_name_attr": "name",
+        "flag_attrs": {
+          "capture_transform_performance": "capture_transform_performance"
+        }
+      },
+      {
+        "_comment": "TRANSFORMS. <type> is the transform plugin id. As in Kettle there is no second axis -- no direction, role, source or target field -- so role comes from kind_dispatch and 100% of role provenance is TABLE. Direction is NOT derived from hop topology: a TableInput with no inbound hop and a Dummy at the head of a fragment are not the same fact.",
+        "name": "transform",
+        "elements": "./transform",
+        "key_attr": "name",
+        "kind_attr": "type",
+        "role_attr": null,
+        "display_name_attr": "name",
+        "flag_attrs": {
+          "distribute": "distribute",
+          "copies": "copies"
+        }
+      }
+    ],
+    "census": {
+      "_comment": "What is DELIBERATELY NOT an element, with a reason per rule. Anything matched by neither a level nor a rule is an UNKNOWN OBJECT: inventoried with a citable location rather than dropped. Rules are written against Hop tags only.",
+      "identity_attrs": [
+        "name",
+        "type",
+        "id",
+        "from",
+        "to",
+        "enabled"
+      ],
+      "_identity_attrs_comment": "How an unknown record is identified in the inventory. These are LIFTED child-element texts, not real attributes. `from`/`to`/`enabled` make an unmatched (disabled) hop readable as the edge it is.",
+      "exclusions": [
+        {
+          "id": "hpl-pipeline-root",
+          "kind": "QUERY",
+          "match": ".",
+          "excludes": "the <pipeline> document root",
+          "why": "The root states nothing of its own. Hop puts the pipeline's identity in <info> -- which is why levels[0].elements and structure.container are './info' -- so the root is a wrapper around <info>, <notepads>, <order>, the transforms and the pipeline-level error-handling block, each classified separately."
+        },
+        {
+          "id": "hpl-lifted-scalar-or-valueless-key",
+          "kind": "VALUE_CARRIER",
+          "excludes": "every child element whose entire content is a scalar the projection already lifted onto its parent, and every element stated with no value at all",
+          "why": "STRUCTURAL, not a tag list -- see identify.py `_is_value_carrier`. Hop writes every scalar as child-element text (<type>TableInput</type>, <sql>...</sql>, <table>DeprecatedTasks</table>), and the projection lifts each onto its parent as an attribute without removing the child, so the fact is inventoried as the parent's attribute. The valueless half covers Hop's <tag/> and the whitespace-only blocks it writes when a collection is empty -- <attributes/>, <parameters> </parameters>, <transform_error_handling> </transform_error_handling> on every official sample. A NON-empty <parameters> or <transform_error_handling> has element children, so it does NOT qualify and is inventoried as an unknown object."
+        },
+        {
+          "id": "hpl-hop-edge",
+          "kind": "EDGE_RECORD",
+          "excludes": "every <hop> matched by edge_levels -- `./order/hop[@enabled='Y']`",
+          "why": "A hop IS an edge and is inventoried as one. The edge level matches only ENABLED hops, so a DISABLED hop matches neither a level nor this rule and comes out as an UNKNOWN OBJECT: a stated connection the graph does not contain, visible rather than assumed away."
+        },
+        {
+          "id": "hpl-hop-collection",
+          "kind": "QUERY",
+          "match": "./order",
+          "excludes": "the <order> element that holds the hops",
+          "why": "An anonymous collection. It states nothing of its own; the hops inside it are classified separately."
+        },
+        {
+          "id": "hpl-error-handling-collection",
+          "kind": "QUERY",
+          "match": "./transform_error_handling",
+          "excludes": "the <transform_error_handling> element that holds the error routes",
+          "why": "An anonymous collection, like <order>. Each <error> in it labels a hop (edge_policy.edge_labels) and is inventoried as an edge record."
+        },
+        {
+          "id": "hpl-designer-notepads",
+          "kind": "QUERY",
+          "match": "./notepads",
+          "subtree": true,
+          "excludes": "the pipeline's <notepads> block and every <notepad> in it",
+          "why": "Sticky notes on the Hop GUI canvas: free text plus geometry, font and colour (<xloc>, <width>, <fontname>, <backgroundcolorred>, ...). Read by no engine at run time and changes nothing a transform computes. SUBTREE, and stated so it can be argued with: a note's <note> text is human documentation of intent, so a reviewer who wants it carried as a model comment should replace this rule with a reader rather than delete it."
+        },
+        {
+          "id": "hpl-transform-canvas-geometry",
+          "kind": "QUERY",
+          "match": "./transform/GUI",
+          "subtree": true,
+          "excludes": "each transform's <GUI> block",
+          "why": "GEOMETRY: <xloc>, <yloc>. Where the box sits on the Hop GUI canvas. Nothing in it changes what the transform computes."
+        },
+        {
+          "id": "hpl-transform-execution-topology",
+          "kind": "QUERY",
+          "match": "./transform/partitioning",
+          "subtree": true,
+          "excludes": "each transform's <partitioning> block",
+          "why": "HOW Hop distributes the transform across copies, not WHAT it computes: <partitioning><method>none</method><schema_name/></partitioning>. Not unread -- `no_slot_facts.partitioning_method` reads ./partitioning/@method and raises a NO_SLOT obligation when it differs from the neutral default 'none'. ARGUABLE: <schema_name> has no reader, and a pipeline partitioned by a real schema would have that name excluded here rather than reported. Every measured document states method 'none'."
+        },
+        {
+          "id": "hpl-transform-output-field-row",
+          "kind": "QUERY",
+          "match": [
+            "./transform[@type='TableInput']/fields",
+            "./transform[@type='TableInput']/fields/field",
+            "./transform[@type='DataGrid']/fields",
+            "./transform[@type='DataGrid']/fields/field",
+            "./transform[@type='CSVInput']/fields",
+            "./transform[@type='CSVInput']/fields/field",
+            "./transform[@type='TextFileInput2']/fields",
+            "./transform[@type='TextFileInput2']/fields/field",
+            "./transform[@type='MappingInput']/fields",
+            "./transform[@type='MappingInput']/fields/field",
+            "./transform[@type='GetVariable']/fields",
+            "./transform[@type='GetVariable']/fields/field"
+          ],
+          "subtree": true,
+          "excludes": "the <fields> collection and <field> rows of the transform kinds whose <fields> IS their output schema",
+          "why": "SCOPED BY KIND ON PURPOSE. On these six kinds (Get Variables: each <field> is one column it adds, its <variable> is read by variable_fields) one <field> row is one output column, read by self_def_sites.output_field_schema as an OUTPUT port with its own `where`, so each row is inventoried as a Port. On SortRows, Unique, SelectValues, CombinationLookup and DimensionLookup the same tag holds sort keys, compare keys, a select/rename list or dimension keys -- NOT an output schema -- and no reader reads them, so this rule deliberately does not match those and they stay UNKNOWN OBJECTS. An unscoped './transform/fields' would have claimed them as read when nothing reads them."
+        },
+        {
+          "id": "hpl-table-output-column-map-row",
+          "kind": "QUERY",
+          "match": [
+            "./transform[@type='TableOutput']/fields",
+            "./transform[@type='TableOutput']/fields/field"
+          ],
+          "subtree": true,
+          "excludes": "a TableOutput's <fields> collection and its <field> rows",
+          "why": "One <field> row is one target column, stating <column_name> (the target table column) and <stream_name> (the incoming stream field written into it). Both halves are read by self_def_sites.table_output_field_map -- stream_name as an INPUT port and column_name as an OUTPUT port -- so each row is inventoried twice as a Port with its own `where`."
+        },
+        {
+          "id": "hpl-text-file-input-location",
+          "kind": "QUERY",
+          "match": "./transform[@type='TextFileInput2']/file",
+          "excludes": "a TextFileInput2's <file> block (not its children, which are lifted scalars)",
+          "why": "The file location: <name> (directory or file) and <filemask>, read by no_slot_facts hop_text_file_input_directory and hop_text_file_input_filemask through CHILD_ATTR, so the two facts that say WHAT is read raise obligations. NOT subtree, and ARGUABLE: its other scalars (<file_required>, <include_subfolders>, <type>, <compression>) are lifted onto <file> and have no reader. Scoped to TextFileInput2 so a <file> child on any other plugin stays an unknown object."
+        },
+        {
+          "id": "hpl-pipeline-parameter",
+          "kind": "QUERY",
+          "match": [
+            "./info/parameters",
+            "./info/parameters/parameter"
+          ],
+          "excludes": "a non-empty <info>/<parameters> block and each named <parameter> in it",
+          "why": "Read by structure.parameters into the IR's top-level `parameters` block (name, default_value, description), one entry per <parameter>. The scalars inside each <parameter> are lifted and covered by hpl-lifted-scalar-or-valueless-key."
+        },
+        {
+          "id": "hpl-keyed-write-lookup",
+          "kind": "QUERY",
+          "match": [
+            "./transform[@type='InsertUpdate']/lookup",
+            "./transform[@type='InsertUpdate']/lookup/key",
+            "./transform[@type='InsertUpdate']/lookup/value",
+            "./transform[@type='Update']/lookup",
+            "./transform[@type='Update']/lookup/key",
+            "./transform[@type='Update']/lookup/value",
+            "./transform[@type='Delete']/lookup",
+            "./transform[@type='Delete']/lookup/key",
+            "./transform[@type='Delete']/lookup/value",
+            "./transform[@type='SynchronizeAfterMerge']/lookup",
+            "./transform[@type='SynchronizeAfterMerge']/lookup/key",
+            "./transform[@type='SynchronizeAfterMerge']/lookup/value"
+          ],
+          "subtree": true,
+          "excludes": "the <lookup> block of Insert/update, Update, Delete and Synchronize after merge, and its <key> and <value> rows",
+          "why": "Read: <table> by hop_lookup_table, each <key> by hop_lookup_key_column / hop_lookup_key_condition and the keyed_write_* port sites, each <value> by the port sites and (Insert/update) hop_insert_update_update_column. <schema> is the hop_lookup_schema NO_SLOT fact. A <key>'s <name2> (BETWEEN upper bound) has no reader; a key whose condition is not '=' degrades the transform in the producer. Synchronize after merge reads the same block the way Insert/update does."
+        },
+        {
+          "id": "hpl-stateful-sink-fields",
+          "kind": "QUERY",
+          "match": [
+            "./transform[@type='DimensionLookup']/fields",
+            "./transform[@type='DimensionLookup']/fields/key",
+            "./transform[@type='DimensionLookup']/fields/date",
+            "./transform[@type='DimensionLookup']/fields/field",
+            "./transform[@type='DimensionLookup']/fields/return",
+            "./transform[@type='CombinationLookup']/fields",
+            "./transform[@type='CombinationLookup']/fields/key",
+            "./transform[@type='CombinationLookup']/fields/return",
+            "./transform[@type='MergeRows']/keys",
+            "./transform[@type='MergeRows']/values"
+          ],
+          "subtree": true,
+          "excludes": "the <fields> block of Dimension lookup/update and Combination lookup/update, and the <keys> / <values> lists of Merge rows (diff)",
+          "why": "Read. Dimension lookup/update: <key> and named <field> rows by the dimension_field_map port sites, <field> update types by hop_dimension_*_column, <date> by hop_dimension_date_*, <return> by hop_return_technical_key / hop_return_key_creation / hop_dimension_version. Combination lookup/update: <key> by the combination_key_map port sites, <return> by hop_return_* and hop_combination_*. Merge rows (diff): each <key> / <value> by hop_merge_rows_key / hop_merge_rows_value."
+        }
+      ]
+    },
+    "_parameters_comment": "Pipeline NAMED PARAMETERS (<info>/<parameters>/<parameter>). Each becomes one IR `parameters` entry and, in the producer, one EtlVariableDefinition: root CONFIG, InitVariablesFromConfig, BuildDbtVarsJsonUDF and --vars, plus dbt_project.yml `vars:`. A value references one as ${NAME}; TableInput substitutes it only when <variables_active> is Y. Hop VARIABLES set by the project config or an environment file are read beside them (structure.parameters.project_config / environment_config) and carried as is_parameter=false. A Get Variables field reads a value the same way (reference_sites); Set Variables is not read.",
+    "parameters": {
+      "xpath": "./info/parameters/parameter",
+      "name_attr": "name",
+      "default_attr": "default_value",
+      "description_attr": "description",
+      "type": "VARCHAR",
+      "reference_pattern": "\\$\\{([^{}$]+)\\}",
+      "substitution_flag_attr": "variables_active",
+      "substitution_flag_on": "Y",
+      "_reference_sites_comment": "Child rows whose attr Hop ALWAYS substitutes, whatever the transform's substitution flag says. Get Variables resolves each <field>/<variable> when the pipeline starts (the P10 shape; SSIS Derived Column reading @[User::X]).",
+      "reference_sites": [{"kind": "GetVariable", "xpath": "./fields/field", "attr": "variable"}],
+      "_sources_comment": "Where a referenced name that is not a parameter gets its value (variable_sources.py). Hop precedence, measured on hop-run 2.19, lowest to highest: parameter default < environment file < project config < -p. A name nothing sets stays as written.",
+      "project_config": {"file": "project-config.json", "variables_path": ["config", "variables"]},
+      "environment_config": {"variables_key": "variables", "exclude_dirs": ["metadata"]},
+      "_builtin_comment": "Hop built-in variables: Internal.* (pipeline / workflow / transform facts), Java system properties, Hop's own HOP_* settings and PROJECT_HOME. The engine has no equivalent for them in a dbt model (SSC-EWI-SSIS0046 / SSC-EWI-INF0012 shape), so they are reported, never rewritten.",
+      "builtin_patterns": ["^Internal\\.", "^java\\.", "^user\\.", "^os\\.", "^file\\.", "^line\\.", "^path\\.", "^HOP_", "^PROJECT_HOME$"]
+    },
+    "load_order": null,
+    "_ref_attrs_comment": "HAZARD, inherited from the Kettle shape. This index is document-global and keeps the FIRST node per value. <name> also appears in <info>/<parameters>/<parameter>, in FilterRows <value> blocks (always the literal 'constant'), and in StreamLookup/DBLookup <key>/<value> rows. <info> and <order> are serialised before the transforms, and transform-internal <name>s sit after their own transform's <name>, so a transform whose name equals a pipeline-parameter name would resolve to the parameter and its hops would be DROPPED (reported as unresolved edge records, not silent). Not triggered by any measured document.",
+    "ref_attrs": [
+      "name"
+    ],
+    "lineage": null,
+    "edge_levels": [
+      {
+        "_comment": "HOPS. A third element naming both endpoints by transform name, like a Kettle <hop> or an SSIS <path>. The [@enabled='Y'] predicate is a SEMANTIC filter: a disabled hop moves no rows, and emitting it would state a dataflow the engine does not run. EDGE CASE: Hop, like Kettle, reads an ABSENT <enabled> as true, which an XPath equality cannot express. Every measured hop states <enabled> explicitly.",
+        "name": "hops",
+        "xpath": "./order/hop[@enabled='Y']",
+        "endpoint_kind": "PORT_REF",
+        "from_attr": "from",
+        "to_attr": "to",
+        "label_attr": null
+      }
+    ],
+    "default_def_site": "SELF",
+    "def_sites": {},
+    "self_def_site": {
+      "_comment": "THE BASE SELF SITE READS NO PORTS, and this is the deliberate difference from platform_pentaho.json. In Hop the tag <fields>/<field> means an output schema on some transforms (TableInput, DataGrid, CSVInput, TextFileInput2, MappingInput) and something else on others: sort keys on SortRows, compare keys on Unique, a select/rename list on SelectValues, key/lookup columns on CombinationLookup and DimensionLookup, a stream-to-column map on TableOutput. Under column_propagation FILL_WHEN_UNDECLARED a declared list is exhaustive, so a base site reading ./fields/field would make SortRows project ONLY its sort keys and drop every other column. Kinds whose <fields> really are the output schema opt in through self_def_site 'output_field_schema'; any unmapped kind therefore reads nothing rather than misreading.",
+      "port_sites": [],
+      "group_site": null,
+      "attr_site": {
+        "_comment": "A Hop transform has no name/value property site. Its configuration IS its own child elements, whose tags differ per plugin. After the scalar lift those are the transform node's own attributes.",
+        "value_from": "SELF_ATTRS"
+      }
+    },
+    "self_def_sites": {
+      "_comment": "Per-plugin port sites. The base reads nothing; these are the kinds whose port reading is evidenced.",
+      "output_field_schema": {
+        "_comment": "<fields>/<field> read as OUTPUT columns. Hop's <length> is mapped to the IR Precision and <precision> to the IR Scale, following platform_pentaho.json; that reinterpretation is charged in no_slot_facts.hop_precision_is_ir_scale. MEASURED: OLE_SRC Tasks in Archive_DeprecatedTasks.hpl -> 4 output columns. NOTE: the official TableInput samples state NO <fields> at all (Hop derives them from the query at run time), so a TableInput there carries zero ports and its columns are knowable only from <sql> -- which is a NO_SLOT fact.",
+        "port_sites": [
+          {
+            "id": "transform_output_field",
+            "xpath": "./fields/field",
+            "porttype": "OUTPUT",
+            "name_attr": "name",
+            "datatype_attr": "type",
+            "precision_attrs": [
+              "length"
+            ],
+            "scale_attrs": [
+              "precision"
+            ],
+            "default_attr": null
+          }
+        ]
+      },
+      "table_output_field_map": {
+        "_comment": "TableOutput with specify_fields=Y states one <field> per target column: <column_name> is the TARGET column and <stream_name> the incoming stream field written into it. Both are read: stream_name as INPUT (InputColumns, via port_policy.input_columns_from INPUT_PORTS) and column_name as OUTPUT (OutputColumns -- the columns the target relation receives). MEASURED on Archive_DeprecatedTasks.hpl: 5 rows, one a rename (stream DepreciatedAt -> column DeprecatedAt). Without this site the target filled from its predecessor and carried 4 columns, silently dropping the fifth. Neither side states a datatype, so none is named. The pairing of row i's two halves is positional in the IR and is NOT a declared map; see residue.table_output_stream_map_is_positional.",
+        "port_sites": [
+          {
+            "id": "table_output_stream_field",
+            "xpath": "./fields/field",
+            "porttype": "INPUT",
+            "name_attr": "stream_name",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          },
+          {
+            "id": "table_output_target_column",
+            "xpath": "./fields/field",
+            "porttype": "OUTPUT",
+            "name_attr": "column_name",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          }
+        ]
+      },
+      "keyed_write_value_map": {
+        "_comment": "Insert/update states one <lookup>/<value> per written column: <name> is the TABLE column and <rename> the incoming stream field. Read like table_output_field_map: rename as INPUT, name as OUTPUT, paired by node. Hop INSERTS exactly these columns; a key column is written only when it is also a <value>.",
+        "port_sites": [
+          {
+            "id": "keyed_write_value_stream_field",
+            "xpath": "./lookup/value",
+            "porttype": "INPUT",
+            "name_attr": "rename",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          },
+          {
+            "id": "keyed_write_value_table_column",
+            "xpath": "./lookup/value",
+            "porttype": "OUTPUT",
+            "name_attr": "name",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          }
+        ]
+      },
+      "keyed_write_key_and_value_map": {
+        "_comment": "Update matches on <lookup>/<key> (<name> the stream field, <field> the table column) and sets every <lookup>/<value> (<rename> the stream field, <name> the table column). Both are read, keys first, so the model projects the key it matches on as well as the columns it sets.",
+        "port_sites": [
+          {
+            "id": "keyed_write_key_stream_field",
+            "xpath": "./lookup/key",
+            "porttype": "INPUT",
+            "name_attr": "name",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          },
+          {
+            "id": "keyed_write_key_table_column",
+            "xpath": "./lookup/key",
+            "porttype": "OUTPUT",
+            "name_attr": "field",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          },
+          {
+            "id": "keyed_write_value_stream_field",
+            "xpath": "./lookup/value",
+            "porttype": "INPUT",
+            "name_attr": "rename",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          },
+          {
+            "id": "keyed_write_value_table_column",
+            "xpath": "./lookup/value",
+            "porttype": "OUTPUT",
+            "name_attr": "name",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          }
+        ]
+      },
+      "keyed_write_key_map": {
+        "_comment": "Delete states only <lookup>/<key>: <name> the stream field, <field> the table column.",
+        "port_sites": [
+          {
+            "id": "keyed_write_key_stream_field",
+            "xpath": "./lookup/key",
+            "porttype": "INPUT",
+            "name_attr": "name",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          },
+          {
+            "id": "keyed_write_key_table_column",
+            "xpath": "./lookup/key",
+            "porttype": "OUTPUT",
+            "name_attr": "field",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          }
+        ]
+      },
+      "dimension_field_map": {
+        "_comment": "Dimension lookup/update maps stream fields to dimension columns twice: each <fields>/<key> (natural key: <name> the stream field, <lookup> the table column) and each <fields>/<field> that carries a stream field (<name>), i.e. the Insert / Update / Punch through columns. A <field> with no <name> is an audit column Hop fills itself (DateInsertedOrUpdated, LastVersion, ...) and is not a port. Keys first, so the model projects the natural key before the tracked columns.",
+        "port_sites": [
+          {
+            "id": "dimension_key_stream_field",
+            "xpath": "./fields/key",
+            "porttype": "INPUT",
+            "name_attr": "name",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          },
+          {
+            "id": "dimension_key_table_column",
+            "xpath": "./fields/key",
+            "porttype": "OUTPUT",
+            "name_attr": "lookup",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          },
+          {
+            "id": "dimension_field_stream_field",
+            "xpath": "./fields/field[@name]",
+            "porttype": "INPUT",
+            "name_attr": "name",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          },
+          {
+            "id": "dimension_field_table_column",
+            "xpath": "./fields/field[@name]",
+            "porttype": "OUTPUT",
+            "name_attr": "lookup",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          }
+        ]
+      },
+      "combination_key_map": {
+        "_comment": "Combination lookup/update matches on every <fields>/<key> (<name> the stream field, <lookup> the table column) and inserts exactly those columns, plus the technical key it generates.",
+        "port_sites": [
+          {
+            "id": "combination_key_stream_field",
+            "xpath": "./fields/key",
+            "porttype": "INPUT",
+            "name_attr": "name",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          },
+          {
+            "id": "combination_key_table_column",
+            "xpath": "./fields/key",
+            "porttype": "OUTPUT",
+            "name_attr": "lookup",
+            "datatype_attr": null,
+            "precision_attrs": [],
+            "scale_attrs": []
+          }
+        ]
+      }
+    }
+  },
+  "kind_dispatch": {
+    "_comment": "Transform plugin id -> IR element $kind. The plugin id is the ONLY thing that says what a transform does. Only the kinds in emit.HYDRATOR_KIND_CONTRACT hydrate (SourceQualifier, ExpressionTransformation, FilterTransformation, TargetTransformation, the keyed-write targets UpsertTargetTransformation / UpdateTargetTransformation / DeleteTargetTransformation / SynchronizeTargetTransformation, the stateful targets DimensionTargetTransformation / CombinationTargetTransformation, MergeRowsDiffTransformation, UnsupportedTransformation), so joins, lookups, sorts, de-dups and column reshapes degrade to UnsupportedTransformation, keeping their hops. Every key below is a type string measured in a real .hpl (W4 or the official apache/hop samples); anything else takes unmapped_kind_degrade_to.",
+    "pipeline": {
+      "degrade_to": null,
+      "degrade_reason": "LEFT NULL DELIBERATELY. The pipeline is the unit of work -- a container with parameters and run settings -- and has no hop, so nothing is lost by leaving it out of the graph. Same reasoning as the Kettle transformation, DSJOB and an SSIS Data Flow Task.",
+      "ir_kind": null,
+      "role": "UNIT_OF_WORK",
+      "supported": false,
+      "def_site": "SELF",
+      "note": "The pipeline itself: named parameters, pipeline type, performance-capture settings. The IR is a flat node/edge graph of data-flow elements; named parameters are carried beside it in the IR's `parameters` block (structure.parameters), the rest has no representation."
+    },
+    "TableInput": {
+      "ir_kind": "SourceQualifier",
+      "role": "SOURCE",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "output_field_schema",
+      "element_fields": {
+        "ExecuteEachRow": {
+          "rule": "hop_table_input_execute_each_row",
+          "required": false
+        },
+        "RowsFromTransform": {
+          "rule": "hop_table_input_lookup",
+          "required": false
+        }
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "Database read. Output columns come from <fields> when the file states them (W4 does; the official samples do not). The read itself -- <sql> -- has NO IR slot and is a NO_SLOT fact (hop_table_input_sql), as is the connection that names its dialect (hop_transform_connection). No TableName is promoted: the query is free SQL, and lifting a table out of it would be a parse, not a read. A query bound to the rows of an upstream transform (<lookup>, promoted into RowsFromTransform; <execute_each_row>=Y, promoted into ExecuteEachRow) is a per-row lookup, not a read: the producer degrades it, so the upstream transform is never taken for the relation it reads."
+    },
+    "TableOutput": {
+      "ir_kind": "TargetTransformation",
+      "role": "TARGET",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "table_output_field_map",
+      "element_fields": {
+        "TableName": {
+          "rule": "hop_table_output_table",
+          "required": true
+        },
+        "TruncateTarget": {
+          "rule": "hop_table_output_truncate",
+          "required": false
+        },
+        "OnlyWhenHaveRows": {
+          "rule": "hop_table_output_only_when_have_rows",
+          "required": false
+        }
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "Database write. TableName is read from <table> and REQUIRED: TargetTranslatorBase substitutes YOUR_DB plus a fallback schema when fields are null, so a target without a table would state a destination the document does not. <schema> (hop_table_output_schema) is a NO_SLOT fact: a source-side schema such as 'dbo' is not the Snowflake target schema. <truncate> is promoted into TruncateTarget (G13): truncate=Y REPLACES the table on every run and the engine then materializes the mart as `table`; truncate=N APPENDS (incremental append). <only_when_have_rows> is promoted into OnlyWhenHaveRows: with truncate=Y, Hop truncates only when the first row arrives, so a run with no input rows keeps the table; the producer emits incremental with its replace_if_rows strategy for that case."
+    },
+    "InsertUpdate": {
+      "ir_kind": "UpsertTargetTransformation",
+      "role": "TARGET",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "keyed_write_value_map",
+      "element_fields": {
+        "TableName": {
+          "rule": "hop_lookup_table",
+          "required": true
+        },
+        "KeyColumns": {
+          "rule": "hop_lookup_key_column",
+          "required": true,
+          "list": true
+        },
+        "KeyConditions": {
+          "rule": "hop_lookup_key_condition",
+          "required": false,
+          "list": true
+        },
+        "UpdateColumns": {
+          "rule": "hop_insert_update_update_column",
+          "required": false,
+          "list": true
+        },
+        "UpdateBypassed": {
+          "rule": "hop_insert_update_bypassed",
+          "required": false
+        }
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "Insert/update: look the row up on every <lookup>/<key>, UPDATE the <value> columns with update=Y when found, INSERT every <value> column otherwise. The producer hands it to the engine's update-strategy target (incremental merge, unique_key = KeyColumns, alias = TableName) and narrows merge_update_columns to UpdateColumns. No update=Y column, or update_bypassed=Y, is insert-only. Written into the table <lookup>/<table> names, never a relation of its own. <lookup>/<schema> is a NO_SLOT fact for the reason TableOutput's schema is. Every <key> must use condition '=' (KeyConditions); any other condition degrades the transform in the producer rather than matching on a subset of the keys."
+    },
+    "Update": {
+      "ir_kind": "UpdateTargetTransformation",
+      "role": "TARGET",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "keyed_write_key_and_value_map",
+      "element_fields": {
+        "TableName": {
+          "rule": "hop_lookup_table",
+          "required": true
+        },
+        "KeyColumns": {
+          "rule": "hop_lookup_key_column",
+          "required": true,
+          "list": true
+        },
+        "KeyConditions": {
+          "rule": "hop_lookup_key_condition",
+          "required": false,
+          "list": true
+        }
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "Update: set every <value> column on the rows matching every <lookup>/<key>; never inserts. The producer hands it to the engine's OLE DB Command translator (update_only, explicit key and update columns). <error_ignored>=N makes Hop FAIL on an input row whose key is not in the table; update_only skips it (NO_SLOT fact hop_update_error_ignored). Written into the table <lookup>/<table> names, never a relation of its own. <lookup>/<schema> is a NO_SLOT fact for the reason TableOutput's schema is. Every <key> must use condition '=' (KeyConditions); any other condition degrades the transform in the producer rather than matching on a subset of the keys."
+    },
+    "Delete": {
+      "ir_kind": "DeleteTargetTransformation",
+      "role": "TARGET",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "keyed_write_key_map",
+      "element_fields": {
+        "TableName": {
+          "rule": "hop_lookup_table",
+          "required": true
+        },
+        "KeyColumns": {
+          "rule": "hop_lookup_key_column",
+          "required": true,
+          "list": true
+        },
+        "KeyConditions": {
+          "rule": "hop_lookup_key_condition",
+          "required": false,
+          "list": true
+        }
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "Delete: delete the rows matching every <lookup>/<key>. The producer hands it to the engine's OLE DB Command translator (delete_only). Written into the table <lookup>/<table> names, never a relation of its own. <lookup>/<schema> is a NO_SLOT fact for the reason TableOutput's schema is. Every <key> must use condition '=' (KeyConditions); any other condition degrades the transform in the producer rather than matching on a subset of the keys."
+    },
+    "SynchronizeAfterMerge": {
+      "ir_kind": "SynchronizeTargetTransformation",
+      "role": "TARGET",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "keyed_write_value_map",
+      "element_fields": {
+        "TableName": {
+          "rule": "hop_lookup_table",
+          "required": true
+        },
+        "KeyColumns": {
+          "rule": "hop_lookup_key_column",
+          "required": true,
+          "list": true
+        },
+        "KeyConditions": {
+          "rule": "hop_lookup_key_condition",
+          "required": false,
+          "list": true
+        },
+        "UpdateColumns": {
+          "rule": "hop_insert_update_update_column",
+          "required": false,
+          "list": true
+        },
+        "OperationField": {
+          "rule": "hop_sync_operation_field",
+          "required": true
+        },
+        "OrderInsert": {
+          "rule": "hop_sync_order_insert",
+          "required": false
+        },
+        "OrderUpdate": {
+          "rule": "hop_sync_order_update",
+          "required": false
+        },
+        "OrderDelete": {
+          "rule": "hop_sync_order_delete",
+          "required": false
+        },
+        "TableNameInField": {
+          "rule": "hop_sync_tablename_in_field",
+          "required": false
+        }
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "Synchronize after merge: per row, the value of the operation field (<operation_order_field>) picks the operation: <order_insert> INSERTs every <value> column, <order_update> UPDATEs the <value> columns with update=Y on the rows matching every <key>, <order_delete> DELETEs the rows matching every <key>, and any other value does nothing. The producer hands it to the engine's update-strategy target for the projection (alias = TableName) and gives the mart the producer's hop_synchronize strategy, which reads the operation field from the batch and never writes it. <perform_lookup>=Y makes Hop fail an update or delete whose key is missing; the converted strategy skips it. <tablename_in_field>=Y (table named per row) degrades the transform in the producer. Written into the table <lookup>/<table> names, never a relation of its own. <lookup>/<schema> is a NO_SLOT fact for the reason TableOutput's schema is. Every <key> must use condition '=' (KeyConditions); any other condition degrades the transform in the producer rather than matching on a subset of the keys."
+    },
+    "MergeRows": {
+      "ir_kind": "MergeRowsDiffTransformation",
+      "role": "TRANSFORMATION",
+      "supported": true,
+      "def_site": "SELF",
+      "element_fields": {
+        "KeyFields": {
+          "rule": "hop_merge_rows_key",
+          "required": true,
+          "list": true
+        },
+        "ValueFields": {
+          "rule": "hop_merge_rows_value",
+          "required": false,
+          "list": true
+        },
+        "FlagField": {
+          "rule": "hop_merge_rows_flag_field",
+          "required": true
+        },
+        "ReferenceTransform": {
+          "rule": "hop_merge_rows_reference",
+          "required": true
+        },
+        "CompareTransform": {
+          "rule": "hop_merge_rows_compare",
+          "required": true
+        },
+        "DiffField": {
+          "rule": "hop_merge_rows_diff_field",
+          "required": false
+        }
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "Merge rows (diff): compare a reference stream (<reference>) with a compare stream (<compare>) on <keys>, and pass one row per key with the flag field (<flag_field>) set to identical / changed / new / deleted: the compare row for identical, changed and new, the reference row for deleted. Hop needs both inputs sorted on the keys; the producer writes it as a FULL OUTER JOIN on the keys (null keys match each other, as Hop's comparison does) with a CASE for the flag, so input order does not matter. Output columns propagate from the inputs; the producer adds the flag field. A <diff-field> (JSON of the changes) or a <passthrough-field> has no translation: a diff field degrades the transform in the producer."
+    },
+    "Formula": {
+      "ir_kind": null,
+      "role": "TRANSFORMATION",
+      "supported": true,
+      "def_site": "SELF",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "NOT mapped to ExpressionTransformation BY THE DETERMINISTIC READER -- the Hop analogue of Pentaho's Janino. A Hop Formula transform holds expressions in Hop's own formula dialect (an OpenFormula/LibreOffice-style function set: NOW(), IF(), string literals in double quotes, [field] references), and each <formula> row also states <replace_field> (overwrite an existing stream field) and <value_type> as a NUMERIC ValueMeta id (2 = String, 3 = Date), not a type name. Emitting `NOW()` or `\"Closed\"` as SQL from a structural rule would be a silent wrong answer: NOW() evaluates per row in Hop and `\"Closed\"` is an identifier in Snowflake, not a string.",
+      "_scope_of_this_declaration": "THESE KEYS ARE THE TIER-1 DEFAULT, NOT THE PIPELINE'S OUTCOME. `ir_kind: null` + `degrade_to` is what the deterministic reader concludes; emit.py then takes the model sidecar as a per-element override (`sidecar:$kind`, MODEL provenance), exactly as for Pentaho Janino. The placeholder carries the full <transform> fragment in `_unsupported_body`, which is what tier 2 reads to author an ExpressionTransformation. Anything reading this entry as 'Hop Formula degrades' is reading a tier-1 default as a pipeline outcome. MEASURED on Archive_DeprecatedTasks.hpl with no sidecar: `Derived Column` emits UnsupportedTransformation with the Formula body, and both hops survive.",
+      "note": "MEASURED on W4: two formulas -- Status = \"Closed\" (replace_field=Status, value_type 2) and DepreciatedAt = NOW() (value_type 3). The <formulas> subtree has no reader and is inventoried as UNKNOWN OBJECTS (see residue.transform_internal_subtrees_have_no_obligation)."
+    },
+    "Calculator": {
+      "ir_kind": null,
+      "role": "TRANSFORMATION",
+      "supported": true,
+      "def_site": "SELF",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "Same tier-1 line as Formula. A Calculator states each output as a NAMED OPERATION over field names -- <calc_type>SUBTRACT</calc_type> <field_a>/<field_b>/<field_c> -> <field_name>, with <remove> and a <value_type> NAME (unlike Formula's numeric id). No rule kind composes calc_type + operands into an expression, and the operation enum has ~100 members with Hop-specific null and rounding semantics. The sidecar may supply ExpressionTransformation at tier 2.",
+      "note": "MEASURED on calculator-basic.hpl: four <calculation> rows (SUBTRACT, ADD, MULTIPLY, DIVIDE). The <calculation> rows have no reader and are inventoried as UNKNOWN OBJECTS."
+    },
+    "FilterRows": {
+      "ir_kind": "FilterTransformation",
+      "role": "TRANSFORMATION",
+      "supported": true,
+      "def_site": "SELF",
+      "element_fields": {
+        "FilterConditions": {
+          "rule": "hop_filter_condition_DETERMINISTICALLY_UNREACHABLE",
+          "required": true
+        }
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "EXPECTED TO DEGRADE WHEN NO MODEL ANSWERS. REQUIRED because FilterTranslator substitutes `WHERE TRUE` for an empty predicate -- a filter that silently returns every row. Hop states the predicate as a nested <compare>/<condition> TREE (negated / operator / leftvalue / function / rightvalue / value, recursive), which no ELEMENT_ATTR reads, so the deterministic reader always misses and the element degrades unless the sidecar supplies FilterConditions. Routing (<send_true_to>, <send_false_to>) is a NO_SLOT fact: the IR edge carries no branch label."
+    },
+    "DataGrid": {
+      "ir_kind": null,
+      "role": "SOURCE",
+      "supported": false,
+      "def_site": "SELF",
+      "self_def_site": "output_field_schema",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "An inline constant table: <fields> declares the schema and <data>/<line>/<item> holds the rows. NOT mapped to SourceQualifier, deliberately unlike Pentaho's RowGenerator: a SourceQualifier emits a model that reads a relation, and there is no relation here -- the rows ARE the source, and no rule reads <data>. Degrading keeps the output columns (so successors resolve their columns by propagation) and the hops, and states nothing false.",
+      "note": "The source of most official samples. The <data> rows are inventoried as UNKNOWN OBJECTS (repeated <item> leaves cannot be lifted)."
+    },
+    "CSVInput": {
+      "ir_kind": "SourceQualifier",
+      "role": "SOURCE",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "output_field_schema",
+      "note": "Delimited file read, mapped to SourceQualifier like Talend's tFileInputDelimited. The file path (<filename>), separator, enclosure and header flag have no IR slot; the path is a NO_SLOT fact (hop_csv_input_filename). The path is NOT UNQUALIFIED_TAIL'd into a TableName: on a file path the part after the last dot is the extension (AUTHORING_CONTRACT)."
+    },
+    "TextFileInput2": {
+      "ir_kind": "SourceQualifier",
+      "role": "SOURCE",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "output_field_schema",
+      "note": "Hop's 'Text file input' plugin id. Same mapping as CSVInput. The location is split across a child <file> block (<name> directory, <filemask> file), read by hop_text_file_input_directory and hop_text_file_input_filemask as NO_SLOT facts."
+    },
+    "MappingInput": {
+      "ir_kind": null,
+      "role": "SOURCE",
+      "supported": false,
+      "def_site": "SELF",
+      "self_def_site": "output_field_schema",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "The entry point of a sub-pipeline (a 'mapping'): rows arrive from a CALLING pipeline that is not in this document. Its <fields> declare the expected input schema, which is read as output columns so successors resolve. There is no relation to read, so SourceQualifier would be false.",
+      "note": "Sub-pipeline wiring is invisible from inside the sub-pipeline."
+    },
+    "SelectValues": {
+      "ir_kind": null,
+      "role": "TRANSFORMATION",
+      "supported": false,
+      "def_site": "SELF",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "Column select/rename/remove/retype. Its <fields>/<field> rows are a select list (<name> + optional <rename>), with <select_unspecified>, <remove> and <meta> blocks beside them -- not an output schema, so the base site deliberately does not read them. ExpressionTransformation with no expressions would be a hollow claim. Same line as Alteryx Select.",
+      "note": "KNOWN LIMIT: with no ports of its own, column propagation fills this node from its predecessor with PRE-rename names. The node is degraded, so the emitted placeholder states no semantics, but a successor resolving columns through it sees the un-renamed names."
+    },
+    "MergeJoin": {
+      "ir_kind": null,
+      "role": "TRANSFORMATION",
+      "supported": false,
+      "def_site": "SELF",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "Two-input sorted join: <join_type> (INNER / LEFT OUTER / RIGHT OUTER / FULL OUTER), <keys_1>/<keys_2>, and <transform1>/<transform2> naming which hop is which side. No join kind hydrates (JoinTransformation has no hydrator arm).",
+      "note": "Left/right side assignment is stated by name in <transform1>/<transform2>, not by the hops; recorded as NO_SLOT facts."
+    },
+    "JoinRows": {
+      "ir_kind": null,
+      "role": "TRANSFORMATION",
+      "supported": false,
+      "def_site": "SELF",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "Cartesian product with an optional <compare> condition tree. No join kind hydrates.",
+      "note": "The <compare> tree is inventoried as UNKNOWN OBJECTS, as on FilterRows."
+    },
+    "StreamLookup": {
+      "ir_kind": null,
+      "role": "TRANSFORMATION",
+      "supported": false,
+      "def_site": "SELF",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "In-memory lookup: the lookup stream is named in <from> (a transform name, NOT a hop), keys and returned values are in <lookup>/<key> and <lookup>/<value>. No lookup kind hydrates.",
+      "note": "<from> is recorded as a NO_SLOT fact (hop_stream_lookup_source)."
+    },
+    "DBLookup": {
+      "ir_kind": null,
+      "role": "TRANSFORMATION",
+      "supported": false,
+      "def_site": "SELF",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "Hop's 'Database lookup' plugin id is DBLookup. Per-row keyed lookup against <lookup>/<table> over <connection>, with eat_row_on_failure / fail_on_multiple semantics. No lookup kind hydrates, and the lookup table is a SECOND relation the IR has no slot for on a transformation.",
+      "note": "The connection is a NO_SLOT fact (hop_transform_connection); the <lookup> subtree is inventoried as UNKNOWN OBJECTS."
+    },
+    "CombinationLookup": {
+      "ir_kind": "CombinationTargetTransformation",
+      "role": "TARGET",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "combination_key_map",
+      "element_fields": {
+        "TableName": {
+          "rule": "hop_table_output_table",
+          "required": true
+        },
+        "KeyColumns": {
+          "rule": "hop_stateful_key_column",
+          "required": true,
+          "list": true
+        },
+        "TechnicalKeyColumn": {
+          "rule": "hop_return_technical_key",
+          "required": true
+        },
+        "KeyCreation": {
+          "rule": "hop_return_key_creation",
+          "required": false
+        },
+        "UseAutoIncrement": {
+          "rule": "hop_combination_use_autoinc",
+          "required": false
+        },
+        "SequenceName": {
+          "rule": "hop_combination_sequence",
+          "required": false
+        },
+        "LastUpdateColumn": {
+          "rule": "hop_combination_last_update_field",
+          "required": false
+        },
+        "UseHash": {
+          "rule": "hop_combination_use_hash",
+          "required": false
+        }
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "Combination lookup/update: look the combination of <fields>/<key> columns up in <table> (null matches null) and, when it is not there, INSERT it with a new technical key (<return>/<name>) made by <creation_method>: tablemax (MAX + 1, in stream order), sequence (<fields>/<sequence>), autoinc. The producer hands it to the engine's update-strategy target for the projection (alias = TableName) and gives the mart the producer's hop_combination strategy. <return>/<last_update_field> is set to the run time on insert. The technical key Hop passes downstream (and <replace>) is not translated: a transform reading the key from the stream reads the dimension table instead. <crc>=Y (hash lookup) degrades the transform in the producer. <schema> is a NO_SLOT fact for the reason TableOutput's schema is."
+    },
+    "DimensionLookup": {
+      "ir_kind": "DimensionTargetTransformation",
+      "role": "TARGET",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "dimension_field_map",
+      "element_fields": {
+        "TableName": {
+          "rule": "hop_table_output_table",
+          "required": true
+        },
+        "Update": {
+          "rule": "hop_dimension_update",
+          "required": false
+        },
+        "KeyColumns": {
+          "rule": "hop_stateful_key_column",
+          "required": true,
+          "list": true
+        },
+        "TechnicalKeyColumn": {
+          "rule": "hop_return_technical_key",
+          "required": true
+        },
+        "KeyCreation": {
+          "rule": "hop_return_key_creation",
+          "required": false
+        },
+        "VersionColumn": {
+          "rule": "hop_dimension_version",
+          "required": false
+        },
+        "DateFromColumn": {
+          "rule": "hop_dimension_date_from",
+          "required": false
+        },
+        "DateToColumn": {
+          "rule": "hop_dimension_date_to",
+          "required": false
+        },
+        "StreamDateField": {
+          "rule": "hop_dimension_date_stream_field",
+          "required": false
+        },
+        "InsertColumns": {
+          "rule": "hop_dimension_insert_column",
+          "required": false,
+          "list": true
+        },
+        "UpdateColumns": {
+          "rule": "hop_dimension_update_column",
+          "required": false,
+          "list": true
+        },
+        "PunchThroughColumns": {
+          "rule": "hop_dimension_punch_through_column",
+          "required": false,
+          "list": true
+        },
+        "DateInsertedOrUpdatedColumns": {
+          "rule": "hop_dimension_date_inserted_updated_column",
+          "required": false,
+          "list": true
+        },
+        "DateInsertedColumns": {
+          "rule": "hop_dimension_date_inserted_column",
+          "required": false,
+          "list": true
+        },
+        "DateUpdatedColumns": {
+          "rule": "hop_dimension_date_updated_column",
+          "required": false,
+          "list": true
+        },
+        "LastVersionColumns": {
+          "rule": "hop_dimension_last_version_column",
+          "required": false,
+          "list": true
+        },
+        "SequenceName": {
+          "rule": "hop_dimension_sequence",
+          "required": false
+        },
+        "TechnicalKeySourceField": {
+          "rule": "hop_dimension_tk_source_field",
+          "required": false
+        },
+        "MinYear": {
+          "rule": "hop_dimension_min_year",
+          "required": false
+        },
+        "MaxYear": {
+          "rule": "hop_dimension_max_year",
+          "required": false
+        },
+        "UseStartDateAlternative": {
+          "rule": "hop_dimension_use_start_date_alternative",
+          "required": false
+        },
+        "StartDateAlternative": {
+          "rule": "hop_dimension_start_date_alternative",
+          "required": false
+        },
+        "UnknownRowCheckDisabled": {
+          "rule": "hop_dimension_unknown_row_check_disabled",
+          "required": false
+        }
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "Dimension lookup/update with <update>Y</update> is a slowly changing dimension write into <table>: look each row up on the natural keys (<fields>/<key>) with the run time (or the <date>/<name> stream field) inside [date_from, date_to); a new key gets version 1 valid from <min_year>-01-01; a changed Insert column closes the current version at the run time and inserts version + 1; a changed Update column overwrites the current version; a changed Punch through column overwrites every version; the technical key comes from <return>/<creation_method>; an 'unknown' row (technical key 0, version 1) is inserted first unless <unknown_row_check_disabled>=Y. The producer hands it to the engine's update-strategy target for the projection (alias = TableName) and gives the mart the producer's hop_scd2 strategy. <update>N</update> is a lookup that writes nothing and degrades in the producer (G23), as do the technical key methods and start-date alternatives the strategy does not implement. The technical key Hop passes downstream is not translated: a transform reading it from the stream reads the dimension table instead."
+    },
+    "SortRows": {
+      "ir_kind": null,
+      "role": "TRANSFORMATION",
+      "supported": false,
+      "def_site": "SELF",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "Reorders rows; optionally de-duplicates (<unique_rows>). Row order has no meaning in a relation, and no sort kind hydrates.",
+      "note": "Its <fields> are sort keys, not an output schema, so they are deliberately unread. Does not change the column set, so NOT in column_propagation.stop_at_kinds."
+    },
+    "Unique": {
+      "ir_kind": null,
+      "role": "TRANSFORMATION",
+      "supported": false,
+      "def_site": "SELF",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "De-duplicates ADJACENT rows (it assumes sorted input) by the compare fields, optionally adding a count field. No de-dup kind hydrates, and 'adjacent' is not a relational concept.",
+      "note": "Its <fields> are compare keys, not an output schema; inventoried as UNKNOWN OBJECTS."
+    },
+    "GetVariable": {
+      "ir_kind": "ExpressionTransformation",
+      "role": "TRANSFORMATION",
+      "supported": true,
+      "def_site": "SELF",
+      "self_def_site": "output_field_schema",
+      "variable_fields": {
+        "xpath": "./fields/field",
+        "name_attr": "name",
+        "value_attr": "variable",
+        "type_attr": "type",
+        "_types_comment": "Quoting follows the field's DECLARED type, as the engine's DbtUtils.CreateDbtVariableReference does (SnowflakeTypeNeedsQuotes): a String is a SQL string literal '{{ var(...) }}', an Integer / Number / BigNumber is the bare value. MEASURED on the corpus: 204 String and 16 Integer fields, nothing else. Date, Timestamp, Boolean, Binary and Internet Address fields convert the text with Hop's conversion mask or its own boolean / binary reading, which has no translation here, so they degrade the transform.",
+        "quoted_types": ["String"],
+        "unquoted_types": ["Integer", "Number", "BigNumber"],
+        "_neutral_comment": "Per-field settings that change the value Hop puts in the row. Any other value degrades the transform: trimming, and number parsing with a mask, currency, decimal or grouping symbol.",
+        "neutral_attrs": {"trim_type": ["", "none"], "format": ["", "#"], "currency": [""], "decimal": [""], "group": [""]},
+        "_refused_comment": "A value Hop resolves with something other than a ${X} variable: #{...} is a metadata resolver (secrets, configuration), %%X%% the older variable syntax.",
+        "refused_markers": ["#{", "%%"]
+      },
+      "degrade_to": "UnsupportedTransformation",
+      "note": "Get Variables: each <field> adds a column whose value is the <variable> text with its ${X} references resolved when the pipeline starts, so every row carries the same value. Mapped to ExpressionTransformation: the inbound columns pass through (column_propagation.accumulate_kinds) and each field becomes a ColumnExpression, '${X}' for a String and ${X} for a number, which params_postpass.py rewrites to {{ var('X', '<default>') }} -- the SSIS Derived Column reading @[User::X]. A reference to a built-in or to a name nothing sets stays ${X} and degrades the run through the post-pass residual gate. With NO inbound hop, Get Variables generates one row by itself; nothing in the engine translates a model without a relation to read, so that case degrades, as does a numeric field whose text is not exactly one ${X}."
+    },
+    "Dummy": {
+      "ir_kind": null,
+      "role": "TRANSFORMATION",
+      "supported": false,
+      "def_site": "SELF",
+      "degrade_to": "UnsupportedTransformation",
+      "degrade_reason": "An explicit no-op, used as a hop target or a placeholder. Degrading keeps its hops and asserts nothing about behaviour.",
+      "note": "There is nothing to translate; ExpressionTransformation would emit a transform with no expressions."
+    },
+    "unmapped_kind_degrade_to": "UnsupportedTransformation"
+  },
+  "role_to_node_type": {
+    "SOURCE": "source",
+    "TARGET": "target",
+    "TRANSFORMATION": "transformation",
+    "UNIT_OF_WORK": "transformation",
+    "unmapped_role_node_type": "unknown",
+    "unmapped_role_reason": "Hop ships hundreds of transform plugins and this table maps those measured in real documents, so an unmapped kind is near-certain on a real pipeline. Its role is then unmapped and the node is typed 'unknown' rather than raising.",
+    "known_defect": "'UNIT_OF_WORK' has no node type of its own and is emitted as a transformation-typed node with a null $kind, the same known misrepresentation as Kettle's transformation and DataStage's JOB."
+  },
+  "naming_policy": {
+    "_comment": "A Hop transform key IS its human name, so name_from and element_name_from agree.",
+    "policy_id": "hop.modelname.v1",
+    "name_source": "transform/name/text()",
+    "name_from": "DISPLAY_NAME",
+    "element_name_from": "DISPLAY_NAME",
+    "lowercase": true,
+    "sanitize_identifier": {
+      "allowed_chars": "abcdefghijklmnopqrstuvwxyz0123456789_",
+      "allowed_leading_chars": "abcdefghijklmnopqrstuvwxyz_",
+      "replace_illegal_with": "_",
+      "leading_prefix": "m_",
+      "_comment": "Hop names routinely contain spaces, hyphens and parentheses ('Filter rows - True False', 'Merge join Left Outer'). One replacement character per illegal character, not a collapsed run, so distinct names do not merge; emit() asserts injectivity across the document."
+    },
+    "replace_whitespace_with": "_",
+    "split_camel_case": false,
+    "strip_kind_prefixes": false,
+    "qualify_with_task": false,
+    "qualify_with_container": null,
+    "qualify_reason": "An .hpl holds one pipeline and <info> is a SIBLING of the transforms, not an ancestor, so there is no container to qualify with. Transform names are unique within a pipeline by GUI convention.",
+    "known_risk": "Two transform names that differ only in illegal characters ('a b' and 'a-b') sanitise to the same model name; emit() raises rather than overwriting one model with another."
+  },
+  "column_propagation": {
+    "_comment": "FILL_WHEN_UNDECLARED: a declared list is exhaustive and only its absence means 'whatever arrives here'. Evidenced on W4: TableInput states its full output list, TableOutput states its full target column list, and Formula states only the fields it ADDS or REPLACES -- which would argue for ACCUMULATE on Formula alone, but Formula has no port site at tier 1 (it degrades), so with FILL it carries its predecessor's 4 columns. ACCUMULATE platform-wide would be wrong for TableOutput: it would append the 5 target column names to the 4 inbound ones. stop_at_kinds is empty: every kind that defines a new shape here (MergeJoin, JoinRows, StreamLookup) declares no ports of its own, and listing a kind that states no output shape starves its successors.",
+    "mode": "FILL_WHEN_UNDECLARED",
+    "_accumulate_kinds_comment": "Kinds whose declared list names only the columns they ADD, so the inbound buffer passes through as well (ACCUMULATE for these kinds alone). Get Variables: its <fields> are the variable columns appended to every incoming row.",
+    "accumulate_kinds": ["GetVariable"],
+    "algorithm_id": "predecessor_column_propagation.v1",
+    "stop_at_kinds": [],
+    "stop_at_roles": []
+  },
+  "port_policy": {
+    "_comment": "No local-variable field concept and no per-field default. <nullif> (TextFileInput2) is the inverse of a default -- read this value AS null -- so it is a no-slot fact, never a default_value.",
+    "output_column_order": "FIELD_ELEMENT_DOCUMENT_ORDER",
+    "input_column_naming": "UPSTREAM_FIELD",
+    "_input_columns_from_comment": "INPUT_PORTS, unlike Pentaho's NONE, because Hop's TableOutput STATES its receiving column list: <stream_name> on each <field>. Those are read as INPUT ports by self_def_sites.table_output_field_map and become InputColumns with SOURCE provenance. No other site declares an INPUT port, and a hop names no fields, so every other element's InputColumns is empty exactly as under NONE.",
+    "input_columns_from": "INPUT_PORTS",
+    "input_column_type_from": "LOCAL_PORT",
+    "emit_scale_when_zero": true,
+    "inline_local_variables": false,
+    "drop_local_variables_from_outputs": false,
+    "port_reference_case_insensitive": false,
+    "local_variable_porttype": "__HOP_HAS_NO_LOCAL_VARIABLE_PORTTYPE__",
+    "output_porttypes": [
+      "OUTPUT"
+    ],
+    "input_porttypes": [
+      "INPUT"
+    ],
+    "exclude_port_groups_with_flag": null,
+    "ref_field_passthrough_rule": null
+  },
+  "type_vocabulary": {
+    "_comment": "Hop names its field types in <fields>/<field>/<type> with the Kettle ValueMeta names. CAVEAT: value types are a plugin type in Hop as in Kettle, so the list is closed for the stock distribution only. CAVEAT 2: a Formula row's <value_type> is the NUMERIC ValueMeta id (1 Number, 2 String, 3 Date, 4 Boolean, 5 Integer, 6 BigNumber, 8 Binary, 9 Timestamp, 10 Internet Address), while a Calculator row's <value_type> is the NAME. No port site reads either, so neither reaches the IR.",
+    "carry": "HOP_VALUEMETA_NAME",
+    "vocabulary": [
+      "Number",
+      "String",
+      "Date",
+      "Boolean",
+      "Integer",
+      "BigNumber",
+      "Binary",
+      "Timestamp",
+      "Internet Address"
+    ],
+    "precision_field_carries": "HOP_LENGTH",
+    "known_defect": "The IR Precision is fed from Hop's <length> and the IR Scale from Hop's <precision>. For a String the IR Precision holds a character length. Charged per column by hop_precision_is_ir_scale."
+  },
+  "edge_policy": {
+    "_comment": "Hop STATES its element-level edges as <hop> entries, so they are read, not derived. There is no field-level lineage in an .hpl: a hop carries a whole row and names no columns, so field_edges is always empty. A hop carries no name, so there is no label.",
+    "element_edges_from": "EXPLICIT_EDGE_ELEMENTS",
+    "collapse_connectors_by": null,
+    "label_source": "HOP_HOPS_ARE_UNNAMED",
+    "label_when_absent": null,
+    "edge_labels": [
+      {
+        "_comment": "TRANSFORM ERROR HANDLING. <transform_error_handling>/<error> names the hop that carries a transform's error rows (source_transform -> target_transform) when is_enabled=Y. That hop is labelled `error`; the producer routes it as the write's reject stream instead of its output rows. The error field names (ERR_DESC, ...) are the target transform's own fields.",
+        "xpath": "./transform_error_handling/error",
+        "from_attr": "source_transform",
+        "to_attr": "target_transform",
+        "enabled_attr": "is_enabled",
+        "label": "error"
+      }
+    ]
+  },
+  "default_value_policy": {
+    "_comment": "No analogue: a Hop field has no default-value slot.",
+    "error_function_prefix": null,
+    "error_default_disposition": null,
+    "literal_default_on_unconnected_input": null,
+    "discardable_label": "DISCARDABLE",
+    "load_bearing_label": "LOAD_BEARING"
+  },
+  "expression_syntax": {
+    "_comment": "UNEXERCISED BY ANY RULE. Hop has no single expression language: Calculator is an operation enum, Formula is Hop's OpenFormula-style dialect, JavaScript is Rhino, and User Defined Java Expression is Janino Java. No port site or rule kind here reads a <formula> or <calculation> row, so nothing reaches the expression scanner. These values are placeholders recorded so the gap is visible rather than absent.",
+    "string_quotes": [
+      "\"",
+      "'"
+    ],
+    "reference_delimiters": null,
+    "identifier_extra_chars": ".",
+    "case_insensitive_resolution": false,
+    "expression_property_read": null,
+    "expression_property_ignored": null
+  },
+  "no_slot_facts": [
+    {
+      "id": "pipeline_type",
+      "from": "ELEMENT_ATTR",
+      "attr": "pipeline_type"
+    },
+    {
+      "id": "pipeline_performance_capture",
+      "from": "ELEMENT_FLAG",
+      "flag": "capture_transform_performance"
+    },
+    {
+      "id": "transform_copies",
+      "from": "ELEMENT_FLAG",
+      "flag": "copies"
+    },
+    {
+      "id": "row_distribution_mode",
+      "from": "ELEMENT_FLAG",
+      "flag": "distribute"
+    },
+    {
+      "id": "partitioning_method",
+      "from": "CHILD_ATTR",
+      "xpath": "./partitioning",
+      "attr": "method",
+      "key_attr": "method"
+    },
+    {
+      "id": "hop_transform_connection",
+      "from": "ELEMENT_ATTR",
+      "attr": "connection",
+      "note": "The named database connection on TableInput, TableOutput, DBLookup, CombinationLookup and DimensionLookup. It is the only statement of which SQL dialect a <sql> body is written in (W4: TaskTracker, a SQL Server database). The IR has no connection slot."
+    },
+    {
+      "id": "hop_table_input_sql",
+      "from": "ELEMENT_ATTR",
+      "attr": "sql",
+      "note": "A TableInput's ENTIRE read specification. MEASURED on W4: `SELECT TaskID, Title, Status, CreatedAt FROM dbo.Tasks WHERE CreatedAt < '2026-06-15 00:00:00.000'`. The IR SourceQualifier has no query slot, so the WHERE clause -- a row filter -- is carried only by this obligation and by the sidecar, never by a structural rule. Honest NO_SLOT, same as Pentaho's ktr_table_input_sql."
+    },
+    {
+      "id": "hop_table_input_limit",
+      "from": "ELEMENT_ATTR",
+      "attr": "limit",
+      "note": "Row limit on the read; 0 means none and is the neutral default."
+    },
+    {
+      "id": "hop_table_input_variables_active",
+      "from": "ELEMENT_ATTR",
+      "attr": "variables_active",
+      "note": "Y means ${VAR} references in <sql> are substituted at run time (tableinput-variables.hpl: `where id > ${PRM_ID}`). The value of the variable is not in the transform."
+    },
+    {
+      "id": "hop_table_input_execute_each_row",
+      "from": "ELEMENT_ATTR",
+      "attr": "execute_each_row",
+      "note": "Y re-runs the query once per incoming row with ? parameters bound from the inbound stream -- a correlated read, not a scan. Promoted into ExecuteEachRow; Y degrades the transform in the producer."
+    },
+    {
+      "id": "hop_table_input_lookup",
+      "from": "ELEMENT_ATTR",
+      "attr": "lookup",
+      "note": "TableInput <lookup> (\"Insert data from transform\"): the upstream transform whose rows bind the query's ? or {name} markers. Promoted into RowsFromTransform; a named transform degrades the Table input in the producer (a per-row lookup, G23)."
+    },
+    {
+      "id": "hop_table_output_table",
+      "from": "ELEMENT_ATTR",
+      "attr": "table",
+      "note": "TableOutput <table>, lifted onto the transform. Promoted into TargetTransformation.TableName by kind_dispatch.TableOutput.element_fields."
+    },
+    {
+      "id": "hop_lookup_table",
+      "from": "CHILD_ATTR",
+      "xpath": "./lookup",
+      "attr": "table",
+      "note": "Insert/update, Update and Delete <lookup>/<table>: the table the transform writes. Promoted into the keyed-write target's TableName."
+    },
+    {
+      "id": "hop_lookup_schema",
+      "from": "CHILD_ATTR",
+      "xpath": "./lookup",
+      "attr": "schema",
+      "note": "<lookup>/<schema>. Not promoted, for the reason hop_table_output_schema gives."
+    },
+    {
+      "id": "hop_lookup_key_column",
+      "from": "CHILD_ATTR",
+      "xpath": "./lookup/key",
+      "attr": "field",
+      "key_attr": "field",
+      "note": "<lookup>/<key>/<field>: a TABLE column the transform matches on (<name> is the stream field). Every key is read (element_fields list) and promoted into KeyColumns."
+    },
+    {
+      "id": "hop_lookup_key_condition",
+      "from": "CHILD_ATTR",
+      "xpath": "./lookup/key",
+      "attr": "condition",
+      "key_attr": "field",
+      "note": "<lookup>/<key>/<condition>, keyed by the key's table column. Promoted into KeyConditions; only '=' is a key match."
+    },
+    {
+      "id": "hop_insert_update_update_column",
+      "from": "CHILD_ATTR",
+      "xpath": "./lookup/value[@update='Y']",
+      "attr": "name",
+      "key_attr": "name",
+      "note": "Insert/update <lookup>/<value> with <update>Y</update>: a table column overwritten when the key is found. update=N columns are written on insert only. Promoted into UpdateColumns (merge_update_columns)."
+    },
+    {
+      "id": "hop_insert_update_bypassed",
+      "from": "ELEMENT_ATTR",
+      "attr": "update_bypassed",
+      "note": "Insert/update <update_bypassed>Y</update_bypassed>: never update, insert only the keys not found. Promoted into UpdateBypassed."
+    },
+    {
+      "id": "hop_update_error_ignored",
+      "from": "ELEMENT_ATTR",
+      "attr": "error_ignored",
+      "note": "Update <error_ignored>. N (the default written by the GUI) fails the pipeline on an input row whose key is not in the table; Y skips it. The converted update_only MERGE skips it in both cases, so N is a semantic difference with no IR slot."
+    },
+    {
+      "id": "hop_sync_operation_field",
+      "from": "ELEMENT_ATTR",
+      "attr": "operation_order_field",
+      "note": "Synchronize after merge <operation_order_field>: the stream field whose value picks insert / update / delete per row. Promoted into OperationField."
+    },
+    {
+      "id": "hop_sync_order_insert",
+      "from": "ELEMENT_ATTR",
+      "attr": "order_insert",
+      "note": "Synchronize after merge <order_insert>: the operation field value that inserts. Promoted into OrderInsert."
+    },
+    {
+      "id": "hop_sync_order_update",
+      "from": "ELEMENT_ATTR",
+      "attr": "order_update",
+      "note": "Synchronize after merge <order_update>: the operation field value that updates. Promoted into OrderUpdate."
+    },
+    {
+      "id": "hop_sync_order_delete",
+      "from": "ELEMENT_ATTR",
+      "attr": "order_delete",
+      "note": "Synchronize after merge <order_delete>: the operation field value that deletes. Promoted into OrderDelete."
+    },
+    {
+      "id": "hop_sync_tablename_in_field",
+      "from": "ELEMENT_ATTR",
+      "attr": "tablename_in_field",
+      "note": "Synchronize after merge <tablename_in_field>: Y names the table per row from a stream field. Promoted into TableNameInField; Y degrades the transform in the producer."
+    },
+    {
+      "id": "hop_merge_rows_key",
+      "from": "CHILD_TEXT",
+      "xpath": "./keys/key",
+      "note": "Merge rows (diff) <keys>/<key>: a key field both streams are compared on. Every key is read (element_fields list) and promoted into KeyFields."
+    },
+    {
+      "id": "hop_merge_rows_value",
+      "from": "CHILD_TEXT",
+      "xpath": "./values/value",
+      "note": "Merge rows (diff) <values>/<value>: a field whose difference makes a row 'changed'. Promoted into ValueFields."
+    },
+    {
+      "id": "hop_merge_rows_flag_field",
+      "from": "ELEMENT_ATTR",
+      "attr": "flag_field",
+      "note": "Merge rows (diff) <flag_field>: the output field holding identical / changed / new / deleted. Promoted into FlagField."
+    },
+    {
+      "id": "hop_merge_rows_reference",
+      "from": "ELEMENT_ATTR",
+      "attr": "reference",
+      "note": "Merge rows (diff) <reference>: the transform whose rows are the reference (old) stream. Promoted into ReferenceTransform."
+    },
+    {
+      "id": "hop_merge_rows_compare",
+      "from": "ELEMENT_ATTR",
+      "attr": "compare",
+      "note": "Merge rows (diff) <compare>: the transform whose rows are the compare (new) stream. Promoted into CompareTransform."
+    },
+    {
+      "id": "hop_merge_rows_diff_field",
+      "from": "ELEMENT_ATTR",
+      "attr": "diff-field",
+      "note": "Merge rows (diff) <diff-field>: an output field with the JSON of each change. Promoted into DiffField; a stated diff field degrades the transform in the producer."
+    },
+    {
+      "id": "hop_dimension_update",
+      "from": "ELEMENT_ATTR",
+      "attr": "update",
+      "note": "Dimension lookup/update <update>: Y updates the dimension (SCD2 write), N only looks keys up. Promoted into Update."
+    },
+    {
+      "id": "hop_stateful_key_column",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/key",
+      "attr": "lookup",
+      "key_attr": "lookup",
+      "note": "Dimension lookup/update and Combination lookup/update <fields>/<key>/<lookup>: a table column of the natural (combination) key. Every key is read (element_fields list) and promoted into KeyColumns."
+    },
+    {
+      "id": "hop_return_technical_key",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/return",
+      "attr": "name",
+      "note": "Dimension lookup/update and Combination lookup/update <fields>/<return>/<name>: the technical key column. Promoted into TechnicalKeyColumn."
+    },
+    {
+      "id": "hop_return_key_creation",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/return",
+      "attr": "creation_method",
+      "note": "Dimension lookup/update and Combination lookup/update <return>/<creation_method>: tablemax, sequence, autoinc, uuid (Dimension only) or field (Dimension only). Promoted into KeyCreation."
+    },
+    {
+      "id": "hop_dimension_version",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/return",
+      "attr": "version",
+      "note": "Dimension lookup/update <return>/<version>: the version column. Promoted into VersionColumn."
+    },
+    {
+      "id": "hop_dimension_date_from",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/date",
+      "attr": "from",
+      "note": "Dimension lookup/update <date>/<from>: the validity start column. Promoted into DateFromColumn."
+    },
+    {
+      "id": "hop_dimension_date_to",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/date",
+      "attr": "to",
+      "note": "Dimension lookup/update <date>/<to>: the validity end column. Promoted into DateToColumn."
+    },
+    {
+      "id": "hop_dimension_date_stream_field",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/date",
+      "attr": "name",
+      "note": "Dimension lookup/update <date>/<name>: the stream field that dates each row. Empty (the usual case) means the pipeline start time. Promoted into StreamDateField."
+    },
+    {
+      "id": "hop_dimension_insert_column",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/field[@update='Insert']",
+      "attr": "lookup",
+      "key_attr": "lookup",
+      "note": "Dimension lookup/update <field> with <update>Insert</update>: a change inserts a new version. Promoted into InsertColumns."
+    },
+    {
+      "id": "hop_dimension_update_column",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/field[@update='Update']",
+      "attr": "lookup",
+      "key_attr": "lookup",
+      "note": "Dimension lookup/update <field> with <update>Update</update>: a change overwrites the current version. Promoted into UpdateColumns."
+    },
+    {
+      "id": "hop_dimension_punch_through_column",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/field[@update='Punch through']",
+      "attr": "lookup",
+      "key_attr": "lookup",
+      "note": "Dimension lookup/update <field> with <update>Punch through</update>: a change overwrites every version. Promoted into PunchThroughColumns."
+    },
+    {
+      "id": "hop_dimension_date_inserted_updated_column",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/field[@update='DateInsertedOrUpdated']",
+      "attr": "lookup",
+      "key_attr": "lookup",
+      "note": "Dimension lookup/update audit column set to the time of every insert and update. Promoted into DateInsertedOrUpdatedColumns."
+    },
+    {
+      "id": "hop_dimension_date_inserted_column",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/field[@update='DateInserted']",
+      "attr": "lookup",
+      "key_attr": "lookup",
+      "note": "Dimension lookup/update audit column set to the insert time. Promoted into DateInsertedColumns."
+    },
+    {
+      "id": "hop_dimension_date_updated_column",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/field[@update='DateUpdated']",
+      "attr": "lookup",
+      "key_attr": "lookup",
+      "note": "Dimension lookup/update audit column set to the update time. Promoted into DateUpdatedColumns."
+    },
+    {
+      "id": "hop_dimension_last_version_column",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/field[@update='LastVersion']",
+      "attr": "lookup",
+      "key_attr": "lookup",
+      "note": "Dimension lookup/update flag column: TRUE on the newest version, FALSE once closed. Promoted into LastVersionColumns."
+    },
+    {
+      "id": "hop_dimension_sequence",
+      "from": "ELEMENT_ATTR",
+      "attr": "sequence",
+      "note": "Dimension lookup/update <sequence>: the sequence a 'sequence' technical key draws from. Promoted into SequenceName."
+    },
+    {
+      "id": "hop_dimension_tk_source_field",
+      "from": "ELEMENT_ATTR",
+      "attr": "tkSourceField",
+      "note": "Dimension lookup/update <tkSourceField>: the stream field a 'field' technical key is read from. Promoted into TechnicalKeySourceField."
+    },
+    {
+      "id": "hop_dimension_min_year",
+      "from": "ELEMENT_ATTR",
+      "attr": "min_year",
+      "note": "Dimension lookup/update <min_year>: a first version is valid from this year's 1 January. Promoted into MinYear."
+    },
+    {
+      "id": "hop_dimension_max_year",
+      "from": "ELEMENT_ATTR",
+      "attr": "max_year",
+      "note": "Dimension lookup/update <max_year>: an open version is valid to this year's 31 December 23:59:59.999. Promoted into MaxYear."
+    },
+    {
+      "id": "hop_dimension_use_start_date_alternative",
+      "from": "ELEMENT_ATTR",
+      "attr": "use_start_date_alternative",
+      "note": "Dimension lookup/update <use_start_date_alternative>. Promoted into UseStartDateAlternative."
+    },
+    {
+      "id": "hop_dimension_start_date_alternative",
+      "from": "ELEMENT_ATTR",
+      "attr": "start_date_alternative",
+      "note": "Dimension lookup/update <start_date_alternative>: none, sysdate, pipeline_start, null or column_value. Promoted into StartDateAlternative."
+    },
+    {
+      "id": "hop_dimension_unknown_row_check_disabled",
+      "from": "ELEMENT_ATTR",
+      "attr": "unknown_row_check_disabled",
+      "note": "Dimension lookup/update <unknown_row_check_disabled>: Y skips inserting the unknown row (technical key 0). Promoted into UnknownRowCheckDisabled."
+    },
+    {
+      "id": "hop_combination_use_autoinc",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/return",
+      "attr": "use_autoinc",
+      "note": "Combination lookup/update <return>/<use_autoinc>. Promoted into UseAutoIncrement."
+    },
+    {
+      "id": "hop_combination_last_update_field",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields/return",
+      "attr": "last_update_field",
+      "note": "Combination lookup/update <return>/<last_update_field>: a column set to the insert time. Promoted into LastUpdateColumn."
+    },
+    {
+      "id": "hop_combination_sequence",
+      "from": "CHILD_ATTR",
+      "xpath": "./fields",
+      "attr": "sequence",
+      "note": "Combination lookup/update <fields>/<sequence>: the sequence a 'sequence' technical key draws from. Promoted into SequenceName."
+    },
+    {
+      "id": "hop_combination_use_hash",
+      "from": "ELEMENT_ATTR",
+      "attr": "crc",
+      "note": "Combination lookup/update <crc>: Y looks combinations up by a hash column. Promoted into UseHash; Y degrades the transform in the producer."
+    },
+    {
+      "id": "hop_table_output_schema",
+      "from": "ELEMENT_ATTR",
+      "attr": "schema",
+      "note": "TableOutput <schema> (W4: dbo). Deliberately NOT promoted: a source-side schema is not the Snowflake target schema, and asserting it would state a destination the migration has not decided."
+    },
+    {
+      "id": "hop_table_output_truncate",
+      "from": "ELEMENT_ATTR",
+      "attr": "truncate",
+      "note": "TableOutput <truncate>. Promoted into TargetTransformation.TruncateTarget (G13): Y -> the engine forces `table` (replace), N -> incremental append. Deliberately NOT in neutral_defaults: both values change what the target receives."
+    },
+    {
+      "id": "hop_table_output_only_when_have_rows",
+      "from": "ELEMENT_ATTR",
+      "attr": "only_when_have_rows",
+      "note": "TableOutput <only_when_have_rows>. With truncate=Y, Y truncates only when the first row arrives (an empty run keeps the table). Promoted into OnlyWhenHaveRows."
+    },
+    {
+      "id": "hop_table_output_specify_fields",
+      "from": "ELEMENT_ATTR",
+      "attr": "specify_fields",
+      "note": "Y means <fields> is the explicit stream-to-column map read by table_output_field_map. N means Hop writes stream fields to same-named columns and <fields> is ignored at run time, so any rows still stated there would be read as a map the engine does not use."
+    },
+    {
+      "id": "hop_filter_condition_DETERMINISTICALLY_UNREACHABLE",
+      "from": "ELEMENT_ATTR",
+      "attr": "condition",
+      "note": "UNRESOLVABLE BY ANY DETERMINISTIC RULE HERE. FilterRows states its predicate as a nested <compare>/<condition> TREE, not a scalar, so this ELEMENT_ATTR reads nothing and the FilterConditions requirement is met only by the model sidecar at tier 2 (MODEL provenance). Turning the tree into a predicate needs a COMPOSING rule kind, which does not exist."
+    },
+    {
+      "id": "hop_filter_send_true_to",
+      "from": "ELEMENT_ATTR",
+      "attr": "send_true_to",
+      "note": "The transform receiving rows that satisfy the predicate. Routing: the IR edge carries no branch label, so which hop is the TRUE branch is lost."
+    },
+    {
+      "id": "hop_filter_send_false_to",
+      "from": "ELEMENT_ATTR",
+      "attr": "send_false_to",
+      "note": "The transform receiving rows that fail the predicate. Same loss as send_true_to."
+    },
+    {
+      "id": "hop_stream_lookup_source",
+      "from": "ELEMENT_ATTR",
+      "attr": "from",
+      "note": "StreamLookup <from>: the transform whose rows are the lookup table. Which inbound hop is the lookup side is stated here by name, not by the hops."
+    },
+    {
+      "id": "hop_merge_join_type",
+      "from": "ELEMENT_ATTR",
+      "attr": "join_type",
+      "note": "MergeJoin INNER / LEFT OUTER / RIGHT OUTER / FULL OUTER."
+    },
+    {
+      "id": "hop_merge_join_left_transform",
+      "from": "ELEMENT_ATTR",
+      "attr": "transform1",
+      "note": "MergeJoin left side, by transform name."
+    },
+    {
+      "id": "hop_merge_join_right_transform",
+      "from": "ELEMENT_ATTR",
+      "attr": "transform2",
+      "note": "MergeJoin right side, by transform name."
+    },
+    {
+      "id": "hop_csv_input_filename",
+      "from": "ELEMENT_ATTR",
+      "attr": "filename",
+      "note": "CSVInput file path. Often a ${VAR} reference (${PROJECT_HOME}/files/...)."
+    },
+    {
+      "id": "hop_text_file_input_directory",
+      "from": "CHILD_ATTR",
+      "xpath": "./file",
+      "attr": "name",
+      "key_attr": "name",
+      "note": "TextFileInput2 <file>/<name> -- the directory or file the input reads."
+    },
+    {
+      "id": "hop_text_file_input_filemask",
+      "from": "CHILD_ATTR",
+      "xpath": "./file",
+      "attr": "filemask",
+      "key_attr": "filemask",
+      "note": "TextFileInput2 <file>/<filemask> -- the file name or wildcard under <name>."
+    },
+    {
+      "id": "field_nullif",
+      "from": "PORT",
+      "porttype_class": "OUTPUT",
+      "keyed_by": "name",
+      "requires": "attr_present",
+      "attrs": [
+        "nullif"
+      ],
+      "where_suffix": "/nullif/text()",
+      "provenance": "RESIDUE",
+      "detail": "field '{name}' declares a nullif substitution; the IR column has no null-handling slot and nullif is the INVERSE of a default value, so it cannot be carried as one"
+    },
+    {
+      "id": "placeholder_length_precision",
+      "from": "PORT",
+      "porttype_class": "OUTPUT",
+      "requires": "placeholder_precision",
+      "placeholder_values": [
+        -1
+      ],
+      "keyed_by": "name",
+      "where_suffix": "/length/text()",
+      "provenance": "RESIDUE",
+      "detail": "length is stated as -1 for type '{datatype}'. -1 is the ValueMeta 'nothing specified' sentinel, not a real length."
+    },
+    {
+      "id": "hop_precision_is_ir_scale",
+      "from": "PORT",
+      "porttype_class": "OUTPUT",
+      "keyed_by": "name",
+      "requires": "attr_present",
+      "attrs": [
+        "length",
+        "precision"
+      ],
+      "where_suffix": "/precision/text()",
+      "provenance": "RESIDUE",
+      "detail": "field '{name}' of type '{datatype}': Hop <length> is emitted as the IR Precision and Hop <precision> as the IR Scale. For a String that puts a character length in a field named Precision."
+    },
+    {
+      "id": "dangling_output_column",
+      "from": "PORT",
+      "porttype_class": "OUTPUT",
+      "connectivity": "UNCONNECTED",
+      "keyed_by": "name",
+      "detail": "no field-level lineage exists in an .hpl -- a hop carries a whole row and names no columns -- so no output column can be shown to be consumed"
+    }
+  ],
+  "neutral_defaults": {
+    "_comment": "A fact only creates an obligation when its value differs from the neutral default. These are Hop's own defaults as written by a fresh Hop GUI pipeline, so they carry no design intent. Applied to ELEMENT_ATTR, ELEMENT_FLAG and CHILD_ATTR rules only. hop_table_output_truncate and hop_table_output_specify_fields are deliberately absent: both values change what the target receives. pipeline_type 'Normal' is the batch default; a 'SingleThreaded' pipeline changes row interleaving and is reported.",
+    "pipeline_type": "Normal",
+    "capture_transform_performance": "N",
+    "method": "none",
+    "distribute": "Y",
+    "copies": "1",
+    "limit": "0",
+    "variables_active": "N",
+    "execute_each_row": "N"
+  },
+  "dialect": {
+    "_comment": "UNEXERCISED. No rule reads a <formula> or <calculation> row, so no source expression reaches the dialect. Hop's string concatenation depends on which expression transform is used, so no single divergent operator can be named for the platform; the entry is empty rather than guessed. NOT declaring dialect.expression_translation is deliberate: the Formula dialect (NOW(), IF(), double-quoted string literals) is not modelled, and a structural lowering of it would ship plausible SQL with the wrong meaning.",
+    "identical": [],
+    "syntactically_identical_semantically_divergent": {},
+    "divergent_operator_lengths": [
+      1
+    ],
+    "known_functions_identical": [],
+    "unknown_identifier_disposition": "RESIDUE"
+  },
+  "residue": {
+    "_comment": "Facts that structure identifies but cannot RESOLVE.",
+    "transform_internal_subtrees_have_no_obligation": "DECIDED AND STATED. Transform-internal SUBTREES -- <formulas>/<formula> (Formula), <calculation> (Calculator), <compare>/<condition>/<value> (FilterRows, JoinRows), <lookup>/<key>/<value> (StreamLookup, DBLookup; on Insert/update, Update and Delete they are read, see hpl-keyed-write-lookup), <keys_1>/<keys_2> (MergeJoin), <data>/<line>/<item> (DataGrid), <file> (TextFileInput2), and the <fields> of SortRows, Unique and SelectValues (the <fields> of CombinationLookup and DimensionLookup and the <keys>/<values> of MergeRows are read, see hpl-stateful-sink-fields) -- are not scalars on the transform, and every no_slot_fact mechanism reads ONE NAMED KEY. THEY ARE NOT SILENT: structure.census inventories each as an UNKNOWN OBJECT with a citable location and the transform containing it. MEASURED on Archive_DeprecatedTasks.hpl: exactly 3 unknown objects, all inside 'Derived Column' -- <formulas> at ktr:77, <formula> at ktr:78, <formula> at ktr:86. A degraded element also carries its full <transform> fragment in `_unsupported_body`, which is what tier 2 reads.",
+    "table_output_stream_map_is_positional": "TableOutput's <stream_name> -> <column_name> map is read into InputColumns[i] and OutputColumns[i], so a rename (W4: DepreciatedAt -> DeprecatedAt) is representable only by position. The IR has no declared per-column source mapping on a target.",
+    "transform_plugin_semantics": "An .hpl states a transform's plugin id and its own configuration and nothing about what the plugin DOES. Hop ships several hundred transform plugins and the set is extensible, so the semantic model of this platform is entirely outside the file.",
+    "four_expression_languages": "Calculator (operation enum), Formula (Hop formula dialect), JavaScript (Rhino) and User Defined Java Expression (Janino Java) each carry a different language. There is no single Hop expression language to write a scanner for.",
+    "formula_value_type_is_numeric": "Formula <value_type> is a numeric ValueMeta id (W4: 2 = String, 3 = Date), while Calculator and <fields> state type NAMES. A reader that treated '2' as a type name would emit a wrong datatype; no reader here reads it.",
+    "null_versus_empty": "Hop's XML writer emits a self-closing <tag/> for both null and the empty string, so the distinction is destroyed by the writer and is not recoverable by any reader. Counted per document in the front-end's `unaccounted` line.",
+    "variable_substitution": "Values throughout an .hpl may be ${VAR} references resolved from pipeline <parameters>, project variables or the environment at run time (official samples: ${PROJECT_HOME}, ${PRM_ID}, %%java.io.tmpdir%%). Declared pipeline parameters are read by structure.parameters into the IR, and project and environment variables beside them; a Get Variables field is read like any other reference (structure.parameters.reference_sites). Set Variables is not read.",
+    "transform_scalar_residue_not_swept": "As in platform_pentaho.json, NO ATTR_RESIDUE rule is declared: the attr site is SELF_ATTRS, so the property bag holds the element's identity (name, type) beside its configuration and a residual sweep would report both as unread. emit.Emitter._assert_attr_residue_usable raises if one is declared. The scalars therefore still uncounted on W4 include TableOutput commit, use_batch, return_keys, ignore_errors, tablename_in_field, partitioning_enabled/daily/monthly and TableInput lazy_conversion, cached_row_meta_active.",
+    "pipeline_error_handling": "<transform_error_handling> routes a transform's error rows to another transform (select-values-basic.hpl: 'Cast data types' -> 'Output Cast Errors'). The hop list does not mark that edge as an error path; edge_policy.edge_labels labels it `error` from the enabled <error> record. Its count and limit settings (nr_valuename, max_errors, max_pct_errors, min_pct_rows) have no slot."
+  },
+  "runtime": {
+    "_comment": "How the ORIGINAL platform behaves when it runs, as opposed to what its document says. The repair loop reads this to tell a source-runtime difference from a converted-code defect; the launcher records the facts it can observe for one run in its status.json `runtime` object. Nothing here changes how the source runs.",
+    "time_zone": {
+      "_comment": "Hop's JVM reads TIMESTAMP_NTZ / DATE columns in the JVM default zone, which is the host zone unless -Duser.timezone is set. A source run on a host that is not on UTC therefore shifts every such value by the host's offset, while the converted Snowflake model does not: a whole-hour difference on timestamp columns only, equal to that offset, is a source-runtime difference, not a model defect (G4: -7 h in a container, -1 h on a laptop).",
+      "jvm_option": "-Duser.timezone",
+      "set_through_env": "HOP_OPTIONS",
+      "default_when_unset": "host",
+      "recorded_by_launcher": "status.json runtime.time_zone, runtime.time_zone_source, runtime.utc_offset",
+      "fix_for_user": "Run the source with the zone the converted target assumes: add -Duser.timezone=UTC (or the warehouse session zone) to HOP_OPTIONS under external_command.env in .scai/settings/test_config.yaml. The user decides; the loop never changes the launcher zone and never shifts or excludes the column."
+    },
+    "stateful_transforms": {
+      "_comment": "Transforms whose sink keeps state across runs, so running the same pipeline twice changes the sink: a second run is not a replay of the first. A difference on such a sink after a re-run is the runtime's, not the model's; the unit's own sink_writes.json mode says which sinks are written this way.",
+      "DimensionLookup": "Slowly changing dimension: a second run over the same input versions rows again (date_from/date_to, version) and allocates new technical keys.",
+      "CombinationLookup": "Allocates a technical key per new combination from the table maximum or a sequence; keys depend on what earlier runs wrote."
+    },
+    "wall_clock_transforms": {
+      "_comment": "Transforms whose output depends on when the pipeline ran. Columns they write are the only legitimate comparison exclusions besides clock_columns.json.",
+      "SystemInfo": "System date/time values (system date, start/end of the run)."
+    },
+    "wall_clock_functions": {
+      "_comment": "Expression functions that read the clock, per transform that evaluates expressions. A field computed by one of them alone is a clock column; clock_postpass.py declares it in clock_columns.json from the converted model (which spells it CURRENT_TIMESTAMP(), SYSDATE(), CURRENT_DATE ...), and the repair may exclude it. A field computed from the clock with anything else (NOW()+1) stays compared.",
+      "Formula": ["NOW()", "TODAY()"]
+    },
+    "nondeterministic_transforms": {
+      "_comment": "Transforms whose output is new on every run, so no two runs agree on it. clock_postpass.py declares a sink column in clock_columns.json when the converted model fills it from a random generator (UUID_STRING(), RANDOM(), UNIFORM()) AND that model stands for one of these elements; the repair treats such a column like a wall-clock one (exclude, never rewrite).",
+      "RandomValue": "Generate random value: random numbers, integers, strings, UUIDs (random uuid / uuid4) and HMAC keys.",
+      "RandomCCNumberGenerator": "Generate random credit card numbers."
+    }
+  }
+}

@@ -28,7 +28,7 @@ Sources & Destinations: [List all sources and destinations. Explicitly mark each
 
 Purpose: [Describe the business purpose and value of the package - why does it exist? What business need does it serve? What downstream processes or users depend on it? Avoid technical pipeline descriptions (the DAG shows that). Focus on business context, data consumers, and the functional outcome.]
 
-Conversion: [Assess conversion path. State if Excellent/Good/Partial/Requires Connector Solution. Explain what converts (Control Flow → Tasks, Data Flow → dbt). For ingestion, identify source type and recommend connector solution (Snowpark Python, Fivetran, Snowpipe, Openflow). Include estimated effort hours with brief justification.]
+Conversion: [Assess conversion path. State if Excellent/Good/Partial/Requires Connector Solution. Explain what converts (Control Flow → Tasks, Data Flow → dbt). For ingestion, identify source type and recommend connector solution (Snowpark Python, Fivetran, Snowpipe, Openflow). Do not estimate effort hours: the assessment's Effort Estimates calculator owns effort.]
 ```
 
 ---
@@ -56,7 +56,7 @@ Sources & Destinations: Source is EXTERNAL - Navision ERP database (navision-pro
 
 Purpose: Captures sales transaction data from the Navision ERP system to make it available for downstream analytics and reporting. This package runs as part of the nightly batch to ensure the data warehouse reflects the latest transactional activity. The incremental extraction approach minimizes load on the source ERP system while ensuring no transactions are missed. This data feeds into revenue reporting, sales performance dashboards, and financial reconciliation processes.
 
-Conversion: Package logic converts but requires external connector solution. Source type: External SQL Server database. Since this is pure ingestion with minimal transformation, recommend Fivetran SQL Server connector or Snowflake Openflow to replicate SalesTransaction data directly to Snowflake staging. The watermark pattern and incremental logic can be handled by the connector's CDC capabilities. Estimated effort: 6 hours for connector setup + 2 hours for validation.
+Conversion: Package logic converts but requires external connector solution. Source type: External SQL Server database. Since this is pure ingestion with minimal transformation, recommend Fivetran SQL Server connector or Snowflake Openflow to replicate SalesTransaction data directly to Snowflake staging. The watermark pattern and incremental logic can be handled by the connector's CDC capabilities.
 ```
 
 ---
@@ -70,7 +70,7 @@ Sources & Destinations: All control flow connections are INTERNAL to DWHPRODLSTN
 
 Purpose: Serves as the master controller for the nightly ETL batch, ensuring all data warehouse tables are refreshed in the correct order before business users begin their day. The package guarantees data consistency by enforcing dependencies - dimensions must complete before facts, facts before aggregates. The restart/recovery capability ensures that a failure at 3am doesn't require a full re-run; operations can resume from the last checkpoint, meeting the 6am SLA for data availability. Email notifications keep the support team informed of batch status.
 
-Conversion: Good conversion candidate with moderate complexity. Execute Package Tasks convert to Snowflake Task DAG dependencies. Execute SQL Tasks operating on metadata tables convert to Snowflake stored procedures or inline SQL. Event Handlers require redesign - Snowflake Tasks lack OnPostExecute/OnError events; recommend Snowflake Alert + Notification Integration for failure alerting. SMTP integration needs external function or separate notification service. Estimated effort: 40 hours due to orchestration complexity and notification redesign.
+Conversion: Good conversion candidate with moderate complexity. Execute Package Tasks convert to Snowflake Task DAG dependencies. Execute SQL Tasks operating on metadata tables convert to Snowflake stored procedures or inline SQL. Event Handlers require redesign - Snowflake Tasks lack OnPostExecute/OnError events; recommend Snowflake Alert + Notification Integration for failure alerting. SMTP integration needs external function or separate notification service.
 ```
 
 ---
@@ -84,7 +84,7 @@ Sources & Destinations: Mixed EXTERNAL and INTERNAL sources. Primary source is E
 
 Purpose: Integrates sales pipeline data from SharePoint CRM into the enterprise data warehouse, enabling unified reporting across CRM and transactional systems. The package enriches raw opportunity records with customer segmentation and product categorization from master data dimensions, then applies business rules for revenue forecasting and probability scoring. This powers the executive sales pipeline dashboard and feeds into quarterly revenue projections used by finance for planning.
 
-Conversion: Package converts with connector solution needed for SharePoint source. Recommend Fivetran SharePoint connector or Snowpark Python with Microsoft Graph API to land opportunity data in Snowflake staging. The transformation logic (Data Flows 2-3) converts directly to dbt models with JOIN and calculation logic. Recommend architectural separation: connector for ingestion, dbt for transformation. Estimated effort: 8 hours connector setup + 16 hours dbt model development = 24 hours total.
+Conversion: Package converts with connector solution needed for SharePoint source. Recommend Fivetran SharePoint connector or Snowpark Python with Microsoft Graph API to land opportunity data in Snowflake staging. The transformation logic (Data Flows 2-3) converts directly to dbt models with JOIN and calculation logic. Recommend architectural separation: connector for ingestion, dbt for transformation.
 ```
 
 ---
@@ -94,7 +94,7 @@ Conversion: Package converts with connector solution needed for SharePoint sourc
 ### Bad: Missing Section Headers
 
 ```
-This package loads customer data. It reads from the ODS database and writes to the DDS database. The transformations include derived columns and lookups. It's a good candidate for automated conversion and should take about 10 hours.
+This package loads customer data. It reads from the ODS database and writes to the DDS database. The transformations include derived columns and lookups. It's a good candidate for automated conversion.
 ```
 
 **Problem:** No clear section headers. Missing Classification, Sources & Destinations, Purpose, Conversion labels.

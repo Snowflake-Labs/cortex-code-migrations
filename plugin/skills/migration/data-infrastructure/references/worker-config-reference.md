@@ -4,7 +4,7 @@ The project-default `.scai/config/dew_configuration.toml` (path relative to the 
 
 > **Advanced options:** [Secrets management](#advanced-secrets-management) (external vaults, `$(...)` substitution), [query modifiers](#query-modifiers-toml), [custom extraction plugins](#custom-extraction-plugins), workflow-level [extraction strategies](../../migrate-objects/actions/data-migration/references/extraction-strategies-reference.md), and [advanced operations](./advanced-operations-reference.md) (rate limiting, preflight, incremental/revalidate DV).
 
-> **Prefer SCAI CLI setup:** Use `scai data worker generate-config` and `scai data worker setup` (SPCS) or `scai data worker start --local` instead of hand-authoring TOML. Manual SPCS worker setup is only needed when the CLI path is unavailable — see official docs for egress IP allowlisting and driver host requirements on the source firewall.
+> **Prefer SCAI CLI setup:** Use `scai data worker generate-config` and `scai data worker setup` (SPCS) or `scai data worker start --local` instead of hand-authoring TOML. Manual SPCS worker setup is only needed when the CLI path is unavailable — see [SPCS worker connectivity](#spcs-worker-connectivity) for connecting to sources using DCP.
 
 ## Configuration Sections
 
@@ -17,7 +17,7 @@ The project-default `.scai/config/dew_configuration.toml` (path relative to the 
 | `[application]` | `lease_refresh_interval` | Integer | Optional. Seconds between task lease renewals while executing. Default `120`. |
 | `[application]` | `affinity` | String | Affinity group to match with workflow affinity |
 | `[application]` | `local_results_directory` | String | Optional. Base directory for exported Parquet/CSV before upload. Default `~/.data_exchange_agent/result_data`. Each task uses `task_<id>/<timestamp>/`; cleaned up after successful upload. |
-| `[application]` | `snowflake_database_for_metadata` | String | Database containing migration/validation metadata procedures |
+| `[application]` | `snowflake_database_for_metadata` | String | Database containing migration/validation metadata procedures. Must match the project's resolved metadata database. A missing key or the `SNOWCONVERT_AI` default is rewritten to it, but any other value reaches the worker as written while the orchestrator and `scai data migrate-schema` use the resolved one, so they would read and write metadata in different databases (`migrate-schema` warns and `scai doctor` fails). To change the metadata database, set Metadata database in the app's Settings (Developer tab), or export `CUSTOM_SNOWCONVERT_DATABASE` when running `scai` directly; otherwise regenerate with `scai data worker generate-config -y`. |
 | `[application]` | `snowflake_schema_for_data_migration_metadata` | String | Schema for migration task queue procedures (default metadata schema) |
 | `[application]` | `snowflake_schema_for_data_validation_metadata` | String | Schema for validation-specific metadata objects |
 | `[connections.source.*]` | N/A | Object | Source system connection config. SQL Server and Redshift use ODBC (SQL Server adds BCP for bulk when `use_bcp`); Oracle uses ODP.NET (`Oracle.ManagedDataAccess.Core`); Teradata uses **`teradatasql`** (preferred) or Teradata ODBC (`auto_detect_driver` default); PostgreSQL uses `psql \copy` or ODBC according to `use_copy`. SCAI code extraction uses the separate .NET `Teradata.Client.Provider` NuGet package — not the worker runtime. |
@@ -25,7 +25,7 @@ The project-default `.scai/config/dew_configuration.toml` (path relative to the 
 | `[connections.source.sqlserver]` | `trust_server_certificate` | Boolean | Optional. Forwarded from the scai SQL Server connection. When omitted, ODBC Driver 18 defaults apply (certificate not trusted). |
 | `[connections.source.sqlserver]` | `encrypt` | Boolean | Optional. Forwarded from the scai SQL Server connection. When omitted, ODBC Driver 18 defaults to `encrypt=on`. |
 | `[connections.source.sqlserver]` | `host` | String | Source host. Bare `localhost` is treated as `127.0.0.1` for IPv4-only SQL Server instances. |
-| `[connections.source.sqlserver]` | `use_bcp` | Boolean | Optional (default `false`). Routes **bulk** extraction through the `bcp` utility instead of ODBC — materially faster, and set by the SQL Server worker container. Requires `bcp` on the worker PATH; there is no ODBC fallback if it is missing. Needs no orchestrator `extraction.strategy` change. The `[bulk_utility.bcp]` section some templates carry neither enables nor tunes it — the worker hardcodes BCP's terminators and encoding. |
+| `[connections.source.sqlserver]` | `use_bcp` | Boolean | Optional (default `false`). Routes **bulk** extraction through the `bcp` utility instead of ODBC — materially faster, and on by default in the SPCS SQL Server worker; `use_bcp = false` in the project worker TOML makes `scai data worker setup` switch that worker to ODBC. Requires `bcp` on the worker PATH; there is no ODBC fallback if it is missing. Needs no orchestrator `extraction.strategy` change. The `[bulk_utility.bcp]` section some templates carry neither enables nor tunes it — the worker hardcodes BCP's terminators and encoding. |
 | `[connections.source.oracle]` | `oracle_connection_mode` | String | Required. Use `"basic"` for standard username/password (EZ Connect). |
 | `[connections.source.oracle]` | `database` | String | Oracle **service name** (same value as `service_name` in `~/.snowflake/scai/connections/oracle.toml`). |
 | `[connections.source.teradata]` | `database` | String | Teradata **database name** (same value as `database` in `~/.snowflake/scai/connections/teradata.toml`). |
@@ -58,7 +58,7 @@ scai stores source connections in `~/.snowflake/scai/connections/<engine>.toml`.
 | scai `--auth` / `auth_method` | Worker TOML |
 |-------------------------------|-------------|
 | SQL Server `standard` | username + password (no `authentication` key; DEA default `sql_auth`) |
-| SQL Server `windows` | `authentication = "windows_auth"` (not `use_windows_auth`) |
+| SQL Server `windows` | `authentication = "windows_auth"` (not `use_windows_auth`). On SPCS, `scai data worker setup` writes this from a profile that has `kerberos_principal`; the keytab is a Snowflake secret, not a TOML field. Follow [`sqlserver-spcs-windows-auth.md`](./sqlserver-spcs-windows-auth.md) before that setup. |
 | SQL Server `service_principal` | `authentication = "service_principal"` + `client_id` / `client_secret` |
 | Teradata `standard` | username + password (DEA default logmech TD2) |
 | Teradata `ldap` | `authentication = "LDAP"` + username + password |
@@ -162,7 +162,23 @@ workflow strategy `regular`.
 
 ## SPCS worker connectivity
 
-When the worker runs on SPCS, allowlist the service **egress IP** on the source firewall and ensure ODBC/driver hostnames resolve from the container. `scai data worker setup` automates image build, service creation, and connectivity checks — use it instead of manual container wiring when possible.
+An SPCS worker runs on Snowflake compute, so the source must be reachable **from Snowflake**. For an
+on-premise or private source, that means a Data Connectivity Proxy tunnel — see
+[dcp-setup](../dcp-setup/SKILL.md). Do not ask the customer to open inbound access to the source.
+
+Also ensure ODBC/driver hostnames resolve from inside the container. `scai data worker setup`
+automates image build, service creation, and connectivity checks — use it instead of manual container
+wiring when possible.
+
+**Pre-created egress objects (`--skip-egress`):** when the customer creates the secret, network rule and
+external access integration themselves (IaC, restricted roles), `worker setup --skip-egress` creates none
+of them. By default it expects `SNOWCONVERT_AI.PUBLIC.<SOURCE>_SECRET`, `SNOWCONVERT_AI.PUBLIC.<SOURCE>_EGRESS_RULE`
+and `SCAI_EAI_<SOURCE>_SNOWCONVERT_AI` (`<SOURCE>` such as `SQLSERVER`; a custom `--service-name` puts
+`<SERVICE>_` before it). Name their own objects with `--external-access-integration <NAME>` and
+`--source-secret <SECRET_FQN>` (`DATABASE.SCHEMA.NAME`) (unquoted identifiers, only with `--skip-egress`). The secret is
+`TYPE = PASSWORD` with the source login's `USERNAME` and `PASSWORD` (the client id and secret for Azure AD).
+The integration must allow the source `host:port` and the driver download hosts in its network rule and
+list the secret in `ALLOWED_AUTHENTICATION_SECRETS`.
 
 ## Advanced: Teradata extraction (workflow YAML)
 
@@ -219,14 +235,27 @@ extraction:
 
 Worker streams Parquet to object storage (no local disk PUT). Used for PostgreSQL/Db2 L3 pushdown and as a fallback when the source cannot natively UNLOAD/EXPORT to the user's bucket.
 
-`scai data worker generate-config --extraction-strategy cloud_direct --object-store s3|gcs|azure` writes this section outside `[connections.source.*]`, so hydration does not rebuild it. S3 and GCS get `bucket_name` and `prefix`. Azure gets `container_name`, an optional `prefix`, and credential fields. Path rules: [object-store path restrictions](./object-store-path-restrictions.md).
+`scai data worker generate-config --extraction-strategy cloud_direct --object-store s3|gcs|azure` writes this section outside `[connections.source.*]`, so hydration does not rebuild it. S3 gets `bucket_name`, `prefix`, `region_name`, and access-key placeholders. GCS gets `bucket_name`, `prefix`, `project_id`, and a service-account file path. Azure gets `container_name`, an optional `prefix`, and credential fields. Path rules: [object-store path restrictions](./object-store-path-restrictions.md).
+
+An SPCS container has no AWS profile and no GCP metadata server. `scai data worker setup` copies non-secret settings into the service spec (`region_name` → `CLOUD_DIRECT_REGION`, `request_timeout` / `connect_timeout`, GCS `project_id` and `anonymous`) and stores credentials in Snowflake secrets:
+
+| Store | Secret | Type | Mount |
+|-------|--------|------|-------|
+| S3 | `<prefix>CLOUD_DIRECT_S3_SECRET` | `PASSWORD` (username = access key id, password = secret key) | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
+| S3 session | `<prefix>CLOUD_DIRECT_S3_SESSION_SECRET` | `GENERIC_STRING` | `AWS_SESSION_TOKEN` |
+| GCS | `<prefix>CLOUD_DIRECT_GCS_SECRET` | `GENERIC_STRING` (service-account JSON) | file `credential_file_path` points at |
+
+`<prefix>` is empty for the default worker service and `<SERVICE>_` otherwise. Setup adds the secret to the external access integration `ALLOWED_AUTHENTICATION_SECRETS` and adds egress for `<bucket>.s3.<region>.amazonaws.com:443`, `s3.<region>.amazonaws.com:443`, or `storage.googleapis.com:443`. Re-running setup keeps hosts, rules, and spec entries it does not own. Without `region_name` the S3 client uses `us-east-1`. A concrete bucket without a region or credentials fails during `worker setup` and `scai data doctor`, before extraction.
 
 ```toml
 [connections.target.s3]
 bucket_name = "<BUCKET_NAME>"
 prefix = "<PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
+region_name = "<REGION>"  # required; omitted, the client uses us-east-1
+access_key_id = "<AWS_ACCESS_KEY_ID>"
+secret_access_key = "<AWS_SECRET_ACCESS_KEY>"  # SPCS has no AWS profile; locally, replace both key lines with profile_name
 
-# [connections.target.gcs] uses the same bucket_name and prefix keys.
+# [connections.target.gcs] uses bucket_name, prefix, project_id, and credential_file_path (or anonymous = true).
 
 [connections.target.blob]
 container_name = "<CONTAINER_NAME>"
@@ -254,6 +283,25 @@ base_url = "https://vault.example.com/v1/secret/data/dea"
 Reference resolved values in connection string fields using the provider scheme (for example `vault://path/to/secret#field`).
 
 **Command substitution** — embed `$(...)` recipes in connection fields (for example `$( aws secretsmanager get-secret-value ... )#password`). Gated by `SECRET_MANAGERS_ALLOW_CMD_SUBSTITUTION=true` (default `false`).
+
+**Azure Key Vault** — use the `az` recipe. `--query value -o tsv` prints the raw secret value; `#field` projects a field from a JSON value, and fields of one secret share one `az` call per cache TTL:
+
+```toml
+[connections.source.sqlserver]
+username = "$( az keyvault secret show --vault-name dmvf-prod-kv --name sqlserver-migrator --query value -o tsv )#username"
+password = "$( az keyvault secret show --vault-name dmvf-prod-kv --name sqlserver-migrator --query value -o tsv )#password"
+
+[connections.target.snowflake_password]
+password = "$( az keyvault secret show --vault-name dmvf-prod-kv --name snowflake-worker-password --query value -o tsv )"
+```
+
+The snippet shows only the secret fields. `[connections.source.sqlserver]` also needs `host` and `database`; `[connections.target.snowflake_password]` also needs `account`, `user`, `role`, `warehouse`, `database` and `schema`.
+
+- The Azure CLI must be on `PATH` and logged in as the worker's OS user before it starts: `az login --identity --allow-no-subscriptions` (managed identity) or `az login --service-principal … --allow-no-subscriptions`. Without the flag, an identity that holds only a Key Vault role fails with `No subscriptions found`. The CLI does not log in from `AZURE_*` variables by itself.
+- Grant the identity **Key Vault Secrets User** on the vault or on each secret.
+- Key Vault secret names allow only letters, digits and hyphens.
+- Prefer this recipe to a REST `akv` provider with a bearer token: that token is read once at start-up and expires after about an hour.
+- Check before starting: `SECRET_MANAGERS_ALLOW_CMD_SUBSTITUTION=true python -m shared.secret_managers check --config <worker.toml> -v` prints `SecretNotFound`, `Forbidden` or `binary 'az' not found on PATH` per failing field, never a value. It does not validate the rest of the config; `data-exchange-agent doctor -c <worker.toml>` with the same environment also opens the source and Snowflake connections.
 
 > **Inline `[secret_managers]` is ignored:** Do **not** put `[secret_managers]` blocks in `dew_configuration.toml` — the worker loader ignores unrecognized top-level sections. Use `SECRET_MANAGERS_CONFIG_FILE` or the env vars below.
 

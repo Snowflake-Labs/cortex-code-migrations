@@ -153,7 +153,16 @@ def handshake(executable: str, version: str) -> Tuple[str, str]:
         stderr_lines.extend(drain_stderr(output))
         returncode = process.poll()
         if returncode is None:
-            returncode = "unknown"
+            # Its pipes can close a moment before it can be reaped.
+            try:
+                returncode = process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                detail = "; ".join(stderr_lines[-3:]) or str(error)
+                return (
+                    "INCOMPATIBLE",
+                    f"'{executable} mcp run' ({version}) closed stdin before "
+                    f"initialize and is still running; {detail}",
+                )
         return early_exit_message(
             executable, version, returncode, stderr_lines, str(error)
         )
@@ -227,6 +236,13 @@ def _version_core(text: str) -> Optional[Tuple[int, ...]]:
     return tuple(int(part) for part in match.group(1).split("."))
 
 
+def is_development_build(version: str) -> bool:
+    """Local and ``make temp`` builds are stamped 0.0.0 on the dev channel
+    (``scripts/publish.sh``); no release is ever numbered 0.0.0."""
+    core = _version_core(version)
+    return core is not None and not any(core)
+
+
 def _older_than(current: str, minimum: str) -> bool:
     left = _version_core(current)
     right = _version_core(minimum)
@@ -236,6 +252,20 @@ def _older_than(current: str, minimum: str) -> bool:
     left = left + (0,) * (width - len(left))
     right = right + (0,) * (width - len(right))
     return left < right
+
+
+def unstamped_build_warning(version: str, *, min_file: Path) -> Optional[str]:
+    """The note SessionStart logs, instead of failing, when *version* is an unstamped local build."""
+    if not is_development_build(version) or not min_file.is_file():
+        return None
+    minimum = min_file.read_text(encoding="utf-8").strip()
+    if not minimum:
+        return None
+    return (
+        f"scai {version} is a local build with no version stamp, so plugin minimum {minimum} "
+        "is not checked. The Code Unit Registry check still applies. To check the minimum too, "
+        f"publish scai with --version {minimum} or newer."
+    )
 
 
 def assessment_venv(home: Optional[Path] = None, environ: Optional[dict] = None) -> Path:
@@ -264,12 +294,49 @@ def assessment_venv(home: Optional[Path] = None, environ: Optional[dict] = None)
     return snowflake / "scai" / "python" / "venv"
 
 
-def install_gate(version: str, *, venv: Path, min_file: Path) -> Optional[Tuple[str, str]]:
+_CUR_LIBRARY = "Snowflake.SnowConvert.CodeUnitRegistry/"
+_SQL_DEPS = "Snowflake.SnowConvertDesktop.Sql.deps.json"
+
+
+def _cur_from_deps(path: Path) -> Optional[Tuple[int, ...]]:
+    try:
+        libraries = json.loads(path.read_text(encoding="utf-8")).get("libraries") or {}
+    except (OSError, ValueError, AttributeError):
+        return None
+    for name in libraries if isinstance(libraries, dict) else ():
+        if name.startswith(_CUR_LIBRARY):
+            return _version_core(name[len(_CUR_LIBRARY):])
+    return None
+
+
+def bundled_cur_version(executable: Optional[str]) -> Optional[Tuple[Tuple[int, ...], Path]]:
+    """The lowest Code Unit Registry version the scai bundle behind *executable* is built on.
+
+    Read from the deps.json of the CLI and of the SQL code processor (``sql/`` beside or one level
+    above it), as `scai doctor` and the MCP server's apacheHop gate read it. ``None`` when no
+    deps.json names the registry. Covers an installed ``orchestrator/scai`` and a wrapper beside
+    ``orchestrator/`` and ``sql/``.
+    """
+    if not executable:
+        return None
+    root = Path(executable).resolve().parent
+    candidates = [root / "scai.deps.json", root / "orchestrator" / "scai.deps.json",
+                  root / "sql" / _SQL_DEPS, root.parent / "sql" / _SQL_DEPS]
+    found = [(v, c) for c in candidates if (v := _cur_from_deps(c)) is not None]
+    return min(found, key=lambda item: item[0]) if found else None
+
+
+def install_gate(version: str, *, venv: Path, min_file: Path, min_cur_file: Optional[Path] = None,
+                 executable: Optional[str] = None) -> Optional[Tuple[str, str]]:
     """Install checks that run after a verified MCP handshake.
 
     A missing assessment venv is not a failure: the first report creates it.
     A venv without pip is the ASM0028 failure from locked-down machines.
-    ``min-scai-version`` in the plugin root is the oldest scai this plugin may drive.
+    ``min-scai-version`` in the plugin root is the oldest scai this plugin may drive;
+    a development build (0.0.0, dev channel) is not held to it.
+    ``min-cur-version`` is the oldest Code Unit Registry it may drive: a version number cannot tell,
+    since develop builds are numbered as a prerelease of the last release on a newer registry.
+    An unreadable registry version is not a failure; the MCP server then stamps no apacheHop.
     """
     if venv.is_dir():
         if os.name == "nt":
@@ -283,7 +350,7 @@ def install_gate(version: str, *, venv: Path, min_file: Path) -> Optional[Tuple[
                 "fails with ASM0028. Delete that folder or repair pip.",
             )
 
-    if min_file.is_file() and version != "unknown version":
+    if min_file.is_file() and version != "unknown version" and not is_development_build(version):
         minimum = min_file.read_text(encoding="utf-8").strip()
         if minimum and _older_than(version, minimum):
             return (
@@ -291,6 +358,22 @@ def install_gate(version: str, *, venv: Path, min_file: Path) -> Optional[Tuple[
                 f"scai {version} is older than plugin minimum {minimum}. "
                 "Update scai before AIM runs.",
             )
+
+    if min_cur_file is not None and min_cur_file.is_file():
+        required = _version_core(min_cur_file.read_text(encoding="utf-8").strip())
+        bundled = bundled_cur_version(executable)
+        if required is not None and bundled is not None:
+            have, source = bundled
+            width = max(len(have), len(required))
+            if have + (0,) * (width - len(have)) < required + (0,) * (width - len(required)):
+                found, need = ".".join(map(str, have)), ".".join(map(str, required))
+                return (
+                    "INCOMPATIBLE",
+                    f"scai {version} is built on Code Unit Registry {found} ({source}); this plugin "
+                    f"needs {need} or newer, because an older registry cannot read the units it "
+                    f"records (such as source.platform = apacheHop). Install a scai built on Code "
+                    f"Unit Registry {need} or newer.",
+                )
     return None
 
 
@@ -328,10 +411,15 @@ def main() -> int:
         version,
         venv=assessment_venv(),
         min_file=_PLUGIN_ROOT / "min-scai-version",
+        min_cur_file=_PLUGIN_ROOT / "min-cur-version",
+        executable=executable,
     )
     if install is not None:
         report(*install)
         return 1
+    warning = unstamped_build_warning(version, min_file=_PLUGIN_ROOT / "min-scai-version")
+    if warning:
+        report("WARNING", warning)
     return 0
 
 

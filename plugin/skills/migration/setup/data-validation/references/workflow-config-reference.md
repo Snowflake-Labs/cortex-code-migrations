@@ -42,6 +42,7 @@
 | `validationCustomTypeRules` | Array | No | Per-column cross-type mappings for L1 |
 | `queryModifiers` | Object | No | SQL hints for source queries (see migration reference). DV Jinja templates alias the source table as `src` or `rw` (not `t`), so check the template context before writing a hint that references the alias. |
 | `intervalHandling` | `"interval"` \| `"varchar"` | `"interval"` | Interval column mapping mode |
+| `hashMd5Function` | String | No | **Teradata only.** The `HASH_MD5` UDF L3 calls, as `DATABASE.HASH_MD5`, so one installation serves every source database (see [Teradata identifiers](#teradata-identifiers)) |
 
 \*At least one entry is required across `tables`, `views`, and `objects`.
 
@@ -57,11 +58,13 @@ qualified names before running.
 | `metricsValidation` | Boolean | `false` | L2 — compare aggregate statistics (opt-in) |
 | `rowValidation` | Boolean | `true` | L3 — row-level comparison |
 | `rowValidationMode` | String | `hybrid` | Only `hybrid` is supported (`row`/`cell` are rejected) |
-| `continueOnFailure` | Boolean | `true` | Continue validating remaining tables on failure |
+| `continueOnFailure` | Boolean | `true` | Continue to the next validation level (L1 → L2 → L3) after a failure. The orchestrator's default when the key is omitted is `false`. An L1 object-type `FAILURE` never continues |
 | `maxFailedRowsNumber` | Integer | No | Stop L3 after N mismatch rows per partition / early-stop threshold |
 | `excludeMetrics` | Boolean | No | `true` drops the `avg` / `sum` / `stddev` L2 metrics on both source and target (the orchestrator's default is `false`) |
 | `includeCountDistinct` | Boolean | No | `true` adds the `count_distinct` L2 metric on both source and target (default `false`; the most expensive L2 metric on large tables). See [L2 `count_distinct`](#l2-count_distinct-opt-in-includecountdistinct) |
 | `includeLobColumnsInRowValidation` | Boolean | `false` | `true` makes L3 hash and compare source LOB columns (Oracle `CLOB` / `NCLOB` / `BLOB`, SQL Server `TEXT` / `NTEXT` / `IMAGE`, …). L3 leaves them out by default; L1 and L2 still check them. See [L3 LOB columns](#l3-lob-columns-opt-in-includelobcolumnsinrowvalidation) |
+| `rowChecksumGate` | String | No | Before full L3 extracts row signatures, compare one row count and row checksum per side: `auto` gates large tables only, `on` gates every table, `off` (the orchestrator's default) never. A table whose checksums match skips L3 extraction |
+| `rowChecksumBisection` | Object | No | How a gated table (`rowChecksumGate` `auto` or `on`) is compared per key range, splitting the ranges that fail so L3 extracts only those. Keys: `initialBisectionPartitions` (unset: sized from the target's rows, bytes and cells), `bisectionFactor` (default 4, at least 2), `maxBisectionCycles` (unset: no cap; past it L3 checks the range), `bisectionEarlyStopping` (default `true`: a cycle's first mismatch skips its ranges not yet started, which are recorded `CHECKSUM_NOT_CHECKED`). A table's block replaces the default block whole |
 | `applyMetricColumnModifier` | Boolean | No | Toggles the `% 2097143` overflow guard on L2 `avg` / `sum` / `stddev`, on both source and target (the orchestrator's default is `true`). `false` aggregates full values, which can overflow on large `BIGINT` / `DECIMAL` sums |
 | `maxColumnsPerMetricsBatch` | Integer | No | Split L2 metrics queries by column count |
 | `maxColumnsPerCellBatch` | Integer | No | Per-table: split L3 cell drill-down batch size |
@@ -222,8 +225,8 @@ Unlike `includeCountDistinct`, the key goes only in a `validationConfiguration` 
 | `targetWhereClause` | Filter **target** rows. Snake_case alias: `target_where_clause`. Pairs with `sourceWhereClause`. |
 | `columnSelectionList` | Columns to include (or exclude) |
 | `useColumnSelectionAsExcludeList` | When `true`, `columnSelectionList` is an exclusion list |
-| `columnMappings` | `{"source_col": "TARGET_COL"}` for renamed columns |
-| `indexColumnList` | Row-identity columns for L3. Snake_case alias: `index_column_list`. |
+| `columnMappings` | `{"source_col": "TARGET_COL"}` for renamed columns. `validate_data(mode="setup")` copies the same `where`'s data migration `columnNameMappings` here (reported in `applied_column_mappings`); an entry the table already maps keeps its value. |
+| `indexColumnList` | Row-identity columns for L3. Snake_case alias: `index_column_list`. On SQL Server and Oracle, `validate_data(mode="setup")` fills it when it is unset: from IDENTITY / the primary key, then a unique index. A table with neither (a heap) gets every comparable column, reported in `applied_index_columns` with `source: all_columns`. L3 counts each key's rows on both sides, so full-row duplicates pass only when both sides hold the same number of copies. The key leaves LOB columns out, so such a heap also gets `validationConfiguration.includeLobColumnsInRowValidation: true`, unless the workflow sets that key itself: L3 hashes its LOBs instead of skipping a heap whose only other columns are LOBs. A heap that renames or selects columns (`columnMappings` / `columnSelectionList`, its own or inherited from `defaultTableConfiguration`), or has no comparable column, gets `rowValidation: false` instead. |
 | `targetIndexColumnList` | Target-side index columns when different. Snake_case alias: `target_index_column_list`. |
 | `columnNamesToPartitionBy` | Partition columns for large-table validation. The first column should be one the source can prune on (sort key, clustered index, Teradata level-1 RANGE_N column, partition key, Oracle IOT primary key, Snowflake / BigQuery clustering key, or BigQuery partition column / `_PARTITIONTIME`). A Teradata primary index does not prune range scans — prefer the RANGE_N column when present, or a composite `[partitioning column, PI column]` when the date is low-cardinality. BigQuery `_PARTITIONTIME` needs `columnMappings` in DV (it is not in the target schema). When omitted, a key is inferred for tables (never for views); an object that needs more than one partition with no key fails with an error naming `columnNamesToPartitionBy`. An explicit `[]` turns partitioning off (no inference, one partition whatever the size): never write it, here or in `defaultTableConfiguration`, unless the user explicitly asks for a single partition and accepts the performance cost. |
 | `targetPartitionSizeRows` / `targetPartitionSizeMb` | Per-table partition sizing (mutually exclusive) |
@@ -252,8 +255,9 @@ Like data migration, you can set shared defaults once via top-level `defaultTabl
 |-------|------|-------------|
 | `strategy` | String | `watermark`, `checksum`, or `none` |
 | `watermarkColumn` | String | Column whose max value marks the high-water mark. **Required** when `strategy: watermark`. |
-| `trackModifications` | Boolean | Watermark only — also reconcile rows modified (not just newly inserted) since the last run. |
 | `checksumExpression` | String | Checksum only — optional SQL aggregate per partition to detect change. Must not contain `;`. **Oracle:** built-in incremental checksum is supported; use this field to override with a cheaper probe (for example `MAX(ORA_ROWSCN)`). |
+
+> **Migration-only flags:** `trackModifications` and `trackDeletions` belong to data migration. Validation accepts both on the shared schema and acts on neither. It keeps and writes back `trackModifications` and drops `trackDeletions`, so don't set either in a validation workflow.
 
 > **Oracle:** `checksum` incremental validation is supported (same as other platforms). Default partition probes hash normalized columns; some types are excluded from the hash — see checksum detection limits below and [Advanced operations reference](../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
 
@@ -292,7 +296,6 @@ tables:
     synchronization:
       strategy: watermark
       watermarkColumn: SIGNATURE
-      trackModifications: true
 ```
 
 Checksum example:
@@ -342,7 +345,7 @@ After L3 completes, partition results use standard codes:
 |------|---------|
 | `VALID` | No mismatches detected |
 | `INVALID` | Row-level mismatches found |
-| `POSSIBLE_MISMATCH` | Early stopping triggered before full comparison — treat as needing review, not automatic pass |
+| `POSSIBLE_MISMATCH` | Provisional row mismatch, written only when the table has `acceptedTransformations`. The cell drill-down then promotes the row to a mismatch or deletes it as explained by an accepted transformation. A row left in this state was not reconciled; treat it as needing review, not as a pass |
 
 ## Custom L2 metrics (`validationCustomMetrics`)
 
@@ -484,7 +487,7 @@ Align `source.databaseName` (when present) with the Oracle **service name** in w
 
 ## Teradata identifiers
 
-Teradata uses **database.table** naming — omit source `schemaName` (there is no schema layer). Align `databaseName` with `[connections.source.teradata].database` in worker TOML. Teradata L3 requires the `HASH_MD5` UDF in that database. Snowflake target identifiers still require `schemaName`.
+Teradata uses **database.table** naming — omit source `schemaName` (there is no schema layer). Align `databaseName` with `[connections.source.teradata].database` in worker TOML. Teradata L3 requires the `HASH_MD5` UDF in that database, unless top-level `hashMd5Function: DATABASE.HASH_MD5` names one installation for every database (two parts at most: Teradata has no schemas, so `DB.SCHEMA.HASH_MD5` is rejected). Snowflake target identifiers still require `schemaName`.
 
 ## Common edit scenarios
 
@@ -497,7 +500,10 @@ Teradata uses **database.table** naming — omit source `schemaName` (there is n
 | Exclude columns from L3 row compare (timestamp / audit drift) | Per table: `useColumnSelectionAsExcludeList: true` and `columnSelectionList: [created_at]` (or `CREATED_AT`, `updated_at`, …). Common for SQL Server `DATETIME2` → Snowflake `TIMESTAMP_*` precision or write-time drift. |
 | Whitelist known formatting differences | `acceptedTransformations` |
 | Reduce source locking | `queryModifiers` on table or worker TOML |
-| Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber` |
+| Faster L3 on huge tables | `earlyStoppingForRowHashing`, `maxFailedRowsNumber`, and a leading `columnNamesToPartitionBy` the source can prune on |
+| Partition column the source cannot prune | `columnNamesToPartitionBy` — put the column from the `Partition prune` finding first; for low cardinality, append remaining physical-key columns or the PK (see [Composite partition keys](../../../migrate-objects/actions/data-migration/references/workflow-config-reference.md#composite-partition-keys)) |
+| Compare LOB contents in L3 (Oracle `CLOB` / `NCLOB` / `BLOB`, SQL Server `TEXT` / `NTEXT` / `IMAGE`, …), which L3 leaves out by default | `validationConfiguration.includeLobColumnsInRowValidation: true`, globally or per table. Oracle then needs `EXECUTE` on `DBMS_CRYPTO`. See [L3 LOB columns](#l3-lob-columns-opt-in-includelobcolumnsinrowvalidation) |
+| L3 extract via object storage | `validationConfiguration.extraction.strategy` + `extraction.externalStage` (see [L3 pushdown](../l3-pushdown/SKILL.md)) |
 | Rename columns between source and target | `columnMappings`, `indexColumnList`, `targetIndexColumnList` |
 | Incremental watermark column | `defaultTableConfiguration.synchronization.watermarkColumn` (or per-table) |
 | Views vs tables in one workflow | Use `objects[]` or separate `views[]` section |

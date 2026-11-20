@@ -8,18 +8,36 @@ license: Proprietary. See License-Skills for complete terms
 
 ## On Entry
 
-Tell the user:
-> **Phase 1: Setup** — I'll walk you through connecting to your source database, initializing the project, registering your objects, converting them to Snowflake SQL, and generating an assessment report. Once you've seen the assessment I'll ask whether you want to go on to migrating objects.
+In one or two sentences of your own, tell the user that **Phase 1: Setup** connects to the source database, initializes the project, registers the objects, converts them to Snowflake SQL and produces an assessment report, and that you will ask before going on to migrating objects.
 
-For a Snowflake source, use this instead:
-> **Snowflake Validation Setup** — I'll initialize a Snowflake-source project,
-> configure the Snowflake target and orchestrator, and capture your validation
-> strategy. Snowflake-source projects skip code conversion, assessment,
-> deployment, data migration, testing setup, and the Data Exchange Worker.
+For a Snowflake source, say instead that **Snowflake Validation Setup** initializes a Snowflake-source project, configures the Snowflake target and orchestrator, and captures the validation strategy; it skips code conversion, assessment, deployment, data migration, testing setup and the Data Exchange Worker.
 
 ## Install check
 
 Before `progress_setup()` or any other tool in this flow, run `scai doctor`. Exit 0: continue. Any other exit: stop, show the output, and do not advance the state machine. If the `doctor` command is missing, this scai predates the check — continue; SessionStart already gated the install. Skip the command when this session already ran it and it exited 0.
+
+## Setup Completion Gates
+
+Before accepting `DONE` or reporting setup complete, verify every option the user
+already chose is persisted. In particular, an enabled local dashboard requires
+`configure(dashboard_port=-1)` (or the chosen non-null port) and a
+`dashboard_port` entry in `.scai/config/plugin.yml`. A user saying `DONE` means
+check these gates; it does not waive a missing setting.
+
+Connection setup must not put a literal password in an agent-authored message or
+tool command. Never use a literal with `--password`, `sqlcmd -P`, `docker exec`,
+`echo`, or `printf`. Never write the password characters in an assistant message,
+including a sentence that says you will not inline them. Say "the supplied password".
+Follow the connection skill's secure-input rules instead.
+
+On every `progress_setup` response, if the user enabled the dashboard and
+`.scai/config/plugin.yml` exists without `dashboard_port`, call
+`configure(dashboard_port=-1)` in that same turn. Do this before connection
+troubleshooting and before accepting `DONE`. A reply that the dashboard UI is
+not bundled (`SKIP_DASHBOARD_BUILD`) is not a skip. Call
+`configure(dashboard_port=-1)` anyway. That call records `dashboard_port` even
+when no listener starts. Do not finish by telling the user the dashboard is
+missing from the build.
 
 ## Flow
 
@@ -66,6 +84,8 @@ the next step automatically. The flow:
 
    When the user has **already** said the answer in conversation, record it
    instead of waiting or asking. Do not ask them to say it again.
+   Exception: the isolation opt-in is never taken from conversation; it needs
+   an explicit answer to that exact question (configure-testing.md).
    - Submit the option's `value`, never its label. If they picked
      **Something else**, submit what they typed — not `other`.
    - If they picked **Snowflake** for the dialect, omit `code_source`.
@@ -133,7 +153,9 @@ the next step automatically. The flow:
    asking the user any question it needs. Do not surface "Next step
    pending: X — let me know" prose and wait — that's a wasted
    round-trip; the user already said "continue" upstream. When the
-   sub-skill returns, go back to step 1.
+   sub-skill returns, check its closing `configure(...)` response for a
+   `setup_next:` line. That JSON is what `progress_setup()` would return
+   now, so go to step 2 with it. With no such line, go back to step 1.
 
    **Do not recap what the machine already settled.** `completed_tasks`
    names questions that were answered, not things the project has, and the
@@ -173,7 +195,7 @@ means `migration/dbt/setup.md`, a sibling of `setup/`.
 | `runAssessment`                  | sub-skill: `assessment/SKILL.md`                                  |
 | `chooseEtlFlow`                  | inline prompt (`next_prompt`) — recommended stabilize-first vs. validate-first ETL routing; writes `etl_flow=stabilize|validate`, then continues to `continueToMigration` |
 | `continueToMigration`            | inline prompt (`next_prompt`) — continue into migration setup or stop at the assessment report; autonomous only |
-| `chooseRunMode`                  | inline prompt (`next_prompt`) — pick manual vs autonomous run mode; each answer carries its `then` |
+| `chooseRunMode`                  | inline prompt (`next_prompt`) — full migration run autonomously, full migration approved manually, or deploy & fix only (no source database); each answer carries its `then`. `deploy_only` is saved as `migration_scope: deploy_only` with manual run mode, and setup then ends after `configureSandboxProfile` |
 | `chooseAutonomousSubagentCount`  | inline prompt (`next_prompt`) — autonomous only; persist the project-wide concurrent sub-agent limit |
 | `configureGit`                   | sub-skill: `setup/git.md`                                         |
 | Default (non-Snowflake) branch   | `configureGit` → `configureSandboxProfile` → `chooseTestingPath`  |
@@ -188,8 +210,11 @@ means `migration/dbt/setup.md`, a sibling of `setup/`.
 Conversion and assessment come first on purpose: neither needs a Snowflake
 target, so a user reaches their assessment report before opting into
 migration setup. The ETL flow choice follows assessment; the continue gate
-follows that, then run mode. Everything else — git included — follows the
-`chooseRunMode` prompt.
+follows that, then run mode, which also asks the migration scope (with
+autonomous off it is the continue gate, offering full or deploy & fix only).
+Everything else — git included — follows the `chooseRunMode` prompt. Never
+answer it for the user: deploy-only rules out autonomous mode, and
+`configure` refuses `run_mode="autonomous"` while it is set.
 
 The milestone commits (`registerCode`, `convertCode`, `runAssessment`) need git,
 which is configured after that prompt, so they land together on the first
@@ -215,12 +240,19 @@ path.
 
 ## Skipping an optional step
 
-To skip an optional setup step for this run, call
-`progress_setup(mode="setup", skip="runAssessment")`. The response
+Skip a step only when the user said to skip it. To skip it for this run, call
+`progress_setup(mode="setup", skip="<task>")`. The response
 resolves the next step exactly as a normal call would (for the last step,
 `completed: true`) — act on it directly. Nothing is persisted, so the step
 is offered again later; for a permanent opt-out use
-`configure(tasks={"runAssessment": {"enabled": false}})`.
+`configure(tasks={"<task>": {"enabled": false}})`.
+
+`runAssessment` is never skipped for a run: a request to migrate (and
+validate) includes it, and `progress_setup` refuses the skip. Run the
+commands `next_skill_commands` quotes; the smallest assessment is
+`assessment_options="none"` (waves and the HTML report). Only a user who
+explicitly declines the assessment turns it off, with the `configure` call
+above.
 
 Trust `progress_setup()` / related MCP return values for what is done vs
 pending — do not invent completion from chat history.
@@ -258,7 +290,15 @@ pending — do not invent completion from chat history.
 1. **Follow sub-skill instructions** — Complete each sub-skill fully before returning
 2. **Confirm transitions through the machine** — stage gates arrive as `progress_setup` prompts (`continueToMigration`, `chooseRunMode`); ask those when they come, and otherwise continue into the next sub-skill in the same turn (step 4)
 3. **A requested stop is the end of this run** — If the user asked to stop after conversion, stop when conversion is done. Do not load `../assessment/SKILL.md` and do not run `scai assessment`, even when `progress_setup` names assessment as the next task. Tell the user assessment is the next stage and wait.
-4. **Turn the local dashboard on once `plugin.yml` exists** — It does not start by itself. Call `configure(dashboard_port=-1)` so `.scai/config/plugin.yml` records the default port. Skip only when the user opts out.
+4. **Turn the local dashboard on once `plugin.yml` exists** — It does not start by itself. Call `configure(dashboard_port=-1)` so `.scai/config/plugin.yml` records the default port. Skip only when the user opts out. Verify the persisted key before accepting `DONE`.
+
+**Stop after connections (before `registerCode`)** — When the user asked to
+halt before extract/convert/deploy, you still owe **Setup Completion Gates**:
+persist `dashboard_port` when they enabled the dashboard (user-sim counts),
+and finish source setup through `configure(source_connection=...)` with
+`connection_test: ok`. Do not treat an early stop as permission to skip
+`dashboard_port` or to reuse a pre-existing SQL Server profile on the wrong
+port.
 
 ## On Completion
 
@@ -279,4 +319,8 @@ close-out, even if you said it before: the autonomous run starts right after.
 > migration) is designed to be multi-user, with multiple engineers
 > working through waves in parallel.
 
-Then return to the parent migration skill.
+**In AIM (`shown_on_card`) with `run_mode` `autonomous`:** end the turn
+after the close-out. Do not return to the parent migration skill or load
+another skill: AIM starts the autonomous run in its own chat.
+
+Otherwise, return to the parent migration skill.

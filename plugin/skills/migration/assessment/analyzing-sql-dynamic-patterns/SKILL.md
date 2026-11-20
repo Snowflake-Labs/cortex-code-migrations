@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 
 # Analyzing SQL Dynamic Patterns
 
-Analyzes Dynamic SQL occurrences flagged by SnowConvert (issue code `SSC-EWI-0030`), classifies them against a dialect-specific pattern catalog, scores complexity, and records migration considerations. All operations go through the `scai assessment sql-dynamic` command — there are no Python helpers, no CSV/JSON scripts, no bash loops.
+Analyzes Dynamic SQL occurrences flagged by SnowConvert (issue codes `SSC-EWI-0030`, `SSC-EWI-0125`, `SSC-EWI-0126` and `SSC-EWI-0129`), classifies them against a dialect-specific pattern catalog, scores complexity, and records migration considerations. All operations go through the `scai assessment sql-dynamic` command — there are no Python helpers, no CSV/JSON scripts, no bash loops.
 
 ## Sub-Agent Mode
 
@@ -118,7 +118,7 @@ scai assessment sql-dynamic generate \
 **What this creates:**
 - A JSON file with `metadata` (totals, generation timestamp, input files) and a `codeUnits` map.
 - Each code unit holds `codeUnitId`, `procedureName`, `fileName`, `codeUnitStartLine`, `linesOfCode`, the full `procedure` text, and an `occurrences` list.
-- Each occurrence starts with `status: PENDING` and empty analysis fields, ready for review.
+- Each occurrence starts with `status: PENDING` and empty analysis fields, ready for review. Its `issueCode` names the code that reported it.
 
 ### 2. View occurrences for a code unit
 

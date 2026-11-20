@@ -40,13 +40,24 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from snowconvert_reports.ewi_heatmap import (
+    build_matrix,
+    counts_from_informatica_units,
+    render_matrix_heatmap,
+)
+from snowconvert_reports.loaders.registry_loader import load_registry_entries
+from snowconvert_reports.services.issue_effort_service import IssueEffortService
+
 from .informatica_dag_service import InformaticaDagService
 
 
 
 
 def generate_informatica_html_content(
-    informatica_json_path: Path, output_html_path: Path = None, source_dir: Optional[Path] = None
+    informatica_json_path: Path,
+    output_html_path: Path = None,
+    source_dir: Optional[Path] = None,
+    registry_dir: Optional[Path] = None,
 ) -> Tuple[str, str, str]:
     """Generate HTML content for Informatica tab in the multi-tab report.
 
@@ -54,6 +65,7 @@ def generate_informatica_html_content(
         informatica_json_path: Path to informatica_assessment_analysis.json
         output_html_path: Path where the main HTML file will be saved (optional)
         source_dir: Ignored (kept for API compatibility)
+        registry_dir: Registry with per-mapping EWIs for the EWI heatmap (optional)
 
     Returns:
         Tuple of (html_content, javascript_code, css_content)
@@ -77,7 +89,12 @@ def generate_informatica_html_content(
         # Build the main content sections (matching SSIS order)
         ai_summary_html = _generate_ai_summary_section(data, informatica_json_path)
         metrics_html = _generate_metrics_section(summary, workflows)
-        classification_html = _generate_workflow_classification(workflows, output_html_path, conversion_mode)
+        classification_html = _generate_workflow_classification(
+            workflows,
+            output_html_path,
+            conversion_mode,
+            ewi_heatmap_html=_render_mapping_ewi_heatmap(registry_dir),
+        )
         breakdown_html = _generate_component_breakdown(workflows)
 
         mode_badge = _generate_mode_badge(conversion_mode)
@@ -823,7 +840,29 @@ def _generate_donut_legend(data: Dict[str, int], colors: Dict[str, str], total: 
     '''
 
 
-def _generate_classification_and_complexity_charts(classification_counts: Dict[str, int], complexity_counts: Dict[str, int], total: int) -> str:
+def _render_mapping_ewi_heatmap(registry_dir: Optional[Path]) -> str:
+    """EWI heatmap for mappings, from the registry. Empty when there is no registry or no EWIs."""
+    if not registry_dir:
+        return ""
+    entries = load_registry_entries(Path(registry_dir))
+    counts, severities = counts_from_informatica_units(
+        entries,
+        severity_of=IssueEffortService.from_bundled_reference().get_severity,
+    )
+    return render_matrix_heatmap(
+        build_matrix(counts, severities),
+        unit_plural="mappings",
+        select_id="infaEwiSeverityFilter",
+        row_class="infa-ewi-heatmap-row",
+    )
+
+
+def _generate_classification_and_complexity_charts(
+    classification_counts: Dict[str, int],
+    complexity_counts: Dict[str, int],
+    total: int,
+    ewi_heatmap_html: str = "",
+) -> str:
     """Generate dual donut charts for classification and complexity distribution (matching SSIS)."""
     classification_colors = {
         'Ingestion': '#29B5E8',
@@ -888,11 +927,17 @@ def _generate_classification_and_complexity_charts(classification_counts: Dict[s
                 </div>
             </div>
         </div>
+        {ewi_heatmap_html}
     </div>
     """
 
 
-def _generate_workflow_classification(workflows: List[Dict], output_html_path: Path = None, conversion_mode: str = "dbt") -> str:
+def _generate_workflow_classification(
+    workflows: List[Dict],
+    output_html_path: Path = None,
+    conversion_mode: str = "dbt",
+    ewi_heatmap_html: str = "",
+) -> str:
     """Generate Workflow Classification section (equivalent to SSIS Package Classification).
 
     Shows workflow classification distribution, analysis status, and a filterable
@@ -1028,7 +1073,12 @@ def _generate_workflow_classification(workflows: List[Dict], output_html_path: P
     """
 
     # Dual donut charts for classification and complexity distribution
-    charts_html = _generate_classification_and_complexity_charts(classification_counts, complexity_counts, total_workflows)
+    charts_html = _generate_classification_and_complexity_charts(
+        classification_counts,
+        complexity_counts,
+        total_workflows,
+        ewi_heatmap_html=ewi_heatmap_html,
+    )
 
     return f"""
     <section id="informatica-workflow-classification">
@@ -1893,6 +1943,14 @@ def _generate_javascript() -> str:
     Targets .workflow-row and .component-row within #informatica-report.
     """
     return """
+        function filterInfaEwiHeatmap() {
+            const selected = document.getElementById('infaEwiSeverityFilter')?.value || '';
+            document.querySelectorAll('.infa-ewi-heatmap-row').forEach(row => {
+                const severity = row.getAttribute('data-severity') || '';
+                row.style.display = !selected || severity === selected ? '' : 'none';
+            });
+        }
+        document.getElementById('infaEwiSeverityFilter')?.addEventListener('change', filterInfaEwiHeatmap);
     (function() {
         function filterInformaticaWorkflows() {
             const searchTerm = document.getElementById('informaticaWorkflowSearch')?.value.toLowerCase() || '';

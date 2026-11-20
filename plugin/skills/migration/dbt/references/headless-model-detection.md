@@ -9,7 +9,7 @@ this file is the scripts and the reasoning behind their exact shape.
 SnowConvert also emits large *legitimate* commented-out blocks, so a raw grep returns roughly
 six times more hits than there are real defects — observed 160 raw hits against 26 real. The
 only sound signal is a per-file diff of the **live** set of upstream calls, comments stripped,
-against the `source/` original. `source/` is the oracle: any drop is converter-introduced.
+against the `source/` original. `source/` is the ground truth: any drop is converter-introduced.
 
 Three things the script below gets right, each of which was a real failure when it was not:
 

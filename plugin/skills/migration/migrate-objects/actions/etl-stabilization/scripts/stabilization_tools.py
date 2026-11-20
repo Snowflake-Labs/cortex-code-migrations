@@ -232,7 +232,8 @@ def resolve_ewi_guide(
     code: str, platform: str | None = None, skill_dir: str | Path | None = None
 ) -> tuple[Path | None, list[Path]]:
     """Return ``(path, candidates)``: ``path`` is the first existing guide for ``code``
-    (platform-specific first, then the shared reference guide), or None if none exists.
+    (platform-specific first, then the shared reference guide, then the rule-engine guide that
+    T-SQL markers inside an Execute SQL task or procedure resolve to), or None if none exists.
     ``candidates`` is the list of paths tried, in order.
     """
     # Guard against path traversal: code comes from marker text and both code and
@@ -252,6 +253,8 @@ def resolve_ewi_guide(
         if platform:
             candidates.append(root / "platforms" / platform / "ewi" / f"{name}.md")
         candidates.append(root / "reference" / "ewi" / f"{name}.md")
+    rule_engine = root.parent.parent / "rule-engine" / "resolving-ewis" / "reference"
+    candidates.extend(rule_engine / f"{name}.md" for name in names)
     for candidate in candidates:
         if candidate.is_file():
             return candidate, candidates

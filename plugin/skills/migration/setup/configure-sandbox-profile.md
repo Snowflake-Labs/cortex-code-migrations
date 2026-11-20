@@ -11,17 +11,12 @@ bindings deploy/migrate/validate run on.
 
 ## Step 1: Explain what this step configures
 
-Tell the user:
+In a sentence or two of your own, tell the user what the **sandbox profile** is: the source and Snowflake connections and database bindings (source → Snowflake databases) every deploy/migrate/validate/test run uses, so they hit a sandbox, not production. They confirm it before saving and can change it in Settings.
 
-> **Sandbox profile** — the connections and databases every deploy /
-> migrate / validate / test run uses, so they hit a sandbox, not production:
-> a **source connection**, a **Snowflake target connection** and **database
-> bindings** (source → Snowflake databases). You'll confirm it before it's
-> saved; change it later in Settings.
-
-A source connection is **required**, even when the user only wants synthetic
-test data: deploy, migrate and validate read from it. Say so if asked to go
-on without one.
+A source connection is **required**, even for synthetic test data:
+deploy, migrate and validate read from it. Say so if asked to skip it,
+unless `configure()` shows `migration_scope: deploy_only` (Deploy-only).
+`no-source-project.md` overrides Steps 3-6.
 
 A profile names its bindings file (`--database-bindings`); editing one
 changes every profile using it. A profile for some databases binds a copy
@@ -67,7 +62,7 @@ mapped in `configure-source-connection.md`; Snowflake:
 `../connection/snowflake-connection/SKILL.md`), then re-read `configure()`
 and re-ask.
 
-No source connection yet: stop; setup resumes once there is one.
+No source connection yet: stop until there is one.
 
 ## Step 4: Bind each source database the code covers
 
@@ -88,9 +83,8 @@ source connection's default database (`scai connection list -l <dialect>
 Suggest a target per database: its `configure()` `snowflake_targets:` entry,
 else `snowflake_database:` for the first, else the entry's `suggestedTarget`
 (an unbound placeholder has none: the default database's name).
-When the result has `databasePrefix`, the Snowflake account is shared: every
-target, suggested or typed, must start with it, so prepend it to any that
-doesn't.
+When the result has `databasePrefix` (a shared account), every target,
+suggested or typed, must start with it: prepend it to any that doesn't.
 Then one `ask_user_question` with one question per database with code
 (`multiSelect = false`), headed by the source database: suggested target
 labelled **(recommended)**; freeform override allowed. Reject duplicate
@@ -100,20 +94,29 @@ targets; re-ask on conflict.
 
 For each target, run `SHOW DATABASES LIKE '<TARGET>'`. It exists only if a
 returned `name` equals it exactly (upper-cased if unquoted): `LIKE` ignores
-case and `_` is a wildcard. Create nothing yet; carry missing ones to the
+case and `_` is a wildcard. Create nothing yet: missing ones go to the
 recap. If the check fails, stop with remediation.
 
 For existing targets, call
 `configure(check_target_tables="<token>=<TARGET>,…", check_target_connection="<snowflake>")`
-and carry each `target_tables_with_rows:` line to the recap; on
-`unavailable: …`, say the check couldn't run.
+and carry each `target_database_exists:` line to the recap: what deploy
+replaces there. On `unavailable: …`, say the check didn't run. Any
+target missing: add `check_create_database=true`.
 
 ## Step 6: Confirm, persist, and complete
 
 Show a recap (name, description, source connection, Snowflake connection,
-bindings file, each source database and its target, targets to create). Per
-`target_tables_with_rows` line add "_<DB> has N tables deploy will
-replace (e.g. DBO.ORDERS, 1,204 rows). Their current rows will be lost._"
+bindings file, each source database and its target, targets to create,
+warning on `create_database: denied` here and on the save option), and
+each `target_database_exists:` line that replaces something, adding "_Deploy
+overwrites these objects; their code and rows will be lost._"
+
+Per existing target deploy replaces something in, or whose check couldn't
+run, ask a separate yes/no naming the database and what deploy replaces:
+**Replace these objects in <DB>** /
+**Pick another target** (back to Step 4). Never answer it yourself: with no
+person to answer, stop and escalate it.
+
 Then ask **Yes, save profile** / **Change something**. On
 **Change something**, ask what to change; for a connection, ask the Step 3
 question for that connection (the current one first, labelled **current**,
@@ -134,8 +137,8 @@ after changing the Snowflake connection or a mapping. Only after Yes:
      <token>: <TARGET_DB>
    ```
 
-   AIM reads only this file for now, so every profile points at it: edit it
-   in place. Per database with code keep its `source:` entry (a
+   AIM reads only this file, so every profile points at it: edit it in
+   place. Per database with code keep its `source:` entry (a
    placeholder's is the connection's default) and set `snow:` to the
    confirmed target. Drop `source:` and `snow:` entries for databases with
    no registered code only after the Step 4 inventory is complete; else keep
@@ -157,14 +160,24 @@ To replace a name, `scai profile remove <name>` first.
 
 4. `scai profile set-default <name>`
 
-5. Persist profile **and** connections, the first target as
-   `snowflake_database`:
+5. Persist profile **and** connections, never `snowflake_database`
+   (the bindings file holds the targets):
 
 ```
 configure(sandbox_profile="<name>", source_connection="<source>",
-  snowflake_connection="<snowflake>", snowflake_database="<first_target_db>",
-  ensure_target_database=true)
+  snowflake_connection="<snowflake>", ensure_target_database=true)
 ```
+
+## Deploy-only
+
+`migration_scope: deploy_only` has no source database; the profile is
+Snowflake-only. The steps above change:
+
+- Steps 1 and 3: leave the source out; ask only for Snowflake.
+- Step 4: bind as usual. Keep each `source:` entry convert wrote; a
+  placeholder binds to its own name.
+- Step 6: omit `--source-connection` from `scai profile create` and
+  `source_connection` from `configure`.
 
 Return to the parent setup skill.
 

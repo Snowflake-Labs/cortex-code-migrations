@@ -7,7 +7,7 @@ license: Proprietary. See License-Skills for complete terms
 
 # Rule Apply
 
-Apply matched rules to a single converted SQL file. For batch application (multiple files from propagation), see [BATCH.md](BATCH.md).
+Apply matched rules to a single converted SQL file. For batch application to several files, see [BATCH.md](BATCH.md).
 
 ## Migration state machine (`applyRules`)
 

@@ -21,7 +21,7 @@ When the executor dispatches this skill as the `extractRules` task:
    transition_status(status="started", task="extractRules", where="id = '<object_id>'")
    ```
 2. Extract or decide there is nothing new (including "converted SQL unchanged" / duplicate rule).
-3. Always finish with an advance so `TASK_EVENTS` get an `advanced` row (do not rely on oracle detection alone):
+3. Always finish with an advance so `TASK_EVENTS` get an `advanced` row (do not rely on status-source detection alone):
    ```
    transition_status(status="advance", task="extractRules", outcome="completed", where="id = '<object_id>'")
    ```
@@ -102,14 +102,6 @@ Present the proposed rule:
 
 Use the `create_rule` tool with the confirmed parameters.
 
-### Step 7: Propagate (Optional)
-
-After creating the rule, offer to find other affected code units:
-
-> Rule created. Check which other code units it applies to?
-
-If yes → Load [../propagate/SKILL.md](../propagate/SKILL.md) with the new rule ID.
-
 ---
 
 ## Git History Mode
@@ -143,7 +135,7 @@ Merge identical patterns across files. Two patterns are the same if they describ
 
 ### Step 5: Check for Existing Rules
 
-For each unique pattern, use `find_similar_rules` to check for duplicates. Remove already-covered patterns.
+For each unique pattern, use `find_similar_rules` to check for duplicates, or `list_rules(detailed=true)` when it errors. Remove already-covered patterns. If both checks error, create no rule: an empty `rules` beside an `error` is not "no duplicates".
 
 ### Step 6: Confirm with User
 
@@ -156,11 +148,7 @@ For each new pattern, ask:
 
 ### Step 7: Insert New Rules
 
-Use the `create_rule` tool for each confirmed pattern with `created_from` = "deduced_from_history".
-
-### Step 8: Find Other Affected Code Units
-
-For each new rule, use `reverse_search_rules` to find other matching objects and report the count.
+Use the `create_rule` tool for each confirmed pattern with `created_from` = "deduced_from_history". A `status: "duplicate"` reply names the existing rules that already match it; no rule was written.
 
 ### Summary
 

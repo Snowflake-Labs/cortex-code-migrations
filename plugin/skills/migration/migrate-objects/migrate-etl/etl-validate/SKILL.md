@@ -145,6 +145,12 @@ If the session uses named-connection overrides, append:
 
 The command streams per-package results. Watch for the summary line reporting the failed-unit count.
 
+Run it once per dispatch, as written: no `--json`, no `| tail` / `| head`. The streamed output is
+the only per-table record of the comparison (`--json` keeps just the summary line), and every run
+executes both pipelines again and appends to their sinks. Never re-run to read the result. A
+`validateEtlRepair` that changed code or the test YAML resets this task, and the machine dispatches
+it again: that run is the repair's verification and is the one run of the new dispatch.
+
 **The CLI owns the registry stamp.** On each unit it actually ran, `scai test etl-validate` writes the field for this dispatch:
 
 | Dispatch | Registry field |
@@ -155,8 +161,16 @@ The command streams per-package results. Watch for the summary line reporting th
 | CLI outcome | Registry stamp |
 |---|---|
 | Unit passed | `{ status: "completed", updatedAt }` |
-| Unit failed | `{ status: "failed", updatedAt, error: "comparison" }` |
+| A comparison failed | `{ status: "failed", updatedAt, error: "comparison" }` |
+| Nothing was compared (DVF could not build the comparison) | `{ status: "failed", error: "tooling", details.toolingErrors }` |
+| Refused before running (token left after binding, absent table) | `{ status: "failed", error: "UNRESOLVED_BINDING_TOKEN" \| "DEPENDENT_TABLE_MISSING" }` |
 | Skipped (no ETL test YAML) | *no stamp* — field stays pending |
+
+The class is the CLI's verdict on *what* failed, and it decides what happens next: only
+`comparison` goes to `validateEtlRepair`; every other class stops with its reason, because the
+converted code was not shown to be wrong.
+
+An SSIS source run whose error message contains `expected_failure.message` on the package source is a designed outcome. The runner marks that source branch successful and continues the comparison. When the comparison passes, the registry stamp is `completed`. Leave that package on the completed path. Do not send it to repair, and do not stop with `needs-user`.
 
 ## Step 3: Confirm stamp, then advance
 
@@ -164,10 +178,13 @@ The command streams per-package results. Watch for the summary line reporting th
 
 - All packages passed → registry should read `completed`. For `etlValidate` the live ETL flow is terminal. For `validateEtlValidate` the machine owns any successor. Then:
   `transition_status(status="advance", task="{TASK}", outcome="completed", where="id = '{ETL_ID}'")`
-- One or more packages failed → registry should read `failed` with `error: "comparison"`. Surface the failed package names and row-level differences, then:
-  `transition_status(status="advance", task="{TASK}", outcome="failed", error="sql", where="id = '{ETL_ID}'")`
+- One or more packages failed → registry should read `failed` with the CLI's `error` class (table above). Surface the failed package names, the class, and the row-level differences or the `details` evidence, then advance **without** an `error` — the stamped class is kept and routes the walk:
+  `transition_status(status="advance", task="{TASK}", outcome="failed", where="id = '{ETL_ID}'")`
+  Never pass a different `error` (`sql` included); for `validateEtlValidate` the server refuses to replace the CLI's class. For a class other than `comparison`, the response names the stop and its next step; relay it and stop. Do not start a repair yourself.
 
 If the CLI exited non-zero but the stamp is missing (registry write failed), say so explicitly and do **not** advance green — ask the user to re-run or investigate the registry write error.
+
+If tables matched but the stamp reads `failed` with `error: "production_run"`, the Snowflake re-run after the comparison failed, so the package is **not** validated. Surface `details.productionRun.error` and advance `outcome="failed"` with no `error`, like any other stamped class. The machine refuses `completed` while that failure stands; only a CLI re-run clears it.
 
 ## Step 4: Exclusion
 
@@ -180,3 +197,17 @@ tasks:
 ```
 
 A disabled task reads as **excluded** by the state machine, so the live ETL flow reaches its terminal state without running the comparison. This is **project-wide** — it disables `etlValidate` for every ETL unit and does not skip `validateEtlValidate`. Per-unit exclusion is not supported: writing `codeStatus.etlValidate=excluded` on a single entry reads back as *completed*, not excluded.
+
+## Step 5: Nothing can be compared for this unit
+
+When no comparison can ever run for one unit (the seed derived no source-to-target pair, every
+sink is outside Snowflake, the package only launches a host process), it is **not validated**, not
+passed. Never close `{TASK}` with a note and `done` that says so: the stamp would read completed.
+Escalate instead, offering `unvalidated` in the asks:
+
+`transition_status(status="escalate", task="{TASK}", where="id = '{ETL_ID}'", reason="<why nothing can be compared>", asks=[...])`
+
+Only a person answers `unvalidated` (an autonomous parent may relay their words). The answer
+records `extensions.testing.unvalidated`, the walk passes `{TASK}` over, and every count shows the
+unit as unvalidated, never validated. Guidance that says to record a unit as NOT VALIDATED is
+relayed as `resolution="unvalidated"`, not `guidance`.

@@ -42,13 +42,40 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from gate_b import GateBError, find_project, parse_model  # noqa: E402
 
 
+def declared_schemas(project_dir):
+    """Map each source name to the schema our generated `models/sources.yml` declares for it.
+
+    `emit_sources_yml.py` writes `schema:` only when the source document itself qualifies the
+    table, so a declared schema is the document's fact, not a guess. A `sources.yml` the engine
+    wrote (no SSC-AI-FIRST-GENERATED marker) is not read: its layout is not ours to parse.
+    """
+    path = os.path.join(project_dir, "models", "sources.yml")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return {}
+    if "SSC-AI-FIRST-GENERATED" not in text:
+        return {}
+    schemas = {}
+    current = None
+    for line in text.splitlines():
+        if line.startswith("  - name: "):
+            current = line[len("  - name: "):].strip()
+        elif current and line.startswith("    schema: "):
+            schemas[current] = line[len("    schema: "):].strip()
+    return schemas
+
+
 def collect_sources(project_dir):
     """Walk the emitted project's models/ and return the union of `source()` calls.
 
-    Returns a sorted list of ``[schema, table]`` pairs (the two arguments the SQL passed to
-    `source(...)`, verbatim -- not resolved against any real database) plus, separately, the
-    intra-project `ref()` names found, reported for visibility but not treated as dependencies.
+    Returns a sorted list of ``[schema, table]`` pairs plus, separately, the intra-project
+    `ref()` names found, reported for visibility but not treated as dependencies. The schema is
+    the one `sources.yml` declares for the source when it declares one (what dbt reads), else
+    the `source()` name verbatim (dbt's own fallback). Nothing is resolved against a database.
     """
+    declared = declared_schemas(project_dir)
     models_dir = os.path.join(project_dir, "models")
     sources = set()
     refs = set()
@@ -66,8 +93,8 @@ def collect_sources(project_dir):
             per_model[model] = {"sql_file": rel, "refs": facts["refs"], "sources": facts["sources"]}
             refs.update(facts["refs"])
             for s in facts["sources"]:
-                schema, table = s.split(".", 1)
-                sources.add((schema, table))
+                name, table = s.split(".", 1)
+                sources.add((declared.get(name, name), table))
     return sorted(sources), sorted(refs), per_model
 
 

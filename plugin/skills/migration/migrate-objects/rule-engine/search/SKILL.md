@@ -1,6 +1,6 @@
 ---
 name: rule-engine-search
-description: Find applicable migration rules for a SQL file using Snowflake. Combines regex pattern matching (REGEXP_LIKE) with Cortex semantic search.
+description: Find applicable migration rules for a SQL file using Snowflake. Combines regex pattern matching (REGEXP_INSTR, a match anywhere in the file) with Cortex semantic search.
 parent_skill: rule-engine
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -24,8 +24,8 @@ Use the `search_rules` tool with:
 
 The tool:
 1. Reads the SQL file locally
-2. Syncs it to `RULE_ENGINE.CODE_UNITS_SQL` via MERGE (so it's available for reverse searches)
-3. Runs **regex pattern matching** (`REGEXP_LIKE`) — deterministic, pattern-based hits
+2. Syncs it to `RULE_ENGINE.CODE_UNITS_SQL` via MERGE
+3. Runs **regex pattern matching** (`REGEXP_INSTR(...) > 0`, so a rule's pattern can match anywhere in the file) — deterministic, pattern-based hits
 4. Builds a search query from your `description` + a structural fingerprint (migration-relevant lines extracted from the procedure body)
 5. Runs **Cortex semantic search** (`RULE_SEARCH!SEARCH`) using that query — catches structural patterns regex might miss
 6. Scans for **EWI markers** (`SSC-EWI-*`, `SSC-FDM-*`) and resolves to local reference files
@@ -93,40 +93,11 @@ If both arrays are empty:
 
 > No known rules or EWI markers found for `<object_name>`. Proceeding to deploy.
 
-## Reverse Search: Find Code Units Affected by a Rule
-
-Given a rule ID, find which other code units it applies to:
-
-Use the `reverse_search_rules` tool with `rule_id` set to `<rule_id>`.
-
-The tool runs both regex (`REGEXP_LIKE` on `RULE_ENGINE.CODE_UNITS_SQL`) and semantic search (`CODE_SEARCH!SEARCH`), deduplicates, and returns:
-
-```json
-{
-  "rule_id": "isnull-to-coalesce",
-  "rule_name": "Replace ISNULL with COALESCE",
-  "affected_code_units": [
-    {"code_unit_name": "dbo.GetOrderTotal", "object_type": "procedure", "file_path": "...", "match_source": "regex"},
-    {"code_unit_name": "dbo.CalcDiscount", "object_type": "function", "file_path": "...", "match_source": "semantic"}
-  ]
-}
-```
-
-## Bulk Sync
-
-To sync all SQL files in a directory to `RULE_ENGINE.CODE_UNITS_SQL` without searching:
-
-Use the `sync_sql_files` tool with `directory` set to `<project_dir>/snowflake`.
-
-This is useful before the `migrate-objects` deploy step to make all table/view SQL content searchable.
-
 ## Quick Actions
 
 After reviewing results, offer these shortcuts:
 
 - **"Apply all matched rules"** → Load [../apply/SKILL.md](../apply/SKILL.md) with the full rules list and file path.
-- **"Find other objects matching rule X"** → Load [../propagate/SKILL.md](../propagate/SKILL.md) with the selected rule ID.
-- **"Apply rule X to all matching objects"** → Load [../propagate/SKILL.md](../propagate/SKILL.md) followed by [../apply/BATCH.md](../apply/BATCH.md).
 
 ## Output
 

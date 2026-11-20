@@ -41,6 +41,9 @@ internal sealed class NoOpEtlAssessmentBuilder : IEtlAssessmentBuilderForPipelin
   {
   }
 
+  // Loose Moq returned false here, and a builder that keeps nothing has registered no status.
+  public bool HasStatus(string fullName) => false;
+
   public void RegisterDeclarationName(string fullName, string declarationName)
   {
   }

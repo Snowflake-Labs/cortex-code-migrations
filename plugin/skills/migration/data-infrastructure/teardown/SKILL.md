@@ -13,7 +13,8 @@ project's.
 
 `data_infrastructure(mode="down")` does the teardown for **both** placements in one call:
 
-- **Local** — reaps the orchestrator + worker processes this MCP session started.
+- **Local** — stops the project's local worker and then its orchestrator with `scai data worker stop --local` and
+  `scai data orchestrator stop --local`, whichever session started them.
 - **SPCS** — when a `compute_pool` is configured for the project, it also suspends the SPCS orchestrator
   service and the Data Exchange Worker. An SPCS worker is suspended even when the orchestrator ran
   locally (`execution: local` with `worker: suspended_spcs`). The compute pool then **auto-suspends** on its own
@@ -49,7 +50,7 @@ an idle hour it only stops the services if the orchestrator spec has the suspend
 
 So, when the session stops on a question with no wave in flight, and always before an overnight or unattended gap:
 
-1. Run the in-flight check in Step 1. If a wave is still loading, leave it running (or abort it on purpose with
+1. Run the in-flight check in Step 1. If a wave is still loading, leave it running (or cancel it on purpose with
    `force=true`).
 2. Otherwise offer `data_infrastructure(mode="down")`, and resume with `data_infrastructure(mode="up")` when the
    user comes back.
@@ -81,7 +82,15 @@ If any rows return, **abort teardown** and report:
 > Teardown skipped — workflow `<id>` still has `<N>` `<status>` task(s). Wait for completion (or cancel via the troubleshooting reference) before suspending.
 
 If a job is running only on this machine and you intend to stop it anyway, pass
-`data_infrastructure(mode="down", force=true)`.
+`data_infrastructure(mode="down", force=true)`. It first cancels each running job's workflow in Snowflake and
+ends its attempt (the payload lists them in `cancelled_jobs`), so the next `migrate_data` / `validate_data` run
+starts a new job. When a cancel fails, or a job is still creating its workflow, it stops no process and
+returns `refused` (one reason per job left running) next to the `cancelled_jobs` it already ended, which stay
+ended. Tell the user both, then retry once the refused jobs are resolved.
+
+A paused job (`job_status` reads `status: "paused"`) counts as running here: its tasks still show in the query
+above, and `force=true` cancels it like any other. If the user paused it to carry on later, leave the
+infrastructure up and say so rather than forcing the teardown.
 
 ---
 
@@ -116,19 +125,22 @@ GRANT MONITOR, OPERATE ON SERVICE <metadata_database>.DATA_MIGRATION.DATA_MIGRAT
 GRANT MONITOR, OPERATE ON SERVICE <metadata_database>.DATA_MIGRATION.DATA_EXCHANGE_WORKER_SERVICE TO ROLE <your_role>;
 ```
 
-### Local orchestrator started outside MCP (the tool can't reap it)
+### Local orchestrator running in a terminal (the tool can't stop it)
 
-`data_infrastructure(mode="down")` reaps the local orchestrator/worker **this MCP session** spawned. A
-local orchestrator the user launched themselves is not the tool's to kill. Tell the user:
+`data_infrastructure(mode="down")` stops the project's local orchestrator and worker that were started with
+`--detach`: the ones `up` started, from this session or another, and one the user started with
+`scai data orchestrator start --local --detach` on the project's connection. A foreground one records no PID
+file for scai to find. Tell the user:
 
 > Stop the local orchestrator so it stops polling Snowflake:
-> - Started with `scai data orchestrator start --local --detach`: run `scai data orchestrator stop --local`
->   with the same connection.
 > - Running in a terminal (`scai data orchestrator start --local`): press `Ctrl+C` there.
+> - Started with `--detach` on another connection: run `scai data orchestrator stop --local` with that
+>   connection.
 
-The same applies to a local **worker** started outside MCP: `scai data worker stop --local [CONFIG_FILE]`
-stops one started with `scai data worker start --local` (foreground or `--detach`) on that config, and
-`Ctrl+C` stops a foreground one in its terminal.
+For a local **worker**, `down` runs `scai data worker stop --local` on the project's worker config, which
+stops one started on that config in the foreground or with `--detach`. One started on another config stops
+with `scai data worker stop --local [CONFIG_FILE]` for that config, and `Ctrl+C` stops a foreground one in
+its terminal.
 
 ---
 

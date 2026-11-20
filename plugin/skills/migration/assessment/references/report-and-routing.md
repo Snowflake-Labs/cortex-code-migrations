@@ -15,7 +15,8 @@ end-to-end path is fully defined in `SKILL.md`.
 
 | Intent | Skill or source |
 |---|---|
-| Deployment waves, dependency order | `waves-generator/SKILL.md` |
+| Business use cases, migration waves, a wave for an app, process, report or object | `business-use-cases/SKILL.md` |
+| Size-based waves with a different size, prioritization patterns or mixed types | `waves-generator/SKILL.md` |
 | Temporary/staging/deprecated exclusions | `object_exclusion_detection/SKILL.md` |
 | Migration effort/hours | `effort-estimate/SKILL.md` |
 | Migration risks/anti-patterns | `anti-patterns/SKILL.md` |
@@ -72,13 +73,20 @@ The common path is:
 
 ```bash
 scai assessment report \
+  --plugin-version "<plugin_version>" \
   --project-dir "<project_dir>" \
-  --output "<project_dir>/assessment/multi_report.html" \
   [--ssis-json "<path>" when SSIS succeeded] \
-  [--informatica-json "<path>" when Informatica succeeded]
+  [--informatica-json "<path>" when Informatica succeeded: the JSON path `scai assessment etl generate` printed]
 ```
 
-The command also writes a PDF of every tab beside the HTML (`multi_report.pdf`, or the `-o` stem with a `.pdf` extension). It needs Google Chrome, Microsoft Edge, or Chromium on the machine.
+Leave `--output` unset so the CLI names the file
+`{customer}_migration_plan_{yyyyMMdd_HHmmss}.html` under `assessment/`. The
+command also writes a PDF of every tab beside the HTML (same stem, or the `-o`
+stem with a `.pdf` extension). It needs Google Chrome, Microsoft Edge, or
+Chromium on the machine.
+
+`<plugin_version>` is the trimmed text of the plugin's `VERSION` file. It names
+the build on the report when `AIM_APP_VERSION` is unset.
 
 Always pass `--project-dir`; its registry is required to enrich UUID-based
 waves with names, categories, paths, statuses, and dependencies. The command
@@ -90,11 +98,15 @@ auto-discovers:
   artifacts
 - `assessment/json/sql_dynamic_analysis.json`
 - stable `artifacts/assessment/data-lineage.json`
+- newest `artifacts/assessment/etl/etl_assessment_analysis_*.json` (SSIS) or
+  `informatica_assessment_analysis_*.json` (Informatica), else the legacy
+  `assessment/ssis/` or `assessment/informatica/` file of an older project
 
 Only use explicit source flags to select nonstandard locations:
 
 ```bash
 scai assessment report \
+  --plugin-version "<plugin_version>" \
   --project-dir "<project_dir>" \
   --waves-json "<path>" \
   --exclusion-json "<path>" \
@@ -103,7 +115,7 @@ scai assessment report \
   --snowconvert-reports-dir "<path>" \
   --ssis-json "<path>" \
   --informatica-json "<path>" \
-  --output "<path>/multi_report.html"
+  --output "<path>/{customer}_migration_plan_{yyyyMMdd_HHmmss}.html"
 ```
 
 An explicitly supplied source overrides discovery. A partial assessment passes

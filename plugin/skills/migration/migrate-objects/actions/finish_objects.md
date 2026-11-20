@@ -1,6 +1,8 @@
 # Action: Finish Objects
 
-Mark completed objects as done and (when git is enabled) merge them into `main`.
+Mark completed objects as done and (when git is enabled) save their files to `main` as a direct commit. No pull request is opened or needed.
+
+When you tell the user what happened, say their finished objects were saved (committed) to `main`. Don't call it a merge or mention a pull request: nothing is reviewed or merged.
 
 ## Step 1: Confirm selection
 
@@ -12,9 +14,14 @@ Call `migration_status(mode="my_objects_details", group="done")` to fetch the li
 transition_status(status="finish", where="id IN ('<id1>', '<id2>')")
 ```
 
+An object whose walk has not reached done is refused, and nothing is marked or
+committed. `force=true` overrides that only in an interactive session, and only
+when the user explicitly asks to finish the named objects anyway; it is refused
+under `subagent_mode`.
+
 ### When git is enabled
 
-The handler stamps each object done (`isDone`), then lands its registered files (`files.source.path`, `files.converted.path`, `files.artifacts.path`, `registry/<id>.json`) on top of `origin/main` using pure git plumbing — it builds the commit in a throwaway index and pushes the commit SHA directly, so your working tree never leaves your current branch (the response reports the new commit as `merge_commit`). It then rebases your branch onto the updated `origin/main`, pulling in any teammates' merged work. Files outside the selection stay on your branch.
+The handler stamps each object done (`isDone`), then lands its registered files (`files.source.path`, `files.converted.path`, `files.artifacts.path`, `registry/<id>.json`) on top of `origin/main` using pure git plumbing — it builds the commit in a throwaway index and pushes the commit SHA directly, so your working tree never leaves your current branch (the response reports that commit's SHA as `merge_commit`; despite the field name, it is a direct commit to `main`, not a pull-request merge). It then rebases your branch onto the updated `origin/main`, pulling in any teammates' finished work. Files outside the selection stay on your branch. When `my_objects_summary` reported `solo_project: true`, describe this as saving the user's own finished work to `main`, without mentioning teammates.
 
 ### Relaying git activity
 

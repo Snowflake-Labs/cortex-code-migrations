@@ -38,7 +38,8 @@ class Issue:
 
     Core fields (required by all tools):
         code: Issue code (e.g. SSC-EWI-INF0001)
-        effort_hours: Estimated manual effort
+        effort_hours: Estimated manual effort (never exported by to_dict:
+            the Effort Estimates calculator is the only source of effort)
         severity: Issue severity level
 
     Extension fields (optional, tool-specific):
@@ -95,5 +96,4 @@ class Issue:
             "type": self.issue_type,
             "description": self.description or self.name,
             "severity": self.severity,
-            "effort_hours": self.effort_hours,
         }

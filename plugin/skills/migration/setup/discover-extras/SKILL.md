@@ -1,6 +1,6 @@
 ---
 name: discover-extras
-description: Surface assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PL/SQL packages, custom shell scripts, etc.) and register them as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved Kind enum) so the orchestration layer (next_object + state machine) tracks them alongside built-in units. Triggers from the setup state machine as its last step; can also be re-entered any time the user identifies more custom assets. ETL platforms found here (SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory) are handed to the ETL register path as kind=etl, not registered as customKind.
+description: Surface assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PL/SQL packages, custom shell scripts, etc.) and register them as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved Kind enum) so the orchestration layer (next_object + state machine) tracks them alongside built-in units. Triggers from the setup state machine as its last step; can also be re-entered any time the user identifies more custom assets. ETL platforms found here (SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory) are handed to the ETL register path as kind=etl, not registered as customKind.
 parent_skill: setup
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -14,14 +14,14 @@ This step catches those and registers them in the registry as code units with `k
 ## ETL platforms found here
 
 If the files are an ETL platform the migration is going to convert — SSIS, Informatica
-PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, or Azure
-Data Factory — this skill can be where they are found. Do not register them here.
+PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho,
+or Azure Data Factory — this skill can be where they are found. Do not register them here.
 
 Hand them to **setup → register local ETL → convert**, registered as `kind: etl`:
 
 - SSIS and Informatica PowerCenter go through register-code-units into `source/_etl/`.
-- Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, and Azure Data Factory
-  go through the same register path into `source/_etl_aifirst/<platform>/`, via
+- Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, and Azure
+  Data Factory go through the same register path into `source/_etl_aifirst/<platform>/`, via
   `create_registry_unit`.
 
 Do not offer to register those ETL jobs as `customKind` cookbooks. A `customKind` unit
@@ -31,8 +31,8 @@ as `customKind`.
 
 Say something like:
 
-> "Those Talend jobs (or Alteryx workflows / IICS mappings / DataStage `.dsx` / Pentaho
-> `.ktr` / ADF pipelines / etc.) stay in this discovery step only long enough to hand
+> "Those Talend jobs (or Alteryx workflows / IICS mappings / DataStage `.dsx` / Hop `.hpl` /
+> Pentaho `.ktr` / ADF pipelines / etc.) stay in this discovery step only long enough to hand
 > them to register. They are registered as `kind: etl`, not as a `customKind` cookbook.
 > Airflow, FiveTran, SSAS, and hand-maintained scripts stay here."
 
@@ -66,7 +66,7 @@ The Orchestration category is for ingest and orchestration that will keep runnin
 against Snowflake, not for ETL you want to convert. Do not list an ETL platform the
 migration is going to convert as an orchestration extra — SSIS, Informatica PowerCenter
 (both converted natively) and Talend, Alteryx, Informatica Cloud / IICS, DataStage,
-Pentaho, Azure Data Factory (AI-First) all belong in register-and-convert. If the user
+Apache Hop, Pentaho, Azure Data Factory (AI-First) all belong in register-and-convert. If the user
 picks orchestration and then names one of those, refuse the cookbook path in one
 sentence and hand those files to the ETL register path as `kind: etl` (setup → register local ETL → convert). Do not draft a cookbook,
 do not write `.scai/skills/talendJob.md` (or similar), and do not register those files

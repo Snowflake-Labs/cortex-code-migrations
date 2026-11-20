@@ -40,7 +40,7 @@ Present the extracted pattern with enough detail for a quick decision:
 > **No duplicate found in rule engine.**
 >
 > Save as a reusable rule? This will auto-apply to future objects with the same pattern.
-> 1. Yes — save and check which other objects it applies to
+> 1. Yes — save it
 > 2. No — one-off fix, continue
 
 If **no**, done — return to [SKILL.md](SKILL.md) Step 6.
@@ -54,15 +54,6 @@ If **no**, done — return to [SKILL.md](SKILL.md) Step 6.
 Use the `create_rule` tool with the appropriate parameters. The tool generates the ID, builds search text, and inserts the rule.
 
 For the full standalone extraction workflow (interactive fix mode or git history analysis), see [../rule-engine/extract/SKILL.md](../rule-engine/extract/SKILL.md).
-
-### Step 5: Find Other Affected Code Units (automatic)
-
-Use the `reverse_search_rules` tool to find which other objects have the same pattern:
-
-Use the `reverse_search_rules` tool with `rule_id` set to `<new_rule_id>`.
-
-If results found, report:
-> "This rule also matches N other code units: `dbo.X`, `dbo.Y`, ... They will be auto-fixed during their pre-apply step."
 
 Return to [SKILL.md](SKILL.md) Step 6.2.
 

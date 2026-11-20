@@ -1,6 +1,6 @@
 ---
 name: anti-patterns
-description: Flags migration optimization opportunities (performance, architecture/security, behavior) by running `scai assessment anti-patterns`, which buckets SnowConvert's recorded issue codes and writes JSON for the assessment multi-report Optimization Opportunities tab. Supports SQL Server and Redshift.
+description: Flags migration optimization opportunities (performance, architecture/security, behavior) by running `scai assessment anti-patterns`, which buckets SnowConvert's recorded issue codes and writes JSON for the assessment multi-report Optimization Opportunities tab. Supports SQL Server, Redshift, Oracle, and Teradata.
 parent_skill: assessment
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -9,7 +9,7 @@ license: Proprietary. See License-Skills for complete terms
 
 Thin wrapper over `scai assessment anti-patterns`. SCAI reads the project's Code Unit Registry, matches the already-recorded issue codes against a curated per-dialect catalog, and writes one timestamped JSON the parent assessment multi-report consumes.
 
-- **Supported dialects:** SQL Server, Redshift. Any other dialect aborts with `ASM0024` — report `skipped`, not an error.
+- **Supported dialects:** SQL Server, Redshift, Oracle, and Teradata. Any other dialect aborts with `ASM0024` — report `skipped`, not an error.
 
 ## Run
 

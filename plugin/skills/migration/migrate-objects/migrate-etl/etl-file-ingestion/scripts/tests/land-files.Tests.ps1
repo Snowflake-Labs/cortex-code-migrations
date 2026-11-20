@@ -1,60 +1,62 @@
 #Requires -Version 5.1
 
-$Uploader = if ($env:LAND_FILES_PS1) {
-    $env:LAND_FILES_PS1
-}
-else {
-    Join-Path (Split-Path $PSScriptRoot -Parent) 'land-files.ps1'
-}
-
-$PowerShellExe = if ($PSVersionTable.PSEdition -eq 'Core') {
-    (Get-Process -Id $PID).Path
-}
-else {
-    Join-Path $PSHOME 'powershell.exe'
-}
-
-function Invoke-Uploader([string[]]$Arguments) {
-    $output = & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Uploader @Arguments 2>&1
-    [pscustomobject]@{
-        ExitCode = $LASTEXITCODE
-        Output = ($output | Out-String)
+BeforeAll {
+    $Uploader = if ($env:LAND_FILES_PS1) {
+        $env:LAND_FILES_PS1
     }
-}
+    else {
+        Join-Path (Split-Path $PSScriptRoot -Parent) 'land-files.ps1'
+    }
 
-# Windows PowerShell 5.1 has no $IsWindows; it only ever runs on Windows.
-$OnWindows = (-not (Test-Path variable:IsWindows)) -or $IsWindows
+    $PowerShellExe = if ($PSVersionTable.PSEdition -eq 'Core') {
+        (Get-Process -Id $PID).Path
+    }
+    else {
+        Join-Path $PSHOME 'powershell.exe'
+    }
 
-function ConvertTo-JsonText([string]$Text) {
-    return $Text.Replace('\', '\\')
-}
+    function Invoke-Uploader([string[]]$Arguments) {
+        $output = & $PowerShellExe -NoProfile -ExecutionPolicy Bypass -File $Uploader @Arguments 2>&1
+        [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Output = ($output | Out-String)
+        }
+    }
 
-function Write-Manifest([string]$Path, [string]$SourcesJson) {
-    Set-Content -Encoding ASCII $Path @"
+    # Windows PowerShell 5.1 has no $IsWindows; it only ever runs on Windows.
+    $OnWindows = (-not (Test-Path variable:IsWindows)) -or $IsWindows
+
+    function ConvertTo-JsonText([string]$Text) {
+        return $Text.Replace('\', '\\')
+    }
+
+    function Write-Manifest([string]$Path, [string]$SourcesJson) {
+        Set-Content -Encoding ASCII $Path @"
 {
   "schemaVersion": "1.0",
   "stage": { "name": "public.landing_stage" },
   "sources": [$SourcesJson]
 }
 "@
-}
+    }
 
-# A fake snow on PATH that appends its arguments to $Calls, one line per call.
-function Install-FakeSnow([string]$Bin, [string]$Calls) {
-    New-Item -ItemType Directory -Force $Bin | Out-Null
-    if ($OnWindows) {
-        Set-Content -Encoding ASCII (Join-Path $Bin 'snow.cmd') @"
+    # A fake snow on PATH that appends its arguments to $Calls, one line per call.
+    function Install-FakeSnow([string]$Bin, [string]$Calls) {
+        New-Item -ItemType Directory -Force $Bin | Out-Null
+        if ($OnWindows) {
+            Set-Content -Encoding ASCII (Join-Path $Bin 'snow.cmd') @"
 @echo off
 echo %*>>"$Calls"
 exit /b 0
 "@
+        }
+        else {
+            $fake = Join-Path $Bin 'snow'
+            Set-Content -Encoding ASCII $fake "#!/bin/sh`necho `"`$*`" >> '$Calls'`nexit 0"
+            & chmod +x $fake
+        }
+        return "$Bin$([IO.Path]::PathSeparator)$env:PATH"
     }
-    else {
-        $fake = Join-Path $Bin 'snow'
-        Set-Content -Encoding ASCII $fake "#!/bin/sh`necho `"`$*`" >> '$Calls'`nexit 0"
-        & chmod +x $fake
-    }
-    return "$Bin$([IO.Path]::PathSeparator)$env:PATH"
 }
 
 Describe 'land-files.ps1 integration' {
@@ -94,9 +96,9 @@ Describe 'land-files.ps1 integration' {
             '-DryRun'
         )
 
-        $result.ExitCode | Should Be 0
-        $result.Output | Should Match 'UPLOAD\s+.*employees\.csv -> @public\.landing_stage/demo/ \(1 file\(s\)\)'
-        $result.Output | Should Match 'DRY RUN: 1 file\(s\) from 1 source\(s\), 0 warning\(s\), 0 error\(s\)'
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match 'UPLOAD\s+.*employees\.csv -> @public\.landing_stage/demo/ \(1 file\(s\)\)'
+        $result.Output | Should -Match 'DRY RUN: 1 file\(s\) from 1 source\(s\), 0 warning\(s\), 0 error\(s\)'
     }
 
     It 'uses PathRoot and the manifest glob without descending' {
@@ -131,10 +133,10 @@ Describe 'land-files.ps1 integration' {
             '-DryRun'
         )
 
-        $result.ExitCode | Should Be 0
-        $result.Output | Should Match '@public\.landing_stage/glob/ \(1 file\(s\)\)'
-        $result.Output | Should Not Match 'ignore\.txt'
-        $result.Output | Should Not Match 'nested\.csv'
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match '@public\.landing_stage/glob/ \(1 file\(s\)\)'
+        $result.Output | Should -Not -Match 'ignore\.txt'
+        $result.Output | Should -Not -Match 'nested\.csv'
     }
 
     It 'executes snow with the exact safe PUT contract' {
@@ -171,17 +173,17 @@ Describe 'land-files.ps1 integration' {
             $env:PATH = $oldPath
         }
 
-        $result.ExitCode | Should Be 0
+        $result.ExitCode | Should -Be 0
         $call = Get-Content -Raw $calls
-        $call | Should Match "PUT 'file://.*employees\.csv' '@public\.landing_stage/demo/'"
+        $call | Should -Match "PUT 'file://.*employees\.csv' '@public\.landing_stage/demo/'"
         if ($OnWindows) {
             # A Windows path lands as file://C:/..., never with backslashes inside the quoted literal.
-            $call | Should Match "PUT 'file://[A-Za-z]:/[^'\\]*employees\.csv'"
+            $call | Should -Match "PUT 'file://[A-Za-z]:/[^'\\]*employees\.csv'"
         }
-        $call | Should Match 'AUTO_COMPRESS = FALSE'
-        $call | Should Match 'OVERWRITE = TRUE'
-        $call | Should Match 'PARALLEL = 4'
-        $call | Should Match '-c test-connection --database demo-db --schema demo-schema'
+        $call | Should -Match 'AUTO_COMPRESS = FALSE'
+        $call | Should -Match 'OVERWRITE = TRUE'
+        $call | Should -Match 'PARALLEL = 4'
+        $call | Should -Match '-c test-connection --database demo-db --schema demo-schema'
     }
 
     It 'does not call snow when two sources claim one stage object' {
@@ -230,10 +232,10 @@ Describe 'land-files.ps1 integration' {
             $env:PATH = $oldPath
         }
 
-        $result.ExitCode | Should Be 1
-        $result.Output | Should Match 'Stopped before any PUT'
-        $result.Output | Should Match 'both land on'
-        Test-Path $calls | Should Be $false
+        $result.ExitCode | Should -Be 1
+        $result.Output | Should -Match 'Stopped before any PUT'
+        $result.Output | Should -Match 'both land on'
+        Test-Path $calls | Should -Be $false
     }
 
     It 'treats recurse, packageName and resolutionState as optional, as land-files.py does' {
@@ -263,10 +265,10 @@ Describe 'land-files.ps1 integration' {
 
         $result = Invoke-Uploader @('-Manifest', $manifestPath, '-Connection', 'test', '-Database', 'demo', '-DryRun')
 
-        $result.ExitCode | Should Be 0
-        $result.Output | Should Match 'UPLOAD\s+.*data[\\/]\*\.csv -> @public\.landing_stage/bare/ \(1 file\(s\)\)'
-        $result.Output | Should Match 'SKIPPED\s+no-state: conversion could not resolve a real path'
-        $result.Output | Should Match 'SKIPPED\s+no-prefix: manifest has no mapping\.expectedStagePrefix'
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match 'UPLOAD\s+.*data[\\/]\*\.csv -> @public\.landing_stage/bare/ \(1 file\(s\)\)'
+        $result.Output | Should -Match 'SKIPPED\s+no-state: conversion could not resolve a real path'
+        $result.Output | Should -Match 'SKIPPED\s+no-prefix: manifest has no mapping\.expectedStagePrefix'
     }
 
     It 'keeps relativeFromRoot paths right when the root ends with a separator' {
@@ -289,9 +291,9 @@ Describe 'land-files.ps1 integration' {
 
         $result = Invoke-Uploader @('-Manifest', $manifestPath, '-Connection', 'test', '-Database', 'demo', '-DryRun')
 
-        $result.ExitCode | Should Be 0
-        $result.Output | Should Match 'data[\\/]\*\.csv -> @public\.landing_stage/rel/ \(1 file\(s\)\)'
-        $result.Output | Should Match 'nested[\\/]\*\.csv -> @public\.landing_stage/rel/nested/ \(1 file\(s\)\)'
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Match 'data[\\/]\*\.csv -> @public\.landing_stage/rel/ \(1 file\(s\)\)'
+        $result.Output | Should -Match 'nested[\\/]\*\.csv -> @public\.landing_stage/rel/nested/ \(1 file\(s\)\)'
     }
 
     It 'plans the provider path, not the provider-qualified one Resolve-Path gives UNC roots' {
@@ -316,10 +318,10 @@ Describe 'land-files.ps1 integration' {
 
         $result = Invoke-Uploader @('-Manifest', $manifestPath, '-Connection', 'test', '-Database', 'demo', '-DryRun')
 
-        $result.ExitCode | Should Be 0
-        $result.Output | Should Not Match 'FileSystem::'
-        $result.Output | Should Match 'data[\\/]\*\.csv -> @public\.landing_stage/unc/ \(1 file\(s\)\)'
-        $result.Output | Should Match 'nested[\\/]\*\.csv -> @public\.landing_stage/unc/nested/ \(1 file\(s\)\)'
+        $result.ExitCode | Should -Be 0
+        $result.Output | Should -Not -Match 'FileSystem::'
+        $result.Output | Should -Match 'data[\\/]\*\.csv -> @public\.landing_stage/unc/ \(1 file\(s\)\)'
+        $result.Output | Should -Match 'nested[\\/]\*\.csv -> @public\.landing_stage/unc/nested/ \(1 file\(s\)\)'
     }
 
     It 'lands a subfolder with spaces under a quoted stage destination' {
@@ -348,8 +350,8 @@ Describe 'land-files.ps1 integration' {
             $env:PATH = $oldPath
         }
 
-        $result.ExitCode | Should Be 0
-        Get-Content -Raw $calls | Should Match "PUT 'file://.*2024 Q1/\*\.csv' '@public\.landing_stage/sales/2024 Q1/' AUTO_COMPRESS"
+        $result.ExitCode | Should -Be 0
+        Get-Content -Raw $calls | Should -Match "PUT 'file://.*2024 Q1/\*\.csv' '@public\.landing_stage/sales/2024 Q1/' AUTO_COMPRESS"
     }
 
     It 'accepts a stage prefix with a space but refuses one that would close the quoted literal' {
@@ -375,9 +377,9 @@ Describe 'land-files.ps1 integration' {
 
         $result = Invoke-Uploader @('-Manifest', $manifestPath, '-Connection', 'test', '-Database', 'demo', '-DryRun')
 
-        $result.ExitCode | Should Be 1
-        $result.Output | Should Match 'UPLOAD   .*one\.csv -> @public\.landing_stage/2024 Q1/ \(1 file\(s\)\)'
-        $result.Output | Should Match 'ERROR    quoted: stage prefix is not a landing_stage path'
-        $result.Output | Should Not Match 'ERROR    spaced'
+        $result.ExitCode | Should -Be 1
+        $result.Output | Should -Match 'UPLOAD   .*one\.csv -> @public\.landing_stage/2024 Q1/ \(1 file\(s\)\)'
+        $result.Output | Should -Match 'ERROR    quoted: stage prefix is not a landing_stage path'
+        $result.Output | Should -Not -Match 'ERROR    spaced'
     }
 }

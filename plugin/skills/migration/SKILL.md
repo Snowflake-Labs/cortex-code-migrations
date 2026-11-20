@@ -1,6 +1,6 @@
 ---
 name: migration
-description: End-to-end database migration and data validation to Snowflake. Orchestrates migrations from source connection through conversion (including ETL jobs from Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory, and other ETL platforms alongside SSIS and Informatica PowerCenter), and project-based in-warehouse validation between Snowflake tables. Triggers: migrate, migration, migrate to snowflake, migrate ETL, migrate Talend, migrate Alteryx, migrate Informatica Cloud, migrate IICS, migrate DataStage, migrate Pentaho, migrate ADF, migrate Azure Data Factory, migrate other ETL, convert ETL, Snowflake to Snowflake validation, validate Snowflake tables, compare Snowflake databases.
+description: End-to-end database migration and data validation to Snowflake. Orchestrates migrations from source connection through conversion (including ETL jobs from Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory, and other ETL platforms through the AI-First approach, alongside natively supported SSIS and Informatica PowerCenter), and project-based in-warehouse validation between Snowflake tables. Triggers: migrate, migration, migrate to snowflake, migrate ETL, migrate Talend, migrate Alteryx, migrate Informatica Cloud, migrate IICS, migrate DataStage, migrate Apache Hop, migrate Hop, migrate Pentaho, migrate ADF, migrate Azure Data Factory, migrate other ETL, convert ETL, Snowflake to Snowflake validation, validate Snowflake tables, compare Snowflake databases.
 license: Proprietary. See License-Skills for complete terms
 ---
 
@@ -8,6 +8,8 @@ license: Proprietary. See License-Skills for complete terms
 
 Tell the user:
 > **Welcome to Snowflake AIM for Data Warehouses.**
+>
+> Snowflake AIM for Data Warehouses is now available as an application with better user experience. We recommend using the application for your migration project: [docs.snowflake.com/en/migrations/aim-for-datawarehouses/quick-start](https://docs.snowflake.com/en/migrations/aim-for-datawarehouses/quick-start)
 
 On the first message of a session, the plugin injects whether a migration project exists in this directory. If the user's message already states what they want, act on it (Step 1); otherwise begin with Step 0. Either way, do **not** call `migration_status` — `configure` returns the status.
 
@@ -78,7 +80,11 @@ Use `by_type.<type>.total` to decide what to show:
 - **Type present but none in the current wave** (`total` > 0, but the wave-scoped counts like `deployed` are absent or 0 for this wave): keep it visible and acknowledge it in the narrative. For example, "You also have 1 Informatica ETL workflow staged, scheduled in a later wave and ready to deploy." Do not let the current wave hide work that exists elsewhere in the project.
 - **A wave is active** (`wave` is present in the status JSON): `in_scope`, `objects_done` and every `stage_totals` count cover that wave alone, while `total_objects` and `by_type.<type>.total` are project-wide. Always name the wave and `in_scope_all_waves` when you quote them — "69 objects in wave 1, of 1,110 in scope across all waves" — never present a wave's count as the project's.
 
+`by_type` counts Snowflake types, as the app's Objects list does: an object SnowConvert converted to another type (e.g. a function rewritten as a procedure) counts under its new one. When the status JSON has `type_conversions`, say so where you quote that type — "6 procedures (3 converted from functions)", from each entry's `to`, `from` and `total` (`in_scope` under a wave).
+
 Never describe the project as "<type>-only" (e.g. "table-only") when `by_type` lists any other type with `total` > 0. The placeholders read directly from `by_type.<type>` in the `## Migration status` block; counts that never incremented are absent from the JSON and should be treated as `0`. **BTEQ scripts have no deploy step** — they run their converted SQL inside the test itself, so report them only by `tested` (never "deployed"); `by_type.bteq` carries no `deployed` count.
+
+**Setup unfinished:** when `routing.setup_complete` is false, setup is still in progress even if `routing.assessed` is true: the Snowflake target, testing or data infrastructure can still be open, for example after a session died mid-setup. Call `progress_setup()`, name its `next_task` as what comes next, and mark step 6 not done. Never say setup is complete, and never suggest starting a wave or migrating objects.
 
 Present the narrative summary followed by the progress checklist, then continue with the **Prescribed Path** below.
 
@@ -97,7 +103,8 @@ Use `routing` from the status JSON to delegate to the next step. If the user alr
 | `routing.data_validation_only` = true | Load `./validate-objects/SKILL.md` |
 | `routing.code_conversion_only` = true | Load `./code-conversion-only/SKILL.md` |
 | `routing.assessed` = false | Load `./setup/SKILL.md` |
-| `routing.assessed` = true | Load `./migrate-objects/SKILL.md` |
+| `routing.assessed` = true and `routing.setup_complete` = false | Load `./setup/SKILL.md` |
+| `routing.assessed` = true and `routing.setup_complete` = true | Load `./migrate-objects/SKILL.md` |
 
 Each sub-skill handles its own internal routing based on the full `routing` object.
 </prescribed-path>
@@ -109,14 +116,13 @@ Each sub-skill handles its own internal routing based on the full `routing` obje
 These answer common questions about project state without loading a sub-skill:
 
 - **"What is the current state?"** — Call `migration_status(mode="summary")`, construct the narrative summary (as in Step 1), and present the progress checklist.
-- **"What should I work on next?"** — Call `migration_status(mode="my_objects_summary")` to get per-`(task, object_type)` counts plus `errored_count` and `done_count`. Present the list and **ask the user what they want to work on — do not pick for them**. When the user picks a group, drill down with `migration_status(mode="my_objects_details", group=<id>)`.
+- **"What should I work on next?"** — Call `migration_status(mode="my_objects_summary")` to get per-`(task, object_type)` counts plus `errored_count` and `done_count`. Present the list and **ask the user what they want to work on — do not pick for them**. A group with `writesSource` is blocked: it would delete rows in the live source database it names, and nothing can allow that. Never recommend it, list it first or call it a copy; offer rebinding it to an empty database or testbed test data instead. When the user picks a group, drill down with `migration_status(mode="my_objects_details", group=<id>)`.
 
-- **"Show me objects that match rule X"** — Load `./migrate-objects/rule-engine/propagate/SKILL.md`.
 - **"Can I change conversion settings?"** / **"I picked defaults but need a conversion flag"** — Load `./convert/SKILL.md` → "Changing Conversion Settings Later". The same project keeps working: no new project or re-import.
 
 - **"How do I extend / customize the migration plugin?"** / **"How do I override task X?"** — Load `./extensibility/TASKS.md` for the full reference: overridable task ids, per-task contracts, the project-local + `$AIM_SKILL_EXT_DIR` paths, and registering code units with `kind=custom` plus a free-form `customKind` discriminator. Optionally call `migration_status(mode='extensions')` to show which overrides are active.
 
-- **"My migration also has FiveTran / SSAS / dbt / Airflow / Oracle PACKAGE bodies / scripts the engine doesn't generate"** / **"How do I track <non-built-in asset> in the migration?"** — Load `./setup/discover-extras/SKILL.md`. Registers each asset as a code unit with `kind=custom` and a `customKind` discriminator, then writes a `.scai/skills/<customKind>.md` cookbook with the customer so every object of that kind runs the same playbook (see `./extensibility/TASKS.md` → "Custom code units"). **Do not** list ETL platforms this migration converts (SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory) here — those go through **setup → register local ETL → convert**, not `discover-extras`.
+- **"My migration also has FiveTran / SSAS / dbt / Airflow / Oracle PACKAGE bodies / scripts the engine doesn't generate"** / **"How do I track <non-built-in asset> in the migration?"** — Load `./setup/discover-extras/SKILL.md`. Registers each asset as a code unit with `kind=custom` and a `customKind` discriminator, then writes a `.scai/skills/<customKind>.md` cookbook with the customer so every object of that kind runs the same playbook (see `./extensibility/TASKS.md` → "Custom code units"). **Do not** list ETL platforms this migration converts (SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory) here — those go through **setup → register local ETL → convert**, not `discover-extras`.
 
 ---
 
@@ -132,8 +138,8 @@ Match the user's request to the most relevant skill and load it.
 - If no skill matches, fall back to the section below.
 
 **ETL routing (do not shortcut):** any request to convert or migrate ETL jobs — SSIS,
-Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho,
-Azure Data Factory, or "some other ETL platform" — flows through **setup → register local
+Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop,
+Pentaho, Azure Data Factory, or "some other ETL platform" — flows through **setup → register local
 ETL → convert**, not `discover-extras`. `discover-extras` is for orchestration or engine-gap
 assets the user *doesn't* want converted (Airflow DAGs, Fivetran connectors, SSAS cubes,
 custom scripts). Never route a convert-my-ETL ask to `discover-extras` and never register
@@ -142,10 +148,23 @@ those ETL jobs as `customKind` cookbooks.
 - **Informatica PowerCenter** (on-prem repo XML export) → converted natively via the normal
   convert path.
 - **Informatica Cloud / IICS** → AI-First via convert Step 4.5. Do not confuse the two.
+- **Supported ETL platforms come in two kinds.** *Natively supported:* SSIS and
+  Informatica PowerCenter, converted by SnowConvert's own ETL converters. *AI-First
+  approach (not native):* Apache Hop (`.hpl` / `.hwf`) and Pentaho (`.ktr` / `.kjb`),
+  which go end to end through the plugin (register, convert, deploy, two-sided
+  `etl-validate`, DVF and repair), and Talend, Alteryx, Informatica Cloud / IICS,
+  DataStage, Azure Data Factory and any other ETL platform, through convert Step 4.5. When
+  you name an AI-First platform to the user, say it is an AI-First conversion, not native
+  support. AI-First is a model-assisted attempt at an end-to-end conversion, not native
+  support: coverage is narrower than SSIS and Informatica PowerCenter, steps with no
+  SnowConvert equivalent are written by a model or flagged for review, and each converted
+  job must pass validation before it is trusted.
 - Local `.dtsx`, PowerCenter XML repo export, or any unsupported ETL platform is **not**
-  `project_type: code_conversion_only`. `code-conversion-only` is Sybase / Spark /
-  Databricks / Greenplum / Netezza / Vertica / Hive / DB2 SQL. If the user has ETL to
-  convert, follow **setup → convert**, not `code-conversion-only`.
+  `project_type: code_conversion_only`. `code-conversion-only` is only for **legacy**
+  projects whose `project.yml` still has that type; new conversion-dialect projects
+  (including Sybase / Spark / Databricks / Greenplum / Netezza / Vertica / Hive / Druid)
+  are `full_migration`. If the user has ETL to convert, follow **setup → convert**,
+  not `code-conversion-only`.
 
 ### SAS (Preview — parallel track, not SnowConvert)
 - **sas** (Preview) — SAS → Snowflake: assess portfolios, convert `.sas` programs, or load `.sas7bdat` from a stage → `./sas/SKILL.md`
@@ -179,13 +198,15 @@ those ETL jobs as `customKind` cookbooks.
   - **code-conversion-only** — convert local source files for code-conversion-only source systems (incl. optional Power BI `.pbit` repointing) → `./code-conversion-only/SKILL.md`
   - **powerbi-repointing** — collect `.pbit` folder path and `--powerbi-repointing` flag for Power BI repointing → `./powerbi-repointing/SKILL.md`
   - **tableau-repointing** — collect `.twb`/`.tds` folder path and `--tableauRepointing` flag for Tableau repointing. Triggers: tableau, tableau migration, tableau repointing, migrate tableau, repoint tableau → `./tableau-repointing/SKILL.md`
-  - **dbt-consolidation** — before SSIS or Informatica dbt conversion, ask one question about consolidating projects and models by package/folder, consolidating SSIS into one dbt project, or retaining the per-Data-Flow/per-mapping layout; use `--consolidate-dbt-projects`, or `--consolidate-as-single-dbt-project` for the SSIS-only single-project choice → `./dbt-consolidation/SKILL.md`
+  - **dbt-consolidation** — before SSIS or Informatica dbt conversion, ask one question about consolidating projects and models by package/folder, consolidating SSIS or Informatica into one dbt project, or retaining the per-Data-Flow/per-mapping layout; use `--consolidate-dbt-projects`, or `--consolidate-as-single-dbt-project` when SSIS-only or Informatica-only chose the single-project layout → `./dbt-consolidation/SKILL.md`
 - **assessment** — analyze workloads: waves, object exclusion, dynamic SQL, ETL → `./assessment/SKILL.md`
 
 ### Migration & validation
 - **migrate-objects** — deploy tables, views, functions, procedures wave-by-wave → `./migrate-objects/SKILL.md`
   - **sandbox** — private `AIMSBX_*` catalogs for procedure tests (`createIsolatedSandbox`) and shared source-catalog setup (`deployCommonSandbox`). Not common-catalog `deploy`. → `./migrate-objects/sandbox/SKILL.md`
   - **migrate-etl** — claim an ETL code unit, then stabilize it. Entry point for "fix ETL package", "fix SSIS/Informatica conversion", "proceed with stabilization", "resume ETL fixing" — it claims the unit (so it appears in `my_objects_summary` with the current user as owner) before delegating to the phase-based etl-stabilization engine. → `./migrate-objects/migrate-etl/SKILL.md`
+    - **etl-seed** — seed test YAML for already-deployed ETL units; load before searching for tools or running CLI commands. Triggers: "seed ETL tests", "generate ETL test YAML", "create ETL test configuration" → `./migrate-objects/migrate-etl/etl-seed/SKILL.md`
+    - **etl-validate** — run a live comparison for already-deployed ETL units; load before searching for tools or running CLI commands. Triggers: "validate ETL output", "run the ETL comparison" → `./migrate-objects/migrate-etl/etl-validate/SKILL.md`
   - **etl-file-ingestion** — hand over the landing contract (Openflow flow, direct-upload script, or mover table). Triggers: "land my files", "set up file ingestion", "set up Openflow", "upload files to the stage", "where do my CSVs go" → `./migrate-objects/migrate-etl/etl-file-ingestion/SKILL.md`
   - **etl-database-ingestion** — hand over database landing (generated JDBC Openflow JSON, their own loader, or a SQL Server Change Tracking / CDC connector). Triggers: "land my database tables", "database landing", "change tracking landing", "CDC landing", "JDBC Openflow" → `./migrate-objects/migrate-etl/etl-database-ingestion/SKILL.md`
   - **data-migration-setup** — choose approach, generate workflow YAML, create target database for `migrate_data` → `./migrate-objects/actions/data-migration/SKILL.md`
@@ -196,14 +217,18 @@ those ETL jobs as `customKind` cookbooks.
 ### Object metadata
 - **tag-objects** — tag or untag code units with the user's own labels (`extensions.tags`), and find objects by tag. Triggers: "tag this table", "label these objects", "untag", "which objects are tagged" → `./tag-objects/SKILL.md`
 
+### dbt project quality
+Use the dbt-quality workflow for an existing dbt project or estate with the migration MCP's `dbt_quality_audit` and `dbt_quality_repair` tools and the `scai dbt-quality` CLI. Audits are local and static; repairs require a reviewed dry run, approval before apply, and the selected verification gate. For converting or repointing dbt for Snowflake, use `./dbt/SKILL.md`; it runs automatically after `scai code add`. User guide (install, configuration, CI, limits): `./dbt-quality/README.md`; every rule: `scai dbt-quality rules`.
+- **dbt-quality** — audit, lint, or health-check a dbt project or several projects; HTML quality report; validate one model or schema file; explain a rule; mark findings in the files (`annotate`); repair findings using reviewed plans; set up editor tasks. Triggers: "audit my dbt project", "dbt anti-patterns", "review the converted dbt output", "validate this model", "lint this dbt file", "SSC-EWI-DBT", "fix dbt-quality findings", "repair converted dbt" → `./dbt-quality/SKILL.md`
+- **dbt-standards** — choose which dbt-quality rules to enforce, rule by rule from the project's own findings (keep, waive for paths, tune a threshold, disable, migration mode), and record the choices in `.dbt-quality.yml` after the user approves a diff; never edits models. Triggers: "tune dbt-quality rules", "too many dbt-quality findings", "set up .dbt-quality.yml", "waive / disable a dbt-quality rule", "lift_and_shift / native mode" → `./dbt-standards/SKILL.md`
+
 ### Rules
 - **rule-engine** — search, apply, and manage migration rules → `./migrate-objects/rule-engine/SKILL.md`
   - **extract-rule** — extract a reusable rule from a code fix (interactive or git history) → `./migrate-objects/rule-engine/extract/SKILL.md`
-  - **propagate-rule** — find all code units matching a rule for batch application → `./migrate-objects/rule-engine/propagate/SKILL.md`
 
 ### Customization
 - **task-overrides** — replace the skill that runs for any built-in task with the user's own `SKILL.md`, scoped to the project or to a global directory via `$AIM_SKILL_EXT_DIR`. Triggers: "extend the plugin", "customize task X", "swap out the skill for Y", "override registerCode/convertCode/deploy/...". Reference: `./extensibility/TASKS.md`
-- **discover-extras** — register assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PACKAGE bodies, custom shell scripts) as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved `databaseObject` / `script` / `etl` / `custom` set) so they flow through orchestration alongside built-in units. Triggers: "I have FiveTran / SSAS / dbt / a script that touches the database", "register custom asset", "track <non-built-in> in the migration". **Not** for ETL the user wants converted: SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, and Azure Data Factory go through **setup → register → convert** (native or AI-First Step 4.5). Skill: `./setup/discover-extras/SKILL.md`. Reference: `./extensibility/TASKS.md` (Custom code units).
+- **discover-extras** — register assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PACKAGE bodies, custom shell scripts) as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved `databaseObject` / `script` / `etl` / `custom` set) so they flow through orchestration alongside built-in units. Triggers: "I have FiveTran / SSAS / dbt / a script that touches the database", "register custom asset", "track <non-built-in> in the migration". **Not** for ETL the user wants converted: SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, and Azure Data Factory go through **setup → register → convert** (native for SSIS and Informatica PowerCenter, AI-First Step 4.5 for the rest). Skill: `./setup/discover-extras/SKILL.md`. Reference: `./extensibility/TASKS.md` (Custom code units).
 
 ## Fallback
 
@@ -218,3 +243,5 @@ If no skill matches, say so explicitly, then help with your own knowledge.
 3. **Confirm transitions through the machine** — stage gates arrive as MCP prompts (`continueToMigration`, `chooseRunMode`); ask those when they come rather than adding a confirmation turn between sub-skills, and ask before loading migrate-objects after setup completes
 4. **Diagnose against the source before retrying or touching shared infrastructure** — when a step fails, reproduce it first: run the failing statement (from the error, or the task's `statement` in the worker's `data_exchange_agent.log` under scai's `logs/data/`) with `query_source`, and check any theory (a version mismatch, a missing file) against what the tools report before acting on it. Never re-dispatch an unchanged workflow to see whether it fails again, and never update, recreate or restart the orchestrator, worker or compute pool to test a guess: they are shared by every project on the account. Change them only with evidence that they are the cause, after the user agrees with who else it affects named. Until the cause is found, say what you checked and that you don't know yet; never "not your setup" when the setup is what you haven't ruled out.
 5. **Say what the product can't do** — when no supported setting does what the user asked, say so plainly before acting and offer what is possible. Never build the nearest thing and report the request as done.
+6. **Read the whole error before naming a cause** — when a tool or command fails, tell the user what the error says (e.g. "the SQL Server driver fails to load") and what is not yet known. Read its details too, and test the cheapest explanation first (does the file exist on disk, is the install complete, when did it last change, is the host reachable). The same error on every connection points at something they share on this machine, not at every server being down. Name a cause only once a check confirms it. Never tell the user to reinstall, update, contact support or report a defect on a cause you have not confirmed.
+7. **State only what a check shows** — take counts, durations and commits from the output or log that holds them (`git rev-parse --short HEAD` for the current commit, the log's timestamps for how long a step took), never from memory. Call a fix certain only after it has run. Once a check disproves a claim, leave it out of every later answer, summaries included. A new cause for an earlier failure needs its own check, and must explain the error that failure gave. In a write-up for someone else (an escalation, a summary), mark each claim verified, with the check that showed it, or inferred, and keep the corrections the session made.

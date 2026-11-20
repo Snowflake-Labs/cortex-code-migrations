@@ -20,7 +20,7 @@ Call `deploy` with the `invocation` from `next_task` — it already has
 | Reload closure table CSVs (wipes AIMSBX DML; latches restore-from-sandbox) | `sandbox=true`, `mode=reload_tables` |
 | This object only onto the common catalogs | omit `sandbox` — that is the later `deploy` task, not this one |
 
-After AIMSBX DML the tools did not see (`sql_execute`), pass `restore_from="sandbox"` on `deploy` or `run_tests`.
+After AIMSBX DML the tools did not see (`sql_execute`), pass `restore_from="sandbox"` on `deploy` with `mode=redeploy_object` — the other modes reload CSVs first, and `run_tests` clones only when none is latched yet.
 
 `reload_tables` resets only tables with a testbed CSV on disk, through the
 source half. When a closure table has none, or the procedure has no source
@@ -29,6 +29,15 @@ is latched. Copy each named table from the common catalog into the pair on
 both sides, then `mode=redeploy_object`, `restore_from="sandbox"`. If the
 load itself skips a closure table or fails a table load, `reload_tables`
 returns an error saying so and latches nothing; the pair stays ready.
+
+On `source_database` setup copies live source rows into the SQL Server
+tables; `reload_tables` deletes them, copies them again and reclones the
+Snowflake tables, so both halves start from the same rows.
+
+A setup reply's `rowCountMismatch` names closure tables whose two sides
+hold different rows (often no testbed CSV: Snowflake cloned the common
+rows, SQL Server has none). Before capturing a baseline, copy each from
+the common catalog into the AIMSBX table on the short side so both match.
 
 Omit `mode` on a live `ready` leftover pair still deploys tables (CSV
 reload), peer functions/views/procs, and this object on source — no DROP
@@ -123,5 +132,5 @@ an `advanced` row — `next_task` alone writes none:
 transition_status(status="advance", task="createIsolatedSandbox", outcome="completed", where="id = '<object_id>'")
 ```
 
-The server checks the sandbox oracle. If advance refuses, wait for the oracle
+The server checks the sandbox status source. If advance refuses, wait for it
 and retry.

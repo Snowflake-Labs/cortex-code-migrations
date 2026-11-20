@@ -404,6 +404,67 @@ def build_items(integrity, gate_b_sidecar, aim_issues):
     return items
 
 
+def attach_source_fragments(items, element_map, document_lines, max_chars=4000):
+    """Give every item the source document's own lines for the element it is about.
+
+    The element comes from the item's `element_ids`, else from its models through the element map
+    (element_map.py: model -> source element -> line range). The fragment is the document's raw lines,
+    capped at `max_chars` (the platform table's `structure.unsupported_body_max_chars`), so a repair
+    reads what the original states without a second, unaudited reading of the document. An item
+    whose element the map does not locate says why instead of carrying a guess."""
+    lines_of = {}
+    for el in (element_map or {}).get("elements", []) or []:
+        if el.get("element_id") and el.get("source_lines"):
+            lines_of.setdefault(el["element_id"], el["source_lines"])
+    element_of_model = {
+        m["model"]: m["source_element"]
+        for m in (element_map or {}).get("models", []) or []
+        if m.get("model") and m.get("source_element")
+    }
+    models_of_element = {}
+    for model, element in element_of_model.items():
+        models_of_element.setdefault(element, []).append(model)
+    for item in items:
+        candidates = list(item.get("element_ids") or [])
+        for model in item.get("models") or []:
+            stem = os.path.splitext(os.path.basename(str(model)))[0]
+            if stem in element_of_model:
+                candidates.append(element_of_model[stem])
+        # An integrity subject names its element by display name ("Dimension lookup/update . value",
+        # "Data grid  [Kind]", "A -> B"), which the digit-token join cannot see on a platform whose
+        # elements are not numbered. Only a name the element map knows is taken.
+        for cited in item.get("from") or []:
+            subject = str(cited.get("subject") or "")
+            for part in re.split(r"\s+->\s+|\s+\.\s+|\s{2,}\[", subject):
+                name = part.strip()
+                if name in lines_of and name not in candidates:
+                    candidates.append(name)
+        located = next((c for c in candidates if c in lines_of), None)
+        if located is not None:
+            if located not in (item.get("element_ids") or []):
+                item["element_ids"] = sorted(set(item.get("element_ids") or []) | {located})
+            if not item.get("models") and models_of_element.get(located):
+                item["models"] = sorted(models_of_element[located])
+        if located is None or not document_lines:
+            item["source_element"] = None
+            item["source_lines"] = None
+            item["source_fragment"] = None
+            item["source_unlocated"] = (
+                "no element map" if not element_map
+                else "source document not readable" if not document_lines
+                else "the element map locates none of: %s" % (", ".join(map(str, candidates)) or "(no element)")
+            )
+            continue
+        start, end = lines_of[located]
+        fragment = "\n".join(document_lines[start - 1 : end])
+        item["source_element"] = located
+        item["source_lines"] = [start, end]
+        item["source_fragment"] = fragment[:max_chars]
+        if len(fragment) > max_chars:
+            item["source_fragment_truncated"] = True
+    return items
+
+
 def build_summary(integrity, gate_b_sidecar, aim_issues):
     summary = {}
     if gate_b_sidecar and gate_b_sidecar.get("ledger"):
@@ -424,6 +485,9 @@ def build_brief(
     aim_issues=None,
     conversion_exit=None,
     source_status=None,
+    element_map=None,
+    document_lines=None,
+    fragment_max_chars=4000,
 ):
     """The one function that assembles the whole document. `pointers` is a dict of path strings the
     caller already resolved -- this function never guesses a path itself, so a test can feed it
@@ -435,6 +499,7 @@ def build_brief(
     source had nothing to report" from "this source could not be read", so both would otherwise reach
     the exact same items_total:0 shape as a genuinely clean run."""
     items = build_items(integrity, gate_b_sidecar, aim_issues)
+    attach_source_fragments(items, element_map, document_lines, fragment_max_chars)
     lane_counts = {}
     for it in items:
         lane_counts[it["lane"]] = lane_counts.get(it["lane"], 0) + 1
@@ -470,14 +535,22 @@ def _resolve_paths(table_path, output_root, bundle_dir):
     gate_b_dir = os.path.join(bundle_dir, "gateB")
     integrity_dir = os.path.join(bundle_dir, "integrity")
     aim_dir = os.path.join(output_root, "Reports", "AiFirstIssues")
+    gate_a_dir = os.path.join(bundle_dir, "gateA")
     return {
         "platform": platform,
+        "gate_a_verdict": os.path.join(gate_a_dir, "verdict.json"),
+        "gate_a_obligations": os.path.join(gate_a_dir, "obligations.json"),
+        "platform_table": os.path.join(gate_a_dir, "platform_table.json"),
+        "source_lines": os.path.join(gate_a_dir, "source_document.lines.txt"),
+        "stage0_provenance": os.path.join(bundle_dir, "stage0", "provenance.json"),
+        "sidecar_prompts": os.path.join(bundle_dir, "sidecar", "prompts"),
         "gate_b_verdict": os.path.join(gate_b_dir, "verdict.json"),
         "gate_b_obligations": os.path.join(gate_b_dir, "obligations.json"),
         "gate_b_sidecar": os.path.join(gate_b_dir, "gateB-sidecar.json"),
         "integrity": os.path.join(integrity_dir, "integrity.json"),
         "ir": os.path.join(integrity_dir, "ir.json"),
         "aim_issues": os.path.join(aim_dir, "issues.json"),
+        "element_map": os.path.join(output_root, "Reports", "AiFirstElementMap", "element_map.json"),
         "output_root": output_root,
     }
 
@@ -508,6 +581,14 @@ def main(argv):
         "gate_b_sidecar": gate_b_status,
         "aim_issues": aim_status,
     }
+    element_map = _load_json(resolved["element_map"])
+    try:
+        with open(args.document, "r", encoding="utf-8", errors="replace") as fh:
+            document_lines = fh.read().split("\n")
+    except OSError:
+        document_lines = None
+    table = _load_json(args.table) or {}
+    max_chars = (table.get("structure") or {}).get("unsupported_body_max_chars") or 4000
 
     brief = build_brief(
         platform=platform,
@@ -518,6 +599,9 @@ def main(argv):
         aim_issues=aim_issues,
         conversion_exit=args.conversion_exit,
         source_status=source_status,
+        element_map=element_map,
+        document_lines=document_lines,
+        fragment_max_chars=max_chars,
     )
     brief["generated_utc"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
