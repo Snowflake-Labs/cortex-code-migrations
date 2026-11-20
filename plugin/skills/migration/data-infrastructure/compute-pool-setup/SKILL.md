@@ -37,10 +37,11 @@ The values above are for an orchestrator-only pool. When the Data Exchange Worke
 ([worker-spcs](../worker-spcs/SKILL.md)) in the same pool, size it from the worker's CPU request, and keep
 the minimum at one node:
 
-- **Instance family:** the worker spec requests `cpu: 6`, which needs `CPU_X64_M` (6 vCPU per node). A
-  `CPU_X64_S` pool cannot schedule it.
-- **Node count:** with `cpu: 6`, each worker replica fills a node and the orchestrator needs one more. With a
-  smaller request (`cpu: 0.5`–`2`), the orchestrator and two or three workers share one or two nodes.
+- **Instance family:** the worker spec (`scai data worker setup` and the
+  [worker-spcs](../worker-spcs/SKILL.md) custom service example) requests `memory: 2Gi` and `cpu: 0.1`
+  (no limits), so a `CPU_X64_S` pool schedules it. A larger request such as `cpu: 6` needs `CPU_X64_M`.
+- **Node count:** with the `scai` request, the orchestrator and two or three workers share one or two nodes.
+  If you raise the request to fill a node, each worker replica needs its own node plus one for the orchestrator.
 - **Recommend `MIN_NODES = 1`, `MAX_NODES = 2`–`3`, `AUTO_SUSPEND_SECS = 60`**, with 2–3 worker replicas and
   `MAX_PARALLEL_TASKS = 4`. The source system, not the pool, limits throughput: a pool wider than the source can
   feed adds cost, not speed.
@@ -69,6 +70,14 @@ ALTER COMPUTE POOL <COMPUTE_POOL_NAME> RESUME;
 ```
 
 Then re-verify.
+
+**An `IDLE` pool with no service on it suspends itself.** Snowflake counts a pool as inactive when no service or
+job runs on it, whether or not one has ever run, so a new pool goes from `IDLE` to `SUSPENDED` about
+`AUTO_SUSPEND_SECS` (60s) after it is ready. That is expected: continue with Step 4, and
+`data_infrastructure(mode="up")` resumes it. A pool state read here is stale a minute later: before telling the
+user the pool is `IDLE`, billing, or worth suspending, run `DESCRIBE COMPUTE POOL <COMPUTE_POOL_NAME>;` again in
+that turn and report what it shows (`num_services`, `state`). Offer to suspend it only when that fresh read shows
+it is not `SUSPENDED`.
 
 ## Step 4 — Grant USAGE to the Migration Role
 

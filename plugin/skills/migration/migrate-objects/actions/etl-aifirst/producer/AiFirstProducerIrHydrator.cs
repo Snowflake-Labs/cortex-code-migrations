@@ -6,11 +6,13 @@ namespace AiFirst.Producer;
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using Mobilize.Snow.Issues;
 using Snowflake.SnowConvert.EtlToDbt.Dag;
 using Snowflake.SnowConvert.EtlToDbt.Models;
 using Snowflake.SnowConvert.EtlToDbt.Models.Columns;
+using Snowflake.SnowConvert.EtlToDbt.Models.Enums;
 
 /// <summary>
 /// Deterministic JSON → engine-IR hydrator for the AI-first producer. This is the piece that makes
@@ -54,7 +56,7 @@ using Snowflake.SnowConvert.EtlToDbt.Models.Columns;
 /// structurally: a container or an orchestration element that no data-flow class describes.
 /// </para>
 /// </remarks>
-internal static class AiFirstProducerIrHydrator
+internal static partial class AiFirstProducerIrHydrator
 {
   /// <summary>
   /// The hydrated graph plus the per-node dbt model names. The model name is carried per node rather
@@ -81,13 +83,79 @@ internal static class AiFirstProducerIrHydrator
   /// <see cref="AiFirstProducerDataFlowContext.GetIncomingEntities"/>. See there for why this is not
   /// an extra graph node.
   /// </param>
+  /// <param name="Parameters">
+  /// The unit's run-time values: the IR's optional top-level <c>parameters</c> block (named
+  /// parameters), then its <c>variables</c> block (names a project or environment file sets).
+  /// Empty when the document references none.
+  /// </param>
+  /// <param name="WriteModesByNodeId">
+  /// The write mode of each target whose mart the producer adjusts after the engine translates it.
+  /// Absent for a target the engine's output already writes correctly.
+  /// </param>
+  /// <param name="ParameterFile">
+  /// The IR's optional <c>parameter_file</c> name: the environment file a run swaps through
+  /// CONFIG <c>param_file</c>. Null when there is none.
+  /// </param>
+  /// <param name="SinkWritesByNodeId">
+  /// How each target writes its table and which table columns identify a row of it, for every
+  /// target, whether or not the producer adjusts its mart. Null when the caller built none.
+  /// </param>
   internal sealed record HydratedIr(
     DagPipeline<Transformation> Pipeline,
     IReadOnlyDictionary<string, string> ModelNamesByNodeId,
     IReadOnlyList<UnsupportedIrNode> UnsupportedNodes,
     IReadOnlyList<string> EdgesDroppedForUnsupportedNodes,
     IReadOnlyDictionary<string, string> SourceRelationsByNodeId,
-    IReadOnlyDictionary<string, IReadOnlyList<ModelAuthoredFact>> ModelAuthoredByNodeId);
+    IReadOnlyDictionary<string, IReadOnlyList<ModelAuthoredFact>> ModelAuthoredByNodeId,
+    IReadOnlyList<IrParameter> Parameters,
+    IReadOnlyDictionary<string, TargetWriteMode> WriteModesByNodeId,
+    string? ParameterFile = null,
+    IReadOnlyDictionary<string, SinkWrite>? SinkWritesByNodeId = null);
+
+  /// <summary>How a target writes its table, where the engine's translation is not the whole answer.</summary>
+  internal enum TargetWriteKind
+  {
+    /// <summary>MERGE on the key: update <see cref="TargetWriteMode.UpdateColumns"/>, insert the rest.</summary>
+    Upsert,
+
+    /// <summary>MERGE on the key: insert keys not in the table, never update.</summary>
+    InsertOnly,
+
+    /// <summary>Replace the table's rows, but only when this run's input has rows.</summary>
+    ReplaceIfRows,
+
+    /// <summary>Per row, a flag field picks INSERT, UPDATE on the key, or DELETE on the key.</summary>
+    Synchronize,
+
+    /// <summary>A versioned (slowly changing, type 2) dimension keyed by a generated technical key.</summary>
+    Scd2,
+
+    /// <summary>Insert each combination of the key columns not in the table, with a generated technical key.</summary>
+    Combination,
+  }
+
+  /// <summary>One target's write mode.</summary>
+  /// <param name="Kind">The write semantics.</param>
+  /// <param name="KeyColumns">The table columns the write matches on; empty for ReplaceIfRows.</param>
+  /// <param name="UpdateColumns">The table columns an Upsert or a Synchronize overwrites; empty otherwise.</param>
+  /// <param name="Spec">
+  /// The settings a producer strategy macro reads from the model's config (Synchronize, Scd2,
+  /// Combination); null for the kinds the engine's own strategies cover.
+  /// </param>
+  internal sealed record TargetWriteMode(
+    TargetWriteKind Kind,
+    IReadOnlyList<string> KeyColumns,
+    IReadOnlyList<string> UpdateColumns,
+    IReadOnlyDictionary<string, object?>? Spec = null);
+
+  /// <summary>One unit parameter or variable as the IR states it.</summary>
+  /// <param name="Name">The source name; its ConstantReference is the CONFIG, --vars and var() key.</param>
+  /// <param name="Default">The conversion-time value; empty when the document states none.</param>
+  /// <param name="DataType">The Snowflake type recorded in CONFIG.</param>
+  /// <param name="IsParameter">True for a named parameter, false for a variable.</param>
+  /// <param name="Section">The CONFIG section: <c>package</c> or <c>project</c>.</param>
+  internal sealed record IrParameter(
+    string Name, string Default, string DataType, bool IsParameter = true, string Section = "package");
 
   /// <summary>
   /// One fact a MODEL authored rather than the document stating it — TIER 2 of the fallback ladder.
@@ -141,6 +209,8 @@ internal static class AiFirstProducerIrHydrator
     var modelAuthored =
       new Dictionary<string, IReadOnlyList<ModelAuthoredFact>>(StringComparer.Ordinal);
     var unsupportedIds = new HashSet<string>(StringComparer.Ordinal);
+    var writeModes = new Dictionary<string, TargetWriteMode>(StringComparer.Ordinal);
+    var sinkWrites = new Dictionary<string, SinkWrite>(StringComparer.Ordinal);
 
     foreach (var nodeJson in Required(root, "nodes").EnumerateArray())
     {
@@ -191,6 +261,17 @@ internal static class AiFirstProducerIrHydrator
       }
 
       modelNames.Add(id, modelName);
+
+      var writeMode = WriteModeOf(node.Element, elementJson);
+      if (writeMode is not null)
+      {
+        writeModes.Add(id, writeMode);
+      }
+
+      if (SinkWriteOf(node.Element, elementJson, writeMode) is { } sinkWrite)
+      {
+        sinkWrites.Add(id, sinkWrite);
+      }
 
       // TIER-2 PROVENANCE, read for the node it belongs to. OPTIONAL: a document that needed no
       // sidecar has none, and that is the normal case on the two platforms the engine supports.
@@ -243,9 +324,132 @@ internal static class AiFirstProducerIrHydrator
       edges.Add(new DagEdge<Transformation>(from, to, label));
     }
 
+    var parameters = new List<IrParameter>();
+    foreach (var (block, isParameter) in new[] { ("parameters", true), ("variables", false) })
+    {
+      if (!root.TryGetProperty(block, out var blockJson) || blockJson.ValueKind != JsonValueKind.Array)
+      {
+        continue;
+      }
+
+      foreach (var parameterJson in blockJson.EnumerateArray())
+      {
+        parameters.Add(new IrParameter(
+          RequiredString(parameterJson, "name"),
+          OptionalString(parameterJson, "default") ?? string.Empty,
+          OptionalString(parameterJson, "type") is { Length: > 0 } type ? type : "VARCHAR",
+          isParameter,
+          OptionalString(parameterJson, "section") is { Length: > 0 } section ? section : "package"));
+      }
+    }
+
+    string? parameterFile = null;
+    if (root.TryGetProperty("parameter_file", out var parameterFileJson)
+      && parameterFileJson.ValueKind == JsonValueKind.Object)
+    {
+      parameterFile = OptionalString(parameterFileJson, "name");
+    }
+
+    edges = WriteOutputRows.Route(nodes, edges, modelNames, writeModes);
     var pipeline = new DagPipeline<Transformation> { Nodes = nodes, Edges = edges };
     return new HydratedIr(
-      pipeline, modelNames, unsupported, droppedEdges, sourceRelations, modelAuthored);
+      pipeline, modelNames, unsupported, droppedEdges, sourceRelations, modelAuthored, parameters, writeModes,
+      parameterFile, sinkWrites);
+  }
+
+  private static TargetWriteMode? WriteModeOf(Transformation element, JsonElement elementJson)
+  {
+    if (element is not UnsupportedTransformation && StatefulWriteModeOf(elementJson) is { } stateful)
+    {
+      return stateful;
+    }
+
+    switch (element)
+    {
+      case OptimizedUpdateStrategyTargetTransformation:
+        var keys = RequiredStringList(elementJson, "KeyColumns");
+        var updates = OptionalStringList(elementJson, "UpdateColumns")
+          .Where(c => !keys.Contains(c, StringComparer.OrdinalIgnoreCase))
+          .ToList();
+        return IsYes(elementJson, "UpdateBypassed") || updates.Count == 0
+          ? new TargetWriteMode(TargetWriteKind.InsertOnly, keys, [])
+          : new TargetWriteMode(TargetWriteKind.Upsert, keys, updates);
+      case TargetTransformation when IsYes(elementJson, "TruncateTarget") && IsYes(elementJson, "OnlyWhenHaveRows"):
+        return new TargetWriteMode(TargetWriteKind.ReplaceIfRows, [], []);
+      default:
+        return null;
+    }
+  }
+
+  /// <summary>
+  /// The engine class a keyed write becomes, or a degraded placeholder when the document states a
+  /// key the class cannot match on.
+  /// </summary>
+  /// <remarks>
+  /// <para>
+  /// Insert/update becomes <see cref="OptimizedUpdateStrategyTargetTransformation"/> with a constant
+  /// INSERT-or-UPDATE expression, the move the engine itself makes for an Informatica session's
+  /// "Treat source rows as" override: incremental merge, unique_key = the key columns (marked
+  /// <c>IsPrimaryKey</c> below), alias = the table. Update and Delete become
+  /// <see cref="OleDbCommandTransformation"/> with no SQL, which the engine translates from its key
+  /// and update columns alone into update_only / delete_only.
+  /// </para>
+  /// <para>
+  /// A key whose condition is not <c>=</c>, or an Insert/update key the transform never writes, has
+  /// no MERGE equivalent (the ON clause would match on a subset of the keys, or on a column the
+  /// model does not project), so the element degrades instead of being written on the wrong key.
+  /// </para>
+  /// </remarks>
+  private static Transformation HydrateKeyedWrite(string kind, JsonElement elementJson)
+  {
+    var tableName = AiFirstProducerDataFlowContext.SanitizeRelationIdentifier(RequiredString(elementJson, "TableName"));
+    var keys = RequiredStringList(elementJson, "KeyColumns");
+    var written = HydrateColumns(elementJson, "OutputColumns").Select(c => c.Name).ToList();
+
+    var refusal = OptionalStringList(elementJson, "KeyConditions").Any(c => c.Trim() != "=")
+      ? "a key condition other than '=' has no MERGE equivalent"
+      : keys.FirstOrDefault(k => !written.Contains(k, StringComparer.OrdinalIgnoreCase)) is { } unwritten
+        ? $"key column '{unwritten}' is not a column this transform writes"
+        : null;
+    if (kind == "UpdateTargetTransformation"
+      && !written.Any(c => !keys.Contains(c, StringComparer.OrdinalIgnoreCase)))
+    {
+      refusal ??= "an update with no column to set";
+    }
+
+    if (refusal is not null)
+    {
+      return new UnsupportedTransformation
+      {
+        OriginalTransformationText = (OptionalString(elementJson, "_unsupported") ?? kind) + "\n" + refusal,
+        IssueCodeForNotConverted = IssueName.ExceptionThrownWhileConverting,
+      };
+    }
+
+    return kind switch
+    {
+      "UpsertTargetTransformation" => new OptimizedUpdateStrategyTargetTransformation
+      {
+        TableName = tableName,
+        InlinedUpdateStrategyExpression = "IIF(FALSE, DD_INSERT, DD_UPDATE)",
+      },
+      "UpdateTargetTransformation" => new OleDbCommandTransformation
+      {
+        TableName = tableName,
+        CommandType = OleDbCommandType.Update,
+        UniqueKeyColumns = keys.ToList(),
+        UpdateColumns = written
+          .Where(c => !keys.Contains(c, StringComparer.OrdinalIgnoreCase))
+          .Distinct(StringComparer.OrdinalIgnoreCase)
+          .ToList(),
+      },
+      _ => new OleDbCommandTransformation
+      {
+        TableName = tableName,
+        CommandType = OleDbCommandType.Delete,
+        UniqueKeyColumns = keys.ToList(),
+      },
+    };
   }
 
   private static Transformation HydrateElement(JsonElement elementJson, string nodeId, string? platformId)
@@ -254,7 +458,16 @@ internal static class AiFirstProducerIrHydrator
     var kind = RequiredString(elementJson, "$kind");
     Transformation element = kind switch
     {
-      "SourceQualifier" => new SourceQualifier(),
+      // A read whose query is bound to the rows of an upstream transform (Hop Table input with
+      // <lookup> or execute_each_row=Y) is a per-row lookup. The engine takes a SourceQualifier's
+      // graph predecessor for the relation it reads, so it would print source('raw', <upstream>).
+      "SourceQualifier" => RowBoundReadRefusal(elementJson) is { } rowBound
+        ? new UnsupportedTransformation
+        {
+          OriginalTransformationText = (OptionalString(elementJson, "_unsupported") ?? kind) + "\n" + rowBound,
+          IssueCodeForNotConverted = IssueName.ExceptionThrownWhileConverting,
+        }
+        : new SourceQualifier(),
       "ExpressionTransformation" => new ExpressionTransformation(),
 
       // WIDENING (blind run follow-up). The vocabulary above was TWO element kinds, which is why
@@ -285,12 +498,29 @@ internal static class AiFirstProducerIrHydrator
       // UNC-path-as-identifier problem, so it gets the same sanitization here.
       // Schema and Database are genuinely optional -- plenty of source documents state neither, and
       // absent is a truthful answer for them, unlike an absent filter predicate.
+      //
+      // TruncateTarget is the engine's slot for "this write replaces the table", so the translator
+      // forces `table`. Truncate only when the input has rows has no engine slot: own strategy.
       "TargetTransformation" => new TargetTransformation
       {
         TableName = AiFirstProducerDataFlowContext.SanitizeRelationIdentifier(RequiredString(elementJson, "TableName")),
         SchemaName = OptionalString(elementJson, "SchemaName"),
         Database = OptionalString(elementJson, "Database"),
+        TruncateTarget = IsYes(elementJson, "TruncateTarget") && !IsYes(elementJson, "OnlyWhenHaveRows"),
       },
+
+      // KEYED WRITES INTO A NAMED TABLE (Hop Insert/update, Update, Delete). Each hands the engine a
+      // class it already translates into a mart aliased to the table, so no new translation logic
+      // lives here. See HydrateKeyedWrite for the class each one becomes.
+      "UpsertTargetTransformation" or "UpdateTargetTransformation" or "DeleteTargetTransformation"
+        => HydrateKeyedWrite(kind, elementJson),
+
+      // Writes the engine has no strategy for (Synchronize after merge, Dimension and Combination
+      // lookup/update): the engine's update-strategy target builds the mart and a producer strategy
+      // macro does the write; see AiFirstProducerIrHydrator.StatefulSinks.cs.
+      "SynchronizeTargetTransformation" or "DimensionTargetTransformation" or "CombinationTargetTransformation"
+        => HydrateStatefulWrite(kind, elementJson),
+      "MergeRowsDiffTransformation" => HydrateMergeRowsDiff(elementJson),
 
       // NOT WIDENED, and it is worth recording why rather than leaving it looking like an oversight.
       // RouterTransformation is `public abstract` and its only concrete subclasses are
@@ -370,7 +600,115 @@ internal static class AiFirstProducerIrHydrator
     // changes which engine property can SEE the columns, not what the columns are.
     element.Columns = element.OutputColumns;
 
+    // A target column written from a differently named stream field. Hydrated onto
+    // TableColumnReference for targets only: the engine's target projection resolves the upstream
+    // column through it, and on every other kind it would inject aliases into the source_data CTE.
+    if (element is TargetTransformation
+      && elementJson.TryGetProperty("OutputColumns", out var targetColumnsJson))
+    {
+      var i = 0;
+      foreach (var columnJson in targetColumnsJson.EnumerateArray())
+      {
+        if (OptionalString(columnJson, "SourceColumn") is { Length: > 0 } sourceColumn)
+        {
+          element.OutputColumns[i].TableColumnReference = sourceColumn;
+        }
+
+        i++;
+      }
+    }
+
+    // The engine reads the key from InputColumns[].IsPrimaryKey. InputColumns[i] is the stream
+    // field written into OutputColumns[i], so the flag follows the table column's name.
+    if (element is OptimizedUpdateStrategyTargetTransformation)
+    {
+      var keys = RequiredStringList(elementJson, "KeyColumns");
+      for (var i = 0; i < element.OutputColumns.Count; i++)
+      {
+        var isKey = keys.Contains(element.OutputColumns[i].Name, StringComparer.OrdinalIgnoreCase);
+        element.OutputColumns[i].IsPrimaryKey = isKey;
+        if (i < element.InputColumns.Count)
+        {
+          element.InputColumns[i].IsPrimaryKey = isKey;
+        }
+      }
+    }
+
+    if (element is OptimizedUpdateStrategyTargetTransformation)
+    {
+      AddStreamOnlyColumns(element, elementJson);
+    }
+
+    if (element is HopMergeRowsDiffTransformation mergeRows)
+    {
+      element.OutputColumns.Add(new Column { Name = mergeRows.FlagField });
+    }
+
+    // The OLE DB Command translator looks each key and update column up in InputColumns BY TABLE
+    // COLUMN NAME and reads the stream field from its TableColumnReference.
+    if (element is OleDbCommandTransformation
+      && elementJson.TryGetProperty("OutputColumns", out var writtenJson))
+    {
+      var inputs = new List<Column>();
+      foreach (var columnJson in writtenJson.EnumerateArray())
+      {
+        var name = RequiredString(columnJson, "Name");
+        if (inputs.Any(c => string.Equals(c.Name, name, StringComparison.OrdinalIgnoreCase)))
+        {
+          continue;
+        }
+
+        inputs.Add(new Column
+        {
+          Name = name,
+          TableColumnReference = OptionalString(columnJson, "SourceColumn") is { Length: > 0 } stream ? stream : null,
+        });
+      }
+
+      element.InputColumns = inputs;
+      element.OutputColumns = inputs.Select(c => new Column { Name = c.Name }).ToList();
+      element.Columns = element.OutputColumns;
+    }
+
     return element;
+  }
+
+  private static bool IsYes(JsonElement owner, string propertyName)
+    => OptionalString(owner, propertyName) is { } value
+      && value.Trim().ToUpperInvariant() is "Y" or "YES" or "TRUE" or "1";
+
+  private static string? RowBoundReadRefusal(JsonElement elementJson)
+  {
+    var rowsFrom = OptionalString(elementJson, "RowsFromTransform")?.Trim();
+    if (!string.IsNullOrEmpty(rowsFrom))
+    {
+      return $"a query bound to the rows of '{rowsFrom}' (a per-row lookup) has no translation; "
+        + $"'{rowsFrom}' supplies its parameters, not the relation it reads";
+    }
+
+    return IsYes(elementJson, "ExecuteEachRow")
+      ? "a query run once per incoming row (execute_each_row=Y) has no translation"
+      : null;
+  }
+
+  private static IReadOnlyList<string> RequiredStringList(JsonElement owner, string propertyName)
+  {
+    var values = OptionalStringList(owner, propertyName);
+    return values.Count > 0
+      ? values
+      : throw new InvalidOperationException($"Producer IR property '{propertyName}' must be a non-empty string list.");
+  }
+
+  private static IReadOnlyList<string> OptionalStringList(JsonElement owner, string propertyName)
+  {
+    if (!owner.TryGetProperty(propertyName, out var value) || value.ValueKind == JsonValueKind.Null)
+    {
+      return [];
+    }
+
+    return value.ValueKind == JsonValueKind.Array
+      ? value.EnumerateArray().Select(v => v.GetString() ?? string.Empty).Where(v => v.Length > 0).ToList()
+      : throw new InvalidOperationException($"Producer IR property '{propertyName}' must be a string list.");
   }
 
   /// <summary>
@@ -444,6 +782,11 @@ internal static class AiFirstProducerIrHydrator
       if (columnJson.TryGetProperty("Scale", out var scale))
       {
         column.Scale = scale.GetInt32();
+      }
+
+      if (columnJson.TryGetProperty("TableColumnReference", out var tableColumnReference))
+      {
+        column.TableColumnReference = tableColumnReference.GetString();
       }
 
       columns.Add(column);

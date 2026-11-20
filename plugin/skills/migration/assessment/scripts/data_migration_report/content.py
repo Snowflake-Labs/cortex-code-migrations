@@ -90,6 +90,7 @@ FINDINGS_LEDE = (
 )
 FINDINGS_HEADERS = ("Type", "Becomes", "Migration", "Validation", "What to expect")
 FINDINGS_USED_IN_HEADER = "Used in"
+USAGE_SHOW_TABLES = "Show tables"
 
 # {clean} types map cleanly and are not listed.
 CLEAN_TYPES_SENTENCE = (

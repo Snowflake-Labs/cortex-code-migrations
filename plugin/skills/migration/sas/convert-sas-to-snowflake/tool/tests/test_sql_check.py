@@ -282,5 +282,37 @@ class ConcatAndTieTests(unittest.TestCase):
         self.assertEqual(self._run("-- SAS: job.sas:L4-L4\nCREATE TABLE S AS SELECT * FROM A ORDER BY grp;\n"), set())
 
 
+class SelectionsTest(unittest.TestCase):
+    FULL = {'depth': 'T2', 'source_location': 'not_in_snowflake', 'ddl': 'infer',
+            'test_data': 'synthetic', 'baseline': 'trace'}
+
+    def _problems(self, sel):
+        return sc.selection_problems({'metadata': {'validation_selections': sel}})
+
+    def test_t1_needs_no_data_answers(self):
+        self.assertEqual(self._problems({'depth': 'T1'}), [])
+
+    def test_t2_complete_passes(self):
+        self.assertEqual(self._problems(self.FULL), [])
+        self.assertEqual(self._problems({**self.FULL, 'source_location': 'DB.SRC',
+                                         'ddl': 'user:ddl/inputs.sql'}), [])
+
+    def test_t2_missing_ddl_fails(self):
+        sel = {k: v for k, v in self.FULL.items() if k != 'ddl'}
+        self.assertEqual(self._problems(sel), ['ddl missing'])
+
+    def test_bad_values_fail(self):
+        self.assertEqual(len(self._problems({**self.FULL, 'ddl': 'user:', 'baseline': 'maybe'})), 2)
+        self.assertTrue(self._problems({'depth': 'T4'}))
+
+    def test_cli_exit_codes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / 'conversion_state.json'
+            state.write_text('{"metadata": {"validation_selections": {"depth": "T3"}}}')
+            self.assertEqual(sc.main(['selections', '--state', str(state)]), 2)
+            state.write_text('{"validation_selections": {"depth": "none"}}')
+            self.assertEqual(sc.main(['selections', '--state', str(state)]), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

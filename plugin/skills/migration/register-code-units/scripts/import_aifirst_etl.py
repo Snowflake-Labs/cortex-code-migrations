@@ -15,8 +15,10 @@ The helper does two things and only those:
 2. Emit a per-source-document enumeration on stdout (with `--json`) so the
    calling skill can call the MCP `create_registry_unit` tool once per document.
    Each entry carries a deterministic collision-resistant `unit_id`, the
-   source-derived `name`, the stated `platform`, the file `format` (extension
-   without the dot), and the project-relative vendored `source_file`.
+   source-derived `name`, the registry `platform` (Hop aliases `"hop"` /
+   `"apacheHop"` to CUR `apacheHop`; the on-disk folder stays `hop`), the file
+   `format` (extension without the dot), and the project-relative vendored
+   `source_file`.
 
 Registry writing is not the helper's job. The Code Unit Registry has its own
 `create_registry_unit` tool (`ai/crates/mcp-server/src/registry.rs`) that stamps
@@ -61,21 +63,51 @@ PLATFORM_UNIT_EXTS: dict[str, frozenset[str]] = {
     "alteryx": frozenset({"yxmd"}),
     "datastage": frozenset({"dsx"}),
     "pentaho": frozenset({"ktr", "kjb"}),
+    "hop": frozenset({"hpl", "hwf"}),
     "adf": frozenset({"xml", "json"}),
     "iics": frozenset({"json"}),
+}
+
+# Folder slug stays the short on-disk name (`hop`) so unit ids do not churn; each unit carries
+# CUR's SourcePlatform spelling (`apacheHop`) for `create_registry_unit` to record.
+FOLDER_SLUG_ALIASES: dict[str, str] = {
+    "apachehop": "hop",
+    "apache-hop": "hop",
+    "apache_hop": "hop",
+}
+REGISTRY_PLATFORM: dict[str, str] = {
+    "hop": "apacheHop",
+    "apachehop": "apacheHop",
+    "apache-hop": "apacheHop",
+    "apache_hop": "apacheHop",
 }
 
 # Fallback for platforms with no specific mapping above (a user-entered name
 # we don't recognize). We can't know that platform's real document extension,
 # so we stay permissive rather than silently enumerating zero units for it.
 DEFAULT_UNIT_EXTS: frozenset[str] = frozenset({
-    "item", "yxmd", "dsx", "ktr", "kjb", "xml", "json",
+    "item", "yxmd", "dsx", "ktr", "kjb", "hpl", "hwf", "xml", "json",
 })
 
 # Sub-extensions we intentionally leave out of the enumeration even though the
 # file may share a matching primary extension. `.properties` sit next to Talend
 # `.item` documents but are companion metadata, not the workflow document.
 COMPANION_EXTS: frozenset[str] = frozenset({"properties"})
+
+
+def _folder_slug(normalized: str) -> str:
+    """On-disk directory under `source/_etl_aifirst/`."""
+    return FOLDER_SLUG_ALIASES.get(normalized, normalized)
+
+
+def _registry_platform(normalized: str) -> str:
+    """Value the skill passes to `create_registry_unit(platform=…)`.
+
+    Listed aliases return the CUR enum spelling; everything else is the
+    normalized folder slug (unlisted platforms stay honest in
+    `extensions.sourcePlatform`).
+    """
+    return REGISTRY_PLATFORM.get(normalized, normalized)
 
 
 def _unit_exts_for(platform_slug: str) -> frozenset[str]:
@@ -86,7 +118,7 @@ def _unit_exts_for(platform_slug: str) -> frozenset[str]:
     permissive union so we don't fail closed on a real document we can't
     recognize by name.
     """
-    return PLATFORM_UNIT_EXTS.get(platform_slug, DEFAULT_UNIT_EXTS)
+    return PLATFORM_UNIT_EXTS.get(_folder_slug(platform_slug), DEFAULT_UNIT_EXTS)
 
 
 class UsageError(RuntimeError):
@@ -312,20 +344,21 @@ def _unit_id_for(platform_slug: str, project_relpath: str) -> str:
 
 
 def _enumerate_units(
-    platform_slug: str,
+    folder_slug: str,
+    registry_platform: str,
     target_root: Path,
     project_dir: Path,
     files: list[str],
 ) -> list[UnitRecord]:
     """Turn copied files into per-document registry-unit records, sorted for stability."""
-    unit_exts = _unit_exts_for(platform_slug)
+    unit_exts = _unit_exts_for(folder_slug)
     records: list[UnitRecord] = []
     seen_ids: dict[str, str] = {}
     for rel in files:
         if not _is_source_document(rel, unit_exts):
             continue
         vendored = (target_root / rel).relative_to(project_dir).as_posix()
-        unit_id = _unit_id_for(platform_slug, vendored)
+        unit_id = _unit_id_for(folder_slug, vendored)
         if unit_id in seen_ids:
             # UUID5 over a project-relative path already collision-resists, so
             # this only fires if the same file is enumerated twice — a defect
@@ -340,7 +373,7 @@ def _enumerate_units(
             UnitRecord(
                 unit_id=unit_id,
                 name=_unit_name_for(rel),
-                platform=platform_slug,
+                platform=registry_platform,
                 format=ext,
                 source_file=vendored,
             )
@@ -358,11 +391,13 @@ def import_aifirst_etl(
 ) -> ImportResult:
     """Programmatic entry point. Same contract as the CLI, raises on error."""
     project = _resolve_project_dir(str(project_dir) if project_dir is not None else None)
-    slug = _normalize_platform(platform)
+    normalized = _normalize_platform(platform)
+    folder = _folder_slug(normalized)
+    registry = _registry_platform(normalized)
     src = _resolve_source(str(source))
     _validate_source_tree(src)
 
-    target_root = project / AIFIRST_ROOT_RELPATH / slug
+    target_root = project / AIFIRST_ROOT_RELPATH / folder
     if _target_would_collide(target_root, src) and not overwrite:
         raise ConflictError(
             f"{target_root.relative_to(project)} already exists with different content; "
@@ -372,17 +407,17 @@ def import_aifirst_etl(
         shutil.rmtree(target_root)
 
     files = _copytree_lossless(src, target_root)
-    units = _enumerate_units(slug, target_root, project, files)
+    units = _enumerate_units(folder, registry, target_root, project, files)
     if not units:
         shutil.rmtree(target_root)
         raise UsageError(
-            f"no source documents recognized for platform {slug!r} in {src}; "
+            f"no source documents recognized for platform {folder!r} in {src}; "
             f"copied {len(files)} companion file(s) but none matched that "
             f"platform's workflow-document extensions"
         )
 
     return ImportResult(
-        platform=slug,
+        platform=folder,
         project_dir=project,
         target_root=target_root,
         files=files,

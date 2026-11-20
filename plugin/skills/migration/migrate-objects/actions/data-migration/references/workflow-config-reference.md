@@ -10,16 +10,19 @@
 | `tables` | `TableConfiguration[]` | Yes | Tables to migrate |
 | `defaultTableConfiguration` | `TableConfiguration` | No | Shared defaults inherited by all tables |
 | `affinity` | String | No | Routes every task of this workflow to workers whose affinity matches (exact and case-sensitive unless the worker's value contains `*`). Setup stamps the project-default affinity. The orchestrator stays without an affinity and claims every workflow. See [Affinity Reference](../../../../data-infrastructure/references/affinity-reference.md). |
-| `preflight` | Boolean | No | When `true`, cap each table to one partition and run against a transient `PREFLIGHT_<workflowId>` schema (bounded dry-run). Default `false`. |
-| `preflightKeepSchema` | Boolean | No | When `preflight` is `true`, skip cleanup so the transient schema remains for manual inspection. Default `false`. |
+| `preflight` | Boolean | No | When `true`, cap each table to one partition and load it into a transient `LIKE` copy of the target in a `PREFLIGHT_<workflowId>` schema (bounded dry-run). The real native targets must already exist. Default `false`. |
+| `preflightKeepSchema` | Boolean | No | When `preflight` is `true`, skip cleanup so the transient schema remains for manual inspection; the user then drops it. Default `false`. |
 | `exportDataGcsBucket` | String | No | BigQuery `export_data` only: GCS bucket name (no `gs://`) that `EXPORT DATA` writes to. `scai data migrate start` copies it into the local worker config as `export_data_gcs_bucket`, replacing any value already there. `extraction.externalStage` must point at the same bucket and prefix. Set with `scai data migrate generate-config --export-data-gcs-bucket <BUCKET>`. |
 | `exportDataGcsPrefix` | String | No | BigQuery `export_data` only: path inside `exportDataGcsBucket`, copied into the worker config as `export_data_gcs_prefix`. Set with `--export-data-gcs-prefix <PREFIX>`. |
 | `cleanUpTransientResources` | `"never"` \| `"on-success"` \| `"always"` | No | Delete intermediate stage files for this workflow after it finishes (`TASK_RESULTS` and any external stages used by extraction). Default `"on-success"`. Underscores are accepted (`on_success`). Set `"never"` to retain stage files for debugging. When the orchestrator runs in Iceberg metadata mode, the omitted-key default may be `"always"` instead — check your deployment profile if you rely on the default. |
+| `comparisonConfiguration` | `{ tolerance, relativeTolerance }` | No | Tolerances of the metrics compare that checks a partition before [`synchronization.adoption`](#adopting-an-existing-target-synchronizationadoption) adopts it; same keys and defaults as the validation workflow's `comparisonConfiguration`. Neither set: absolute `0.001`. Only `relativeTolerance`: no absolute tolerance. Both: a pair passes if either does. Set `relativeTolerance: 1e-6` when adopting float or decimal columns. |
+| `hashMd5Function` | String | No | **Teradata only**, for adoption `check: row`: the `HASH_MD5` UDF as `DATABASE.HASH_MD5`. Unset means `HASH_MD5` in the worker's default database. Any other source rejects the key. Edit it into the YAML; setup has no parameter for it. |
 | `intervalHandling` | `"interval"` \| `"varchar"` | No | How PostgreSQL/BigQuery mixed-family interval columns are mapped. Default `"interval"`. Can be overridden per table. |
+| `periodHandling` | `"period"` \| `"varchar"` | No | **Teradata only.** How PERIOD columns map. Default `"period"` (native Snowflake PERIOD). `"varchar"` is sized VARCHAR `begin*end` text. Overridable under `defaultTableConfiguration` or per table; most specific wins. Iceberg always stores PERIOD as `begin*end` text. Set the same value in the validation workflow. |
 
 ## Preflight (bounded dry-run)
 
-Set top-level `preflight: true` for a **migration smoke test**: each table runs as a single partition; loads go to transient schema `PREFLIGHT_<workflowId>`, not the configured production target. Optional `preflightKeepSchema: true` retains the schema after the workflow for inspection.
+Set top-level `preflight: true` for a **migration smoke test**: each table runs as a single partition; loads go to `LIKE` copies of the targets in transient schema `PREFLIGHT_<workflowId>`, not the configured production target, so the real targets must be deployed first. It is not full workload validation: small tables load in full, and other partitions are never read. Optional `preflightKeepSchema: true` retains the schema after the workflow for inspection; the user drops it afterwards.
 
 **Not the same as** Preliminary migration type (`whereClauseCriteria` loads to real targets) or `scai data doctor` (infra health checks).
 
@@ -57,15 +60,17 @@ preflightKeepSchema: false
 
 ## Identity columns and `continueIdentityColumns`
 
-**When:** the customer will insert new rows on Snowflake after cutover into tables whose keys come from a source identity, auto-increment or `serial` column, or asks why a new insert collides with a migrated key.
+**When:** a new insert on Snowflake reuses a migrated identity / auto-increment / `serial` key, a "Recreate target with identity starts" task failed, or the customer wants a table's generator left alone.
 
-**Default:** off. Identity values are copied as ordinary data and the target's generator is left alone, so the next generated value can collide with a migrated key.
+**Default:** the orchestrator treats an omitted key as **false**. `migrate_data(mode="setup")` writes **true** under `defaultTableConfiguration` for reload tables (`none`, `full-replace`, or no strategy) when the key is absent, and **false** on a table whose own strategy is incremental (`checksum`, `watermark`, …); an explicit value wins. `scai data migrate generate-config` omits the key.
 
-**Opt in:** `continueIdentityColumns: true` per table, or under `defaultTableConfiguration` for every table. Tables the orchestrator creates get a sequence default on each source identity column. After the final load, a cleanup task restarts each target identity or sequence-default column at `MAX(column) + 1` (empty tables keep their start value). It also covers existing targets, such as tables SnowConvert created with `IDENTITY`. It replaces the column's generator with a `<table>_<column>_IDENTITY_SEQ` sequence, so offer it only when the customer wants it; do not turn it on by default. Native targets only: Iceberg targets and preflight runs are skipped. For incremental sync it runs at the end of every workflow run. Detail: `dmvf/data-migration-orchestrator/README.md` ("Identity columns and sequences").
+**What it does:** each target identity or sequence-default column continues at the larger of the source's next value and `MAX(column) + 1`. On SQL Server the source value is `IDENT_CURRENT` plus one increment, so a source with gaps (`IDENT_CURRENT` 370, `MAX` 348) continues at 371. A SnowConvert `IDENTITY` column cannot change its `START` in place, so the table is recreated with the new `START`. While the target is still empty, before its first load, that copies nothing; after a load it copies the table, keeping rows, grants, constraints and foreign keys. A reload of the same source leaves it alone; an incremental run after the source moved recreates it again (a full copy), which is why incremental tables default off. Tables the orchestrator creates get a sequence default instead. Iceberg targets and preflight runs are skipped.
+
+**Opt out** with `continueIdentityColumns: false` on a table the recreate refuses: one a stream reads, or one with a data access policy (it would copy filtered rows). The recreate is a `CREATE OR REPLACE`, so an "Insufficient privileges" failure means the orchestrator's role does not own the target. Detail: `dmvf/data-migration-orchestrator/README.md` ("Identity columns and sequences").
 
 ```yaml
 defaultTableConfiguration:
-  continueIdentityColumns: true
+  continueIdentityColumns: true      # setup writes this for reload tables when absent; omit → orchestrator false
 tables:
   - source: { databaseName: SALES, schemaName: dbo, tableName: Orders }
     target: { databaseName: TARGET_DB, schemaName: DBO, tableName: ORDERS }
@@ -76,6 +81,47 @@ tables:
     continueIdentityColumns: false   # leave this table's generator alone
 ```
 
+## BCP terminators and `escapeBcpTerminators`
+
+**When:** a SQL Server table extracted with BCP holds text containing U+001E or U+001F, as the
+read-only check in [Text holding the BCP terminators](./troubleshooting-reference.md#text-holding-the-bcp-terminators-sql-server-bcp)
+finds. BCP uses those two characters as its row and field terminators, so such a value splits its row.
+
+**Default:** off. Setup never writes it. The skill sets it on the one table the check found, so other
+tables keep the plain SELECT with no per-column `REPLACE`.
+
+**What it does:** the extraction SELECT encodes `~` as `~0`, U+001F as `~1` and U+001E as `~2` in each
+text column, and `COPY INTO` decodes them. No `customColumnTransforms` rule is needed; one the table
+already has keeps working inside the escape. SQL Server sources on native targets only.
+
+```yaml
+tables:
+  - source: { databaseName: SALES, schemaName: dbo, tableName: Notes }
+    target: { databaseName: TARGET_DB, schemaName: DBO, tableName: NOTES }
+    escapeBcpTerminators: true
+    synchronization: { strategy: full-replace }   # reload the rows the split broke
+```
+
+## Common edit scenarios
+
+| User goal | Workflow fields |
+|-----------|-----------------|
+| Repeatable full reload (overwrite, no duplicates) | `synchronization.strategy: full-replace` |
+| Incremental sync | `synchronization.strategy`, `watermarkColumn`, `trackModifications`, `trackDeletions`, `primaryKeyColumns` |
+| Limit rows (preliminary) | `whereClauseCriteria` |
+| Reduce source locking | `queryModifiers` (or worker TOML `query_modifiers`) |
+| Large table performance | `columnNamesToPartitionBy` (leading column must be one the source can prune on), `targetPartitionSizeMb` / `targetPartitionSizeRows`, `executionTimeoutMinutes` (Analyze boundaries only; default 20); Redshift only — experimental `boundaryDiscoveryMode` (`approximate` / `quick`) when NTILE Analyze is too slow (subject to change) |
+| Column rename/type map | `columnNameMappings`, `columnTypeMappings` |
+| Server/cloud export | `extraction.strategy`, `extraction.externalStage` + worker TOML |
+| Iceberg target | `target.tableType`, `target.icebergConfig`, `migrationStrategy` |
+| Teradata mixed charsets / untranslatable bytes | `onUntranslatable` (`substitute` default, `fail` to stop on Error 6706); applies to ODBC, TPT, and `write_nos` — see `dmvf/docs/data-migration-orchestrator/teradata-charset-extraction.md` |
+| Load SQL Server text holding U+001E / U+001F over BCP | `escapeBcpTerminators: true` on that table, then a `full-replace` reload. See [BCP terminators](#bcp-terminators-and-escapebcpterminators) |
+| Leave a table's identity / auto-increment generator as it is after the load | `continueIdentityColumns: false` on that table (setup turns it on for reload tables only; native targets only) — see [Identity columns](#identity-columns-and-continueidentitycolumns) |
+| Align partitions to calendar years / months / days | `partitionByDate` (`year` / `month` / `day`) plus exactly one date or timestamp in `columnNamesToPartitionBy` |
+| Drop source columns from the migration | `excludeSourceColumns` |
+| Encode / decode a column or force its Snowflake type | `customColumnTransforms` |
+| Map Teradata PERIOD as native PERIOD vs `begin*end` text | `periodHandling` (`period` default, `varchar` for text); set the same value in the validation workflow |
+
 ## TableConfiguration
 
 | Property | Type | Required | Description |
@@ -84,9 +130,9 @@ tables:
 | `target` | `TargetIdentifier` | Yes | Target table location in Snowflake |
 | `columnNamesToPartitionBy` | `String[]` | No | Ordered columns used to partition data during extraction. When omitted, the orchestrator extracts the table as a single unit if it fits in one partition, and otherwise infers a key at preprocessing; with no key to infer, a table that needs more than one partition fails. An explicit `[]` turns partitioning off (no inference, one unit whatever the size): never write it unless the user explicitly asks for a single partition — see [Never write `[]`](../SKILL.md#never-write-columnnamestopartitionby-). **Not used for Iceberg loading** (see Iceberg section below). |
 | `extraction` | `ExtractionStrategy` | No | How data is extracted from source |
-| `synchronization` | `SynchronizationStrategy` | No | Incremental sync settings. **Does not apply to Iceberg migrations.** |
+| `synchronization` | `SynchronizationStrategy` | No | Sync settings. On a Snowflake-managed Iceberg table the migration creates, `watermark` and `checksum` reuse the table on a later run. `full-replace` is rejected by the orchestrator. `scai data migrate create-workflow` rejects `watermark` and `checksum` for an Iceberg target and accepts `full-replace` (see the Iceberg section). |
 | `columnTypeMappings` | `ColumnTypeMapping[]` | No | Type conversions during migration |
-| `columnNameMappings` | `ColumnNameMapping[]` | No | Column renaming mappings |
+| `columnNameMappings` | `ColumnNameMapping[]` | No | Column renaming mappings (`sourceName` / `targetName`). Map here every column the target DDL renamed (e.g. a reserved name). |
 | `primaryKeyColumns` | `String[]` | No | Required for `watermark` sync with `trackModifications`; also used for incremental key tracking |
 | `whereClauseCriteria` | String | No | SQL filter appended after `WHERE` in the extraction query (e.g., `"is_deleted = 0"`, `"c_custkey <= 1000"`). **Do not use** `TOP` (SQL Server) or `LIMIT` (Redshift/Oracle) here — they are not valid WHERE clause syntax and cause extraction errors. Teradata: use normal predicates (e.g. `"id <= 1000"`). |
 | `targetPartitionSizeMb` | Integer | No | Target partition size in MB. Mutually exclusive with `targetPartitionSizeRows`. Omit both for auto sizing. |
@@ -97,8 +143,45 @@ tables:
 | `intervalHandling` | `"interval"` \| `"varchar"` | No | Per-table override of top-level `intervalHandling`. |
 | `onUntranslatable` | `"substitute"` \| `"fail"` | No | **Teradata only.** How non-Unicode string columns handle untranslatable bytes during extraction. Default `"substitute"`. Set under `defaultTableConfiguration` for a workflow-wide default, or per table to override. Use `"fail"` when untranslatable non-Unicode bytes must abort the partition (Error 6706) instead of substituting U+FFFD. Detail: `dmvf/docs/data-migration-orchestrator/teradata-charset-extraction.md`. |
 | `executionTimeoutMinutes` | Integer | No | Wall-clock timeout in minutes for the **Analyze boundaries** DEA task only (orchestrator default is **20** when omitted). Does **not** apply to extraction or load. Use per table for large/slow boundary queries, or under `defaultTableConfiguration` to apply to all tables. |
-| `continueIdentityColumns` | Boolean | No | Continue source identity / auto-increment / `serial` generators on the Snowflake target after the final load (default **false**). Per table, or under `defaultTableConfiguration` for all tables. See [Identity columns](#identity-columns-and-continueidentitycolumns). |
+| `boundaryDiscoveryMode` | `"accurate"` \| `"approximate"` \| `"quick"` | No | **Experimental (Redshift only; may change or be removed).** How Analyze discovers partition cut points. Default / omit = `accurate` (NTILE). `approximate` and `quick` trade accuracy for faster Analyze on a **single** numeric or date/time partition column. Do **not** set on non-Redshift sources, composite keys, or with `partitionByDate`. See [Experimental boundary discovery modes](#experimental-boundary-discovery-modes-redshift). |
+| `continueIdentityColumns` | Boolean | No | Continue source identity / auto-increment / `serial` generators on the Snowflake target after the final load. The orchestrator default when omitted is **false**. `migrate_data(mode="setup")` writes **true** under `defaultTableConfiguration` for reload tables when absent; incremental tables stay off. `scai data migrate generate-config` omits the key. Per table, or under `defaultTableConfiguration`. See [Identity columns](#identity-columns-and-continueidentitycolumns). |
+| `partitionByDate` | `"year"` \| `"month"` \| `"day"` | No | Align partition boundaries to calendar periods of the partition column. No default. Per table or `defaultTableConfiguration`. Requires exactly one date or timestamp in `columnNamesToPartitionBy`. `targetPartitionSizeMb` / `targetPartitionSizeRows` still split a large period. Other grains fail with `partitionByDate must be 'year', 'month', or 'day', got '<value>'`. No column: `partitionByDate requires columnNamesToPartitionBy to specify exactly one column`. Several columns: `partitionByDate requires exactly one column in columnNamesToPartitionBy, got <n>: <columns>`. A later validation workflow accepts the key but does not use it to plan partitions, so migration and validation partitions do not line up. |
+| `ignoreTargetCheckConstraints` | Boolean | No | Drop the Snowflake target's CHECK constraints for the load and restore them after it with `ENABLE NOVALIDATE` (default **false**). When false, the CHECKs stay on the target and Snowflake enforces them: a row that violates one fails its load (Snowflake error `001185`), and a row with NULL in the checked column passes. Set it to load rows the target's CHECKs would reject; they stay in the table after the restore. No effect in Direct Mode, which logs a warning. Only `true` / `false` are accepted. Per table or `defaultTableConfiguration`. |
+| `targetHasCheckConstraints` | Boolean \| `"unknown"` | No | Deprecated and ignored: do not generate it. Older configs that set it still load, and the workflow logs a warning. Use `ignoreTargetCheckConstraints` instead. Other values still fail with `targetHasCheckConstraints must be true, false, or "unknown", got <value>`. |
+| `excludeSourceColumns` | `String[]` | No | Source columns to drop from extraction, staged files, `COPY INTO`, and `CREATE TABLE` for a new target. Default: none. A table's list replaces the default list. Matched with the source platform's identifier rules. Cannot exclude a partition, primary key, or watermark column (`excludeSourceColumns for <table> cannot exclude partition column(s): <columns>` / primary key / watermark column). |
+| `customColumnTransforms` | list of rules | No | Per-column encode, decode, and target-type rules. See [customColumnTransforms](#customcolumntransforms). |
+| `periodHandling` | `"period"` \| `"varchar"` | No | Per-table override of top-level `periodHandling`. **Teradata only.** |
 | `resetPartitions` | `"disabled"` \| `"enabled"` \| `"enabledWithDedup"` | No | Discard the partitions a previous workflow created for this table and repartition it on the next incremental (`checksum` / `watermark`) run (default **disabled**; `true` / `false` alias `enabled` / `disabled`). Neither value wipes the target; `enabledWithDedup` merges `watermark` tables on the primary key (not supported with Snowpipe or Iceberg). Set it for one run, then remove it. Per table, or under `defaultTableConfiguration`. Detail: `dmvf/data-migration-orchestrator/README.md` ("Resetting partitions"). |
+| `replacePartitions` | Integer[] | No | `PARTITION_NUMBER`s of an already-migrated table to re-extract in full, clear on the target and load again, whatever the synchronization strategy (e.g. `[3, 7, 12]`). Only the listed partitions get tasks; the others are carried forward as they are. **Per table only**: rejected under `defaultTableConfiguration`, with `resetPartitions`, Iceberg targets or Snowpipe loading. Set it for one run, then remove it. `scai data migrate generate-config` omits the key. Detail: `dmvf/data-migration-orchestrator/README.md` ("Replacing partitions"). |
+
+## customColumnTransforms
+
+A list of rules. Per table or under `defaultTableConfiguration`. Each rule needs at least one selector and at least one action.
+
+| Kind | Fields |
+|------|--------|
+| Selectors | `dataType`, `column`, `columnPattern`. `dataType` can combine with either of the other two. `column` and `columnPattern` are mutually exclusive. |
+| Actions | `encodeExpression`, `decodeExpression`, `targetType`. Every expression must name the column as `{{ col_name }}`. |
+
+A rule has **no `scope` field**; the workflow rejects one (`extra="forbid"`). Rules under `defaultTableConfiguration` are global, rules on a table are table-scoped, and both lists are kept. Precedence: `column` > `columnPattern` > `dataType` alone; table beats global; also naming `dataType` wins; first declared wins. Encode and decode always come from the same highest-ranked rule that sets either of them.
+
+Rejects: encode on a watermark column; encode or decode on Iceberg; no selector; no action; both `column` and `columnPattern`; invalid `columnPattern`; expression without `{{ col_name }}`; blank `targetType`.
+
+```yaml
+defaultTableConfiguration:
+  customColumnTransforms:
+    - dataType: TIMESTAMP
+      encodeExpression: "TO_CHAR({{ col_name }}, 'YYYY-MM-DD HH24:MI:SS')"
+      decodeExpression: "TO_TIMESTAMP({{ col_name }})"
+      targetType: TIMESTAMP_NTZ
+tables:
+  - source: { databaseName: SALES, schemaName: dbo, tableName: Orders }
+    target: { databaseName: TARGET_DB, schemaName: DBO, tableName: ORDERS }
+    customColumnTransforms:
+      - column: notes
+        encodeExpression: "UPPER({{ col_name }})"
+        decodeExpression: "{{ col_name }}"
+```
 
 ## SourceTargetIdentifier
 
@@ -156,7 +239,7 @@ Configuration for Iceberg table targets. Required when `tableType` is `"iceberg"
 > (DMVF's own defaults do not count as approval). The orchestrator accepts the same `native` + `v3`
 > pair and rejects `native` with spec `v2` or with `externalEngineAccess`. The following keys must be
 > **absent**: `sourceDataStage`, `catalogTableName`, `catalogSync`, `externalEngineAccess`.
-> `synchronization.strategy` must be `none` or `full-replace` (incremental is not released for Iceberg).
+> The orchestrator rejects `synchronization.strategy: full-replace` for an Iceberg target. `watermark` and `checksum` run on a Snowflake-managed table this migration creates (`catalog: SNOWFLAKE`, no `sourceDataStage`): a later run reuses the table after a previous run completed. The first `watermark` load uses `ADD_FILES_COPY`. A later run with `trackModifications` and a primary key merges. `resetPartitions: enabledWithDedup` is rejected. `scai data migrate create-workflow` still rejects `watermark` and `checksum` for an Iceberg target, and it still accepts `full-replace`. Do not set `watermark` or `checksum` on a workflow this command submits until that gate accepts them. A second `none` run fails when the Iceberg table already exists.
 > Set these once on `defaultTableConfiguration.target.icebergConfig`; they are inherited by every table.
 >
 > **`migrate_data(mode="setup")` writes this block** when `target_table_type=iceberg`: `tableType: iceberg`
@@ -237,17 +320,18 @@ extraction:
 | `strategy` | `"none"` \| `"full-replace"` \| `"checksum"` \| `"watermark"` | Yes | Sync strategy (default `none`) |
 | `checksumExpression` | String | When `strategy` is `checksum` | Source SQL expression used to detect changed partitions (for example `MAX(ORA_ROWSCN)`). Must not contain `;`. |
 | `watermarkColumn` | String | When `strategy` is `watermark` | Monotonic column used for incremental filtering |
-| `trackModifications` | Boolean | No | When `true` with `watermark`, detect updated rows (requires `primaryKeyColumns`) |
-| `trackDeletions` | Boolean | No | When `true` with `watermark`, detect deleted rows (requires `primaryKeyColumns`) |
+| `trackModifications` | Boolean | No | When `true` with `watermark`, merges updated rows into the target by primary key (requires `primaryKeyColumns`; warehouse loading only, rejected with `loading.strategy: snowpipe`). Other strategies accept the flag but never act on it. |
+| `trackDeletions` | Boolean | No | When `true` with `watermark`, deletes target rows whose primary key is no longer in the source (requires `primaryKeyColumns`). Any other strategy is rejected at configuration validation. Supported with Snowpipe. |
+| `adoption` | `AdoptionConfig` | No | `checksum` and `watermark` only: check a partition already in the target against the source and keep it when it matches, instead of reloading it. See [Adopting an existing target](#adopting-an-existing-target-synchronizationadoption). |
 
 | Strategy | Description | Best for |
 |----------|-------------|----------|
 | `none` (default) | Full extraction every run; rows are **appended** to the target | One-time loads, or tables you will not re-migrate without clearing the target first |
-| `full-replace` | Like `none`, but each partition's target rows are **deleted before loading** so a re-run overwrites instead of appending | Repeatable full reloads where the whole table (or partition) should be replaced each run, without needing a monotonic/change-tracking column. Works for every supported source dialect (the delete runs on the Snowflake target). |
+| `full-replace` | Like `none`, but the target is **emptied before loading** (one `TRUNCATE`; with `whereClauseCriteria`, each partition's target rows are deleted instead) so a re-run overwrites instead of appending | Repeatable full reloads where the whole table (or partition) should be replaced each run, without needing a monotonic/change-tracking column. Works for every supported source dialect (the delete runs on the Snowflake target). Rejected for Iceberg targets. |
 | `checksum` | Hash all column values per partition; re-extract changed partitions only | Dimension tables without a monotonic column. **Oracle:** built-in partition checksum is supported (`STANDARD_HASH` over normalized columns); optional `checksumExpression` (for example `MAX(ORA_ROWSCN)`) overrides the default hash. Some Oracle types are excluded from the default hash — see checksum type coverage below. |
 | `watermark` | Track a monotonic column; sync only rows newer than the last observed value | Fact tables, event logs with a reliable `UPDATED_AT` / ID column |
 
-> **Re-running without incremental sync:** With `strategy: none` (or no `synchronization` block), every migration run extracts and loads **all** matching rows again. Re-running the same workflow against a target that already holds data from a prior run **appends duplicate rows** (or loads more data than expected). Use `full-replace` to have each run delete the target partition before loading (clean overwrite, no duplicates), or `watermark` / `checksum` for repeatable incremental runs. Do **not** `TRUNCATE` or bulk-`DELETE` the target manually without explicit user confirmation — the table may legitimately contain pre-existing or expected rows.
+> **Re-running without incremental sync:** With `strategy: none` (or no `synchronization` block), every migration run extracts and loads **all** matching rows again. Re-running the same workflow against a native target that already holds data from a prior run **appends duplicate rows** (or loads more data than expected). The same second `none` run against an existing Iceberg table fails with `IcebergTargetExistsError`. Use `full-replace` on a native target to have each run delete the target partition before loading (clean overwrite, no duplicates), or `watermark` / `checksum` for repeatable incremental runs. On a Snowflake-managed Iceberg table, `watermark` and `checksum` reuse the table on a later run, and the orchestrator rejects `full-replace`. Do **not** `TRUNCATE` or bulk-`DELETE` the target manually without explicit user confirmation — the table may legitimately contain pre-existing or expected rows.
 
 > **Checksum type coverage:** Built-in partition checksums **skip or normalize** some types (SQL Server `text`/`ntext`/`image`; Oracle LOBs/`LONG`/`XMLTYPE`/`VECTOR`; float rounding; spatial WKT; Redshift `HLLSKETCH`). Changes only in those columns may **not** change the checksum — no re-extract on the next run. Custom `checksumExpression` (for example `MAX(ORA_ROWSCN)`) only reflects what that expression measures. See [Advanced operations reference](../../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
 
@@ -271,6 +355,50 @@ synchronization:
   primaryKeyColumns:
     - CUSTOMER_ID
 ```
+
+### Adopting an existing target (`synchronization.adoption`)
+
+**When:** the Snowflake target already holds rows another tool loaded (a previous migration tool, a hand-run `COPY`, an interrupted run). Without adoption, `checksum` treats every partition as a first load, clears it and reloads it, and the first `watermark` run appends duplicates. With adoption, a partition whose existing rows match the source only costs a metrics check: nothing is extracted, cleared or loaded, and its baseline is stored so later runs sync incrementally.
+
+```yaml
+synchronization:
+  strategy: checksum   # or watermark
+  adoption:
+    mode: verify       # the only legal value today
+    check: metrics     # default (L2); or row (exact hash)
+    onMismatch: reload # default; or report
+```
+
+| Property | Values | Description |
+|----------|--------|-------------|
+| `mode` | `verify` | How existing partitions are handled. Only `verify`. |
+| `check` | `metrics` (default) \| `row` | `metrics` is the L2 metrics compare. `row` hashes each row (same normalization as row validation) and compares the row count and four sums of the hash exactly. It catches a changed cell that moves no aggregate, at a little more cost per partition. A platform that cannot run `row` settles each partition as check-unavailable, which follows `onMismatch`. |
+| `onMismatch` | `reload` (default) \| `report` | A partition that fails the check is cleared and loaded in full (`reload`), or left exactly as it is (`report`): nothing loaded or cleared, no baseline stored, a row in the `ADOPTION_REPORT` metadata table. Under `report` a check that could not run, or returned no metrics, is reported too: only a confirmed match is adopted. |
+
+**Setup.** `migrate_data(mode="setup", sync_strategy="checksum" | "watermark", adoption=true, adoption_check=..., adoption_on_mismatch=...)` writes this block into `defaultTableConfiguration.synchronization` and records it in `.scai/config/plugin.yml` (`data_migration_adoption`, `data_migration_adoption_check`, `data_migration_adoption_on_mismatch`); a later setup for the same project writes it again. It does **not** write the strategy: `checksum` / `watermark` need each table's columns, so set `strategy` (and `watermarkColumn`) per table as in [Recommending a strategy per table](#recommending-a-strategy-per-table). `adoption=false` removes the block and records the opt-out.
+
+**Rules** (the orchestrator parser and `scai data doctor` enforce them; setup refuses the first two before writing):
+
+- Adoption needs `checksum` or `watermark`. `none` and `full-replace` keep no baseline to adopt, and setup refuses `adoption=true` with them or with no incremental strategy named.
+- **Iceberg targets are rejected.** Setup refuses `adoption=true` with `target_table_type=iceberg`. This is unrelated to an Iceberg table's catalog or `convert_to_managed` options, a different product.
+- A table that sets its own `synchronization` must keep `checksum` or `watermark`. `tables[]` blocks deep-merge over `defaultTableConfiguration`, so a table that overrides the strategy to `none` / `full-replace` is rejected while the default carries `adoption`: put `adoption` on the tables that need it instead.
+- Adoption only applies to a partition with **no baseline**, so a re-run is safe: a partition that has one runs as ordinary incremental sync.
+- **Teradata `check: row`** calls an unqualified `HASH_MD5` in the worker's default database. When the UDF lives in another database, set the top-level `hashMd5Function: <DATABASE>.HASH_MD5`. Only Teradata accepts the key.
+- The metrics compare uses the workflow's `comparisonConfiguration`; the default absolute `0.001` fails matching partitions on float noise in a `SUM`, so set `relativeTolerance: 1e-6` for float or decimal columns.
+- **`resetPartitions` + adoption:** a reset creates new partitions with no baseline, so with `adoption` still set the run **re-checks** them instead of reloading: a range that already matches keeps its rows. Anyone resetting to force a full reload (a changed column mapping or transformation, or a target suspected of differences the check cannot see) must drop adoption from that run: `migrate_data(mode="setup", adoption=false, ...)`, or delete the block from the YAML.
+- `watermark`: the check covers the rows up to the target's own `MAX(watermarkColumn)` (the floor); the delta above it is then extracted. A target that is only missing its newest rows adopts and loads them; it is not a mismatch. A source-only watermark column or partition key is rejected.
+
+**Who decides.** Adoption is never the plugin's default. Interactively, when the user says the target already has rows from another tool, explain the three choices, then record theirs: **adopt** (`onMismatch: reload`: matching partitions are kept, the rest reloaded), **adopt and report** (`onMismatch: report`: nothing is ever loaded or cleared, mismatches are listed), or **reload** (no adoption: `full-replace`, or `checksum` / `watermark` that reloads each partition without a baseline). Autonomous walkers never enable it on their own: setup writes it for a walker only when the parent step passes `adoption=true`, and a walker is forced to `full-replace`, which refuses it. On a populated target with adoption unset, a walker escalates.
+
+### Recommending a strategy per table
+
+Setup does not pick a strategy for an incremental migration with no `sync_strategy`. Recommend a strategy **per table** (a `synchronization` block on each `tables[]` entry, with `defaultTableConfiguration.synchronization` only as the shared fallback), using the registry / generated YAML columns and `partition_key_findings`:
+
+1. **`watermark`** when the table has a monotonic timestamp column (`watermarkColumn`). Add `trackModifications` / `trackDeletions` only when a PK is available (`primaryKeyColumns`) and the target is already populated.
+2. **`checksum` with a custom `checksumExpression`** when a cheap change signal beats the full hash — Oracle `MAX(ORA_ROWSCN)`, a SQL Server `rowversion` column.
+3. **Plain `checksum`** otherwise. Tell the user it rewrites the whole partition whenever anything in it changes.
+
+Show each table's choice with its reason and confirm before run. If the user already knows the strategy, call `migrate_data(mode="setup", sync_strategy=..., force_regenerate=true)` instead; an explicit `sync_strategy` is applied as given.
 
 ## LoadSegmentation
 
@@ -407,8 +535,41 @@ See also: `dmvf/docs/data-migration-orchestrator/features/QueryModifiersAntiLock
 - **Auto mode:** omit both `targetPartitionSizeMb` and `targetPartitionSizeRows`. The orchestrator picks platform-appropriate defaults.
 - **Explicit sizing:** set exactly one of `targetPartitionSizeMb` or `targetPartitionSizeRows`.
 - **`columnNamesToPartitionBy`:** optional. Prefer a column (or ordered list) the source can prune on for large tables. When omitted, the orchestrator extracts the table as a single unit if it fits in one partition, and otherwise infers a key at preprocessing — review `partition_key_findings` from setup. A table that needs more than one partition and has no key to infer fails with an error naming `columnNamesToPartitionBy`. An explicit `[]` turns partitioning off: no key is inferred and the whole table moves as one slice, however large. Never write `[]` unless the user explicitly asks for a single partition and accepts the performance cost.
-- **`executionTimeoutMinutes`:** optional wall-clock limit for **Analyze boundaries** only (default 20). Raise it when NTILE/boundary analysis on large tables exceeds 20 minutes; prefer a cheaper partition key when possible.
+- **`partitionByDate`:** optional `year` / `month` / `day`. Aligns each partition to a whole calendar period of that one partition column. Size targets still split a large period. Validation workflows do not plan from this key.
+- **Key preference by dialect** (prefer an explicit key for large tables): SQL Server / Redshift: PK or prune column; Oracle: physical partition key, then IOT PK, then PK — omit the key to let DMVF infer, including `ROWID` only for one-time full extracts with sync `none`; Teradata: level-1 `RANGE_N` bare column when present, else the primary index — the PI spreads rows across AMPs and does not prune; PostgreSQL: declared partition key, then a correlated BRIN column, then the clustered index, then the PK — avoid `ctid`; BigQuery: partition column (`is_partitioning_column`), then `_PARTITIONTIME` for ingestion-time tables with sync `none`, then clustering columns — never lead with a non-partition column when `require_partition_filter` is set; `generate-config` writes the PK when one exists, so on a `Partition prune:` finding offer the catalog column instead of keeping that PK.
+- **`executionTimeoutMinutes`:** optional wall-clock limit for **Analyze boundaries** only (default 20). Raise it when NTILE/boundary analysis on large tables exceeds 20 minutes; prefer a cheaper partition key when possible. On **Redshift**, also consider experimental `boundaryDiscoveryMode` (below) before large timeout increases.
 - **Deprecated:** do not use legacy `partitionSize: auto` — use the flat `targetPartitionSizeMb` / `targetPartitionSizeRows` fields instead.
+
+### Experimental boundary discovery modes (Redshift)
+
+**(Experimental — subject to change or removal.)** Redshift-only. Do not invent this for SQL Server, Teradata, Oracle, PostgreSQL, BigQuery, or any non-Redshift source. Prefer leaving it unset (`accurate`) unless Analyze boundaries is too slow on a large Redshift table **and** the partition key is a single numeric or date/time column.
+
+| Mode | Meaning |
+|------|---------|
+| `accurate` (default / omit) | Today's NTILE path. Safe default. |
+| `approximate` | Faster Analyze via approximate percentiles + interpolation between knots. |
+| `quick` | Fastest Analyze via sampled `MIN`/`MAX` + equal-width interpolation (assumes a more uniform key). |
+
+**Constraints:** exactly one partition column; types limited to integer / decimal / float / `DATE` / `TIMESTAMP` / `TIMESTAMPTZ` (not `TIME`/`TIMETZ`); incompatible with composite `columnNamesToPartitionBy` and with `partitionByDate`. Rejected at config parse or Analyze when misused.
+
+**Agent policy:** tell the user it is experimental and may change; only set it when they accept that trade-off (or ask for faster Redshift Analyze). Prefer `approximate` over `quick` unless they explicitly want the cheapest sketch. Detail: `dmvf/docs/data-migration-orchestrator/partitioning.md#experimental-boundary-discovery-modes-redshift`.
+
+```yaml
+tables:
+  - source: { ... }
+    target: { ... }
+    columnNamesToPartitionBy: [sale_date]   # single numeric/date/time column
+    boundaryDiscoveryMode: approximate      # or quick — experimental
+```
+
+### Showing the columns behind a key
+
+A partition column can only be judged against the alternatives, and the user sees your edit as a one-line diff. So in the message **before** you write `columnNamesToPartitionBy`, give per affected table the column (or composite) you picked, why it beats the others (primary key, non-nullable, cardinality / NULL ratio from the finding's `detail`), and the columns it was picked from. Read those from the table's DDL under `snowflake/`, or with `query_source` against the source catalog.
+
+- **Narrow tables** — list every column with its type.
+- **Wide tables, or several tables at once** — do not paste every column. Give the column count and the **partition candidates** only (unique / non-nullable keys, date and numeric columns, physical prune columns), and offer the full list per table on request.
+
+A bare `suggestion` string leaves the user nothing to approve or reject on.
 
 ### Composite partition keys
 
@@ -433,7 +594,7 @@ Prefer, in order: the declared partition key (`pg_partitioned_table.partattrs`, 
 
 ### BigQuery
 
-Prefer, in order: the partition column (`INFORMATION_SCHEMA.COLUMNS.is_partitioning_column = 'YES'`, via a `Partition prune:` finding or inference), then `_PARTITIONTIME` for ingestion-time tables (when `INFORMATION_SCHEMA.PARTITIONS` has rows and there is no partition column), then the clustering columns (`clustering_ordinal_position`). Leave the field empty to let the orchestrator infer. For an ingestion-time table, write `["_PARTITIONTIME", <high-cardinality column>]` and use sync `none` — `_PARTITIONTIME` is source-only (no checksum, full-replace, or trackDeletions). Put clustering columns after the partition column, never instead of it; clustering allows up to four columns and cluster pruning is not guaranteed. When `require_partition_filter` is true (`INFORMATION_SCHEMA.TABLE_OPTIONS`), a leading key that is not the partition column or `_PARTITIONTIME` fails extraction — Doctor reports that as a Fail. Verify with `query_source` against `INFORMATION_SCHEMA.COLUMNS`, `PARTITIONS`, and `TABLE_OPTIONS`. On a low-cardinality partition date, use a composite `[partition column or _PARTITIONTIME, clustering columns]` (or append the PK when there is no clustering).
+Prefer, in order: the partition column (`INFORMATION_SCHEMA.COLUMNS.is_partitioning_column = 'YES'`, via a `Partition prune:` finding or inference), then `_PARTITIONTIME` for ingestion-time tables (when `INFORMATION_SCHEMA.PARTITIONS` has rows and there is no partition column), then the clustering columns (`clustering_ordinal_position`). Leave the field empty to let the orchestrator infer. For an ingestion-time table, write `["_PARTITIONTIME", <high-cardinality column>]` and use sync `none` — `_PARTITIONTIME` is source-only (no checksum, trackDeletions, or full-replace with `whereClauseCriteria`). Put clustering columns after the partition column, never instead of it; clustering allows up to four columns and cluster pruning is not guaranteed. When `require_partition_filter` is true (`INFORMATION_SCHEMA.TABLE_OPTIONS`), a leading key that is not the partition column or `_PARTITIONTIME` fails extraction — Doctor reports that as a Fail. Verify with `query_source` against `INFORMATION_SCHEMA.COLUMNS`, `PARTITIONS`, and `TABLE_OPTIONS`. On a low-cardinality partition date, use a composite `[partition column or _PARTITIONTIME, clustering columns]` (or append the PK when there is no clustering).
 
 ## ColumnTypeMapping
 

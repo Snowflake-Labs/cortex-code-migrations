@@ -38,6 +38,10 @@ Tell the user in one sentence that row-level validation will use the **same obje
 
 If DM is worker-only extract (`regular` / `tpt` / unset), or object-store strategy is set **without** `externalStage`, fall through to Step 1.
 
+## Small default run (skip the question)
+
+When there is no landing to reuse and this is a small default run — the user said to go with the defaults (or just to run it), or `.scai/config/plugin.yml` records `data_orchestrator_placement: direct` — do not ask the Step 1 question. Leave `extraction.strategy` unset, as on **No** below, and tell the user in one sentence that row-level validation runs without a bucket and they can add one later. Do not call this path slow.
+
 ## Step 1 — Ask about object storage
 
 Say that **using a bucket is faster**. Do not say the inverse.

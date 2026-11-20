@@ -5,6 +5,7 @@
   python3 sql_check.py scan|lint|xfile|fidelity --dir <out> ...
   python3 sql_check.py fix  --dir <out> [--dry-run]     # repair stray comment delimiters, differential-checked
   python3 sql_check.py count --file x.sql
+  python3 sql_check.py selections --state <out>/conversion_state.json   # Step 1 answers complete
 
 Prints only findings (`file:line severity rule message`) and one summary line, and writes the
 full report to --report (default <dir>/sql_check.json). Exit 2 when any `error` remains.
@@ -710,6 +711,50 @@ def emit(rep, report_path, label):
     return 2 if errs else 0
 
 
+# ------------------------------------------------------------------ Step 1 selections
+
+# key -> (bare values allowed, prefixes that must carry a location after ':')
+SELECTION_RULES = {
+    'source_location': (('not_in_snowflake',), ()),
+    'ddl': (('infer',), ('user:',)),
+    'test_data': (('synthetic',), ('user:',)),
+    'baseline': (('trace',), ('sas_outputs:',)),
+}
+
+
+def selection_problems(state):
+    """Missing or malformed Step 1 data answers; empty when the selections are complete."""
+    meta = state.get('metadata', {})
+    sel = meta.get('validation_selections') or state.get('validation_selections') or {}
+    depth = str(sel.get('depth', '')).upper()
+    if depth not in ('T1', 'T2', 'T3', 'NONE'):
+        return [f"depth={sel.get('depth')!r} (want T1|T2|T3|none)"]
+    if depth not in ('T2', 'T3'):
+        return []
+    problems = []
+    for key, (bare, prefixes) in SELECTION_RULES.items():
+        val = sel.get(key)
+        if not isinstance(val, str) or not val.strip():
+            problems.append(f'{key} missing')
+        elif key == 'source_location':
+            if val not in bare and not re.fullmatch(r'[\w$]+\.[\w$]+', val):
+                problems.append(f'{key}={val!r} (want DB.SCHEMA|not_in_snowflake)')
+        elif val not in bare and not any(val.startswith(p) and len(val) > len(p) for p in prefixes):
+            problems.append(f"{key}={val!r} (want {'|'.join(bare + tuple(p + '<location>' for p in prefixes))})")
+    return problems
+
+
+def cmd_selections(a):
+    try:
+        state = json.loads(read(a.state))
+    except (OSError, ValueError) as exc:
+        print(f'selections: cannot read {a.state}: {exc}', file=sys.stderr)
+        return 2
+    problems = selection_problems(state)
+    print('selections: ' + ('; '.join(problems) + ' -- ask in Step 1' if problems else 'complete'))
+    return 2 if problems else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest='cmd', required=True)
@@ -722,7 +767,11 @@ def main(argv=None):
         s.add_argument('--report')
     s = sub.add_parser('fix'); s.add_argument('--dir', required=True); s.add_argument('--dry-run', action='store_true')
     s = sub.add_parser('count'); s.add_argument('--file', required=True)
+    s = sub.add_parser('selections'); s.add_argument('--state', required=True)
     a = ap.parse_args(argv)
+
+    if a.cmd == 'selections':
+        return cmd_selections(a)
 
     if a.cmd == 'fix':
         return cmd_fix(a)

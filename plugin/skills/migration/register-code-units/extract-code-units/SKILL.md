@@ -23,6 +23,17 @@ Tell the user:
 - `configure()` called at session start — validates the source connection and, for Oracle/Teradata, seeds the driver cache via [`../../connection/references/driver-bootstrap.md`](../../connection/references/driver-bootstrap.md)
 - Network access to source database
 
+## Before extract — confirm the source profile
+
+Run `scai connection list -l <dialect> --json` (or the table form) and compare
+the bound `source_connection` to the host, port, and database the user already
+supplied in this session. If the port or database differs, do **not** wait for
+the user to re-run a password prompt. Create a new matching connection with the
+per-dialect skill (reference the password env var by name; never paste it),
+`configure(source_connection=<new-name>)` until `connection_test: ok`, then
+extract. Asking the user to re-enter credentials is only for when no password
+is available in the environment and the CLI cannot prompt.
+
 ## Workflow
 
 ### Step 1: Extract all objects from the connection's database
@@ -219,8 +230,11 @@ yes/no — extras already collected that on the setup/register card.
 >
 > 1. **SSIS** — `.dtsx` packages (converted natively)
 > 2. **Informatica Power Center** — XML repo export (converted natively)
-> 3. **Another ETL platform** — Talend, Alteryx, Informatica Cloud / IICS, DataStage,
->    Pentaho, Azure Data Factory, or something else (routes through AI-First)
+> 3. **Apache Hop or Pentaho**: Hop `.hpl` / `.hwf`, Pentaho `.ktr` / `.kjb` (AI-First
+>    approach, not native support: converted end to end, then validated against the
+>    original)
+> 4. **Another ETL platform**: Talend, Alteryx, Informatica Cloud / IICS, DataStage,
+>    Azure Data Factory, or something else (AI-First approach, not native support)
 
 - **SSIS / Informatica Power Center:** ask for the ETL folder path and
   run (do **not** pass `--overwrite` — the extracted SQL is already in `source/`):
@@ -228,6 +242,8 @@ yes/no — extras already collected that on the setup/register card.
   ```bash
   scai code add -i <ETL_PATH> --json
   ```
+
+  Launch it with `run_in_background=true`, or set the bash tool `timeout` to at least `900000` (15 minutes), then poll until the command finishes. The default 120 second timeout kills the process during the conversion engine's silent pause and a relaunch starts it over.
 
   This arranges the packages into `source/_etl/`, where `convert` finds them without an
   external path flag.
@@ -237,11 +253,16 @@ yes/no — extras already collected that on the setup/register card.
   [add-code-units Step 3](../add-code-units/SKILL.md#if-the-import-times-out-or-runs-in-the-background)
   says before you go on.
 
-- **Another ETL platform:** these files never go through `scai code add` —
+- **Apache Hop or Pentaho / Another ETL platform:** these files never go through `scai code add` —
   the native `EtlFileClassifier` under `source/_etl/` only understands SSIS and
   Informatica PowerCenter. Instead:
-  1. Ask which platform. Accept a free-form name if it is not in the list. Store the
-     lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `adf`, …).
+  1. For **Apache Hop or Pentaho**, take the platform from the files (`.hpl` / `.hwf`
+     are `hop`, `.ktr` / `.kjb` are `pentaho`) or ask which one; when the folder holds
+     both, register each set separately. Otherwise ask which platform. Accept a free-form
+     name if it is not in the list. Store the
+     lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `hop`, `adf`, …).
+     For Hop, `hop` and `apacheHop` are the same intake: the helper vendors under
+     `source/_etl_aifirst/hop/` and enumerates `units[].platform` as `apacheHop`.
   2. Ask for the folder path containing the platform's source documents.
   3. Copy losslessly into `source/_etl_aifirst/<platform>/` by invoking the
      enumeration helper — do **not** hand-copy files. The helper writes no parallel
@@ -261,14 +282,15 @@ yes/no — extras already collected that on the setup/register card.
   4. Query the deterministic `unit_id` values from the helper first. If an ID
      already exists, verify its platform, format, and `files.source.path` exactly
      match the helper output and do not recreate it; stop on a mismatch. For every
-     missing entry, call `create_registry_unit` — this is what `convert` Step 4.5
-     reads:
+     missing entry, call `create_registry_unit` with that unit's envelope
+     `platform` (`<UNIT_PLATFORM>`), not the asked slug — this is what
+     `convert` Step 4.5 reads. Hop enumerates `apacheHop`.
 
      ```
      create_registry_unit(
        unit_id="<UNIT_ID>",
        name="<NAME>",
-       platform="<PLATFORM_SLUG>",
+       platform="<UNIT_PLATFORM>",
        format="<FORMAT>",
        source_file="<PROJECT_RELATIVE_SOURCE_PATH>"
      )
@@ -282,10 +304,13 @@ yes/no — extras already collected that on the setup/register card.
      that would create a `kind: custom` unit without `files.source.path`, which the
      setup gate and Step 4.5 refuse.
 
-  5. Verify with `query_registry` that each unit exists with `kind = 'etl'`,
-     `source.objectType = 'workflow'`, and a `files.source.path` matching its
-     vendored source. If any is missing, stop and tell the user — the registry write
-     is the contract Step 4.5 reads at convert time.
+  5. Verify with `query_registry(where="id = '<UNIT_ID>'")` that each unit
+     exists with `kind = 'etl'`, `source.objectType = 'workflow'`, and a
+     `files.source.path` matching its vendored source, and
+     `extensions.sourcePlatform` equal to the envelope platform. A Hop unit may also
+     have `source.platform = apacheHop`; do not set or change either with
+     `update_registry`. If any is missing, stop and tell the user —
+     the registry write is the contract Step 4.5 reads at convert time.
 
   Repeat once per platform if there is more than one AI-First ETL source.
 

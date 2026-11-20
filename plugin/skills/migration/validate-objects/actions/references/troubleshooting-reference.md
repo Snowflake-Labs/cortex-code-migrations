@@ -18,10 +18,13 @@ Hybrid L3 validation may stop early when `earlyStoppingForRowHashing` or `maxFai
 
 **Meaning:** The orchestrator closed the workflow while one or more tables never finished. This is an **error**, not success.
 
+The terminal event already counts such tables as `failed`. **Do not report "Passed"**: treat them as failures (scai's `HasErrors` does the same).
+
 **Fix path:**
 
-1. **MCP / reports (no SQL):** Re-read the latest status response. Use `tableStates[].errorMessage` and `details.reports.files.data_validation_errors` for task detail.
-2. **Task queue and infrastructure:** follow [Workflow finished but tables incomplete](../../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md#workflow-finished-but-tables-incomplete) — the causes (worker not running, affinity, stale tasks, suspended orchestrator) and `TASK_QUEUE` queries are the same.
+1. **Report them:** list the pending tables under **Execution** as "never validated", with `tableStates[].errorMessage` when set, else `details.reports.files.data_validation_errors`, else "Table not validated — check task errors". Do **not** treat `metricsValidated: null` as a failure when metrics was disabled.
+2. **Task queue and infrastructure:** when the messages are thin, follow [Workflow finished but tables incomplete](../../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md#workflow-finished-but-tables-incomplete) — the causes (worker not running, affinity, stale tasks, suspended orchestrator) and `TASK_QUEUE` queries are the same. Worker or orchestrator trouble is one cause, not the only one.
+3. Do **not** suggest a re-run until the cause is identified.
 
 ---
 

@@ -31,20 +31,22 @@ import base64
 import csv
 import html as html_escape_module
 import json
+import os
 import re
 import sys
 import tempfile
 import traceback
 from collections import Counter, defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _scripts_dir = str(Path(__file__).resolve().parent)
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
 from snowconvert_reports.console_utils import DONE  # noqa: E402
+from snowconvert_reports.ewi_heatmap import EWI_HEATMAP_CSS  # noqa: E402
 from snowconvert_reports.services.assessment_metadata import (  # noqa: E402
     resolve_assessment_name,
 )
@@ -102,6 +104,18 @@ try:
 except ImportError as e:
     print(f"Warning: Data lineage report generator not available: {e}", file=sys.stderr)
     DATA_LINEAGE_SUPPORT = False
+
+try:
+    from business_use_cases_report import (
+        BUSINESS_USE_CASES_CSS,
+        load_json_object as load_business_use_cases_json,
+        render_business_use_cases_html,
+        render_pending_objects_html,
+    )
+    BUSINESS_USE_CASES_SUPPORT = True
+except ImportError as e:
+    print(f"Warning: Business use cases report generator not available: {e}", file=sys.stderr)
+    BUSINESS_USE_CASES_SUPPORT = False
 
 from conversion_issues_report import (
     conversion_issues_css,
@@ -180,6 +194,9 @@ VIRTUALIZATION_ENABLED = False
 
 # Flip to False to hide Workload Insights from every supported report.
 WORKLOAD_INSIGHTS_ENABLED = True
+
+# The PDF prints this many rows of each Object Exclusion classification; the HTML keeps every row.
+EXCLUSION_PRINT_ROWS_PER_CLASSIFICATION = 10
 
 
 def generate_ai_summary(summary: Dict, temp_staging: List, deprecated: List, testing: List) -> str:
@@ -444,6 +461,7 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
     
     rows = []
     row_id = 0
+    rows_in_classification = {}
     
     for obj in all_objects:
         full_name = html_escape_module.escape(str(obj['full_name']))
@@ -453,6 +471,8 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
         classification = obj['classification']
         classification_label = obj['classification_label']
         raw = obj['raw']
+        rows_in_classification[classification] = rows_in_classification.get(classification, 0) + 1
+        print_class = ' print-omit' if rows_in_classification[classification] > EXCLUSION_PRINT_ROWS_PER_CLASSIFICATION else ''
         
         # Get reason from matched patterns (use combined patterns if available, else from raw).
         # Patterns come straight from SCAI as regex strings; translate them to
@@ -554,13 +574,13 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
         if has_details:
             details_content = ''.join(details_items)
             details_html = f'''
-            <tr class="details-row" id="details-{row_id}" style="display: none;" data-classification="{classification}" data-type="{obj_type}">
+            <tr class="details-row{print_class}" id="details-{row_id}" style="display: none;" data-classification="{classification}" data-type="{obj_type}">
                 <td colspan="5" class="details-cell">{details_content}</td>
             </tr>'''
         
         # Show expand icon only if there are details
         expand_icon = '<span class="expand-icon">+</span>' if has_details else ''
-        row_class = 'expandable' if has_details else ''
+        row_class = ('expandable' if has_details else '') + print_class
         onclick_attr = f'onclick="toggleDetails({row_id}, this)"' if has_details else ''
         
         # Get all classifications for filtering (comma-separated)
@@ -940,10 +960,15 @@ def generate_waves_html_content(waves_info: Dict) -> tuple:
     return (waves_info['html_content'], waves_info.get('sidebar_html', ''), waves_info['javascript'])
 
 
+MISSING_REASON_NO_DEPENDENTS = "No recorded dependents"
+MISSING_REASON_DEPENDENTS_OUT_OF_SCOPE = "No in-scope dependents"
+
+
 def _shared_refs_to_overview(shared_result: Dict) -> Dict:
     """Convert the shared missing-refs loader contract into the Overview UI contract."""
     missing_set = shared_result.get('missing_objects', set()) or set()
     dependents_map = shared_result.get('dependents', {}) or {}
+    without_callers = shared_result.get('missing_without_callers', {}) or {}
     details = shared_result.get('details', []) or []
     data_source = shared_result.get('data_source', 'none')
     warning_msg = shared_result.get('warning') or ''
@@ -964,12 +989,19 @@ def _shared_refs_to_overview(shared_result: Dict) -> Dict:
             for item in dependent_rows
             if str(item.get('caller', '')).strip()
         })
-        missing_objects.append({
+        row = {
             'referenced': missing_name,
             'callers': callers,
             'dependants_count': len(callers),
             'reference_count': len(dependent_rows),
-        })
+        }
+        if missing_name in without_callers:
+            row['reason'] = (
+                MISSING_REASON_DEPENDENTS_OUT_OF_SCOPE
+                if without_callers[missing_name]
+                else MISSING_REASON_NO_DEPENDENTS
+            )
+        missing_objects.append(row)
 
     return {
         'missing_objects': missing_objects,
@@ -1192,6 +1224,58 @@ def _conversion_issues_artifact(project_dir: Path = None, conversion_issues_json
     return load_conversion_issues(path)
 
 
+def _planning_tab(tab_id: str, body: str) -> str:
+    return (
+        f'<div class="tab-content" :class="{{active: activeTab === \'{tab_id}\'}}">'
+        + body
+        + "</div>"
+    )
+
+
+def _optional_report_json(path: Path) -> Optional[Dict]:
+    """A companion artifact. Missing is normal; present but unreadable is a warning."""
+    if not path.is_file() or not BUSINESS_USE_CASES_SUPPORT:
+        return None
+    loaded = load_business_use_cases_json(path)
+    if loaded is None:
+        print(
+            f"Warning: could not read {path.name}; the business use cases report omits it.",
+            file=sys.stderr,
+        )
+    return loaded
+
+
+APP_VERSION_ENV = "AIM_APP_VERSION"
+
+
+def build_version_label(plugin_version: Optional[str] = None) -> str:
+    """Which build produced this report, for the journey hero: ``AIM App version {v}`` or ``AIM Plugin version {v}``.
+
+    ``AIM_APP_VERSION`` is set on the process AIM runs (``aim serve``, and the
+    ``scai`` it starts), so it names the installed app build. Without it, the
+    plugin version ``scai`` was given names the build. Neither gives ``""``,
+    and the hero shows no pill. Nothing on the machine is looked up: the HTML
+    keeps what the generating process knew.
+    """
+    app_version = os.environ.get(APP_VERSION_ENV, "").strip()
+    if app_version:
+        return f"AIM App version {app_version}"
+    plugin_version = (plugin_version or "").strip()
+    if plugin_version:
+        return f"AIM Plugin version {plugin_version}"
+    return ""
+
+
+def generated_at_label(when: Optional[datetime] = None) -> str:
+    """When this HTML was written, for the journey hero beside the build pill."""
+    stamp = when or datetime.now(timezone.utc)
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    else:
+        stamp = stamp.astimezone(timezone.utc)
+    return f"Generated {stamp.strftime('%Y-%m-%d %H:%M')} UTC"
+
+
 def generate_multi_report(
     output_file: Path,
     exclusion_json: Path = None,
@@ -1206,8 +1290,10 @@ def generate_multi_report(
     effort_estimates_json: Path = None,
     workload_insights_json: Path = None,
     data_lineage_json: Path = None,
+    use_cases_json: Path = None,
     project_dir: Path = None,
     conversion_issues_json: Path = None,
+    plugin_version: Optional[str] = None,
 ) -> None:
     """Generate multi-tab HTML report"""
 
@@ -1337,9 +1423,51 @@ def generate_multi_report(
         if override_count:
             print(f"  - Effort overrides: {override_count} from {overrides_path.name}")
 
-    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns and not effort_estimates_json and not workload_insights_json and not has_data_lineage:
-        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, anti-patterns, effort estimates, workload insights, or data lineage) must be provided")
-    
+    business_use_cases_html = ""
+    pending_objects_html = ""
+    has_business_use_cases = False
+    if BUSINESS_USE_CASES_SUPPORT:
+        wave_plan_artifact = None
+        use_case_effort_artifact = None
+        use_case_context_artifact = None
+        use_cases_body = None
+        if use_cases_json:
+            print(f"Loading business use cases from {use_cases_json}...")
+            use_cases_artifact = load_business_use_cases_json(use_cases_json)
+            if use_cases_artifact is None:
+                print(
+                    f"Warning: business use cases could not be read: {use_cases_json}",
+                    file=sys.stderr,
+                )
+            else:
+                plan_path = Path(use_cases_json).parent / "wave-plan.json"
+                effort_path = Path(use_cases_json).parent / "use-case-effort.json"
+                context_path = Path(use_cases_json).parent / "use-case-context.json"
+                wave_plan_artifact = _optional_report_json(plan_path)
+                use_case_effort_artifact = _optional_report_json(effort_path)
+                use_case_context_artifact = _optional_report_json(context_path)
+                use_cases_body = render_business_use_cases_html(
+                    use_cases_artifact,
+                    wave_plan_artifact,
+                    use_case_effort_artifact,
+                    use_case_context_artifact,
+                )
+                has_business_use_cases = True
+        if use_cases_body is None:
+            use_cases_body = render_business_use_cases_html({"useCases": []})
+        business_use_cases_html = _planning_tab("business-use-cases", use_cases_body)
+        pending_objects_html = _planning_tab(
+            "pending-objects",
+            render_pending_objects_html(
+                wave_plan_artifact,
+                use_case_effort_artifact,
+                use_case_context_artifact,
+            ),
+        )
+
+    if not exclusion_data and not dynamic_sql_data and not waves_info and not ssis_data and not informatica_data and not has_anti_patterns and not effort_estimates_json and not workload_insights_json and not has_data_lineage and not has_business_use_cases:
+        raise ValueError("At least one data source (exclusion, dynamic SQL, waves, SSIS, Informatica, anti-patterns, effort estimates, workload insights, data lineage, or business use cases) must be provided")
+
     # Process exclusion data — schema produced by `scai assessment object-exclusion`
     # is the single source of truth; field names below match that schema directly.
     exclusion_summary = exclusion_data.get('summary', {}) if exclusion_data else {}
@@ -1498,6 +1626,7 @@ def generate_multi_report(
         has_informatica=has_informatica,
         informatica_json=informatica_json if has_informatica else None,
         informatica_source_dir=informatica_source_dir,
+        informatica_registry_dir=registry_dir,
         output_file=output_file,
         dynamic_sql_meta=dynamic_sql_meta,
         exclusion_summary=exclusion_summary,
@@ -1528,10 +1657,15 @@ def generate_multi_report(
         testing_readiness=testing_readiness,
         data_migration_readiness=data_migration_readiness,
         assessment_name=resolve_assessment_name(project_dir),
+        build_version=build_version_label(plugin_version),
+        generated_at=generated_at_label(),
         initial_active_tab=initial_active_tab,
         initial_discovery_tab=initial_discovery_tab,
         project_dir=project_dir,
         conversion_issues_artifact=_conversion_issues_artifact(project_dir, conversion_issues_json),
+        business_use_cases_html=business_use_cases_html,
+        pending_objects_html=pending_objects_html,
+        business_use_cases_css=BUSINESS_USE_CASES_CSS if BUSINESS_USE_CASES_SUPPORT else "",
     )
     
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -1555,6 +1689,7 @@ def generate_html_template(
     has_informatica: bool,
     informatica_json: Path,
     informatica_source_dir: Path,
+    informatica_registry_dir: Path,
     output_file: Path,
     dynamic_sql_meta: Dict,
     exclusion_summary: Dict,
@@ -1588,12 +1723,17 @@ def generate_html_template(
     testing_readiness: Any = None,
     data_migration_readiness: Any = None,
     assessment_name: str = "",
+    build_version: str = "",
+    generated_at: str = "",
     ssis_registry_packages: Optional[List[Dict[str, str]]] = None,
 
     initial_active_tab: str = "journey",
     initial_discovery_tab: str = "lineage",
     project_dir: Path = None,
     conversion_issues_artifact: Dict = None,
+    business_use_cases_html: str = "",
+    pending_objects_html: str = "",
+    business_use_cases_css: str = "",
 ) -> str:
     """Generate the complete HTML template"""
     dynamic_sql_meta_json = json.dumps(dynamic_sql_meta or {}, ensure_ascii=False)
@@ -1659,11 +1799,15 @@ def generate_html_template(
     if top_missing_objects:
         for item in top_missing_objects:
             referenced = html_escape_module.escape(str(item.get('referenced', '')))
+            reason_html = (
+                f'<div style="color: #6B7280; font-size: 0.8em; font-style: italic;">{html_escape_module.escape(str(item["reason"]))}</div>'
+                if item.get('reason') else ''
+            )
             dependants_count = int(item.get('dependants_count') or len(item.get('callers') or []))
             reference_count = int(item.get('reference_count') or dependants_count)
             missing_top10_rows.append(f'''
                             <tr>
-                                <td><span class="copyable-top-object" data-tooltip="{referenced}" style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1em; color: #111827; font-family: inherit; cursor: copy;">{referenced}</span></td>
+                                <td><span class="copyable-top-object" data-tooltip="{referenced}" style="display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1em; color: #111827; font-family: inherit; cursor: copy;">{referenced}</span>{reason_html}</td>
                                 <td style="text-align: center;"><strong>{reference_count}</strong></td>
                                 <td style="text-align: center;"><strong>{dependants_count}</strong></td>
                             </tr>
@@ -1698,7 +1842,7 @@ def generate_html_template(
                         <div>
                             <h3 style="margin: 0; color: #92400E; font-size: 1.1rem;">{missing_objects_count:,} Missing Object References Found</h3>
                             <p style="margin: 4px 0 0 0; color: #B45309; font-size: 0.86rem;">
-                                These objects are referenced but not defined in the source workload.
+                                These objects are not defined in the source workload.
                             </p>
                         </div>
                     </div>
@@ -1768,6 +1912,17 @@ def generate_html_template(
     # The sidebar sits inside the Vue mount, so v-pre is required or a name
     # containing {{ }} would be compiled as an expression.
     safe_assessment_name = html_escape_module.escape(assessment_name) if assessment_name else ''
+    # v-pre for the same reason as the sidebar name: the hero is inside the Vue mount.
+    build_version_pill_html = (
+        f'<span class="journey-pill" v-pre>{html_escape_module.escape(build_version)}</span>'
+        if build_version
+        else ''
+    )
+    generated_at_pill_html = (
+        f'<span class="journey-pill" v-pre>{html_escape_module.escape(generated_at)}</span>'
+        if generated_at
+        else ''
+    )
     assessment_title_prefix = f'{safe_assessment_name} — ' if safe_assessment_name else ''
     assessment_name_html = (
         f'<span class="status-badge-neutral" v-pre>{safe_assessment_name}</span>'
@@ -1857,13 +2012,11 @@ def generate_html_template(
         effort_nav_link = (
             '<a @click="activeTab = \'effort-estimates\'" class="nav-link" '
             'data-tab="effort-estimates" :class="{active: activeTab === \'effort-estimates\'}">'
-            'Effort Estimates <span class="nav-preview-badge">Preview</span></a>'
+            'Effort Estimates</a>'
         )
         effort_nav_sublist = (
             '<div v-if="activeTab === \'effort-estimates\'" class="nav-sublist">'
             '<a @click="scrollToSection(\'#effort-calculator\', \'effort-estimates\')" class="nav-sublink">Calculator</a>'
-            '<a @click="scrollToSection(\'#effort-ddl-assessment\', \'effort-estimates\')" class="nav-sublink">DDL Assessment</a>'
-            '<a @click="scrollToSection(\'#effort-top-issues\', \'effort-estimates\')" class="nav-sublink">Top Issues</a>'
             '</div>'
         )
 
@@ -1877,15 +2030,9 @@ def generate_html_template(
         if has_waves and waves_info
         else ""
     )
-    etl_nav_sublist = (
-        '<div v-if="activeTab === \'etl\'" class="nav-sublist">'
-        '<a @click="scrollToSection(\'#informatica-executive-summary\', \'etl\')" class="nav-sublink">AI Summary</a>'
-        '<a @click="scrollToSection(\'#informatica-metrics\', \'etl\')" class="nav-sublink">Key Metrics</a>'
-        '<a @click="scrollToSection(\'#informatica-workflow-classification\', \'etl\')" class="nav-sublink">Workflow Classification</a>'
-        '<a @click="scrollToSection(\'#informatica-component-breakdown\', \'etl\')" class="nav-sublink">Component Breakdown</a>'
-        '</div>'
-        if has_informatica
-        else ""
+    etl_nav_sublist = build_etl_nav_sublist(
+        has_ssis=has_ssis,
+        has_informatica=has_informatica,
     )
 
     # Overview tab HTML
@@ -2011,6 +2158,8 @@ def generate_html_template(
     """
 
     journey_steps = [
+        ('business-use-cases', 'Wave Planning',
+         'Review the business use cases found in the workload, and the objects none of them include. Each use case can migrate on its own. Lineage and the deployment plan are in the assessment report in the app.'),
         ('overview', 'Code/ETL Conversion',
          'Convert your database code and ETL pipelines to Snowflake. Review conversion readiness, dependencies, object exclusions, and dynamic SQL.'),
         ('data-migration', 'Data Migration &amp; Validation',
@@ -2059,7 +2208,7 @@ def generate_html_template(
                 <div class="journey-card" @click="activeTab = '{tab}'">
                     <div class="journey-badge">{step}</div>
                     <div class="journey-card-body">
-                        <h3>{title}</h3>
+                        <h3>{title}{' <span class="nav-preview-badge">Preview</span>' if tab == 'business-use-cases' else ''}</h3>
                         <p>{desc}</p>
                     </div>
                     <span class="journey-cta">
@@ -2073,9 +2222,9 @@ def generate_html_template(
     )
     # Naming a phase the reader has no card or nav item for reads as a missing tab.
     journey_phases_copy = (
-        'converting code and ETL, moving and validating data, testing, and virtualization'
+        'planning the migration, converting code and ETL, moving and validating data, testing, and virtualization'
         if show_virtualization
-        else 'converting code and ETL, moving and validating data, and testing'
+        else 'planning the migration, converting code and ETL, moving and validating data, and testing'
     )
     journey_download_html = ""
     if project_dir:
@@ -2085,9 +2234,11 @@ def generate_html_template(
         archive_path = (project_dir / ".scai" / "reports" / "conversion-reports.zip").resolve()
         safe_archive_href = html_escape_module.escape(archive_path.as_uri(), quote=True)
         journey_download_html = f"""
-                    <a class="journey-download" href="{safe_archive_href}" download="conversion-reports.zip">
-                        Download conversion reports
-                    </a>
+            <div class="journey-footer">
+                <a class="journey-download" href="{safe_archive_href}" download="conversion-reports.zip">
+                    Download conversion reports
+                </a>
+            </div>
         """
     journey_overview_html = f"""
         <!-- Migration Journey Overview (entry point) -->
@@ -2100,12 +2251,14 @@ def generate_html_template(
                 </p>
                 <div class="journey-actions">
                     <span class="journey-pill">Source platform: {safe_source_dialect}</span>
-                    {journey_download_html}
+                    {build_version_pill_html}
+                    {generated_at_pill_html}
                 </div>
             </div>
             <div class="journey-grid">
                 {journey_cards_html}
             </div>
+            {journey_download_html}
         </div>
     """
 
@@ -2155,7 +2308,7 @@ def generate_html_template(
     informatica_js = ""
     informatica_css = ""
     if has_informatica and INFORMATICA_SUPPORT and informatica_json:
-        informatica_content, informatica_js, informatica_css = generate_informatica_html_content(informatica_json, output_html_path=output_file, source_dir=informatica_source_dir)
+        informatica_content, informatica_js, informatica_css = generate_informatica_html_content(informatica_json, output_html_path=output_file, source_dir=informatica_source_dir, registry_dir=informatica_registry_dir)
         informatica_html = informatica_content
     else:
         informatica_html = ""
@@ -2172,7 +2325,7 @@ def generate_html_template(
         """
     else:
         etl_tab_content = """
-            <div class="tab-content" :class="{active: activeTab === 'etl'}">
+            <div class="tab-content print-compact" :class="{active: activeTab === 'etl'}">
                 <div style="margin-bottom: 32px;">
                     <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
                         ETL Assessment Report
@@ -2279,7 +2432,7 @@ def generate_html_template(
         query_logs_panel_html = f"""
             <div v-show="discoveryTab === 'query-logs'" class="discovery-panel"
                  role="tabpanel" aria-label="Query Logs Analysis">
-                <div class="lineage-segment" role="group" aria-label="Query log views">
+                <div class="lineage-segment print-omit" role="group" aria-label="Query log views">
                     <button type="button" data-query-logs-view="analysis"
                             :aria-pressed="queryLogsView === 'analysis'" aria-controls="query-logs-analysis-panel"
                             :class="{{active: queryLogsView === 'analysis'}}" @click="queryLogsView = 'analysis'">
@@ -2295,7 +2448,7 @@ def generate_html_template(
                      role="region" aria-label="Analysis">
                     {workload_insights_content}
                 </div>
-                <div v-show="queryLogsView === 'extract'" id="query-logs-extract-panel"
+                <div v-show="queryLogsView === 'extract'" id="query-logs-extract-panel" class="print-omit"
                      role="region" aria-label="Extract Log">
                     {workload_insights_extract_content}
                 </div>
@@ -2322,7 +2475,7 @@ def generate_html_template(
             </div>
             <div v-show="discoveryTab === 'lineage'" class="discovery-panel"
                  role="tabpanel" aria-label="Lineage">
-                <div class="lineage-segment" role="group" aria-label="Lineage views">
+                <div class="lineage-segment print-omit" role="group" aria-label="Lineage views">
                     <button type="button" data-lineage-view="data"
                             :aria-pressed="lineageView === 'data'" aria-controls="data-lineage-panel"
                             :class="{{active: lineageView === 'data'}}" @click="lineageView = 'data'">
@@ -2339,7 +2492,7 @@ def generate_html_template(
                     {data_lineage_content}
                 </div>
                 <div v-show="lineageView === 'object'" id="object-lineage-panel"
-                     class="empty-state object-lineage-notice" role="region" aria-labelledby="object-lineage-title">
+                     class="empty-state object-lineage-notice print-omit" role="region" aria-labelledby="object-lineage-title">
                     <h3 id="object-lineage-title">Object Lineage</h3>
                     <p>Object Lineage is available only in the interactive Migration Dashboard.</p>
                     <div class="prompt-head">
@@ -2364,7 +2517,7 @@ def generate_html_template(
             <!-- Exclusion Report Tab -->
             <div class="tab-content" :class="{{active: activeTab === 'exclusion'}}">
                 <!-- Executive Summary -->
-                <section id="executive-summary" style="margin-bottom: 48px;">
+                <section id="exclusion-executive-summary" style="margin-bottom: 48px;">
                     <div style="margin-bottom: 32px;">
                         <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
                             Object Exclusion Analysis
@@ -2435,7 +2588,8 @@ def generate_html_template(
                         Flagged Objects for Review
                     </h2>
                     <p style="color: #64748B; margin-bottom: 1rem;">Showing {flagged_count} objects that match naming patterns for temporary, deprecated, testing, or duplicate categories. These objects require review before migration.</p>
-                    <div class="export-buttons" style="margin-bottom: 1.5rem;">
+                    <p class="print-only print-note">This PDF lists the first {EXCLUSION_PRINT_ROWS_PER_CLASSIFICATION} objects of each classification. All {flagged_count} flagged objects are in the HTML report (multi_report.html) and its CSV and Excel downloads.</p>
+                    <div class="export-buttons print-omit" style="margin-bottom: 1.5rem;">
                         <button class="export-btn-compact" onclick="downloadCSV('all')">Download All (CSV)</button>
                         <button class="export-btn-compact" onclick="downloadExcel('all')">Download All (Excel)</button>
                         <button class="export-btn-compact" onclick="downloadCSV('temp')">Temporary/Staging (CSV)</button>
@@ -2445,7 +2599,7 @@ def generate_html_template(
                     </div>
                     
                     <!-- Search and Count -->
-                    <div style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap;">
+                    <div class="print-omit" style="display: flex; gap: 1rem; margin-bottom: 1rem; align-items: center; flex-wrap: wrap;">
                         <div style="display: flex; align-items: center; gap: 0.5rem;">
                             <input type="text" id="search-objects" placeholder="Search by name, schema, file..." onkeyup="filterExclusionTable()" style="padding: 0.5rem 1rem; border: 1px solid #E2E8F0; border-radius: 6px; font-size: 0.875rem; width: 280px;">
                         </div>
@@ -2462,7 +2616,7 @@ def generate_html_template(
                                     <th class="col-schema">
                                         <div class="th-content">
                                             <span>Schema</span>
-                                            <select id="schema-filter" onchange="filterExclusionTable()" class="column-filter">
+                                            <select id="schema-filter" onchange="filterExclusionTable()" class="column-filter print-omit">
                                                 <option value="all">All</option>
                                                 {generate_schema_filter_options(temp_staging, deprecated, testing)}
                                             </select>
@@ -2471,7 +2625,7 @@ def generate_html_template(
                                     <th class="col-type">
                                         <div class="th-content">
                                             <span>Type</span>
-                                            <select id="type-filter" onchange="filterExclusionTable()" class="column-filter">
+                                            <select id="type-filter" onchange="filterExclusionTable()" class="column-filter print-omit">
                                                 <option value="all">All</option>
                                                 {generate_type_filter_options(temp_staging, deprecated, testing)}
                                             </select>
@@ -2480,7 +2634,7 @@ def generate_html_template(
                                     <th class="col-reason">
                                         <div class="th-content">
                                             <span>Reason</span>
-                                            <select id="reason-filter" onchange="filterExclusionTable()" class="column-filter">
+                                            <select id="reason-filter" onchange="filterExclusionTable()" class="column-filter print-omit">
                                                 <option value="all">All</option>
                                                 {generate_reason_filter_options(temp_staging, deprecated, testing)}
                                             </select>
@@ -2489,7 +2643,7 @@ def generate_html_template(
                                     <th class="col-classification">
                                         <div class="th-content">
                                             <span>Classification</span>
-                                            <select id="classification-filter" onchange="filterExclusionTable()" class="column-filter">
+                                            <select id="classification-filter" onchange="filterExclusionTable()" class="column-filter print-omit">
                                                 <option value="all">All</option>
                                                 <option value="temp">Temp/Staging</option>
                                                 <option value="deprecated">Deprecated</option>
@@ -2510,7 +2664,7 @@ def generate_html_template(
         """
     else:
         exclusion_html = """
-            <div class="tab-content" :class="{active: activeTab === 'exclusion'}">
+            <div class="tab-content print-compact" :class="{active: activeTab === 'exclusion'}">
                 <h2 class="text-3xl font-bold text-sf-dark-blue mb-6 border-b-2 border-sf-blue pb-2">
                     Exclusion Report
                 </h2>
@@ -2723,7 +2877,7 @@ def generate_html_template(
                                         legend: {{ display: false }},
                                         tooltip: {{ callbacks: {{ label: function(c) {{
                                             var text = formatValue(Number(c.raw) || 0);
-                                            return mode === 'percent' ? text : text + ' occurrences';
+                                            return mode === 'percent' ? text : text + ' unresolved occurrences';
                                         }} }} }},
                                         datalabels: {{
                                             display: true,
@@ -2764,7 +2918,7 @@ def generate_html_template(
                             <button type="button" id="dsql-pat-obj" onclick="toggleDynamicSqlPatternView('objects')"
                                     style="padding:4px 12px;border-radius:6px;border:1px solid #29B5E8;
                                            background:#29B5E8;color:white;font-size:0.82rem;cursor:pointer;">
-                                Occurrence Count
+                                Unresolved Occurrence Count
                             </button>
                             <button type="button" id="dsql-pat-pct" onclick="toggleDynamicSqlPatternView('percent')"
                                     style="padding:4px 12px;border-radius:6px;border:1px solid #E2E8F0;
@@ -2781,7 +2935,7 @@ def generate_html_template(
             <!-- Dynamic SQL Report Tab -->
             <div class="tab-content" :class="{active: activeTab === 'dynamic-sql'}">
                 <!-- Executive Summary -->
-                <section id="executive-summary" style="margin-bottom: 48px;">
+                <section id="dynamic-sql-executive-summary" style="margin-bottom: 48px;">
                     <div style="margin-bottom: 32px;">
                         <h1 style="font-size: 1.875rem; font-weight: 800; color: #102E46; margin-bottom: 12px;">
                             Dynamic SQL Analysis
@@ -2792,14 +2946,14 @@ def generate_html_template(
                     </div>
                     <div class="metrics-row">
                         <div class="metric-item">
-                            <div class="metric-label">Total occurrences</div>
+                            <div class="metric-label">Unresolved occurrences</div>
                             <div class="metric-value">{{ totalOccurrences }}</div>
-                            <div class="metric-sub">Dynamic SQL instances detected</div>
+                            <div class="metric-sub">Unresolved dynamic SQL instances</div>
                         </div>
                         <div class="metric-item">
                             <div class="metric-label">Analyzed</div>
                             <div class="metric-value">{{ analyzedOccurrencesCount }}</div>
-                            <div class="metric-sub">Reviewed occurrences</div>
+                            <div class="metric-sub">Reviewed unresolved occurrences</div>
                         </div>
                         <div class="metric-item" v-if="pendingOccurrencesCount > 0">
                             <div class="metric-label">Pending</div>
@@ -2809,7 +2963,7 @@ def generate_html_template(
                         <div class="metric-item">
                             <div class="metric-label">Code units</div>
                             <div class="metric-value">{{ uniqueCodeUnits }}</div>
-                            <div class="metric-sub">With reviewed occurrences</div>
+                            <div class="metric-sub">With reviewed unresolved occurrences</div>
                         </div>
                         <div class="metric-item">
                             <div class="metric-label">High priority</div>
@@ -2824,7 +2978,7 @@ def generate_html_template(
                         <thead class="bg-sf-blue text-white">
                             <tr>
                                 <th class="p-3 text-left">Category</th>
-                                <th class="p-3 text-center">Occurrences</th>
+                                <th class="p-3 text-center">Unresolved occurrences</th>
                                 <th class="p-3 text-center">Code Units</th>
                                 <th class="p-3 text-center">Percentage</th>
                             </tr>
@@ -2846,7 +3000,7 @@ def generate_html_template(
                         <thead class="bg-sf-blue text-white">
                             <tr>
                                 <th class="p-3 text-left">Type</th>
-                                <th class="p-3 text-center">Occurrences</th>
+                                <th class="p-3 text-center">Unresolved occurrences</th>
                                 <th class="p-3 text-center">Code Units</th>
                                 <th class="p-3 text-center">Percentage</th>
                             </tr>
@@ -2903,14 +3057,14 @@ def generate_html_template(
                                     Showing {{ filteredCodeUnits.length }} of {{ uniqueCodeUnits }} code units
                                 </span>
                                 <span v-if="pendingOccurrencesCount > 0" class="text-xs dsq-count-note">
-                                    {{ pendingOccurrencesCount }} pending occurrence{{ pendingOccurrencesCount === 1 ? '' : 's' }} hidden
+                                    {{ pendingOccurrencesCount }} pending unresolved occurrence{{ pendingOccurrencesCount === 1 ? '' : 's' }} hidden
                                 </span>
                             </div>
 
                             <div class="dsq-thead" role="row">
                                 <div class="dsq-cell">Name</div>
                                 <div class="dsq-cell">Complexity</div>
-                                <div class="dsq-cell">Occurrences</div>
+                                <div class="dsq-cell">Unresolved occurrences</div>
                                 <div class="dsq-cell">File</div>
                             </div>
 
@@ -2961,8 +3115,8 @@ def generate_html_template(
                                     <div class="dsq-codeunit-grid">
                                         <div class="dsq-kvs dsq-kvs-compact">
                                             <div class="dsq-k">Complexity</div><div class="dsq-v">{{ selectedCodeUnit.maxComplexity }}</div>
-                                            <div class="dsq-k">Analyzed occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
-                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-k">Pending occurrences</div>
+                                            <div class="dsq-k">Analyzed unresolved occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
+                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-k">Pending unresolved occurrences</div>
                                             <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-v">{{ selectedCodeUnit.pendingCount }}</div>
                                             <div class="dsq-k">Filename</div>
                                             <div class="dsq-v dsq-vpath" :title="selectedCodeUnit.filename">{{ selectedCodeUnit.filename }}</div>
@@ -3104,8 +3258,8 @@ def generate_html_template(
                                             <div class="dsq-codeunit-grid">
                                                 <div class="dsq-kvs dsq-kvs-compact">
                                             <div class="dsq-k">Complexity</div><div class="dsq-v">{{ selectedCodeUnit.maxComplexity }}</div>
-                                            <div class="dsq-k">Analyzed occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
-                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-k">Pending occurrences</div>
+                                            <div class="dsq-k">Analyzed unresolved occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
+                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-k">Pending unresolved occurrences</div>
                                             <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-v">{{ selectedCodeUnit.pendingCount }}</div>
                                                     <div class="dsq-k">Filename</div>
                                                     <div class="dsq-v dsq-vpath" :title="selectedCodeUnit.filename">{{ selectedCodeUnit.filename }}</div>
@@ -3192,7 +3346,7 @@ def generate_html_template(
         """
     else:
         dynamic_sql_html = """
-            <div class="tab-content" :class="{active: activeTab === 'dynamic-sql'}">
+            <div class="tab-content print-compact" :class="{active: activeTab === 'dynamic-sql'}">
                 <h2 class="text-3xl font-bold text-sf-dark-blue mb-6 border-b-2 border-sf-blue pb-2">
                     Dynamic SQL Report
                 </h2>
@@ -3305,11 +3459,11 @@ def generate_html_template(
         .effort-table td.ctr, .effort-table th.ctr {{ text-align: center; }}
         .effort-table.compact th, .effort-table.compact td {{ padding: 0.5rem 0.6rem; font-size: 0.8rem; }}
         .effort-table.sticky thead th {{ position: sticky; top: 0; z-index: 1; }}
-        .effort-table tr.effort-total td {{ background: #F8FAFC; font-weight: 700; color: #1E252F; }}
+        .effort-table tr.effort-total td {{ background: #E0F2FE; font-weight: 700; color: #102E46; }}
         /* The grouping note is a full sentence. Cap the column so it wraps
            instead of stretching the calculator across the page. */
         .effort-table td.effort-comments {{ color: #64748B; font-size: 0.85rem; }}
-        .effort-comments-body {{ width: 56ch; max-width: 56ch; overflow-wrap: break-word; }}
+        .effort-comments-body {{ max-width: 56ch; overflow-wrap: break-word; }}
         /* Interactive effort calculator: editable per-band rates and their paired
            Snowflake values. */
         .effort-band-legend {{ display: flex; flex-wrap: wrap; gap: 4px 18px; margin-bottom: 12px; color: #5D6A85; font-size: 0.8rem; line-height: 1.5; }}
@@ -3348,10 +3502,20 @@ def generate_html_template(
         .effort-badge {{ background: #E0F2FE; color: #0369A1; border-radius: 999px; padding: 3px 10px; font-size: 0.78rem; font-weight: 600; }}
         .effort-notice {{ color: #0369A1; background: #F0F9FF; border: 1px solid #BAE6FD; border-radius: 6px; padding: 8px 12px; font-size: 0.82rem; margin: 0 0 12px; }}
         .effort-warning {{ color: #92400E; background: #FFFBEB; border: 1px solid #FDE68A; border-radius: 6px; padding: 8px 12px; font-size: 0.82rem; margin: 0 0 12px; }}
-        .effort-input {{ width: 84px; text-align: right; padding: 4px 6px; border: 1px solid #CBD5E1; border-radius: 4px; font-size: 0.85rem; font-family: inherit; color: #1E252F; background: #FFFFFF; }}
+        .effort-input {{ width: 4.5rem; height: 24px; box-sizing: border-box; text-align: right; padding: 2px 6px; border: 1px solid #CBD5E1; border-radius: 4px; font-size: 0.85rem; font-family: inherit; color: #1E252F; background: #FFFFFF; }}
+        /* Option C: a light box around each editable number, inset from the cell. */
+        .effort-sheet td:has(> .effort-input) {{ padding: 0; }}
+        .effort-sheet td:has(> .effort-input) > span {{ display: block; padding: 2px 8px; }}
+        .effort-sheet .effort-input {{
+            width: calc(100% - 8px); min-width: 0; height: 24px; margin: 3px 4px;
+            display: block; box-sizing: border-box; border: 0; border-radius: 0;
+            padding: 2px 6px; background: #FFFFFF; box-shadow: inset 0 0 0 1px #CBD5E1;
+        }}
         .effort-input:focus {{ outline: 2px solid #93C5FD; outline-offset: 0; border-color: #005C8F; }}
+        .effort-sheet .effort-input:focus {{ outline: 2px solid #005C8F; outline-offset: 0; box-shadow: none; }}
         .effort-input:disabled {{ background: #F1F5F9; color: #94A3B8; cursor: not-allowed; }}
         .effort-input-error {{ border-color: #DC2626; background: #FEF2F2; }}
+        .effort-sheet .effort-input.effort-input-error {{ box-shadow: inset 0 0 0 1px #DC2626; background: #FEF2F2; }}
         .effort-error {{ display: block; color: #B91C1C; font-size: 0.72rem; margin-top: 2px; }}
         .effort-sf-note {{ display: block; color: #64748B; font-size: 0.72rem; font-weight: 400; margin-top: 2px; white-space: nowrap; }}
         .effort-ewi-link {{
@@ -3390,16 +3554,62 @@ def generate_html_template(
         .effort-ewi-modal-body {{
             flex: 1 1 auto; min-height: 0; overflow: auto; padding: 16px;
         }}
-        .effort-ewi-modal .effort-table th.effort-ewi-tip {{
+        .effort-ewi-doc-link {{
+            color: #0C7AA6; text-decoration: none;
+        }}
+        .effort-ewi-doc-link:hover {{
+            text-decoration: underline;
+        }}
+        .effort-ewi-tip {{
             cursor: help; text-decoration: underline dotted; text-underline-offset: 3px;
         }}
         .effort-table tr.effort-row-overridden td {{ background: #FFFDF5; }}
         .effort-table tr.effort-row-overridden:hover td {{ background: #FEF9E7; }}
-        /* The rate row belongs to the count row above it, so the border between
-           them is dropped and only the pair is separated from the next object type. */
-        .effort-table tr.effort-rate-row td {{ padding-top: 0; border-bottom-width: 2px; }}
-        .effort-table tr.effort-rate-row {{ background: #FBFDFF; }}
-        .effort-rate-lbl {{ color: #94A3B8; font-size: 0.72rem; white-space: nowrap; }}
+        /* Spreadsheet lines: lines of one object type sit tight, and a heavier rule
+           separates each object type from the next. */
+        .effort-sheet {{ border-collapse: collapse; table-layout: fixed; width: 100%; }}
+        .effort-sheet td {{ vertical-align: middle; padding: 3px 8px; }}
+        .effort-sheet thead th, .effort-sheet thead th.num, .effort-sheet thead th.ctr {{ text-align: center; white-space: nowrap; }}
+        .effort-sheet th, .effort-sheet td {{ border-right: 1px solid #CBD5E1; }}
+        .effort-sheet tr > :first-child {{ border-left: 1px solid #CBD5E1; }}
+        .effort-sheet tbody tr.effort-line-first td {{ border-top: 2px solid #CBD5E1; }}
+        .effort-sheet td.effort-line-total {{ font-weight: 600; font-variant-numeric: tabular-nums; }}
+        /* Narrow enough that Comments keeps a readable measure on a laptop; below
+           the table's min-width the wrapper scrolls sideways instead of squeezing. */
+        .effort-sheet {{ min-width: 1080px; }}
+        .effort-col-type {{ width: 180px; }}
+        .effort-col-category {{ width: 110px; }}
+        .effort-col-count {{ width: 95px; }}
+        .effort-col-rate {{ width: 115px; }}
+        .effort-col-fixed {{ width: 105px; }}
+        .effort-col-grouping {{ width: 100px; }}
+        .effort-col-total {{ width: 105px; }}
+        .effort-sheet thead th {{ padding: 8px; }}
+        /* Print fits the calculator to the page width: every column, Comments
+           included, stays on the page instead of running off its right edge. */
+        @media print {{
+            .effort-table-wrap:has(> .effort-sheet) {{ overflow: visible; }}
+            .effort-sheet {{ min-width: 0; width: 100%; }}
+            .effort-sheet th, .effort-sheet td {{ font-size: 0.62rem; padding: 2px 4px; }}
+            .effort-sheet thead th, .effort-sheet thead th.num, .effort-sheet thead th.ctr {{ white-space: normal; padding: 4px; }}
+            .effort-sheet tr {{ break-inside: avoid; page-break-inside: avoid; }}
+            .effort-col-type {{ width: 13%; }}
+            .effort-col-category {{ width: 10%; }}
+            .effort-col-count {{ width: 7%; }}
+            .effort-col-rate {{ width: 10%; }}
+            .effort-col-fixed {{ width: 9%; }}
+            .effort-col-grouping {{ width: 8%; }}
+            .effort-col-total {{ width: 9%; }}
+            .effort-sheet .effort-comments-body {{ max-width: none; font-size: 0.6rem; }}
+            .effort-sheet .effort-ewi-link {{ font-size: 0.6rem; }}
+            .effort-sheet .effort-sf-note {{ white-space: normal; font-size: 0.56rem; }}
+            .effort-sheet .effort-input {{ font-size: inherit; height: auto; padding: 1px 3px; }}
+            .effort-section-toggle {{ padding: 4px 6px; font-size: 0.66rem; }}
+        }}
+        .effort-sheet td.effort-type-cell {{ vertical-align: middle; }}
+        .effort-sheet td.effort-comments {{ vertical-align: top; }}
+        .effort-comments-body {{ font-size: 0.78rem; color: #475569; line-height: 1.45; white-space: normal; }}
+        .effort-comment-note {{ display: block; margin-top: 4px; color: #64748B; }}
         /* Section banner: the only divider in the table, so a reader can tell at a
            glance which pricing rule the rows below it follow. */
         .effort-table th.effort-section {{
@@ -3415,22 +3625,12 @@ def generate_html_template(
         .effort-section-toggle:hover {{ background: #CDEBFB; }}
         .effort-chevron {{ display: inline-flex; color: #64748B; }}
         .effort-section-blurb {{ font-weight: 400; color: #64748B; }}
-        /* Trailing edge, so the figure lands near the Est. Hours column it sums and
-           stays readable when the section is closed. */
-        .effort-section-total {{
-            margin-left: auto; display: flex; align-items: baseline; gap: 8px;
-            font-variant-numeric: tabular-nums;
+        /* The subtotal sits in the Total hours column, so it reads as the sum of that
+           column's lines; the banner title spans the columns to its left. */
+        .effort-table th.effort-section-total {{
+            text-align: right; padding: 9px 8px; color: #102E46;
+            font-weight: 700; font-variant-numeric: tabular-nums;
         }}
-        /* A flat section's own column headers. Lighter than the table head so they
-           read as scoped to the section rather than as a second table. */
-        .effort-table th.effort-subhead {{
-            text-align: left; background: #F8FAFC; color: #64748B; font-size: 0.74rem;
-            font-weight: 600; padding: 6px 14px; border-bottom: 1px solid #E2E8F0;
-            white-space: nowrap;
-        }}
-        /* Comes after the subhead rule so Critical / High / Medium / Low center
-           in their cells. The later left alignment would otherwise win. */
-        .effort-table th.effort-subhead.ctr {{ text-align: center; }}
         .effort-table tr.effort-total td {{ border-top: 2px solid #CBD5E1; }}
         .effort-muted {{ color: #64748B; font-size: 0.85rem; }}
         .nav-preview-badge {{
@@ -3534,14 +3734,24 @@ def generate_html_template(
             background: #D6E6FF;
             color: #1A6CE7;
         }}
-        /* The badge row would otherwise let the flex label give way to the badge.
-           Effort Estimates is the longest Code/ETL label and sits close enough
-           to the sidebar edge that a wider font fallback would wrap it. */
+        /* Effort Estimates is the longest Code/ETL label and sits close enough
+           to the sidebar edge that a wider font fallback would wrap it, and the
+           fixed row height would clip the second line. */
         .nav-link[data-tab="effort-estimates"] {{
             white-space: nowrap;
         }}
         .nav-sublist {{
             padding: 4px 0 8px 0;
+        }}
+        .nav-subhead {{
+            display: block;
+            padding: 8px 16px 2px 24px;
+            margin: 0 16px;
+            color: #2A3342;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
         }}
         .nav-sublink {{
             display: block;
@@ -3626,19 +3836,23 @@ def generate_html_template(
             font-size: 0.85rem;
             font-weight: 600;
         }}
+        .journey-footer {{
+            display: flex;
+            justify-content: flex-start;
+            margin-top: 8px;
+        }}
         .journey-download {{
             display: inline-flex;
             align-items: center;
-            background: #0284C7;
-            color: #FFFFFF;
-            padding: 8px 16px;
-            border-radius: 8px;
-            font-size: 0.9rem;
-            font-weight: 700;
+            color: #64748B;
+            padding: 4px 0;
+            font-size: 0.85rem;
+            font-weight: 500;
             text-decoration: none;
         }}
         .journey-download:hover {{
-            background: #0369A1;
+            color: #0284C7;
+            text-decoration: underline;
         }}
         .journey-grid {{
             display: flex;
@@ -4837,10 +5051,22 @@ def generate_html_template(
             font-size: 0.85rem;
             vertical-align: middle;
         }}
+        /* The columns have fixed widths, so each filter sits under its label
+           and shrinks to its cell instead of spilling into the next one. */
         .exclusion-table th .th-content {{
             display: flex;
-            align-items: center;
-            gap: 0.5rem;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 0.35rem;
+        }}
+        .exclusion-table th .th-content > span {{
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+        .exclusion-table th .column-filter {{
+            min-width: 0;
+            max-width: 100%;
         }}
         .exclusion-table td {{
             padding: 0.75rem 0.75rem;
@@ -5104,11 +5330,15 @@ def generate_html_template(
                 break-before: page;
                 page-break-before: always;
             }}
+            /* A tab with no data prints its one-line empty state under the previous tab. */
+            .content > .tab-content.print-compact {{
+                break-before: auto;
+                page-break-before: auto;
+                margin-top: 32px;
+            }}
             .discovery-panel,
             #data-lineage-panel,
-            #object-lineage-panel,
-            #query-logs-analysis-panel,
-            #query-logs-extract-panel {{
+            #query-logs-analysis-panel {{
                 display: block !important;
             }}
             .wi-card {{
@@ -5121,17 +5351,38 @@ def generate_html_template(
         html.is-printing .content > .tab-content {{ display: block !important; }}
         html.is-printing .discovery-panel,
         html.is-printing #data-lineage-panel,
-        html.is-printing #object-lineage-panel,
-        html.is-printing #query-logs-analysis-panel,
-        html.is-printing #query-logs-extract-panel {{
+        html.is-printing #query-logs-analysis-panel {{
             display: block !important;
         }}
         
+        /* Business use cases readiness (scoped to #business-use-cases-report) */
+{business_use_cases_css}
+        /* The PDF is a summary: long lists print their first rows and a pointer to the
+           full list (.print-omit), and say so in a note only print shows (.print-only). */
+        .print-only {{ display: none !important; }}
+        @media print {{
+            .print-omit {{ display: none !important; }}
+            .print-only {{ display: block !important; }}
+        }}
+        html.is-printing .print-omit {{ display: none !important; }}
+        html.is-printing .print-only {{ display: block !important; }}
+        .print-note {{
+            margin: 8px 0 16px;
+            padding: 8px 12px;
+            border-left: 4px solid #29B5E8;
+            background: #F8FBFC;
+            color: #2A3342;
+            font-size: 0.85rem;
+        }}
+
         /* SSIS report styles (scoped to #ssis-report) */
 {ssis_css}
 
         /* Informatica report styles (scoped to #informatica-report) */
 {informatica_css}
+
+        /* EWI heatmap (shared by the SSIS and Informatica reports) */
+{EWI_HEATMAP_CSS}
 
         /* Anti-patterns report styles (scoped to #anti-patterns-report) */
 {anti_patterns_css}
@@ -6214,6 +6465,17 @@ def generate_html_template(
                     <span>Migration Journey</span>
                 </a>
                 {discovery_nav_html}
+                <a class="nav-section" @click="selectSection(planningTabs, 'business-use-cases')">
+                    <span>Wave Planning</span> <span class="nav-preview-badge">Preview</span>
+                </a>
+                <div class="nav-group" v-show="planningTabs.includes(activeTab)">
+                    <a @click="activeTab = 'business-use-cases'" class="nav-link" data-tab="business-use-cases" :class="{{active: activeTab === 'business-use-cases'}}">
+                        Business use cases
+                    </a>
+                    <a @click="activeTab = 'pending-objects'" class="nav-link" data-tab="pending-objects" :class="{{active: activeTab === 'pending-objects'}}">
+                        Other objects
+                    </a>
+                </div>
                 <a class="nav-section" @click="selectSection(codeEtlTabs, '{default_tab}')">
                     <span>Code/ETL Conversion</span>
                 </a>
@@ -6258,6 +6520,8 @@ def generate_html_template(
         <div class="content">
             {journey_overview_html}
             {discovery_html}
+            {business_use_cases_html}
+            {pending_objects_html}
             {overview_html}
             {render_conversion_issues_tab(conversion_issues_artifact)}
             {effort_tab_html}
@@ -6406,6 +6670,7 @@ def generate_html_template(
                     sourceDialect: {source_dialect_json},
                     // Must list every nav-link inside the group: the group is
                     // v-show'd on membership, so an omitted tab hides its own sub-nav.
+                    planningTabs: ['business-use-cases', 'pending-objects'],
                     codeEtlTabs: ['overview', 'conversion-issues', 'effort-estimates', 'waves', 'exclusion', 'dynamic-sql', 'etl'],
                     jsonData: dynamicSqlData,
                     searchQuery: '',
@@ -7642,6 +7907,86 @@ def print_usage():
     print("      --output report.html")
 
 
+_SSIS_ETL_NAV_LINKS = (
+    ("#executive-summary", "AI Summary"),
+    ("#metrics", "Key Metrics"),
+    ("#package-summary", "Package Classification"),
+    ("#not-supported", "Component Conversion Breakdown"),
+)
+_INFORMATICA_ETL_NAV_LINKS = (
+    ("#informatica-executive-summary", "AI Summary"),
+    ("#informatica-metrics", "Key Metrics"),
+    ("#informatica-workflow-classification", "Workflow Classification"),
+    ("#informatica-component-breakdown", "Component Breakdown"),
+)
+
+
+def _etl_nav_sublinks(links: Tuple[Tuple[str, str], ...]) -> str:
+    return "".join(
+        f'<a @click="scrollToSection(\'{anchor}\', \'etl\')" class="nav-sublink">{label}</a>'
+        for anchor, label in links
+    )
+
+
+def build_etl_nav_sublist(*, has_ssis: bool, has_informatica: bool) -> str:
+    if not has_ssis and not has_informatica:
+        return ""
+    groups: List[str] = []
+    if has_ssis and has_informatica:
+        groups.append(
+            '<div class="nav-subhead">SSIS</div>' + _etl_nav_sublinks(_SSIS_ETL_NAV_LINKS)
+        )
+        groups.append(
+            '<div class="nav-subhead">Informatica</div>'
+            + _etl_nav_sublinks(_INFORMATICA_ETL_NAV_LINKS)
+        )
+    elif has_ssis:
+        groups.append(_etl_nav_sublinks(_SSIS_ETL_NAV_LINKS))
+    else:
+        groups.append(_etl_nav_sublinks(_INFORMATICA_ETL_NAV_LINKS))
+    inner = "".join(groups)
+    return f'<div v-if="activeTab === \'etl\'" class="nav-sublist">{inner}</div>'
+
+
+def _discover_etl_json(
+    project_dir: Path, *, artifact_glob: str, legacy_name: str, legacy_folder: str
+) -> Optional[Path]:
+    """Newest timestamped artifact under artifacts/assessment/etl/, else a legacy assessment/ path."""
+    etl_dir = project_dir / "artifacts" / "assessment" / "etl"
+    if etl_dir.is_dir():
+        matches = [p for p in etl_dir.glob(artifact_glob) if p.is_file()]
+        if matches:
+            matches.sort(key=lambda p: p.name, reverse=True)
+            return matches[0]
+    for candidate in (
+        project_dir / "assessment" / legacy_folder / legacy_name,
+        project_dir / "assessment" / legacy_name,
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def discover_ssis_json(project_dir: Path) -> Optional[Path]:
+    """The SSIS assessment JSON that `scai assessment etl generate` wrote last."""
+    return _discover_etl_json(
+        project_dir,
+        artifact_glob="etl_assessment_analysis_*.json",
+        legacy_name="etl_assessment_analysis.json",
+        legacy_folder="ssis",
+    )
+
+
+def discover_informatica_json(project_dir: Path) -> Optional[Path]:
+    """The Informatica assessment JSON that `scai assessment etl generate` wrote last."""
+    return _discover_etl_json(
+        project_dir,
+        artifact_glob="informatica_assessment_analysis_*.json",
+        legacy_name="informatica_assessment_analysis.json",
+        legacy_folder="informatica",
+    )
+
+
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
@@ -7728,9 +8073,21 @@ def main():
     )
 
     parser.add_argument(
+        '--use-cases-json',
+        type=Path,
+        help='Path to use-cases.json produced by `scai assessment waves use-cases`.'
+    )
+
+    parser.add_argument(
         '--conversion-issues-json',
         type=Path,
         help='Path to conversion-issues.json produced by `scai assessment conversion-issues`.'
+    )
+
+    parser.add_argument(
+        '--plugin-version',
+        help='Migration plugin version scai was given (its global --plugin-version). '
+             'The journey hero shows it as "AIM Plugin version {version}" when AIM_APP_VERSION is unset.'
     )
 
     parser.add_argument(
@@ -7788,16 +8145,10 @@ def main():
                 args.waves_json = matches[-1]  # latest by timestamp
                 print(f"Using waves JSON: {args.waves_json}", file=sys.stderr)
         if not args.ssis_json:
-            # Check common locations for SSIS analysis output
-            candidates = [
-                args.project_dir / "assessment" / "ssis" / "etl_assessment_analysis.json",
-                args.project_dir / "assessment" / "etl_assessment_analysis.json",
-            ]
-            for candidate in candidates:
-                if candidate.is_file():
-                    args.ssis_json = candidate
-                    print(f"Using SSIS JSON: {args.ssis_json}", file=sys.stderr)
-                    break
+            discovered = discover_ssis_json(args.project_dir)
+            if discovered:
+                args.ssis_json = discovered
+                print(f"Using SSIS JSON: {args.ssis_json}", file=sys.stderr)
         if not args.anti_patterns_json:
             ap_dir = args.project_dir / "artifacts" / "assessment"
             if ap_dir.is_dir():
@@ -7811,6 +8162,11 @@ def main():
             if candidate.is_file():
                 args.data_lineage_json = candidate
                 print(f"Using data lineage JSON: {candidate}", file=sys.stderr)
+        if not args.use_cases_json:
+            candidate = args.project_dir / "artifacts" / "assessment" / "waves" / "use-cases.json"
+            if candidate.is_file():
+                args.use_cases_json = candidate
+                print(f"Using business use cases JSON: {candidate}", file=sys.stderr)
         if not args.effort_estimates_json:
             effort_dir = args.project_dir / "artifacts" / "assessment"
             if effort_dir.is_dir():
@@ -7836,19 +8192,12 @@ def main():
                         file=sys.stderr,
                     )
         if not args.informatica_json:
-            # Check common locations for Informatica analysis output
-            candidates = [
-                args.project_dir / "assessment" / "informatica" / "informatica_assessment_analysis.json",
-                args.project_dir / "assessment" / "informatica_assessment_analysis.json",
-            ]
-            for candidate in candidates:
-                if candidate.is_file():
-                    args.informatica_json = candidate
-                    print(f"Using Informatica JSON: {args.informatica_json}", file=sys.stderr)
-                    break
+            args.informatica_json = discover_informatica_json(args.project_dir)
+            if args.informatica_json:
+                print(f"Using Informatica JSON: {args.informatica_json}", file=sys.stderr)
 
-    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.effort_estimates_json and not args.workload_insights_json and not args.data_lineage_json and not args.registry_dir:
-        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --effort-estimates-json, --workload-insights-json, --data-lineage-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
+    if not args.exclusion_json and not args.dynamic_sql_json and not args.waves_json and not args.ssis_json and not args.informatica_json and not args.anti_patterns_json and not args.effort_estimates_json and not args.workload_insights_json and not args.data_lineage_json and not args.use_cases_json and not args.registry_dir:
+        print("Error: At least one data source (--exclusion-json, --dynamic-sql-json, --waves-json, --ssis-json, --informatica-json, --anti-patterns-json, --effort-estimates-json, --workload-insights-json, --data-lineage-json, --use-cases-json, --registry-dir, or --project-dir) must be provided", file=sys.stderr)
         print_usage()
         sys.exit(1)
 
@@ -7900,6 +8249,10 @@ def main():
             f"Error: Data Lineage JSON file not found: {explicit_data_lineage_json}",
             file=sys.stderr,
         )
+        sys.exit(1)
+
+    if args.use_cases_json and not args.use_cases_json.exists():
+        print(f"Error: Business use cases JSON file not found: {args.use_cases_json}", file=sys.stderr)
         sys.exit(1)
 
     # Registry-driven waves data. Two modes:
@@ -7963,8 +8316,10 @@ def main():
                 effort_estimates_json=getattr(args, 'effort_estimates_json', None),
                 workload_insights_json=getattr(args, 'workload_insights_json', None),
                 data_lineage_json=getattr(args, 'data_lineage_json', None),
+                use_cases_json=getattr(args, 'use_cases_json', None),
                 conversion_issues_json=getattr(args, 'conversion_issues_json', None),
                 project_dir=getattr(args, 'project_dir', None),
+                plugin_version=args.plugin_version,
             )
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)

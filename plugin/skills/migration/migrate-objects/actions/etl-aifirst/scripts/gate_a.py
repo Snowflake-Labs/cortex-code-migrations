@@ -171,6 +171,7 @@ if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
 import coverage_gate  # noqa: E402  the deterministic half. Imported, never reimplemented.
+import model_host  # noqa: E402  Cortex is the supported verifier host; claude is override-only.
 
 W = 96
 
@@ -197,6 +198,11 @@ RESIDUE_RULES = {
         "element_tags": ["step"],
         "link_tags": ["hop"],
         "rule": "ktr.residue.v1",
+    },
+    "ApacheHop": {
+        "element_tags": ["transform"],
+        "link_tags": ["hop"],
+        "rule": "hpl.residue.v1",
     },
     "IbmInfoSphereDataStage": {
         "rule": "dsx.residue.v1",
@@ -229,6 +235,11 @@ LINK_RULES = {
         "ktr.hop.v1",
         "one link per <hop>. from = <from>, to = <to>, and <enabled> is carried through because a "
         "disabled hop is a stated fact about the graph.",
+    ),
+    "ApacheHop": (
+        "hpl.hop.v1",
+        "one link per <hop> inside <order>. from = <from>, to = <to>, and <enabled> is carried through "
+        "because a disabled hop is a stated fact about the graph. Same shape as a Kettle hop.",
     ),
     "IbmInfoSphereDataStage": (
         "dsx.pinpair.v1",
@@ -729,6 +740,7 @@ LINKERS = {
     "SqlServerIntegrationServices": links_ssis,
     "InformaticaPowerCenter": links_informatica,
     "PentahoDataIntegration": links_pentaho,
+    "ApacheHop": links_pentaho,
     "IbmInfoSphereDataStage": links_datastage,
     "alteryx": links_alteryx,
 }
@@ -1361,6 +1373,19 @@ means exactly that — if your verdict rests on one, say so.
   server.
 - **[COMMON]** The `<info>` block carries transformation-level settings, including logging tables and
   parameters.
+
+## Apache Hop `.hpl`
+
+- **[PRIMARY]** The Kettle fork. Root is `<pipeline>`; `<transform>` elements are the units of work,
+  with the plugin id in `<type>`; `<hop>` elements inside `<order>` are the edges and name no columns.
+  Like a `.ktr`, an `.hpl` carries no XML attributes: every value is child-element text.
+- **[PRIMARY]** A `Formula` transform's `<formula>/<value_type>` is a numeric ValueMeta id
+  (2 = String, 3 = Date), while `<fields>/<field>/<type>` and `Calculator` state type names.
+- **[PRIMARY]** A `TableOutput` with `specify_fields=Y` maps `<stream_name>` (incoming field) to
+  `<column_name>` (target column) per `<field>`; the two may differ.
+- **[COMMON]** `<fields>` is an output schema on input transforms (TableInput, DataGrid, CSVInput,
+  TextFileInput2) but holds keys or a select list on SortRows, Unique, SelectValues and the
+  dimension lookups.
 
 ## IBM DataStage `.dsx`
 
@@ -2502,6 +2527,44 @@ def _view_settings():
     }
 
 
+VIEW_ROOT_FALLBACKS = ("/tmp", "/var/tmp")
+
+
+def _view_root_problem(root, home):
+    """Why `root` cannot hold a verifier view, or None when it can."""
+    real = os.path.realpath(root)
+    if real == home or real.startswith(home + os.sep):
+        return "inside $HOME, where the isolation rules deny reads"
+    if not os.path.isdir(real):
+        return "not a directory"
+    try:
+        probe = tempfile.mkdtemp(prefix=".gate-view-probe-", dir=real)
+        os.rmdir(probe)
+    except OSError as ex:
+        return "not writable (%s)" % ex
+    return None
+
+
+def resolve_view_root(view_root=None):
+    """The folder a verifier view is staged in: outside $HOME (the deny rules refuse reads there) and writable.
+
+    An explicit `--view-root` is used as given or refused. Otherwise the system temp dir, then
+    VIEW_ROOT_FALLBACKS: a TMPDIR under $HOME (a common way to keep scratch files from being swept)
+    must not make the verifier unable to read its own view. No usable candidate raises, naming each one
+    tried and why it was rejected.
+    """
+    home = os.path.realpath(os.path.expanduser("~"))
+    candidates = [view_root] if view_root else [tempfile.gettempdir(), *VIEW_ROOT_FALLBACKS]
+    rejected = []
+    for root in candidates:
+        problem = _view_root_problem(root, home)
+        if problem is None:
+            return os.path.realpath(root)
+        rejected.append("%s (%s)" % (root, problem))
+    raise GateAError("no folder can hold the verifier view: %s. Pass --view-root with a writable folder "
+                     "outside $HOME." % "; ".join(rejected))
+
+
 def build_verifier_view(bundle, view, extra_exclude=()):
     """Stage the reader-facing bundle files into `view`. Returns (staged, excluded).
 
@@ -2516,7 +2579,8 @@ def build_verifier_view(bundle, view, extra_exclude=()):
         # force the deny list open, and a hole cut in the blindness to make the run work is exactly
         # the trade this gate exists to refuse.
         raise GateAError("the verifier view %s is inside $HOME, where the isolation rules deny reads. "
-                         "Use --view-root outside $HOME (the default is the system temp dir)." % view)
+                         "Use --view-root outside $HOME (the default is the first writable of the system temp dir, "
+                         "/tmp and /var/tmp outside $HOME)." % view)
     mpath = os.path.join(bundle, "MANIFEST.json")
     if not os.path.isfile(mpath):
         raise GateAError("no MANIFEST.json in %s — pack the bundle first" % bundle)
@@ -2586,16 +2650,14 @@ def isolated_model_call(gate, bundle, verdict_dest, cli_prompt, *, cli=None, mod
     an isolation record that lists the wrong bytes for the one file batching changes is worse than no
     record at all.
     """
-    cli = cli or os.environ.get("GATE_VERIFIER_CLI") or "claude"
-    resolved = shutil.which(cli) or (cli if os.path.isfile(cli) else None)
+    cli = cli or model_host.default_cli()
+    resolved = model_host.resolve_cli(cli)
     if resolved is None:
-        raise GateAError("verifier CLI %r not found. Pass --cli /path/to/claude or set "
-                         "GATE_VERIFIER_CLI. A gate that cannot reach its verifier is UNMEASURED, "
-                         "which is a different claim from clean." % cli)
+        raise GateAError(model_host.missing_host_error(cli))
 
     bundle = os.path.abspath(bundle)
     view = (os.path.abspath(view) if view else
-            os.path.join(view_root or tempfile.gettempdir(),
+            os.path.join(resolve_view_root(view_root),
                          "gate%s-view-%s-%d" % (gate, os.path.basename(bundle.rstrip(os.sep)),
                                                 os.getpid())))
     if os.path.isdir(view):
@@ -2616,19 +2678,11 @@ def isolated_model_call(gate, bundle, verdict_dest, cli_prompt, *, cli=None, mod
     with open(settings_path, "w", encoding="utf-8") as fh:
         json.dump(_view_settings(), fh, indent=1)
 
-    argv = [resolved, "-p", cli_prompt,
-            "--tools", "Read,Grep,Glob,Write",
-            "--settings", settings_path,
-            "--permission-mode", "acceptEdits",
-            # ALL INHERITED CONFIGURATION OFF. CLAUDE.md, auto-memory, skills, plugins, hooks, MCP
-            # servers and custom agents. This is a blindness requirement, not tidiness: this project's
-            # own auto-memory states one of the findings a verifier is meant to reach unaided.
-            "--safe-mode",
-            "--output-format", "json"]
-    if model:
-        argv += ["--model", model]
-    if max_budget_usd:
-        argv += ["--max-budget-usd", str(max_budget_usd)]
+    argv = model_host.argv_for_isolated_call(
+        resolved, cli_prompt, view=view, settings_path=settings_path,
+        model=model, max_budget_usd=max_budget_usd,
+        tools="Read,Grep,Glob,Write", output_format="json",
+    )
 
     started = datetime.now(timezone.utc)
     t0 = time.time()
@@ -2645,28 +2699,72 @@ def isolated_model_call(gate, bundle, verdict_dest, cli_prompt, *, cli=None, mod
             err = err.decode("utf-8", "replace")
     elapsed = round(time.time() - t0, 1)
 
-    try:
-        meta = json.loads(out)
-    except Exception:
-        meta = {}
+    result_text, env = model_host.unwrap_cli_stdout(out or "")
+    meta = env or {}
 
     produced_verdict = os.path.join(view, "verdict.json")
     dest = os.path.abspath(verdict_dest)
     wrote, verdict_source = False, None
-    if os.path.isfile(produced_verdict):
-        try:
-            with open(produced_verdict, "r", encoding="utf-8") as fh:
-                json.load(fh)
+
+    def _take_verdict(source_label, from_text):
+        nonlocal wrote, verdict_source
+        if os.path.isfile(produced_verdict):
+            try:
+                with open(produced_verdict, "r", encoding="utf-8") as fh:
+                    json.load(fh)
+                shutil.copyfile(produced_verdict, dest)
+                wrote, verdict_source = True, source_label
+                return True
+            except Exception as ex:
+                verdict_source = "verdict.json in the view is not JSON: %s" % ex
+        recovered = model_host.verdict_from_result_text(from_text)
+        if recovered is not None:
+            with open(produced_verdict, "w", encoding="utf-8") as fh:
+                json.dump(recovered, fh, indent=1)
             shutil.copyfile(produced_verdict, dest)
-            wrote, verdict_source = True, "verdict.json written in the view"
-        except Exception as ex:
-            verdict_source = "verdict.json in the view is not JSON: %s" % ex
+            wrote, verdict_source = True, "recovered from CLI result envelope"
+            return True
+        return False
+
+    if not _take_verdict("verdict.json written in the view", result_text):
+        # Cortex often reads the bundle and prints the analysis instead of Write.
+        # One retry, same view, write-only instruction. Do not invent claims.
+        if not timed_out and rc == 0:
+            retry_prompt = (
+                "Read PROMPT.md and obligations.json in this directory, then write your "
+                "answer as JSON to ./verdict.json. Do not print the verdict. The file is "
+                "your only accepted output."
+            )
+            retry_argv = model_host.argv_for_isolated_call(
+                resolved, retry_prompt, view=view, settings_path=settings_path,
+                model=model, max_budget_usd=max_budget_usd,
+                tools="Read,Grep,Glob,Write", output_format="json",
+            )
+            try:
+                proc2 = subprocess.run(
+                    retry_argv, cwd=view, capture_output=True, text=True,
+                    stdin=subprocess.DEVNULL, timeout=min(int(timeout or 900), 300),
+                )
+                out2 = proc2.stdout or ""
+            except subprocess.TimeoutExpired as ex:
+                out2 = ex.stdout or ""
+                if isinstance(out2, bytes):
+                    out2 = out2.decode("utf-8", "replace")
+            result_text2, env2 = model_host.unwrap_cli_stdout(out2)
+            if env2 and not meta:
+                meta = env2
+            _take_verdict(
+                "verdict.json written on retry (host printed instead of Write)",
+                result_text2 or result_text,
+            )
+            if result_text2:
+                result_text = result_text2
 
     record = {
         "gate": gate,
         "what": what,
         "cli": resolved,
-        "argv": argv[:1] + ["-p", "<CLI_PROMPT>"] + argv[3:],
+        "argv": model_host.redact_prompt(argv, cli_prompt),
         "model_requested": model,
         "model_used": sorted((meta.get("modelUsage") or {}).keys()) or None,
         "model_usage": meta.get("modelUsage"),
@@ -2702,7 +2800,7 @@ def isolated_model_call(gate, bundle, verdict_dest, cli_prompt, *, cli=None, mod
                                      "the verifier could see; do not read this field as a negative "
                                      "result."),
         "stderr_tail": (err or "")[-2000:],
-        "result_text_tail": (meta.get("result") or out or "")[-2000:],
+        "result_text_tail": (result_text or meta.get("result") or out or "")[-2000:],
         "verdict_written": wrote,
         "verdict_source": verdict_source,
         "verdict_path": dest if wrote else None,
@@ -2715,8 +2813,7 @@ def isolated_model_call(gate, bundle, verdict_dest, cli_prompt, *, cli=None, mod
             "excluded_from_the_view": excluded,
             "settings": _view_settings(),
             "tools": "Read,Grep,Glob,Write",
-            "inherited_configuration": "disabled via --safe-mode (CLAUDE.md, auto-memory, skills, "
-                                       "plugins, hooks, MCP servers, custom agents)",
+            "inherited_configuration": model_host.isolation_note(model_host.host_kind(resolved)),
             "prompt_added_by_this_wrapper": cli_prompt,
             "_note": ("The wrapper adds NO reasoning instruction. Round 2's pass on the getYear trap "
                       "was confounded by a hand-added warning in one prompt; the only instructions "
@@ -2886,7 +2983,7 @@ def _run_one_batch(bundle, batch, packed, *, cli, model, timeout, view_root, kee
     """
     bundle = os.path.abspath(bundle)
     frag_verdict_path = os.path.join(bundle, "verdict.batch%d.json" % batch["index"])
-    view = os.path.join(view_root or tempfile.gettempdir(),
+    view = os.path.join(resolve_view_root(view_root),
                         "gateA-batch%d-view-%s-%d" % (batch["index"],
                                                       os.path.basename(bundle.rstrip(os.sep)),
                                                       os.getpid()))
@@ -3438,7 +3535,7 @@ def main(argv):
     p.add_argument("--bundle", required=True)
     p.add_argument("--verdict", required=True)
     p.add_argument("--cli", default=None,
-                   help="the CLI to invoke (default: $GATE_VERIFIER_CLI, else `claude`)")
+                   help="the CLI to invoke (default: $AIFIRST_VERIFIER_CLI / $GATE_VERIFIER_CLI, else `cortex`)")
     p.add_argument("--model", default=None)
     p.add_argument("--max-budget-usd", dest="max_budget_usd", default=None)
     p.add_argument("--verifier-timeout", dest="verifier_timeout", type=int, default=900)
@@ -3457,7 +3554,7 @@ def main(argv):
                                            "see `run` for the iterate-to-convergence loop.")
     add_pack_args(p)
     p.add_argument("--cli", default=None,
-                   help="the CLI to invoke per batch (default: $GATE_VERIFIER_CLI, else `claude`)")
+                   help="the CLI to invoke per batch (default: $AIFIRST_VERIFIER_CLI / $GATE_VERIFIER_CLI, else `cortex`)")
     p.add_argument("--model", default=None)
     p.add_argument("--max-budget-usd", dest="max_budget_usd", default=None)
     p.add_argument("--verifier-timeout", dest="verifier_timeout", type=int, default=900)

@@ -17,6 +17,9 @@ Use the `deploy` MCP tool with `object_name` = `<object_name>` (or the
 `invocation` from `next_task`). When several objects of the group are at
 `deploy`, deploy them in one call with `where="id IN ('<id1>', '<id2>')"`
 instead of one `object_name` per call; scai reports each object separately.
+A Deploy group can hold an FK child next to the parent it waits on: scai
+deploys a set parent first, so keep them in one call. A claimed schema and its
+tables come back as two Deploy groups, schema first; run both in the same pass.
 Unclaimed clean tables go through `deploy(clean_tables=true)` from the picker
 ([claim_objects.md](../actions/claim_objects.md#bulk-deploy)), not this guide.
 
@@ -39,6 +42,8 @@ This guide only handles the current `deploy` task. It does not select an ETL flo
 
 `scai code deploy` deploys the supporting helpers, dbt project(s), and orchestration task graph. The task graph is created suspended; do not `EXECUTE TASK` here.
 
+**If an ETL deploy fails, report and stop.** The `deploy` result lists each failed part under `errors` (object, part path, Snowflake error, suggestion) and says the next step in `next_step`. Tell the user those errors, stamp `transition_status(status="advance", task="deploy", outcome="failed", error="sql", where="id = '<etl_id>'")`, and stop work on that unit. Never deploy an ETL unit by hand: no `snow dbt deploy`, no `CREATE TASK` / `EXECUTE DBT PROJECT` through `sql_execute`, no edits to `dbt_project.yml`, `profiles.yml` or the task SQL under `snowflake/**`. The pre-deploy checks below are for converted SQL objects, not ETL output.
+
 ## Pre-deploy file checks
 
 Converted files may contain issues that need manual fixes before deployment:
@@ -54,6 +59,7 @@ Converted files may contain issues that need manual fixes before deployment:
 | Error | Cause | Fix |
 |-------|-------|-----|
 | Syntax error | Invalid SQL | A pre-deploy check above, if one matches — otherwise `transition_status(outcome='failed', error='sql')` and let the fix loop take it |
+| `Unresolved EWI marker(s): …` | SnowConvert left `!!!RESOLVE EWI!!!` where it could not convert; scai sent nothing | `transition_status(outcome='failed', error='sql')`: the fix loop resolves the named EWI lines |
 | `unexpected 'DEFAULT'` | An output argument carries a default | Pre-deploy check 5 — delete that argument's `DEFAULT`, nothing else |
 | Unknown function `<name>` | Missing or non-bindable dependency | If that object's SQL/CUR has no `<%token%>`, spawn `cur_reconciler`; otherwise deploy that function first |
 | Object does not exist | Missing table/view | Deploy or check schema |
@@ -78,12 +84,13 @@ Workflow:
 A response with `nothingDeployed: true` created nothing, even with `failed: 0`:
 tell the user its `reason` and `errors`, and never report it as deployed.
 
-Confirm the deploy oracle (`remoteDeploymentInfo` / `cloudStatus.deployment` as
+Confirm the deploy status source (`remoteDeploymentInfo` / `cloudStatus.deployment` as
 appropriate), then stamp so `TASK_EVENTS` get an `advanced` row:
 
 - **Succeeded** → `transition_status(status="advance", task="deploy", outcome="completed", where="id = '<object_id>'")` (or `id IN (...)` for every object that deployed)
 - **Failed** with anything the pre-deploy checks do not cover → `transition_status(status="advance", task="deploy", outcome="failed", error="<sql|infra>", where="id = '<object_id>'")`
+- **Failed only because a parent in the same call failed** (its error names that parent as missing) → leave the child unstamped; scai keeps going past a failure, and the child deploys again with or after its parent
 
 If completed advance refuses (`does not confirm completion`), wait for the
-oracle and retry — do not leave success to `next_task` alone. See
+status source and retry — do not leave success to `next_task` alone. See
 [Advancing and reporting](../SKILL.md#advancing-and-reporting).

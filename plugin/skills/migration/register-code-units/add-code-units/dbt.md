@@ -33,7 +33,7 @@ Run exactly this command, then jump to Step 5 of `add-code-units/SKILL.md`:
 scai code add -i <DBT_PROJECT_ROOT> --code-already-split --json
 ```
 
-If it times out, runs in the background or fails, handle it as
+Launch it with `run_in_background=true`, or set the bash tool `timeout` to at least `900000` (15 minutes). The default 120 second timeout kills the process. If it times out, runs in the background or fails, handle it as
 [Step 3 of the skill](SKILL.md#if-the-import-times-out-or-runs-in-the-background) says
 before you go on to Step 5. Never start the Power BI `scai code add` while this one runs.
 

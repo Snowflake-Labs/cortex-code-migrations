@@ -65,6 +65,10 @@ scai connection add-sql-server \
 - Must be running on Windows or have Kerberos configured
 - Current user must have access to the SQL Server
 
+### Snowpark Container Services
+
+A worker on SPCS cannot use the process Windows login. When Windows authentication is required there, follow [`../../../data-infrastructure/references/sqlserver-spcs-windows-auth.md`](../../../data-infrastructure/references/sqlserver-spcs-windows-auth.md). `scai connection add-sql-server` does not prompt for `kerberos_principal`; that file's **Save the source connection** section sets it. Setup rejects the connection without it.
+
 ## SSL/TLS Configuration
 
 ### Azure SQL Database
@@ -191,6 +195,24 @@ Some SQL Server instances require VPN access before connecting.
 
 ---
 
+### Driver Fails to Load
+
+**Symptoms:**
+- "Could not load file or assembly 'Microsoft.Data.SqlClient …'. The system cannot find the file specified."
+- The same error on every SQL Server connection, before any network traffic
+
+**What it points to:** `scai` could not load its SQL Server driver, so the failure is local to the `scai` install, not the server, network or credentials. Do not ping hosts or check firewalls for it. Why the driver did not load is a hypothesis until you check: files missing from the bundle are the usual suspect, but not the only one.
+
+**Check before naming a cause:**
+1. Find the `scai` that ran: `$SCAI_CLI` when set, else `which -a scai`. Several installs can coexist.
+2. Find the real executable behind it. `$SCAI_CLI` can be a symlink or a wrapper script: resolve symlinks (`readlink -f`), and for a script read its last `exec` line. A `make temp` session's `<session>/scai` is a wrapper that runs `<session>/orchestrator/scai`, so its bundle is `<session>/orchestrator/`, not the directory holding the wrapper.
+3. In that bundle directory, check whether `Microsoft.Data.SqlClient.dll` and the other `*.dll` files are there (`ls -la`), and compare with another install of the same version when one is at hand.
+4. Report what you found, not more. A missing driver file explains the error; the directory alone does not say when or how the file went. A bundle under `$TMPDIR` or `/tmp`, such as a `make temp` session, may have lost files to the OS's temp cleanup: say it is possible, not that it happened. Suggest rebuilding (`make temp`) or reinstalling only once a file is shown to be missing.
+
+When the files are all there and the driver still fails to load, presence alone does not prove the versions or dependencies resolve: tell the user what you checked and that the cause is still open, and quote the full error, including any `Details` lines, rather than guessing.
+
+---
+
 ### Connection Timeout
 
 **Symptoms:**
@@ -206,14 +228,31 @@ Some SQL Server instances require VPN access before connecting.
 ### Authentication Failures
 
 **Symptoms:**
-- "Login failed for user"
-- "Cannot open database requested by the login"
+- "Login failed for user" (error 18456), with no `Cannot open database` before it
 
 **Solutions:**
 1. Verify username and password are correct
-2. Confirm user has access to the specified database
-3. Check SQL Server authentication mode (Mixed Mode required for SQL auth)
-4. For Windows auth, verify domain connectivity
+2. Check SQL Server authentication mode (Mixed Mode required for SQL auth)
+3. For Windows auth, verify domain connectivity
+
+### Cannot open database (4060)
+
+**Symptoms:**
+- `Cannot open database "<name>" requested by the login. The login failed. Login failed for user '<user>'` (error 4060)
+
+**Cause:** The server accepted the credentials. The connection's default database is missing, offline, or the login is not mapped to it. The trailing "Login failed" is part of the 4060 text, not a wrong password. Testing the same login on another database the user isn't mapped to fails with 4060 again and proves nothing about the password.
+
+**What to do:**
+1. Tell the user the sign-in worked and the database `<name>` could not be opened. Do not ask for the password again, and do not create temporary profiles to probe other databases.
+2. Ask via `ask_user_question`: *"May I list the databases `<user>` can open on this server?"* with **List them** / **I'll type the name**. Wait for the answer.
+3. On **List them**, run this read-only query once. `--database master` opens `master` for this query only and never changes the saved profile; it works before `configure` has accepted the connection:
+   ```bash
+   scai query -s <SOURCE_CONNECTION_NAME> --database master \
+     -q "SELECT name FROM sys.databases WHERE database_id > 4 AND HAS_DBACCESS(name) = 1 ORDER BY name" --json
+   ```
+   Show the names and ask which one to use via `ask_user_question`, even when only one is listed. If the list is empty, say *No accessible database names were returned*, and explain that SQL Server shows a login only the databases its catalog permissions let it see: without `VIEW ANY DATABASE` the list can be empty even for a database the login can open. Ask for the exact database name; do not conclude that the login lacks access or ask for access to be granted.
+4. If `master` can't be opened either (4060 again), scai rejects `--database` as unknown (an older scai), or the user chose **I'll type the name**, ask for the exact database name.
+5. Correct the profile with the same `scai connection add-sql-server` command, every field, the chosen `--database`, plus `--replace --json`, as "Correcting a saved profile" in `../SKILL.md` says. Then re-run `configure(source_connection=<SOURCE_CONNECTION_NAME>)` once.
 
 ### Windows auth from WSL/Linux
 
@@ -247,27 +286,36 @@ See [`./wsl-windows-auth.md`](./wsl-windows-auth.md) for the full walkthrough of
 2. Install the server's CA certificate on your machine
 3. Verify the server URL matches the certificate's CN/SAN
 
-### macOS: ODBC Driver 18 can't load OpenSSL
+### macOS: the ODBC driver can't load OpenSSL
 
-**Symptoms** (from `scai data doctor`'s *Source connection* row, `scai test capture`, or anything else that connects through ODBC Driver 18):
+**Symptoms** (from `scai data doctor`'s *Source connection* row, `scai test capture`, or anything else that connects through ODBC Driver 17 or 18):
 - `SSL Provider: [OpenSSL library could not be loaded, make sure OpenSSL 1.0, 1.1, or 3.0 is installed]`
 
-**Cause:** ODBC Driver 18 for SQL Server (`msodbcsql18`) loads OpenSSL itself when it connects, and only OpenSSL 1.0, 1.1 or 3.0. It does not find Homebrew's current `openssl@3` under `/opt/homebrew`. The server, the credentials and the driver version are not the problem.
+Check which driver the error names; Driver 17 and 18 fail the same way.
 
-**Do not** upgrade `msodbcsql18` or re-link or uninstall Homebrew's `openssl@3`: neither fixes it, and other tools depend on that OpenSSL.
-
-**Solution:** install OpenSSL 3.0 and link its libraries into `/usr/local/lib`, where the driver looks. These commands change system libraries and need `sudo`, so show them to the user and let the user run them:
+**Cause:** the driver loads OpenSSL itself when it connects, and only OpenSSL 1.0, 1.1 or 3.0. Its binary names a single place for it, Homebrew's `openssl` alias (`/opt/homebrew/opt/openssl/lib` on Apple Silicon). When Homebrew points that alias at OpenSSL 4, the driver rejects it. The server, the credentials and the driver version are not the problem, and `encrypt=no` does not avoid it (the login exchange is always encrypted). See where the alias points:
 
 ```bash
-brew install openssl@3.0
-sudo mkdir -p /usr/local/lib
-sudo ln -sf "$(brew --prefix openssl@3.0)/lib/libssl.3.dylib" /usr/local/lib/libssl.3.dylib
-sudo ln -sf "$(brew --prefix openssl@3.0)/lib/libcrypto.3.dylib" /usr/local/lib/libcrypto.3.dylib
-sudo ln -sf "$(brew --prefix openssl@3.0)/lib/libssl.dylib" /usr/local/lib/libssl.dylib
-sudo ln -sf "$(brew --prefix openssl@3.0)/lib/libcrypto.dylib" /usr/local/lib/libcrypto.dylib
+readlink "$(brew --prefix)/opt/openssl"
 ```
 
-Then re-run what failed (`scai data doctor`, the test capture, or `configure(source_connection=<NAME>)`). `scai data doctor` and the `scai test` commands print this same repair when they see the error.
+**Tested, no `sudo`:** pointing the loader at Homebrew's `openssl@3` lets the driver connect. Run the failing Python with:
+
+```bash
+DYLD_LIBRARY_PATH="$(brew --prefix openssl@3)/lib" <the python command that failed>
+```
+
+`DYLD_FALLBACK_LIBRARY_PATH` does **not** work. Install `openssl@3` with `brew install openssl@3` if it is missing; `openssl@3.0` is not needed. macOS strips `DYLD_*` variables from signed apps, so this may not reach the Python processes `scai` and the app start.
+
+**Lasting fix, likely but unverified, no `sudo`:** point the alias at `openssl@3`. Note the `readlink` output first; restoring it with `ln -sfn` undoes this, and a `brew upgrade` may reset it:
+
+```bash
+ln -sfn "$(brew --prefix openssl@3)" "$(brew --prefix)/opt/openssl"
+```
+
+**Do not** link OpenSSL into `/usr/local/lib`: the driver does not look there (the `DYLD_FALLBACK_LIBRARY_PATH` failure shows it skips fallback locations), and unversioned `libssl.dylib`/`libcrypto.dylib` links there change what other software loads. Do not upgrade `msodbcsql18` or uninstall `openssl@3` either.
+
+When you offer any of these: call a fix tested only when you ran that exact fix, label the rest "likely, unverified", and settle evidence against a fix before asking the user to run it again. Then re-run what failed (`scai data doctor`, the test capture, or `configure(source_connection=<NAME>)`). `scai data doctor` and the `scai test` commands print this same repair when they see the error.
 
 ### Named Instance Not Found
 

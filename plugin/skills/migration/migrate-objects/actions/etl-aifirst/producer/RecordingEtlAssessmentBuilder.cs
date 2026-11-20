@@ -65,6 +65,10 @@ internal sealed class RecordingEtlAssessmentBuilder : IEtlAssessmentBuilderForPi
   public void RegisterStatus(string fullName, EtlReplatformStatus status)
     => this.statuses[fullName ?? string.Empty] = status;
 
+  // The engine's builder answers from its status map; the null key folds to "" as RegisterStatus does.
+  public bool HasStatus(string fullName)
+    => this.statuses.ContainsKey(fullName ?? string.Empty);
+
   public void RegisterDeclarationName(string fullName, string declarationName)
     => this.declarationNames[fullName ?? string.Empty] = declarationName;
 

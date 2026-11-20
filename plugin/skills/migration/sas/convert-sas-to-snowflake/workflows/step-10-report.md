@@ -20,6 +20,9 @@ Load `templates/conversion-report.md` and generate the report with:
 **PRE-CONDITION CHECK** (before generating):
 - Read `<output_dir>/compilation_results.json` → populate Section 1 Compile Status. If file missing → "COMPILATION NOT PERFORMED"
 - Read `tables.py summary tables.json` → name every table that was `not_found` or `inferred` (Section 3)
+- Read `validation_selections` from `conversion_state.json` and the `-- DDL source:` header of
+  `source_table_ddl.sql` → Section 3 opens with one line: "Data inputs: source <location>; DDL
+  <user|inferred|mixed>; test data <user|synthetic>; baseline <SAS outputs|trace> (user choices)"
 - Read `sql_check.json` (errors fixed, warnings justified) and `validation_results.json` (`repairs[]`, unresolved) → Section 3
 - Read trace baselines under `tests/*/expected/` → Section 3a. If no baseline → "NO BASELINE (T2 not run)"
 - Check if `source_table_ddl.sql` and `synthetic_data.sql` exist → populate Section 3. If missing → "Test artifacts not generated"

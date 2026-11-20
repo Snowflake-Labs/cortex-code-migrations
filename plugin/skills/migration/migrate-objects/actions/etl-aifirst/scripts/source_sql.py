@@ -85,6 +85,77 @@ def _strip_noise(sql: str) -> str:
     return cleaned
 
 
+_SELECT_HEAD = re.compile(r"(?is)select\s+(?:distinct\s+|top\s+\d+\s+)?(.*)")
+_TOP_LEVEL_FROM = re.compile(r"(?i)from(?![\w$#])")
+_DOTTED_IDENT = re.compile(rf"(?s){_IDENT_PART}(?:\.{_IDENT_PART})*")
+_ALIAS_AS = re.compile(rf"(?is)(.*?)\s+as\s+({_IDENT_PART})")
+_ALIAS_BARE = re.compile(rf"(?s)(.*?)\s+({_IDENT_PART})")
+_LAST_DOT = re.compile(r"\.(?=(?:[^\"\[\]]|\"[^\"]*\"|\[[^\]]*\])*$)")
+_LITERAL = re.compile(r"(?s)'(?:[^']|'')*'|-?\d+(?:\.\d+)?")
+
+
+def _top_level(body: str):
+    """Yield (index, char) for the characters of `body` outside quotes and parentheses."""
+    depth, quote = 0, None
+    for i, ch in enumerate(body):
+        if quote:
+            if ch == quote:
+                quote = None
+        elif ch in "'\"[":
+            quote = "]" if ch == "[" else ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0:
+            yield i, ch
+
+
+def _named(operand: str) -> bool:
+    """True when `operand` is complete on its own, so a trailing identifier after it is an alias:
+    a dotted identifier, a literal, or something ending in a closing parenthesis."""
+    operand = operand.strip()
+    return bool(_DOTTED_IDENT.fullmatch(operand) or _LITERAL.fullmatch(operand)
+                or (operand.endswith(")") and not operand.lower().startswith("case")))
+
+
+def select_list_names(sql: str) -> tuple[list[str], str]:
+    """Column names of a plain SELECT list, or ([], reason). Conservative on purpose: one
+    top-level SELECT ... FROM, every item either an identifier (the last dotted part is the
+    name), `<expression> AS x`, or `<operand> x` where the operand is complete on its own.
+    `*` or an unnamed expression (`a + b`, `CASE ... END`, `x COLLATE c`) refuses the whole
+    list rather than guessing."""
+    text = _LINE_COMMENT.sub(" ", _BLOCK_COMMENT.sub(" ", sql or "")).strip()
+    m = _SELECT_HEAD.match(text)
+    if not m:
+        return [], "no SELECT"
+    body = m.group(1)
+    cut = next((i for i, _ in _top_level(body)
+                if _TOP_LEVEL_FROM.match(body, i) and (i == 0 or not re.match(r"[\w$#.@]", body[i - 1]))),
+               None)
+    if cut is None:
+        return [], "no top-level FROM"
+    body = body[:cut]
+    commas = [i for i, ch in _top_level(body) if ch == ","]
+    items = [body[a + 1:b] for a, b in zip([-1, *commas], [*commas, len(body)])]
+    names = []
+    for it in (x.strip() for x in items):
+        if not it or it.endswith("*"):
+            return [], f"item {it!r} names no column"
+        if _DOTTED_IDENT.fullmatch(it):
+            nm = _LAST_DOT.split(it)[-1]
+        elif (a := _ALIAS_AS.fullmatch(it)) and a.group(1).strip():
+            nm = a.group(2)
+        elif (a := _ALIAS_BARE.fullmatch(it)) and _named(a.group(1)):
+            nm = a.group(2)
+        else:
+            return [], f"item {it!r} has no alias"
+        names.append(nm.strip('"[]'))
+    if len({n.lower() for n in names}) != len(names):
+        return [], "duplicate column names"
+    return names, ""
+
+
 def modelsql_has_verb(sql: str | None) -> bool:
     """True when ModelSql is a SELECT/WITH dbt can compile as a model body.
 

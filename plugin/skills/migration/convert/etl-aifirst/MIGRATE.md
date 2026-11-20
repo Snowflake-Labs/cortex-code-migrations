@@ -29,7 +29,7 @@ that were not measured by the run being resumed.
 
 ## Step 1: Locate the driver
 
-The driver ships inside this plugin — no external install or environment variable to resolve:
+The driver ships inside this plugin. It finds its runtime next to the installed `scai` (`<scai folder>/aifirst/`) and runs that apphost on the .NET runtime `scai` already bundles (`host/fxr` and `shared/` beside the binary). A plugin built with `build-plugin.sh` carries it in `../bin/` instead, and a source checkout falls back to the producer's build output. `AIFIRST_EMITTER` is only an explicit development override for source checkouts and fixture tests; do not set it for an installed plugin:
 
 ```
 ../../migrate-objects/actions/etl-aifirst/scripts/aifirst-migrate.sh
@@ -47,6 +47,7 @@ Map `extensions.sourcePlatform` to a checked-in driver identity when one exists:
 |---|---|
 | `adf` | `adf` |
 | `alteryx` | `alteryx` |
+| `apacheHop` / `hop` | `hop` |
 | `datastage` | `datastage` |
 | `pentaho` | `pentaho` |
 
@@ -62,6 +63,9 @@ Stage each run outside the project and move the result in afterwards:
 
 ```bash
 STAGE=$(mktemp -d)
+# Mining writes beside the stage directory ($STAGE.testbed). Point it at this
+# project so the *.testbed.json files land here, then Step 4 removes the sibling.
+export AIFIRST_TESTBED_PROJECT="$PWD"
 ../../migrate-objects/actions/etl-aifirst/scripts/aifirst-migrate.sh \
   --platform <PLATFORM_IDENTITY> \
   "<DOCUMENT>" \
@@ -71,6 +75,10 @@ STAGE=$(mktemp -d)
 Keep the exit code. It is the verdict, and Step 6 reports it. Because the command is piped, read the driver's status (`${PIPESTATUS[0]}` in bash) rather than the pipeline's.
 
 To measure whether the generated SQL actually runs, export `AIFIRST_SNOWFLAKE_CONN=<connection-name>` — a named connection in the user's Snowflake config — before invoking. Without it the driver reports execution as unmeasured, and you may not claim the SQL works.
+
+Do **not** author a sidecar by hand, and do **not** skip this run because `<document>.ai.json` is missing. When the IR cannot carry a source behavior (NO_SLOT SQL, a Formula with no `ir_kind`, a rename the table cannot state), Stage 3a2 of the driver calls `sidecar_producer.py`, writes `$DOC.ai.json`, re-emits so tier-2 hydration lands, then `ai_fill` consumes the sidecar. A committed sidecar next to the document is still used as-is. Set `AIFIRST_SKIP_SIDECAR_PRODUCE=1` only for a convert-ctrl / no-sidecar measurement.
+
+Sidecar produce, table authoring, and Gate A/B judgement default to Cortex Code (`cortex exec`). Do not export a `claude` CLI. `AIFIRST_VERIFIER_CLI` is a test override only.
 
 ## Step 4: Move the output into the project
 
@@ -148,6 +156,13 @@ require_report "$STAGE/Reports/AiFirstIssues/types-cited.json" || exit 1
 require_report "$STAGE/Reports/AiFirstRemediation/remediation-brief.json" || exit 1
 
 copy_tree_exactly "$STAGE/Output/ETL/<PACKAGE>" "snowflake/_etl/<PACKAGE>" || exit 1
+# The helper procedures a parameterized task graph calls (ClearVariables,
+# InitVariablesFromConfig, BuildDbtVarsJsonUDF, SetRunContext). Deploy finds this
+# bundle by walking up from the unit. Keep one already there: an earlier unit or a
+# native SSIS/Informatica conversion wrote it.
+if [ -d "$STAGE/Output/ETL/etl_configuration" ] && [ ! -e "snowflake/_etl/etl_configuration" ]; then
+  copy_tree_exactly "$STAGE/Output/ETL/etl_configuration" "snowflake/_etl/etl_configuration" || exit 1
+fi
 mkdir -p reports/SnowConvert || exit 1
 for report_name in "${required_csvs[@]}"; do
   if ! merge_report_csv "$STAGE/Reports/$report_name" "reports/SnowConvert/$report_name"; then
@@ -166,7 +181,61 @@ for source_dir in "$STAGE"/Reports/*/; do
   copy_tree_exactly "${source_dir%/}" "reports/$report_group/<PACKAGE>" || exit 1
 done
 
-rm -rf "$STAGE"
+# The gate evidence (Gate A / Gate B verdicts and obligations, integrity, the IR, the platform
+# table, Stage 0 provenance, sidecar prompts) is written beside the stage, not in it. Keep it in
+# the project, then repoint the brief at the project copies: a repair reads them long after the
+# stage is gone.
+if [ -d "$STAGE.gates" ]; then
+  copy_tree_exactly "$STAGE.gates" "reports/AiFirstGates/<PACKAGE>" || exit 1
+fi
+python3 - "$STAGE" "<PACKAGE>" "reports/AiFirstRemediation/<PACKAGE>/remediation-brief.json" <<'PY' || exit 1
+import json, os, sys
+stage, package, brief_path = sys.argv[1:4]
+with open(brief_path, encoding="utf-8") as fh:
+    brief = json.load(fh)
+if "pointers" not in brief:
+    sys.exit(0)
+roots = {os.path.abspath(stage), os.path.realpath(stage)}
+project = os.path.realpath(os.getcwd())
+def relocate(path):
+    for root in roots:
+        for prefix, target in ((root + ".gates/", f"reports/AiFirstGates/{package}/"),
+                               (root + "/Output/ETL/" + package, f"snowflake/_etl/{package}")):
+            if path == prefix.rstrip("/") or path.startswith(prefix):
+                return target + path[len(prefix):]
+        if path == root:
+            return f"snowflake/_etl/{package}"
+        reports = root + "/Reports/"
+        if path.startswith(reports):
+            group, _, rest = path[len(reports):].partition("/")
+            return f"reports/{group}/{package}/{rest}" if rest else f"reports/SnowConvert/{group}"
+    real = os.path.realpath(path)
+    if real.startswith(project + os.sep):
+        return os.path.relpath(real, project)
+    return None
+pointers, missing = {}, {}
+for key, value in (brief.get("pointers") or {}).items():
+    if not isinstance(value, str) or not value:
+        pointers[key] = value
+        continue
+    existed = os.path.exists(value)
+    moved = relocate(value)
+    if not existed:
+        pointers[key] = None
+        missing[key] = "absent when the brief was written"
+    elif moved is None or not os.path.exists(moved):
+        print(f"AI-First copy failed: brief pointer {key} names {value}, which is not in the project", file=sys.stderr)
+        sys.exit(1)
+    else:
+        pointers[key] = moved
+brief["pointers"] = pointers
+if missing:
+    brief["pointers_missing"] = missing
+with open(brief_path, "w", encoding="utf-8") as fh:
+    json.dump(brief, fh, indent=1)
+PY
+
+rm -rf "$STAGE" "$STAGE.testbed" "$STAGE.gates"
 # REPORT-COPY-END
 ```
 
@@ -181,15 +250,33 @@ file, and removes `$STAGE` only after the complete contract has been verified. A
 missing or changed artifact names its path and stops the conversion step instead of
 reporting completion.
 
+The gate evidence the driver wrote beside the stage (`$STAGE.gates`: Gate A and Gate B
+verdicts and obligations, integrity and the IR, the platform table, Stage 0 provenance and the
+sidecar prompts) lands in `reports/AiFirstGates/<PACKAGE>/`, and the brief's `pointers` are
+rewritten to project-relative paths. A pointer whose file existed when the brief was written but
+is not in the project after the copy stops the step; one that was already absent is set to
+`null` and named under `pointers_missing`.
+
+Step 5 reads the remediation brief and `AiFirstLineage/<PACKAGE>/lineage.json` from the
+project, and the MCP refuses a dependency write when no `AiFirstLineage/lineage.json` is
+under it. Never rewrite a lost report from memory — run the driver again.
+
 This is the same location the native ETL path uses — `snowflake/_etl/<package_name>/<package_name>.sql` with the dbt project beside it — so the orchestration SQL lands where the rest of the migration flow already looks for it.
 
 ## Step 5: Record the unit in the Code Unit Registry
 
 Moving files is not the end of the unit's migration — the registry is where the
 rest of the flow reads its state from, and `./SKILL.md` holds the exact contract.
-Read its two sections, "When conversion may be recorded as completed" and
-"Writing lineage into the Code Unit Registry", and follow them for this unit:
+Read these sections of it and follow them for this unit, in this order:
 
+1. "Record where the output landed, before advancing conversion"
+2. "Record the unit's parts"
+3. "When conversion may be recorded as completed"
+4. "Writing lineage into the Code Unit Registry"
+
+- `files.converted.path`, `files.artifacts.path` and `parts` (from
+  `derive_parts.py`) are written before conversion is advanced. Without them deploy
+  finds nothing for this unit (`DEP0001`) and seed has nowhere to write its YAML.
 - Conversion status comes from what the producer left beside the output root. A
   real `Reports/AiFirstRemediation/remediation-brief.json` is what lets you
   `transition_status(status="advance", task="convert", outcome="completed", …)`;
@@ -233,7 +320,8 @@ Two claims you must not make:
 Confirm with user:
 - [ ] They were told their platform is unsupported by the native engine and that this path is a fallback
 - [ ] A new run's exit code was reported using the table above, or a resume's preserved artifact state was reported without inventing a new run
-- [ ] Converted output is under `snowflake/_etl/<PACKAGE>/`, issues under `reports/AiFirstIssues/<PACKAGE>/`
+- [ ] Converted output is under `snowflake/_etl/<PACKAGE>/`; issues, remediation brief and lineage under `reports/AiFirst*/<PACKAGE>/`
+- [ ] `files.converted.path`, `files.artifacts.path` and `parts` were written before conversion was advanced
 - [ ] Whether the SQL was executed in Snowflake was stated either way, never left implied
 - [ ] Existing producer output was resumed without invoking the driver or replacing its reports
 - [ ] The unit's conversion was advanced per Step 5 — `completed` only with a real remediation brief, otherwise `failed` with the reason

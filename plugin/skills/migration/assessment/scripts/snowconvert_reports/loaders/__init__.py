@@ -27,6 +27,7 @@ from .registry_loader import (
     load_code_units_from_registry,
     load_object_references_from_registry,
     load_missing_references_from_registry,
+    load_missing_entries_from_registry,
     load_missing_dependencies_by_object,
     load_exclusion_findings_from_registry,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "load_code_units_from_registry",
     "load_object_references_from_registry",
     "load_missing_references_from_registry",
+    "load_missing_entries_from_registry",
     "load_missing_dependencies_by_object",
     "load_exclusion_findings_from_registry",
     # Registry → waves JSON synthesizer

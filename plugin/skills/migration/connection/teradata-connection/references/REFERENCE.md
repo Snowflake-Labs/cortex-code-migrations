@@ -176,7 +176,7 @@ The Data Exchange Agent worker connects with **`teradatasql`** (preferred) or Te
 - `SELECT` on tables (and views) being migrated or validated
 - Read catalog/metadata needed for schema extraction (typical: `DBC` dictionary access or explicit grants as required by your security model)
 
-Network: the worker host must reach the Teradata listener (`host`:`port`, default 1025). For SPCS workers, configure `EXTERNAL_ACCESS_INTEGRATIONS` for the database host and the NuGet driver download endpoint (see [`../../../data-infrastructure/worker-spcs/SKILL.md`](../../../data-infrastructure/worker-spcs/SKILL.md)).
+Network: the worker host must reach the Teradata listener (`host`:`port`, default 1025). For SPCS workers, configure `EXTERNAL_ACCESS_INTEGRATIONS` for the database host plus PyPI (`pypi.org:443` and `files.pythonhosted.org:443`), because the worker pip-installs `teradatasql` at runtime — not a NuGet endpoint (see [`../../../data-infrastructure/worker-spcs/SKILL.md`](../../../data-infrastructure/worker-spcs/SKILL.md)).
 
 Worker TOML `[connections.source.teradata].database` must be the **database name**, matching `source.databaseName` in migration/validation workflow YAML.
 

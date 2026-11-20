@@ -44,7 +44,7 @@ Record that exact version tag (e.g., `1.11.1`). Use it as `<version>` in all sub
 - `<source_username>`, `<source_password>` — source database credentials from the project's scai source connection; **do not ask the user to type these in the chat** — instruct them to fill them directly into the command
 - `<snowflake_account>`, `<snowflake_user>`, `<snowflake_password>`, `<warehouse>` — Snowflake credentials collected from the user in Step 4; **do not ask the user to say passwords in the chat** — instruct them to fill them directly into the command
 
-Affinity binds this worker to the workflow it should process — see the [Affinity Reference](../references/affinity-reference.md) for the model (and why the orchestrator stays null-affinity). This external manifest needs an explicit label because `AGENT_AFFINITY` must exactly match the plugin-generated workflow.
+Affinity binds this worker to the workflow it should process — see the [Affinity Reference](../references/affinity-reference.md) for the model (and which affinity each orchestrator serves). This external manifest needs an explicit label because `AGENT_AFFINITY` must exactly match the plugin-generated workflow.
 
 Propose a short, stable label for this source database/server, for example `mdx-salesnorth`.
 

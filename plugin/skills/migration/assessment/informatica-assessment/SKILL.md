@@ -1,45 +1,91 @@
 ---
 name: informatica-assessment
-description: Analyze Informatica Power Center workflows/mappings from SnowConvert ETL.* outputs and source XML files. Classifies workflows, scores migration complexity, and produces JSON for the parent assessment multi-report.
+description: Analyze Informatica Power Center workflows/mappings with the `scai assessment etl` commands, from the Code Unit Registry, SnowConvert ETL.* outputs and source XML files. Classifies workflows, scores migration complexity, and produces JSON for the parent assessment multi-report.
 parent_skill: assessment
 license: Proprietary. See License-Skills for complete terms
 ---
 
 # Informatica Power Center Assessment
 
-**Snowflake AIM for Data Warehouses** migrates Informatica Power Center workflows to Snowflake. This skill analyzes workflows and mappings from their source XML and SnowConvert assessment CSV reports to generate detailed migration analysis including workflow classification and complexity assessment.
+**Snowflake AIM for Data Warehouses** migrates Informatica Power Center workflows to Snowflake. This skill analyzes workflows and mappings from their source XML and SnowConvert assessment CSV reports to generate detailed migration analysis including workflow classification and complexity assessment. Every step runs a `scai assessment etl` command with `--platform informatica`.
 
 ---
 
+## Sub-Agent Mode
+
+When invoked from the parent `assessment` skill as a sub-agent, the parent provides a context block with the fields below. The `review_mode` field controls which steps run.
+
+| Field | Required | Notes |
+|---|---|---|
+| `project_dir` | yes | absolute path to the SCAI project root |
+| `output_dir` | except with `review-batch` | `<project_dir>/artifacts/assessment/etl`; the CLI writes the assessment JSON there, and `ai_informatica_summary.html` goes beside it |
+| `informatica_target` | yes | `dbt` or `scripting`. Use it for Step 3 and Step 4; **On entry** checks that the project stores it. |
+| `review_mode` | yes | `generate-only`, `review-batch`, `summary-only`, or `auto-review-all` |
+| `batch_size` | with `review-batch` | how many pending workflows this agent reviews, at most 10 |
+| `assessment_json` | with `review-batch` and `summary-only` | the absolute JSON path the generate child returned. Return it as `output_json`; the commands find the artifact themselves, so never pass it to them |
+
+**On entry:** call the `configure` MCP tool with `project_dir` and `etl_informatica_target=<informatica_target>`. `scai assessment etl generate` reads that setting into the JSON's `summary.conversion_mode`, and uses `dbt` when it is unset. In a session whose `subagent_mode` latch makes `configure` attach-only, `configure` reports `etl_informatica_target` as not applied and leaves the stored value as it was. So after `configure`, read `etl_informatica_target` from `<project_dir>/.scai/config/plugin.yml`. If it is missing or differs from `informatica_target`, return `status: error` with `error: "Informatica target not recorded: plugin.yml has <stored or none>, expected <informatica_target>"`, and run no `scai assessment etl` command and write no HTML. Snowflake credentials are not required.
+
+**Branching by `review_mode`:**
+
+- `generate-only` — run Steps 1–2. Return the JSON path `generate` printed and the `stats` counts; do not review workflows or write the AI summary.
+- `review-batch` — run Step 3 for at most `batch_size` workflows, each taken from `pending`. Do not generate and do not write the AI summary. Return `ok` when every workflow you took is DONE, or when `pending` reports none left.
+- `summary-only` — run Step 4 only, then `scai assessment etl stats --platform informatica`, and report its total, done and pending counts.
+- `auto-review-all` — direct entry only; the parent assessment never sends it. Run all four steps. Stop only when `stats` reports no pending workflows.
+
+**On completion**, return **JSON only**:
+
+```json
+{
+  "sub_skill": "informatica-assessment",
+  "status": "ok",
+  "output_json": "<abs path generate printed, or assessment_json>",
+  "summary": "<one-line: total workflows, classified count, pending count, target>",
+  "error": null
+}
+```
+
+On failure: `"status": "error"`, `"error": "<message>"`.
+
+## Important Notes
+
+- **No help command**: the `scai assessment etl` commands are hidden (AI-agent only). `--help` returns "No help available". They are documented in this skill only.
+- **Always pass `--platform informatica`** to `pending`, `scan-package`, `update`, `stats`, `summary` and `ai-summary`. `generate` takes no platform: it reads the project's one ETL platform from the Code Unit Registry.
+- **Auto-detection**: run every command from the project root. Each one finds the newest `artifacts/assessment/etl/informatica_assessment_analysis_<timestamp>.json` itself; do not pass a JSON path.
+- **Single argument for scan-package**: pass only the workflow's relative path, as `pending` printed it.
+
 ## Rules
 
-1. **Use ONLY Provided Scripts**
-   - ONLY run the analyzer through `scripts/run-analyzer.ps1` (Windows) or `scripts/run-analyzer.sh` (macOS/Linux)
-   - DO NOT call `uv` or `python` yourself
+1. **Use ONLY the `scai assessment etl` commands**
+   - Generation and tracking go through `generate`, `pending`, `scan-package`, `update`, `stats`, `summary` and `ai-summary`
    - DO NOT create custom scripts to read or manipulate the JSON file
    - DO NOT use grep, jq, or other tools to parse the JSON directly
-   - All JSON interactions MUST go through the launcher
 
 2. **One workflow, one analysis**
-   - Analyze each workflow from its own source XML (the workflow `pending` returns), whatever the volume; never batch or reuse
+   - Analyze each workflow from its own `scan-package` output and source XML, whatever the volume; never batch or reuse
      analysis text across workflows, because the report presents each workflow's analysis on its own.
 
-3. **Follow ONLY Provided Analysis Methods**
+3. **One writer, one workflow at a time**
+   - Run the per-workflow loop yourself, in this agent, one workflow after another. Never split the workflows across
+     sub-agents, Task calls, background jobs or shell loops, and never run two `scai assessment etl` commands at once.
+   - Each `update` loads the whole assessment JSON, changes one workflow and writes it back under a lock. Progress is
+     saved after every `update`, so a later run resumes from `pending`.
+   - In `review-batch` mode the parent sends the batches one after another, never side by side.
+
+4. **Follow ONLY Provided Analysis Methods**
    - Use ONLY the workflow defined in this skill
 
-4. **Complete ALL Steps**
-   - Step 4 (AI Summary) is MANDATORY before finishing
-   - DO NOT skip to report generation without completing all steps
+5. **Complete ALL Steps**
+   - Step 4 (AI Summary) is MANDATORY before the assessment finishes
    - Every checkpoint in the workflow must be completed
 
-5. **Report Generation via Parent Skill ONLY**
+6. **Report Generation via Parent Skill ONLY**
    - The multi-report generator in the parent skill (`../SKILL.md`) is the ONLY approved method
-   - Provide the `--informatica-json` parameter pointing to the `informatica_assessment_analysis.json` file generated by this skill
+   - The parent passes the JSON path `generate` printed as `--informatica-json`
 
-6. **Stop when the launcher fails**
-   - If `run-analyzer.ps1` or `run-analyzer.sh` exits non-zero, show that error and stop
-   - Do not write `ai_informatica_summary.html` or any other HTML
-   - Do not open the JSON with another Python. The Windows Store `python.exe` is not a Python
+7. **Stop when a command fails**
+   - If a `scai assessment etl` command exits non-zero, show that error and stop. Two exits are not failures: `pending` exiting 1 means no workflow is pending, and `update` refusing an analysis (`ASM0019`) means rewrite that analysis and run `update` again
+   - Do not write `ai_informatica_summary.html` or any other HTML after a failed `generate` or `summary`
 
 ---
 
@@ -47,12 +93,12 @@ license: Proprietary. See License-Skills for complete terms
 
 ### Conversion Target Context
 
-The parent assessment skill collects `informatica.target` ("dbt" or "scripting") from the user at Step 4. This value is persisted to `.scai/config/plugin.yml` as `etl_informatica_target` and determines how this skill frames its analysis:
+The parent assessment skill collects `informatica.target` ("dbt" or "scripting"), or reuses the `etl_informatica_target` the project already recorded, and passes it as `informatica_target`. It determines how this skill frames its analysis:
 
 - **dbt**: Mappings convert to dbt models. References to dbt project structure, `ref()`, and Snowflake Tasks calling dbt are appropriate.
 - **scripting**: Mappings convert to Snowflake stored procedures (Snowflake Scripting). Zero dbt references allowed — use stored procedure calls, inline SQL, and `CALL` statements instead.
 
-The sub-agent prompt from the parent includes `informatica_target: <value>`. Use this to select the appropriate analysis framing in Step 3 and the AI summary guide in Step 4.
+Use `informatica_target` to select the analysis framing in Step 3 and the AI summary guide in Step 4.
 
 Copy this checklist and track your progress:
 
@@ -66,43 +112,32 @@ Analysis Progress:
 
 ## Step 1: Locate Input Files (auto-detected)
 
-**Do NOT prompt the user for paths.** Inputs are resolved automatically from `project_dir` configured by the parent `assessment` skill.
-
-Resolve `<conversion_reports_dir>` as the first directory that contains both `ETL.Elements.*.csv` and `ETL.Issues.*.csv`: `<project_dir>/.scai/reports/SnowConvert/`, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. Do not use a leftover older folder when `.scai` already has both files.
+**Do NOT prompt the user for paths.** `scai assessment etl generate` resolves its inputs from `project_dir`:
 
 | Input | Auto-resolution |
 |-------|-----------------|
-| `ETL.Elements.csv` | Latest `<conversion_reports_dir>/ETL.Elements.*.csv` |
-| `ETL.Issues.csv` | Latest `<conversion_reports_dir>/ETL.Issues.*.csv` |
-| Informatica source dir | `<project_dir>/source/_etl/` |
-| Output dir | `<project_dir>/assessment/informatica/` (create if missing) |
+| Informatica units | The Code Unit Registry at `<project_dir>/registry/`: units with kind `etl` and platform Informatica |
+| `ETL.Elements.csv`, `ETL.Issues.csv` | Newest pair in `<project_dir>/.scai/reports/SnowConvert/`, then `reports/SnowConvert/`, then `Reports/SnowConvert/` |
+| Informatica source dir | `<project_dir>/source/_etl/` (PowerCenter XML exports) |
+| Output dir | `<project_dir>/artifacts/assessment/etl/` (created by `generate`) |
 
-**Validation (silent — only surface a problem to the user if validation fails):**
-- Confirm both `ETL.*` CSVs exist in `<conversion_reports_dir>`. If they don't, ETL was not converted — return to the parent and ask the parent to re-run register (`code add`) then `convert`.
-- Confirm the Informatica source directory contains `.xml` files (PowerCenter XML exports).
+**Validation (silent — only surface a problem if it fails):** when `generate` fails with `ASM0014`, the registry has no in-scope Informatica units: return to the parent and ask it to re-run register (`code add`) then `convert`.
 
 ---
 
 ## Step 2: Generate JSON Analysis
 
-`<SKILL_DIR>` is the directory that contains this SKILL.md. Run the launcher. Do not call `uv` or `python` yourself.
-
-Windows (PowerShell):
-
-```powershell
-& "<SKILL_DIR>\scripts\run-analyzer.ps1" <ETL.Elements> <ETL.Issues> <OUTPUT> [--source-dir <XML_SOURCE_DIR>] [--conversion-mode dbt|scripting]
-```
-
-macOS and Linux:
+From the project root:
 
 ```bash
-"<SKILL_DIR>/scripts/run-analyzer.sh" <ETL.Elements> <ETL.Issues> <OUTPUT> [--source-dir <XML_SOURCE_DIR>] [--conversion-mode dbt|scripting]
+scai assessment etl generate
 ```
 
-If the launcher exits non-zero, stop and show its error. Do not write an HTML file.
+It prints the absolute path of the assessment JSON it wrote; that path is `output_json`. It writes two files with one timestamp to `<project_dir>/artifacts/assessment/etl/`:
+- `informatica_assessment_analysis_<timestamp>.json` — the assessment data the report reads
+- `informatica_dag_model_<timestamp>.json` — the workflow and mapping graphs
 
-- `--source-dir` is where the analyzer reads each workflow's XML to link split mapping files (`pipelines/m_*.xml`) to their workflow through `MAPPINGNAME`. `<project_dir>/source/_etl/` and `<project_dir>/source/` both work. If omitted, it defaults to `<project_dir>/source/`, inferred from the `ETL.Elements` location, when that folder exists; without it, mapping files have no workflow and their EWIs/FDMs are left out.
-- `--conversion-mode` records the target conversion mode in the output JSON (`dbt` by default). Pass `scripting` when the user selected Snowflake Scripting. The HTML report uses this value to render mode-specific content.
+If it exits non-zero, stop and show its error. Do not write an HTML file.
 
 ## Step 3: Analyze Informatica Workflows
 
@@ -112,47 +147,37 @@ This step is a sub workflow to analyze workflows individually. After this, conti
 - What to read from the XML files (MAPPING, TRANSFORMATION, SOURCE, TARGET elements)
 - How to classify workflows (with concrete criteria for each category)
 - Required analysis format and minimum lengths
-- Effort estimation guidelines
 
 ### Sub-Workflow: Analyze Each Workflow
 
-For each pending workflow:
+For each pending workflow (in `review-batch` mode, at most `batch_size` of them):
 
-1. Get next pending workflow:
-
-Windows (PowerShell):
-
-```powershell
-& "<SKILL_DIR>\scripts\run-analyzer.ps1" informatica <JSON_PATH> pending
-```
-
-macOS and Linux:
+1. Get the next pending workflow. It prints `Name: <name> | Relative Path: <WORKFLOW_PATH>`, or exits 1 when none is pending:
 
 ```bash
-"<SKILL_DIR>/scripts/run-analyzer.sh" informatica <JSON_PATH> pending
+scai assessment etl pending --platform informatica
 ```
 
-2. Analyze the workflow:
-   - Read the source XML file for this workflow
+2. Scan it. The output names the workflow's source XML and the mapping files it runs:
+
+```bash
+scai assessment etl scan-package --platform informatica '<WORKFLOW_PATH>'
+```
+
+3. Analyze the workflow:
+   - Read the source XML files the scan named
    - Examine the mappings, transformations, source/target definitions
    - Identify custom transformations, SQL overrides, complex expressions
    - Classify the workflow based on the criteria in [references/writing_analysis.md](references/writing_analysis.md)
 
-3. Write analysis following the **mandatory format** in [references/writing_analysis.md](references/writing_analysis.md).
+4. Write analysis following the **mandatory format** in [references/writing_analysis.md](references/writing_analysis.md).
 
-   **Note:** Analysis is validated. If format is wrong, the command will fail with guidance.
+   **Note:** Analysis is validated. If the format is wrong, `update` fails with `ASM0019` and guidance; nothing is saved.
 
-4. Update the workflow with AI analysis:
-Windows (PowerShell):
-
-```powershell
-& "<SKILL_DIR>\scripts\run-analyzer.ps1" informatica <JSON_PATH> update <WORKFLOW_PATH> --ai-status DONE --classification "Data Transformation" --ai-analysis "<ANALYSIS_TEXT>"
-```
-
-macOS and Linux:
+5. Save it:
 
 ```bash
-"<SKILL_DIR>/scripts/run-analyzer.sh" informatica <JSON_PATH> update <WORKFLOW_PATH> \
+scai assessment etl update --platform informatica '<WORKFLOW_PATH>' \
   --ai-status DONE \
   --classification "Data Transformation" \
   --ai-analysis "<ANALYSIS_TEXT>"
@@ -160,7 +185,11 @@ macOS and Linux:
 
 `--classification` is one of: Ingestion, Data Transformation, Configuration & Control, Mixed: Ingestion + Transformation.
 
-5. Repeat until no pending workflows remain.
+6. Repeat until no pending workflows remain (or the batch is done), then check:
+
+```bash
+scai assessment etl stats --platform informatica
+```
 
 ---
 
@@ -171,42 +200,28 @@ macOS and Linux:
 **Required Actions:**
 
 1. Run the summary command to get all signals:
-Windows (PowerShell):
-
-```powershell
-& "<SKILL_DIR>\scripts\run-analyzer.ps1" informatica <JSON_PATH> summary
-```
-
-macOS and Linux:
 
 ```bash
-"<SKILL_DIR>/scripts/run-analyzer.sh" informatica <JSON_PATH> summary
+scai assessment etl summary --platform informatica
 ```
 
 2. Read the guide: [references/ai_summary_guide.md](references/ai_summary_guide.md)
 
-3. Generate summary file: `ai_informatica_summary.html`
+3. Generate summary file: `<project_dir>/artifacts/assessment/etl/ai_informatica_summary.html`
    - Follow the structured HTML template in the guide
    - Include all 7 sections: Workload Overview, Classification Breakdown, Sources & Destinations, Connector Types, Complexity Drivers, Recommended Migration Approach, Key Risks
    - Use real data from the summary command output
    - Use inline styles (not CSS classes) since this is an embedded HTML snippet
    - **IMPORTANT: The file must be a fragment only** — do NOT include `<!DOCTYPE>`, `<html>`, `<head>`, `<body>`, or `<h1>` tags. The report generator provides the section heading (`<h2>AI Summary</h2>`) automatically.
 
-4. Register the summary in the JSON:
-Windows (PowerShell):
-
-```powershell
-& "<SKILL_DIR>\scripts\run-analyzer.ps1" informatica <JSON_PATH> ai-summary ai_informatica_summary.html
-```
-
-macOS and Linux:
+4. Register the summary in the JSON, with the absolute path:
 
 ```bash
-"<SKILL_DIR>/scripts/run-analyzer.sh" informatica <JSON_PATH> ai-summary ai_informatica_summary.html
+scai assessment etl ai-summary --platform informatica "<project_dir>/artifacts/assessment/etl/ai_informatica_summary.html"
 ```
 
 **Verification Checklist:**
-- [ ] `<output_path>/ai_informatica_summary.html` exists and is non-empty
+- [ ] `<project_dir>/artifacts/assessment/etl/ai_informatica_summary.html` exists and is non-empty
 - [ ] Summary includes all 7 sections from the guide template
 - [ ] Summary uses specific numbers (not vague terms like "many")
 - [ ] Summary registered with `ai-summary` command
@@ -218,5 +233,5 @@ fails, report an error instead of `"ok"`.
 
 Report to user:
 - Total workflows analyzed
-- JSON file location: `<output_path>/informatica_assessment_analysis.json`
+- JSON file location: the path `generate` printed, under `<project_dir>/artifacts/assessment/etl/`
 - Go to main workflow in parent skill

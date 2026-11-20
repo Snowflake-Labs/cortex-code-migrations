@@ -156,7 +156,7 @@ internal sealed class ProducerOrchestrationConversionContext : OrchestrationConv
       fileSystemService: new FileSystemService(),
       decoratedSource: null!)
   {
-    this.OrchestratorName = orchestratorName;
+    this.SetOrchestratorName(orchestratorName);
   }
 }
 

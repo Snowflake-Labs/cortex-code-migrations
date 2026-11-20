@@ -121,10 +121,16 @@ Configure **one** landing cloud. If several sections are present, the worker pre
 [connections.target.s3]
 bucket_name = "my-migrations-bucket"
 prefix = "<PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
-# profile_name = "my-profile"
+region_name = "<REGION>"  # required; omitted, the client uses us-east-1
+# profile_name = "my-profile"  # local only
+# access_key_id = "<AWS_ACCESS_KEY_ID>"  # SPCS has no AWS profile; worker setup stores both key lines in a Snowflake secret
+# secret_access_key = "<AWS_SECRET_ACCESS_KEY>"
 
 # [connections.target.gcs]
 # bucket_name = "my-gcs-bucket"
+# project_id = "my-project"
+# credential_file_path = "/path/to/service-account.json"  # SPCS: worker setup stores this file in a Snowflake secret
+# anonymous = false
 # prefix = "<PREFIX>"
 
 # [connections.target.blob]

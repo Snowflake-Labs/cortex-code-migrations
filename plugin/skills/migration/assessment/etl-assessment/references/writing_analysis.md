@@ -63,7 +63,8 @@ Using the package information, package metrics, DAG structure, and SQL logic gat
 1. **Classifies** the package based on its actual logic, purpose and data flow patterns
 2. **Describes** the package structure, sources, targets, and logic
 3. **Identifies** external connectivity requirements and recommends connector solutions
-4. **Estimates** migration effort realistically
+
+Do not estimate migration effort or hours. The assessment's Effort Estimates calculator computes effort deterministically, and the HTML report shows only that number.
 
 ---
 
@@ -237,41 +238,12 @@ Report these counts to assess conversion complexity:
 |-----------|-------|------------------|
 | Execute SQL Tasks | X | Low complexity - direct SQL to Snowflake Scripting |
 | Data Flow Tasks | X | Converts to dbt models (dbt mode) or stored procedures (scripting mode), if not ingestion |
-| Script Tasks | X | **Effort depends on script logic** - analyze the code to determine complexity (easy, medium, or complex) |
+| Script Tasks | X | **Complexity depends on script logic** - analyze the code to determine complexity (easy, medium, or complex) |
 | For Each Loop Containers | X | Snowflake procedural logic |
 | Sequence Containers | X | Organizational - minimal impact |
 | Execute Package Tasks | X | Task dependencies |
 | File System Tasks | X | May need external orchestration |
 | FTP/SFTP Tasks | X | **Not convertible** - need alternative |
-
----
-
-
----
-
-## Effort Estimation
-
-Effort = hours to bring package to **production** (migration + validation + deployment).
-
-### Effort Scale
-
-| Effort | Package Profile |
-|--------|-----------------|
-| 6-8 hrs | Simple: <10 components, no Data Flows, standard patterns |
-| 8-24 hrs | Medium: 10-30 components, simple Data Flows, standard SQL |
-| 24-40 hrs | Complex: 30-50 components, multiple Data Flows, some custom logic |
-| 40-80 hrs | Large: 50+ components, complex Data Flows, UDF dependencies |
-| 80-120 hrs | Very large: Many Data Flows, Script Tasks, complex orchestration |
-| 120+ hrs | Massive: 100+ components, heavy scripting, external dependencies |
-
-### Effort Multipliers
-
-| Factor | Impact |
-|--------|--------|
-| Script Tasks present | +20%-30% |
-| External connections (need alternative solution) | +15-30% |
-| Complex orchestration (nested loops, conditions) | +20-40% |
-| Third-party components | +25-50% |
 
 ---
 
@@ -285,7 +257,6 @@ Before submitting analysis, verify:
 - [ ] External connections identify source type and recommend connector solutions
 - [ ] Logic describes actual SQL patterns and operations found
 - [ ] Conversion assessment identifies external connector needs for ingestion packages
-- [ ] Effort is realistic based on complexity factors
 - [ ] Analysis is 150-300 words
 
 ---
@@ -298,8 +269,7 @@ After writing your analysis, update the package record using command options (NO
 scai assessment etl update '<PACKAGE_PATH>' \
   --ai-status DONE \
   --ai-analysis '<YOUR_FULL_ANALYSIS_TEXT>' \
-  --classification '<CATEGORY>' \
-  --effort '<HOURS>'
+  --classification '<CATEGORY>'
 ```
 
 **Parameters:**
@@ -307,6 +277,5 @@ scai assessment etl update '<PACKAGE_PATH>' \
 - `--ai-status` — must be `DONE` when submitting completed analysis
 - `--ai-analysis` — your full analysis text (all four sections: Classification, Sources & Destinations, Purpose, Conversion)
 - `--classification` — one of: `Ingestion`, `Data Transformation`, `Configuration & Control`, `Mixed`
-- `--effort` — estimated hours (e.g., `20-28 hours`, `16-24 hours`)
 
 **Important:** Pass the analysis text directly as a command option, NOT as a file path. The command validates the analysis format before updating the JSON.

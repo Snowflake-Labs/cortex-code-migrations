@@ -17,7 +17,23 @@ The first command is not the result. It collects issues and leaves `problem_desc
 scai assessment conversion-issues
 ```
 
-This reads the code unit registry and converted files. It writes every distinct pair. Do not limit the run to a subset. It writes:
+This reads the code unit registry and converted files, including ETL part SQL. An ETL package is included when the unit or a part has an `SSC-EWI-` issue. It writes every distinct pair. Do not limit the run to a subset.
+
+Each pair is typed for the report tabs and the Jira CSV. Informatica mappings and workflows are both **Informatica**. SSIS packages are **SSIS**. A Teradata BTEQ (or other) script uses its source format, such as **BTEQ**.
+
+The HTML report, the dashboard, and the JSON `panels` list use this tab order:
+
+1. Summary
+2. Table, View, Function, Procedure
+3. Other SQL objects (Macro, Index, and the rest, alphabetically)
+4. Scripts (BTEQ)
+5. The ETL platform last (SSIS or Informatica)
+
+Every ETL row's Issue Information in the Jira CSV names its **Target**: `Snowflake Scripting` when `project.yml` `etl_target` is `snowflake_scripting` and the row's platform is in `etl_scripting_platforms` (a list missing there means Informatica), otherwise `dbt`. A project with no `etl_target` converted its ETL to dbt, since `scai code convert` records the target only for Snowflake Scripting.
+
+For an ETL sample, the original-input highlight prefers the SSIS `User_*` variable whose converted SQL holds the marker (the `VariableValue` under `ObjectName`), or the quoted construct / component in an Informatica package. It does not fall back to the first `PropertyExpression` in the file unless the EWI is itself a property-expression issue (`SSC-EWI-SSIS0013`).
+
+It writes:
 
 - `<project_dir>/artifacts/assessment/conversion-issues.json`
 - `<project_dir>/artifacts/assessment/conversion-issues/conversion_issues.csv`
@@ -35,7 +51,7 @@ For each distinct pair, write a Problem Description and a Recommended Fix that n
 2. The source dialect documentation
 3. Snowflake SQL documentation
 
-The fix must name a concrete replacement. Do not leave `<!-- ewi-skill:agent-must-fill -->`. Do not add an AI disclaimer or the heading "AI-generated recommendation — not a mandatory fix". The CSV places that warning in a Jira `{warning}` panel above the fix. The report and dashboard show only the fix, under a heading that says it is AI-generated and must be validated.
+The fix must name a concrete replacement. Do not leave `<!-- ewi-skill:agent-must-fill -->`. Do not add an AI disclaimer or the heading "AI-generated recommendation — not a mandatory fix". The CSV places that warning in a Jira `{panel}` above the fix. The report and dashboard show only the fix, under a heading that says it is AI-generated and must be validated.
 
 Write `<project_dir>/artifacts/assessment/conversion-issues/updates.json`:
 

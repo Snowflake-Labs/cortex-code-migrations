@@ -295,21 +295,15 @@ Before submitting analysis, verify:
 
 ## Update JSON Command
 
-After completing analysis:
-
-Windows (PowerShell):
-
-```powershell
-& "<SKILL_DIR>\scripts\run-analyzer.ps1" informatica <JSON_PATH> update "<WORKFLOW_PATH>" --ai-status DONE --ai-analysis "..." --classification "Data Transformation"
-```
-
-macOS and Linux:
+After completing analysis, run from the project root:
 
 ```bash
-"<SKILL_DIR>/scripts/run-analyzer.sh" informatica <JSON_PATH> update '<WORKFLOW_PATH>' \
+scai assessment etl update --platform informatica '<WORKFLOW_PATH>' \
   --ai-status DONE \
   --ai-analysis "..." \
   --classification "Ingestion|Data Transformation|Configuration & Control|Mixed: Ingestion + Transformation"
 ```
 
-If the launcher exits non-zero, stop. Do not write a substitute HTML file.
+`<WORKFLOW_PATH>` is the `Relative Path` that `scai assessment etl pending --platform informatica` printed.
+If the command refuses the analysis (`ASM0019`), rewrite it to the format above and run it again.
+For any other non-zero exit, stop. Do not write a substitute HTML file.

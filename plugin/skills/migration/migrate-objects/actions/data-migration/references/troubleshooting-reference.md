@@ -98,7 +98,7 @@ tables:
     columnNamesToPartitionBy: [ ... ]
     executionTimeoutMinutes: 90   # > observed boundary-analysis duration
 ```
-Also consider a cheaper partition key / larger partitions so NTILE boundary analysis finishes sooner. See [workflow-config-reference.md](./workflow-config-reference.md).
+Also consider a cheaper partition key / larger partitions so NTILE boundary analysis finishes sooner. On **Redshift** with a **single** numeric or date/time partition column, experimental `boundaryDiscoveryMode: approximate` (or `quick`) can shorten Analyze — tell the user it is experimental and subject to change. See [workflow-config-reference.md](./workflow-config-reference.md#experimental-boundary-discovery-modes-redshift).
 
 **Operational workaround** (in-flight workflow without resubmitting YAML): update `EXECUTION_TIMEOUT_MINUTES` on the `TASK_QUEUE` row and re-queue if already `failed`.
 
@@ -291,6 +291,57 @@ ORDER BY ID;
 
 If metadata/schema extraction completes with **zero rows** but no worker error, compare worker TOML `[connections.source.*].database` against workflow `source.databaseName` (Oracle: service name; Teradata: database name). This is the most common silent failure mode.
 
+### SQL Server Error 10347 (CLR not enabled)
+
+**Symptom:** Every SQL Server extraction task fails with `Common Language Runtime(CLR) is not enabled
+on this instance. (10347)`; `job_status(details=true)` carries a matching `reports.hints` entry.
+
+**Cause:** Extraction formats temporal columns with T-SQL `FORMAT()`, which needs the SQL Server CLR
+runtime. SQL Server 2012+, Azure SQL Database and Managed Instance have it with no configuration.
+Azure SQL Edge does not, and refuses `sp_configure 'clr enabled'`.
+
+**Fix:** Report it under **Extraction** as a source prerequisite: the source must be a full SQL Server
+edition (see [extraction-strategies-reference.md](./extraction-strategies-reference.md#sql-server-sqlserver)).
+Not a code defect, so not `fixCode`. Never run `sp_configure` or other server changes through
+`query_source`; the source server belongs to the user.
+
+### Text holding the BCP terminators (SQL Server BCP)
+
+**Symptom:** a SQL Server table extracted with BCP (worker `use_bcp = true`) fails its load with
+`100038 Numeric value '…' is not recognized`, `100040 Date '…' is not recognized` or a NULL in a
+non-nullable column, where the rejected value looks like a piece of text. `job_status(details=true)`
+then carries a matching `reports.hints` entry. Or the table loads but validation shows a row count
+or L2 mismatch, which is the silent case.
+
+**Cause:** BCP writes text unquoted, ending a field at U+001F and a row at U+001E. A text value that
+holds U+001E ends its row early, so the rest of the value is read as the next row and usually fails
+the load. A value that holds U+001F starts a new field and can load cut off, or as NULL, with no
+error, so only validation catches it.
+
+**Check:** run one read-only `query_source` on the failing table, listing its `char`, `varchar`,
+`nchar`, `nvarchar`, `text` and `ntext` columns (`EXISTS` stops at the first hit):
+
+```sql
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM [db].[schema].[table]
+  WHERE CHARINDEX(NCHAR(30), CAST([col_a] AS NVARCHAR(MAX)) COLLATE Latin1_General_BIN2) > 0
+     OR CHARINDEX(NCHAR(31), CAST([col_a] AS NVARCHAR(MAX)) COLLATE Latin1_General_BIN2) > 0
+     OR CHARINDEX(NCHAR(30), CAST([col_b] AS NVARCHAR(MAX)) COLLATE Latin1_General_BIN2) > 0
+     OR CHARINDEX(NCHAR(31), CAST([col_b] AS NVARCHAR(MAX)) COLLATE Latin1_General_BIN2) > 0
+) THEN 1 ELSE 0 END AS HAS_BCP_TERMINATORS;
+```
+
+The binary collation matters: under some collations these control characters compare as ignorable.
+Run it only for a table with the symptom, never as a scan of every table.
+
+**Fix (only on `1`):** set `escapeBcpTerminators: true` on that table's entry, not under
+`defaultTableConfiguration`. The extract then escapes those characters and the load decodes them, so the
+SELECT runs a `REPLACE` per text column on that table only. The flag changes the next extract, not the
+rows already loaded. Propose a reload of the table with `synchronization.strategy: full-replace`, and
+run it once the user agrees (autonomous: as in [Clearing a bad load](../SKILL.md)). Native targets
+only: the orchestrator rejects the flag on Iceberg. On `0`, diagnose the value as any other load failure.
+Detail: [workflow-config-reference.md](./workflow-config-reference.md#bcp-terminators-and-escapebcpterminators).
+
 ### Teradata Error 6701 / 5355 (mixed charsets)
 
 **Symptom:** Extraction task fails on Teradata with Error **6701** or **5355** when the source table has columns in different character sets (for example LATIN + KANJISJIS + GRAPHIC in one row).
@@ -317,6 +368,7 @@ If metadata/schema extraction completes with **zero rows** but no worker error, 
 2. **A target this project loaded itself** (see *Clearing a bad load* in [SKILL.md](../SKILL.md)): in autonomous mode, clear and reload it without asking; interactive, propose the truncate and reload and run them once the user agrees.
 3. **Any other target:** confirm with the user before any destructive action. It may hold rows that are expected or unrelated to this migration. Do not blindly `TRUNCATE` or bulk-`DELETE` it; if cleanup is required, scope it (for example delete rows loaded in a specific partition/window, or dedupe by primary key) only after explicit user approval.
 4. **Going forward:** Add `synchronization.strategy: watermark` or `checksum` (with `watermarkColumn`, `checksumExpression`, and `primaryKeyColumns` as needed) so subsequent runs are incremental. See [workflow-config-reference.md](./workflow-config-reference.md#synchronizationstrategy).
+5. **The target held another tool's rows and DMVF reloaded or duplicated them:** that is the no-adoption behaviour. If the user wants matching partitions kept, add `synchronization.adoption` (ask first; see [Adopting an existing target](./workflow-config-reference.md#adopting-an-existing-target-synchronizationadoption)).
 
 ---
 
@@ -418,6 +470,21 @@ Do **not** suggest orchestrator polling-interval env vars as a throttle mechanis
 1. Confirm sync strategy (`checksum` vs `watermark`) and whether the changed column is in the checksum input.
 2. Explain using the skipped/lossy type table — see [Advanced operations reference](../../../../data-infrastructure/references/advanced-operations-reference.md#checksum--incremental-sync--types-that-may-not-trigger-re-sync).
 3. Offer remediation: one-time **full** run; custom **`checksumExpression`**; switch to **watermark** if appropriate.
+
+---
+
+## Adoption: partitions reloaded, reported, or not adopted
+
+**Symptom:** a workflow with `synchronization.adoption` reloaded a partition the user expected to keep, left one untouched with no baseline, or failed validation.
+
+**Cause and fix:**
+
+1. **A mismatching partition is reloaded or reported, by design.** `onMismatch: reload` (default) clears and reloads it. `onMismatch: report` loads and clears nothing, stores no baseline, marks the partition complete and writes a row to the `ADOPTION_REPORT` table in the project's data-migration metadata schema (`REASON` is `mismatch`, `no_metrics` or `check_unavailable`, with `PARTITION_NUMBER`, the source table and `TARGET_ROW_COUNT`). A reported partition is checked again on every run, so it is reported again until the target is fixed or the choice changes to `reload`. Read the table before deciding; do not `TRUNCATE` the target to "fix" it.
+2. **Matching float or decimal columns fail the check:** the default absolute tolerance is `0.001`. Set the top-level `comparisonConfiguration.relativeTolerance` (for example `1e-6`).
+3. **`check: row` settles as check-unavailable:** the platform cannot read the row hash as an unsigned number. The partition follows `onMismatch`; use `check: metrics`. On Teradata a `HASH_MD5` not found means the UDF is not in the worker's default database: set `hashMd5Function: <DATABASE>.HASH_MD5` (Teradata only; any other source rejects the key).
+4. **A re-run after `resetPartitions` re-checked instead of reloading:** adoption applies to every partition with no baseline, and a reset creates such partitions. To force a full reload, remove adoption for that run (`migrate_data(mode="setup", adoption=false, ...)`).
+5. **Configuration rejected:** adoption is valid only on `checksum` / `watermark`, never `none`, `full-replace` or an Iceberg target (a per-table `synchronization` override to one of those fails while the default carries `adoption`). A `watermark` table whose `watermarkColumn`, or a partition key, exists only in the source (such as Oracle `ORA_ROWSCN` or BigQuery `_PARTITIONTIME`) is rejected too: use a migrated column or drop adoption. `migrate_data(mode="setup")` refuses these combinations before writing; `migrate_data(mode="check")` reads the rest from `scai data doctor --config`.
+6. **Nothing adopted because the target was empty or missing:** with no rows there is nothing to adopt; the partition loads as usual.
 
 ---
 

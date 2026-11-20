@@ -1,6 +1,6 @@
 ---
 name: worker-spcs
-description: Deploy the Data Exchange Worker on Snowpark Container Services (SPCS) — image selection, Snowflake Secrets, CREATE SERVICE SQL generation, and verification. Triggers: SPCS worker, container worker, snowpark container, deploy worker SPCS, spcs deployment.
+description: Deploy the Data Exchange Worker on Snowpark Container Services (SPCS) — image selection, Snowflake Secrets, CREATE SERVICE SQL generation, and Windows authentication with a Kerberos keytab when SQL Server requires it. Triggers: SPCS worker, container worker, snowpark container, deploy worker SPCS, spcs deployment, windows authentication, kerberos keytab.
 parent_skill: data-infrastructure-setup
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -10,10 +10,31 @@ license: Proprietary. See License-Skills for complete terms
 `<metadata_database>` below is `.scai/config/plugin.yml` `metadata_database` (`SNOWCONVERT_AI` unless
 overridden): this project's workflows, tasks and results live there, and `SNOWCONVERT_AI` may hold another
 project's.
+`scai` commands you run from the project's directory read the same pin (an exported
+`CUSTOM_SNOWCONVERT_DATABASE` still wins), so a custom metadata database is supported: never tell the user it
+must be `SNOWCONVERT_AI`. Repointing a set-up project needs the new database to exist, or
+`configure(recreate_metadata_database=true)`.
 
 Deploy the Data Exchange Worker as a Snowpark Container Services (SPCS) service. SPCS automatically provides Snowflake authentication via `@SPCS_CONNECTION` — no Snowflake credentials are needed in the service spec.
 
 > Run worker instances on a compute pool that will stay **active** for the full migration. SPCS automatically restarts instances if they stop.
+
+## Windows authentication
+
+When the project's source is SQL Server, run this before Step 1. Step 1's `scai data worker setup` rejects a Windows connection that has no `kerberos_principal`, and it does not create the keytab secrets.
+
+```bash
+scai connection list -l sqlserver --json
+```
+
+Find the row whose `name` is the project's `source_connection`. Read `auth_method` inside `credentialsMaskedJson`.
+
+| `auth_method` | Action |
+|---------------|--------|
+| `windows` | Read [`../references/sqlserver-spcs-windows-auth.md`](../references/sqlserver-spcs-windows-auth.md) and follow it through worker setup. It runs `scai data worker setup`. Then skip Steps 1–4 and continue at Step 5, using the service name setup printed (`DATA_EXCHANGE_WORKER_SERVICE` unless a custom name was set). Step 3's username and password secrets do not apply. Start at **Save the source connection** when `kerberos_principal` is missing; otherwise start at **Create the Kerberos secrets**. |
+| anything else | Continue at Step 1. |
+
+When the source is not SQL Server, continue at Step 1.
 
 ## Step 1 — Image Version
 
@@ -50,9 +71,8 @@ Record that exact version tag (e.g., `1.11.1`). Use it as `<version>` in all sub
 - `<source_type>`, `<host>`, `<port>`, `<database>` — from the project's scai source connection
 - `<warehouse>` — from the parent skill's Question 2
 - `<replica_count>` — the instance count the user provides in Step 4
-- `<driver-download-host>` — **(Oracle/Teradata only)** the hostname of the NuGet driver download endpoint; ask the user for this value if they are on Oracle or Teradata
 
-Affinity binds this worker to the workflow it should process — see the [Affinity Reference](../references/affinity-reference.md) for the model (and why the orchestrator stays null-affinity). The automatic `scai data worker setup` path uses the project's stable default. The custom service-spec path below needs an explicit label because `AGENT_AFFINITY` must exactly match the workflow.
+Affinity binds this worker to the workflow it should process — see the [Affinity Reference](../references/affinity-reference.md) for the model (and which affinity each orchestrator serves). The automatic `scai data worker setup` path uses the project's stable default. The custom service-spec path below needs an explicit label because `AGENT_AFFINITY` must exactly match the workflow.
 
 Propose a short, stable label for this source database/server, for example `mdx-salesnorth`.
 
@@ -93,13 +113,14 @@ Note the exact secret names — they are referenced in Step 4.
 
 > **Non-SPCS / local workers:** Snowflake Secrets above apply to SPCS container services only. For external vaults, AWS Secrets Manager REST providers, or `$(...)` command substitution in worker TOML, see [Advanced: Secrets management](../references/worker-config-reference.md#advanced-secrets-management).
 
-**Oracle and Teradata only:** The container requires outbound network access for two destinations: the source database host and the NuGet driver download endpoint. Ask the user to provide an `EXTERNAL_ACCESS_INTEGRATION` covering both. If they do not have one, show:
+**Oracle and Teradata only:** The container requires outbound network access to the source database host. Neither needs a NuGet driver endpoint. Oracle needs no other host: the worker uses `oracledb` thin mode and installs no client. Teradata also needs PyPI, because the worker pip-installs `teradatasql` at runtime: `pypi.org:443` and `files.pythonhosted.org:443`. Ask the user to provide an `EXTERNAL_ACCESS_INTEGRATION` covering these hosts. If they do not have one, show:
 
 ```sql
 CREATE NETWORK RULE <project>_DRIVER_EGRESS
   TYPE = HOST_PORT
   MODE = EGRESS
-  VALUE_LIST = ('<driver-download-host>:443', '<host>:<port>');
+  -- Oracle:   VALUE_LIST = ('<host>:<port>');
+  VALUE_LIST = ('<host>:<port>', 'pypi.org:443', 'files.pythonhosted.org:443');
 
 CREATE EXTERNAL ACCESS INTEGRATION <project>_DRIVER_ACCESS
   ALLOWED_NETWORK_RULES = (<project>_DRIVER_EGRESS)
@@ -136,11 +157,8 @@ CREATE SERVICE <metadata_database>.DATA_MIGRATION.DATA_EXCHANGE_SERVICE
             AGENT_AFFINITY: <label>
           resources:
             requests:
-              memory: 10G
-              cpu: 6
-            limits:
-              memory: 10G
-              cpu: 6
+              memory: 2Gi
+              cpu: 0.1
           secrets:
             - snowflakeSecret: <project>_SOURCE_USERNAME
               envVarName: DATA_SOURCE_USERNAME
@@ -151,11 +169,10 @@ CREATE SERVICE <metadata_database>.DATA_MIGRATION.DATA_EXCHANGE_SERVICE
   MAX_INSTANCES = <replica_count>;
 ```
 
-**Resource sizing:** The `memory: 10G / cpu: 6` values above match the `CPU_X64_M` instance family. Adjust to match your actual compute pool instance family — larger instance families support higher values.
+**Resource sizing:** The `memory: 2Gi / cpu: 0.1` values above match `scai data worker setup` (`SpcsServiceSpec` defaults; no resource limits). A `CPU_X64_S` pool can schedule them. Raise the request only if the user has a measured need; a `cpu: 6` request needs `CPU_X64_M`.
 
-**Pool fit:** with `cpu: 6`, each replica takes a whole `CPU_X64_M` node, so the pool's `MAX_NODES` must be at
-least the replica count plus one for the orchestrator. Keep the pool at `MIN_NODES = 1` and
-`AUTO_SUSPEND_SECS = 60` (see [Sizing a pool that also runs SPCS workers](../compute-pool-setup/SKILL.md#sizing-a-pool-that-also-runs-spcs-workers)).
+**Pool fit:** with the `scai` request, the orchestrator and two or three workers share one or two nodes.
+Keep the pool at `MIN_NODES = 1` and `AUTO_SUSPEND_SECS = 60` (see [Sizing a pool that also runs SPCS workers](../compute-pool-setup/SKILL.md#sizing-a-pool-that-also-runs-spcs-workers)).
 Adding replicas beyond what the source can serve raises the bill without speeding up the load.
 
 **Oracle/Teradata:** Add `EXTERNAL_ACCESS_INTEGRATIONS = (<project>_DRIVER_ACCESS)` on the line before `MIN_INSTANCES`.

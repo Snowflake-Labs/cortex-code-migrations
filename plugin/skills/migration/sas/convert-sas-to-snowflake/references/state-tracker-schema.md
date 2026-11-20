@@ -21,7 +21,9 @@ Load on **resume** (when `conversion_state.json` exists and needs interpretation
     "validation_scope": "full",
     "pre_approved_compilation": false,
     "pre_approved_validation": null,
-    "sp_permission": null
+    "sp_permission": null,
+    "validation_selections": {"depth": "T2", "source_location": "not_in_snowflake",
+                              "ddl": "infer", "test_data": "synthetic", "baseline": "trace"}
   },
   "source_mappings": {
     "LIBNAME_NAME": {
@@ -129,7 +131,7 @@ At every transition in the table below, the workflow MUST: (1) update `conversio
 
 | Transition | Prerequisite (state file must show) | Checkpoint line appended |
 |---|---|---|
-| Step 1 → Step 2 | File exists with metadata (output_dir, target_schema, migration_mode, `current_step: "1"`) | `step:"1" status:"STARTED"` |
+| Step 1 → Step 2 | File exists with metadata (output_dir, target_schema, migration_mode, `current_step: "1"`); `sql_check.py selections` exits 0 (T2/T3 need all four data keys -- values in `workflows/validation-pipeline.md`) | `step:"1" status:"STARTED"` |
 | Step 2.5 → Step 3 | `gates.step_2_5_source_resolution: "PASSED"` or `"SKIPPED"` (no external sources) — `source_mappings` populated if external sources found | `step:"2.5" status:"PASSED"\|"SKIPPED"` |
 | Step 3 → Step 4 | All files have `status: "classified"`, dependencies populated; `assessment` object written (consumed+reconciliation, or `consumed: false`) | `step:"3" status:"PASSED"` |
 | Step 5 → Step 6 | All files have `status: "converted"` | `step:"5" status:"PASSED"` |

@@ -19,12 +19,7 @@ A user importing local SQL files never reaches this skill from setup.
 
 ## Before connecting — tell the user
 
-Before proceeding to connection setup, show this **verbatim** on every entry path.
-
-> **What this connection is used for:** This source connection will be used
-> throughout the migration lifecycle for metadata extraction, DDL/code
-> extraction, schema introspection, data migration reads, and validation
-> queries.
+Before connection setup, on every entry path, tell the user in one sentence of your own that this source connection is used throughout the migration for metadata and DDL/code extraction, schema introspection, data migration reads and validation queries.
 
 **Never** show the non-production / heavy-read warning on
 `configureExtractionSource` — extraction reads metadata and DDL only. That
@@ -37,10 +32,32 @@ connections used for data migration and validation.
 If `progress_setup` already returned a connection picker as `next_prompt`
 (`write_to` is `source_connection`), ask that prompt as given — it already
 says we will extract all objects from the picked connection's database.
-Submit the chosen name with `progress_setup(answers={"source_connection": "<name>"})`.
-If they pick **Create a new connection**, do not write `source_connection`;
-create a connection with the per-dialect sub-skill below, then call
-`configure(source_connection=<name>)` with the new name.
+When the user already supplied host, port, and database (including user-sim
+answers), run `scai connection list -l <dialect>` first. Reuse a listed name
+only when `server_url`, `port`, and `database` all match those values. If the
+only listed connection differs on port or database, answer **Something else**
+(`source_connection`: `other`) / **Create a new connection** and create a new
+connection with the per-dialect sub-skill — do not bind the project to a stale
+profile.
+
+Submit a matching existing name with
+`progress_setup(answers={"source_connection": "<name>"})` only after you
+confirmed the profile matches. Either way, the transcript must show
+`scai connection add-sql-server` (when you created one) and
+`configure(source_connection=<name>)` returning `connection_test: ok` for the
+source. Picking a name via `progress_setup` alone does not satisfy the source
+test when no `configure(source_connection=...)` ran in this session.
+
+When the user corrects a saved connection's details (database, host, port,
+user or password), update that profile in place. Re-run its
+`scai connection add-<dialect>` command under the same name with every field
+and `--replace --json`. Confirm `"success":true` before
+`configure(source_connection=<name>)`. A `CNX0002` error means nothing was
+saved. Do not re-test the old profile.
+
+If they pick **Something else** or **Create a new connection**, do not write
+`source_connection`; create a connection with the per-dialect sub-skill below,
+then call `configure(source_connection=<name>)` with the new name.
 
 Otherwise, call `configure(needs_source_connection=true)` to list existing
 connections for the configured dialect. Safe to repeat — it only reads.
@@ -60,6 +77,17 @@ connections for the configured dialect. Safe to repeat — it only reads.
   - `db2` → `../connection/db2-connection/SKILL.md`
   - `bigquery` → `../connection/bigquery-connection/SKILL.md`
   - `synapse` / `azuresynapse` → `../connection/azure-synapse-connection/SKILL.md`
+
+## No-source project (AI-First ETL only)
+
+A project whose code came from files (`code_source` is not `extract`) and whose
+ETL is AI-First (Apache Hop, for example, run by an `external_command`
+launcher) never reads the source database. For that project only, offer
+**No source connection** and follow `no-source-project.md`
+(`configure(no_source_connection=true)`). Offer it to no other project. Before
+the ETL is registered, declare it in the same call:
+`configure(has_etl_code=true, no_source_connection=true)`. Never skip this step
+instead.
 
 ## If the user pushes back
 

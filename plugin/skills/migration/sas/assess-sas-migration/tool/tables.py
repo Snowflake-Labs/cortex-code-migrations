@@ -309,11 +309,17 @@ def seed_targets(path) -> List[str]:
     return [r.get('snowflake_fqn') or r['name'] for r in load(path) if r['role'] == 'input' and not is_system(r['name'])]
 
 
+def ddl_source(rows) -> str:
+    """user (live account or user file), inferred, or mixed -- the header Step 10 reports."""
+    kinds = {'user' if r['columns_from'] in ('live', 'user_file') else 'inferred' for r in rows}
+    return kinds.pop() if len(kinds) == 1 else ('mixed' if kinds else 'none')
+
+
 def render_ddl(path, roles=ROLES) -> str:
-    out = ['-- Generated from tables.json by tables.py render-ddl. Edit tables.json, not this file.']
-    for r in load(path):
-        if r['role'] not in roles:
-            continue
+    rows = [r for r in load(path) if r['role'] in roles]
+    out = [f'-- DDL source: {ddl_source(rows)}',
+           '-- Generated from tables.json by tables.py render-ddl. Edit tables.json, not this file.']
+    for r in rows:
         target = r.get('snowflake_fqn') or r['name']
         if not r['columns']:
             out.append(f'-- {target}: no columns recorded (columns_from={r["columns_from"]})')

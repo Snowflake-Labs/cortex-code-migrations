@@ -768,7 +768,7 @@ def _batch_payload(packed, batch):
 
 def _run_one_batch(bundle, batch, packed, args):
     verdict_path = os.path.join(bundle, "verdict.batch%d.json" % batch["index"])
-    view = os.path.join(args.view_root or tempfile.gettempdir(),
+    view = os.path.join(gate_a.resolve_view_root(args.view_root),
                         "gateB-batch%d-view-%s-%d" %
                         (batch["index"], os.path.basename(bundle.rstrip(os.sep)), os.getpid()))
     try:
@@ -1633,6 +1633,73 @@ def falsify(args):
     return 0 if outcome == "PASS" else 3
 
 
+def conversion_arm(bundle):
+    """The arm conversion's Gate B ran, read from its bundle beside the recheck's (`<gates>/gateB`), else
+    the driver's default. A recheck on another arm judges the repaired model by a different standard, and
+    the sourced arm's reference sheet is not shipped with the plugin."""
+    manifest = os.path.join(os.path.dirname(os.path.abspath(bundle)), "gateB", "MANIFEST.json")
+    try:
+        with open(manifest, "r", encoding="utf-8") as fh:
+            arm = json.load(fh).get("arm")
+    except (OSError, ValueError):
+        arm = None
+    return arm if arm in ("sourced", "naive") else os.environ.get("AIFIRST_GATEB_ARM", "naive")
+
+
+def recheck(args):
+    """Gate B again, after a repair, over the project's converted tree, judged on the repaired models.
+
+    A repair edits a model the conversion's Gate B already judged; DVF passing afterwards says the
+    tested rows agree, not that the model still does what the source element says for every input.
+    So the repaired tree is packed and verified exactly as conversion does (the same pack, the same
+    batched verifier, the same scorer -- nothing re-implemented), into a fresh bundle, and the verdict
+    is read for the obligations of the named models only: every MD:<model> and EX:<model>#<column>
+    must be discharged. Obligations on other models are reported, not gated: they were conversion's
+    findings and a repair of one model does not own them. Writes `<bundle>/recheck.json`."""
+    models = sorted({m.strip() for m in (args.models or "").split(",") if m.strip()})
+    if not models:
+        raise GateBError("recheck needs --models: the repaired model names")
+    args.no_issues = True
+    if args.arm is None:
+        args.arm = conversion_arm(args.bundle)
+    rc = batched_run(args)
+    bundle = os.path.abspath(args.bundle)
+    with open(os.path.join(bundle, "obligations.json"), "r", encoding="utf-8") as fh:
+        raised = json.load(fh).get("obligations") or []
+    sidecar_path = os.path.join(bundle, "gateB-sidecar.json")
+    if not os.path.isfile(sidecar_path):
+        raise GateBError("recheck could not score: no %s (Gate B exited %s)" % (sidecar_path, rc))
+    with open(sidecar_path, "r", encoding="utf-8") as fh:
+        sidecar = json.load(fh)
+    mine = [o["id"] for o in raised if o.get("model") in models]
+    open_rows = {r["obligation_id"]: r for r in sidecar.get("unresolved") or [] if r.get("model") in models}
+    missing = sorted(set(models) - {o.get("model") for o in raised})
+    others_open = sorted(r["obligation_id"] for r in sidecar.get("unresolved") or []
+                         if r.get("model") not in models)
+    passed = bool(mine) and not open_rows and not missing
+    record = {
+        "models": models,
+        "obligations": mine,
+        "outstanding": [{"obligation_id": k, "verdict": v.get("verdict"), "reason": v.get("reason")}
+                        for k, v in sorted(open_rows.items())],
+        "models_not_found": missing,
+        "other_outstanding": others_open,
+        "passed": passed,
+        "generated_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+    with open(os.path.join(bundle, "recheck.json"), "w", encoding="utf-8") as fh:
+        json.dump(record, fh, indent=1)
+    print("-" * W)
+    print(" recheck       : %s  %d obligation(s) on %s, %d outstanding%s"
+          % ("PASS" if passed else "FAIL", len(mine), ", ".join(models), len(open_rows),
+             ("; no model named %s in the tree" % ", ".join(missing)) if missing else ""))
+    for k, v in sorted(open_rows.items()):
+        print("   %-40s %s" % (k, v.get("verdict")))
+    if others_open:
+        print(" not gated     : %d outstanding on other models (conversion's findings)" % len(others_open))
+    return 0 if passed else 3
+
+
 def main(argv):
     ap = argparse.ArgumentParser(prog="gate_b.py",
                                  description="Gate B — agentic intent-parity gate.")
@@ -1687,6 +1754,24 @@ def main(argv):
     p.add_argument("--parallelism", type=int,
                    default=int(os.environ.get("AIFIRST_GATE_PARALLELISM", "4")))
 
+    p = sub.add_parser("recheck", help="re-verify repaired models over a project's converted tree")
+    add_pack_args(p)
+    p.set_defaults(arm=None)
+    add_score_args(p)
+    p.add_argument("--models", required=True, help="comma-separated repaired model names")
+    p.add_argument("--cli", default="cortex")
+    p.add_argument("--model", default=None)
+    p.add_argument("--max-budget-usd", dest="max_budget_usd", default=None)
+    p.add_argument("--verifier-timeout", dest="verifier_timeout", type=int, default=900)
+    p.add_argument("--view-root", dest="view_root", default=None)
+    p.add_argument("--keep-view", dest="keep_view", action="store_true")
+    p.add_argument("--expression-batch-size", dest="expression_batch_size", type=int,
+                   default=int(os.environ.get("AIFIRST_GATEB_EXPRESSION_BATCH_SIZE", "8")))
+    p.add_argument("--model-batch-size", dest="model_batch_size", type=int,
+                   default=int(os.environ.get("AIFIRST_GATEB_MODEL_BATCH_SIZE", "12")))
+    p.add_argument("--parallelism", type=int,
+                   default=int(os.environ.get("AIFIRST_GATE_PARALLELISM", "4")))
+
     p = sub.add_parser("verifier")
     p.add_argument("--bundle", required=True)
     p.add_argument("--verdict", required=True)
@@ -1716,6 +1801,8 @@ def main(argv):
             return verifier(args)
         if args.cmd == "batched-run":
             return batched_run(args)
+        if args.cmd == "recheck":
+            return recheck(args)
         if args.cmd == "falsify":
             return falsify(args)
         return run(args)

@@ -22,24 +22,26 @@ Only the consumer value is a pattern; the task value is literal. In a consumer v
 
 Two consequences drive everything below:
 
-1. **A null-affinity consumer claims all tasks.** This is why the **orchestrator must never be given an
-   affinity** — a null orchestrator drains workflows of *every* affinity, and stamps each task with its
-   own workflow's affinity so the right worker picks it up. If you gave the orchestrator an affinity it
-   would partition itself, and workflows of other affinities would sit at "0 pending" forever. **The
-   plugin never sets the orchestrator's affinity.** Isolation happens at the *worker* layer.
+1. **A null-affinity consumer claims all tasks.** An unpinned orchestrator drains workflows of *every*
+   affinity on its metadata database, including another project's on a shared `SNOWCONVERT_AI` account.
+   The **SPCS orchestrator** is that one shared, null-affinity service. A **local orchestrator serves one
+   affinity**: the project's (see below), so two projects can each run one beside the other. Either
+   stamps each task with its workflow's affinity so the right worker picks it up. A local orchestrator
+   leaves a workflow of another affinity for that affinity's orchestrator, and it sits at "0 pending".
 2. **A worker and its workflow must carry the same label when you set one.** A null worker claims
    every task. A null workflow is claimed by any worker. For one source, leave both on the project
    default and don't set an override.
 
-## The two carriers that must agree
+## The carriers that must agree
 
-Affinity lives in **two** files that must carry the same value:
+Affinity lives in these places, which must carry the same value:
 
 | Carrier | Where | Set by |
 |---|---|---|
 | **Workflow config** (`affinity:`) | `artifacts/data_{migration,validation}/workflows/*.yaml` | `migrate_data`/`validate_data` (`mode="setup"`) |
 | **Worker config** (`[application].affinity`) | project-relative `.scai/config/dew_configuration.toml` (local worker) | `data_infrastructure(mode="up")` |
 | **Worker env** (`AGENT_AFFINITY`) | SPCS spec / k8s Deployment manifest | the worker-spcs / worker-k8s-external skill (set it to the **same** label) |
+| **Local orchestrator** (`--affinity`) | `scai data orchestrator start --local` | `data_infrastructure(mode="up")` |
 
 ## Project default vs explicit override
 
@@ -48,6 +50,9 @@ such as `northwind-3f9a1c2b` (`default_affinity` in `.scai/config/project.yml`).
 is passed, `scai data migrate|validate generate-config`, `scai data worker setup` and
 `scai data worker generate-config` all apply it. This is the normal path for one source server and
 requires no user-selected label.
+Setup also writes the workflow's `affinity:` when it reuses an existing YAML: the override if one is set,
+otherwise the project default. So a hand edit of `affinity:` is reset on the next setup; to route a
+workflow to another label, use `configure(affinity=…)`.
 
 A worker labelled by hand does not claim workflows stamped with the project default, and a
 default-labelled worker does not claim a workflow you generated with a different `--affinity`. Set
@@ -61,8 +66,11 @@ across source servers: the plugin doesn't drive that.
   If an existing generated config carries a different affinity, the plugin regenerates it.
 - **SPCS / Kubernetes worker:** set the same override as `AGENT_AFFINITY` in the worker spec/manifest.
   The worker-spcs and worker-k8s-external skills do this.
-
-The plugin never passes affinity to the orchestrator.
+- **Local orchestrator:** `data_infrastructure(mode="up")` passes the override as `--affinity`. With no
+  override, `scai data orchestrator start --local` takes the affinity in `dew_configuration.toml`, then
+  the project default. A running orchestrator is reused as is, so after changing the override, stop the
+  infrastructure (`mode="down"`) and bring it up again. Until then, dispatch refuses workflows of the new
+  affinity because no running orchestrator claims them.
 
 ## Dispatch diagnostics
 
@@ -77,5 +85,5 @@ workflow's affinity.
 ## When affinity is the cause of a stall
 
 "Found 0 pending workflows" / tasks stuck non-terminal is often an affinity mismatch: the workflow
-carries one label and no worker carries a matching (or null) one, or the orchestrator was mistakenly
-given an affinity. See the data-migration [Troubleshooting Reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md).
+carries one label and no worker or orchestrator carries a matching one, for example after
+`configure(affinity=...)` changed the label while the old orchestrator kept running. See the data-migration [Troubleshooting Reference](../../migrate-objects/actions/data-migration/references/troubleshooting-reference.md).

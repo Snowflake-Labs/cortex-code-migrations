@@ -18,7 +18,7 @@ agents and answers recorded in an earlier session — including one this session
 killed in the middle of. Do not open `notes` or `overrideAcceptedCases`. If the
 object is not already parked, park it before reporting. A walker that returns
 `stuck` may already have escalated (one stuck on a human question does; one
-stuck on repeated oracle errors or an unknown ID does not), so check there for
+stuck on repeated status-source errors or an unknown ID does not), so check there for
 an open row on that object before you escalate:
 
 ```
@@ -43,21 +43,70 @@ row, and relay the user's words verbatim:
 
 ```
 transition_status(status="answer", task="<parked task>",
-                  resolution="<guidance|decompose|skip|needs_repair|mark_done>",
+                  resolution="<guidance|decompose|skip|skip_data|needs_repair|unvalidated>",
                   reason="<the user's words>", where="id = '<id>'")
 ```
+
+When the user says to leave an object parked (stop, leave it, they will fix it
+themselves), relay it as `resolution="needs_repair"`, never `guidance`: guidance
+un-parks the object and the board hands it to a walker that only parks it again.
+For several objects parked at the same task, answer them in one call per task with
+`where="id IN ('<id1>', '<id2>')"`. `needs_repair` leaves nothing to send.
 
 Only the autonomous parent may make this call in `subagent_mode`; Cortex stamps
 the current parent identity, so do not pass `agent_id`. Never call
 `status="answer"` without an explicit user reply. Never infer a decision from
 child output or your own diagnosis. Never use an answer to bypass a precondition.
-Walkers cannot answer.
+Walkers cannot answer. "Accept as is" (`mark_done`) is the user's alone, on the
+escalation card, and only a `validateData`, `validateView` or `runTests` escalation
+offers it: when they say it in chat, point them at the card instead of relaying it.
+
+An isolation opt-in row (`task=runTests`, reason starting "Isolation opt-in for this project:") is one question for the whole project. When the user answers any of them, map the answered text exactly:
+- `Yes, test on the live target` → `configure(isolation_strategy="auto")`;
+- `No, keep clone` → `configure(isolation_strategy="clone")`;
+- any other text (a Clarify reply) → apply nothing: relay it as `guidance` and re-ask with the same two asks.
+
+After applying a value, read `configure`'s reply, then answer every open isolation opt-in row with the user's exact words in one call, `transition_status(status="answer", task="runTests", resolution="guidance", reason="<their words>", where="id IN ('<a>', '<b>', …)")`:
+- `Set isolation_strategy: …` → later-send those objects.
+- `… can't be edited in place …` → nothing was set. Park each of those objects again with one rewrite question, `transition_status(status="escalate", task="runTests", cause="infra", asks=[{"value": "rewrite", "label": "Yes, rewrite it"}, {"value": "keep", "label": "No, leave it"}], reason="Isolation rewrite for this project: May I rewrite test_config.yaml in the standard layout to set isolation_strategy to '<value>'? Any comments in it would be lost.", where="id = '<id>'")`. Do not later-send them.
+- any other `Warning: …` → nothing was set. Park each of those objects again with the same two opt-in asks and `reason="Isolation opt-in for this project: <the reply verbatim>"`. Do not later-send them.
+
+An isolation rewrite row (reason starting "Isolation rewrite for this project:") is also one question for the whole project:
+- `Yes, rewrite it` → the same `configure(isolation_strategy="<value>")` with `isolation_strategy_rewrite=true`, then answer and route on its reply as above (its "can't be rewritten" reply is any other `Warning: …`);
+- `No, leave it` → apply nothing; answer every open rewrite row with their words, then later-send those objects;
+- any other text → apply nothing: relay it as `guidance` and re-ask with the same two asks.
+
+Never apply a value the user didn't choose, and never set `isolation_strategy_rewrite` without that yes.
+
+A needs-cloning row (`task=runTests`, reason starting "Not run: needs cloning") is that procedure only. A recovery row (reason starting "Recovery required:") is that object only. Map the answered text exactly:
+- `Switch this project to clone (needs CREATE DATABASE)` → `configure(isolation_strategy="clone")`; then answer every open isolation row (opt-in, needs-cloning and recovery) with the user's exact words in one call, `transition_status(status="answer", task="runTests", resolution="guidance", reason="<their words>", where="id IN ('<a>', '<b>', …)")`, and later-send those objects;
+- `Run the tests again` → answer that row the same way (`resolution="guidance"`) and later-send the object;
+- `Leave this procedure not run` → answer that row the same way and do not later-send it: the procedure stays not run. Do not use `skip`, which takes the whole object out of scope.
+
+Never pass `scope="project"`: it is refused from you, so no agent widens an answer.
+When the user says an answer applies to every object, do not relay it: leave the row
+open and ask them to answer it on its escalation card with "Apply this answer to
+every object in this project" ticked. Relaying it first closes the card and its box.
+Then later-send from `answered` as for any answer. An answer they applied that way reaches every walker you start
+afterwards as `standingGuidance:` in its `walker_prompt`; do not paste it into
+other objects' prompts yourself.
 
 When `answered` shows a new human row, later-send with
-`guidance: <their words>` for `guidance` or `decompose`.
-`needs_repair` stays parked. `skip` takes the object out of scope. `mark_done`
-stays parked until an interactive session performs the explicit finish; the
-autonomous parent does not finish it.
+`guidance: <their words>` for `guidance` or `decompose`, except a `Leave this procedure not run` answer.
+`needs_repair` stays parked. `skip` removes the object from the migration: it
+leaves scope and its dependents stay blocked. `skip_data` answers only a
+`migrateData` park: the table stays in the migration with its structure
+deployed, but no rows are copied. It is un-parked, its `migrateData` and
+`validateData` read excluded, and its dependents continue: procedure deploys and
+sandboxed procedure tests proceed, while view validation and tests that would
+read the empty table are skipped. Re-read the board and send it like any ready
+object. Use `skip_data` only when the user's reply says to keep the table but
+not its data. `mark_done` reads the task as accepted: later-send the object, and
+its walk moves past that task. Never re-run or fix the accepted task.
+`unvalidated` un-parks: later-send so the walker finishes the rest of its walk.
+When the user says an object cannot be validated (record it as NOT VALIDATED, never passed),
+relay it as `resolution="unvalidated"` at its verification task, never `guidance`: guidance
+lets the walker close the task, which then counts as validated.
 
 Do not send an escalated object without an answer already on the row.
 `error="human"` has no failure transition, so it remains parked until its stamp
@@ -138,8 +187,8 @@ Escalations survive the session; read them instead of remembering them.
 Call `migration_status()` and report as [the parent skill](../../SKILL.md) does,
 plus autonomous outcomes: objects finished without intervention, open
 escalations, and unreviewed notes as object plus task only. Do not pass
-`details=true` or quote SQL and choice text. Batch
-`transition_status(status="review", ...)`.
+`details=true` or quote SQL and choice text. Leave the notes for a person to
+review — never call `transition_status(status="review")`.
 
 Also report children dispatched, remediated tasks reset, and outcomes stamped by
 an agent because the machine could not observe them.
@@ -155,16 +204,18 @@ Build every confirmable line from the board. A child's `result` is a claim, not
 a finding. Attribute anything the board cannot confirm to the child. Do not
 turn a child's `completed` response into a completion report by itself.
 
-Finally call `data_infrastructure(mode="down")`, or use
+Finally call `speculative_sandbox(mode="sweep")`, check its preview (pairs still
+without speculative.sql stay up), and call it again with its `confirm`; then `data_infrastructure(mode="down")`, or use
 [the teardown skill](../../../data-infrastructure/teardown/SKILL.md) when the
 project configured a `compute_pool` and data work ran.
 
 ## Resume after interruption
 
 A killed session loses dispatch bookkeeping, not durable work. Claims,
-registry stamps, git merges, escalations, and answers survive, and Cortex
-children outlive the session. Re-enter the autonomous skill at preflight, then
-read the board and escalation queue. A row whose `flight` is `running` or
+registry stamps, git merges, escalations, and answers survive. Laptop-kill, MCP
+death, and flock drop are not child death: Cortex children outlive the
+session. Re-enter the autonomous skill at preflight, then read the board and
+escalation queue. A row whose `flight` is `running` or
 `idle` has a live child: leave it. A harvested waiter (`flight` `none` with a
 full conversation UUID as `agentId`) is resumed with `task(resume=<that UUID>)`
 on a wake or a 2c continue, never first-sent. An 8-character `agentId` is a

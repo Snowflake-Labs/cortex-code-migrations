@@ -149,6 +149,9 @@ def load_registry_entries(
     return entries if keep_temp_table_stubs else drop_temp_table_stubs(entries)
 
 
+entry_full_name = _entry_full_name
+
+
 def build_id_to_name_map(entries: list[dict]) -> dict[str, str]:
     """Build a registry-ID -> ``[DB].[Schema].[Name]`` lookup."""
     mapping: dict[str, str] = {}
@@ -247,6 +250,29 @@ def load_missing_references_from_registry(
     """Load only references whose target is missing (``isMissing=True``)."""
     all_refs = load_object_references_from_registry(registry_dir)
     return [r for r in all_refs if r.is_missing_reference]
+
+
+def _has_required_by(entry: dict) -> bool:
+    """True when the entry records a dependent in ``requiredBy``, at the top
+    level or in one of its ETL parts."""
+    owners = [entry] + [p for p in entry.get("parts", []) or [] if isinstance(p, dict)]
+    return any((owner.get("dependencies") or {}).get("requiredBy") for owner in owners)
+
+
+def load_missing_entries_from_registry(registry_dir: Path | str) -> dict[str, bool]:
+    """Every in-scope ``isMissing`` entry, by full name, mapped to whether its
+    ``requiredBy`` records any dependent.
+
+    Unlike :func:`load_missing_references_from_registry`, this includes the
+    missing entries no in-scope caller's ``dependsOn`` points at, the same
+    entries the Dependencies table lists as Missing.
+    """
+    entries = load_registry_entries(registry_dir)
+    return {
+        _entry_full_name(entry): _has_required_by(entry)
+        for entry in entries
+        if entry.get("inScope", False) and entry.get("isMissing", False)
+    }
 
 
 def _strip_prefix(patterns: list[str], prefix: str) -> str | None:

@@ -66,6 +66,7 @@ deterministically — `dbt_project.yml` lands in `source/` when the dbt project 
 > ```bash
 > scai code convert --dbt --json
 > ```
+> Launch that command the way Step 4 says: `run_in_background=true`, or bash `timeout` at least `900000` (15 minutes). The default 120 second timeout kills the process.
 > The `--dbt` flag is an internal engine detail, never surfaced — the Jinja tokenization,
 > translation, and restoration all happen inside the engine. Repointed models land in
 > `snowflake/models/`. After a successful envelope, the Setup machine routes to the dbt
@@ -89,8 +90,8 @@ ETL in this project reaches convert through one of two roots, kept apart on purp
   stated platform on `extensions.sourcePlatform`. Written by the register skills'
   `import_aifirst_etl.py` helper (lossless copy + enumeration) and the MCP
   `create_registry_unit` tool the register skill calls once per source document
-  (Talend, Alteryx, Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory,
-  or anything else the user names).
+  (Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data
+  Factory, or anything else the user names).
 
 **Read both.** Check `source/_etl/` for a native platform, then ask the Code Unit
 Registry for AI-First platforms:
@@ -121,17 +122,17 @@ Classify the **native** ETL platform from the files when extensions are decisive
 > 2. **Informatica Power Center**
 
 - If `source/_etl/` is **missing or empty**, skip the native ETL prompts.
-- If it contains **SSIS** (`.dtsx`), do not route it to AI-First. Follow [references/ssis-target.md](references/ssis-target.md) before any dbt question. It asks dbt or Snowflake Scripting, sets `SSIS_SCRIPTING_MODE` for Step 4 when Snowflake Scripting is chosen, and loads `../dbt-consolidation/SKILL.md` for dbt.
+- If it contains **SSIS** (`.dtsx`), do not route it to AI-First. Follow [references/ssis-target.md](references/ssis-target.md) before any dbt question. It asks dbt or Snowflake Scripting, sets `SSIS_SCRIPTING_MODE` for Step 4 when Snowflake Scripting is chosen, and for dbt loads `../dbt-consolidation/SKILL.md` and then [references/ssis-dynamic-tables.md](references/ssis-dynamic-tables.md).
 - If it contains **Informatica PowerCenter** XML, ask the remaining ETL questions up front, in one sequence, before running the conversion:
     1. Conversion target, via `ask_user_question` (`multiSelect = false`):
        > "How should Informatica PowerCenter mappings be converted?
        > 1. **dbt**: each mapping becomes a dbt model orchestrated by Snowflake Tasks. Supports ETL stabilization and deploy.
-       > 2. **Snowflake Scripting** (Preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Stabilization and deploy are skipped for this preview flavor."
+       > 2. **Snowflake Scripting** (Preview): each mapping becomes a standalone Snowflake stored procedure the Task graph calls. Supports ETL stabilization and deploy."
        Do not label either option recommended.
-    2. If the answer is **dbt** and SSIS is absent or chose Snowflake Scripting, load `../dbt-consolidation/SKILL.md`. For Informatica with no dbt SSIS it asks one question: consolidate dbt projects and models by folder, or generate 1 project per mapping. Return here when complete. When SSIS also chose dbt, the SSIS bullet above loads `dbt-consolidation` once after both answers.
+    2. If the answer is **dbt** and SSIS is absent or chose Snowflake Scripting, load `../dbt-consolidation/SKILL.md`. For Informatica with no dbt SSIS it asks one question: consolidate dbt projects and models by folder, generate 1 project per mapping, or consolidate into a single dbt project. Return here when complete. When SSIS also chose dbt, the SSIS bullet above loads `dbt-consolidation` once after both answers.
     3. If the answer is **Snowflake Scripting**, set `SCRIPTING_MODE = true` for Step 4. Do **not** load `dbt-consolidation`.
 
-    Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`. When the target is Snowflake Scripting, the `--informatica-to-snowflake-scripting` convert flag in Step 4 additionally records the project-level `etl_target` in `project.yml` that gates the scripting-preview routing.
+    Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`. When the target is Snowflake Scripting, the `--informatica-to-snowflake-scripting` convert flag in Step 4 additionally records the project-level `etl_target` in `project.yml`, which gates deploy on stabilization for these units.
 
     These questions are still required: the conversion target is not something `scai code add` can infer from the imported files. **Informatica Cloud / IICS is a different platform** — it is AI-First, not native, and the two Informatica flavors must not share this prompt.
 
@@ -140,8 +141,8 @@ etl` rows with `extensions.sourcePlatform` set, set `<AIFIRST_ETL_PATH> =
 source/_etl_aifirst/` and keep the returned rows for Step 4.5: each row carries the
 `id`, the platform on `extensions.sourcePlatform`, and the vendored source at
 `files.source.path`. Common platforms you will see include **Talend**, **Alteryx**
-(`.yxmd`), **Informatica Cloud / IICS**, **DataStage** (`.dsx`), **Pentaho** (`.ktr`
-/ `.kjb`), and **Azure Data Factory**, but any other name the user typed is valid —
+(`.yxmd`), **Informatica Cloud / IICS**, **DataStage** (`.dsx`), **Apache Hop** (`.hpl`
+/ `.hwf`), **Pentaho** (`.ktr` / `.kjb`), and **Azure Data Factory**, but any other name the user typed is valid —
 Step 4.5 passes it through.
 
 If the registry has no AI-First ETL rows but the user tells you mid-conversation that
@@ -191,7 +192,7 @@ After the user answers:
 
 ### Step 4: Run Conversion
 
-Before running, tell the user what the conversion will cover: the SQL and native ETL already in the project (`source/`, plus `source/_etl/` when present), Power BI repointing if `PBIT_PATH` was set, and Tableau repointing if `TABLEAU_PATH` was set. Tableau-only (empty `source/`, `TABLEAU_PATH` set) is valid. On a SqlServer project, also tell them convert will write `.scai/bindings/database-bindings.yaml` by default so each source catalog maps to a Snowflake database — they can opt out before you run if they want the older single-database convert. On other dialects, say nothing about bindings. AI-First ETL under `source/_etl_aifirst/` is **not** part of `scai code convert` — Step 4.5 handles it independently.
+Before running, tell the user what the conversion will cover: the SQL and native ETL already in the project (`source/`, plus `source/_etl/` when present), Power BI repointing if `PBIT_PATH` was set, and Tableau repointing if `TABLEAU_PATH` was set. Tableau-only (empty `source/`, `TABLEAU_PATH` set) is valid. On a SqlServer project, also tell them a full-migration convert writes `.scai/bindings/database-bindings.yaml` so each source catalog maps to a Snowflake database. The opt-out is a code-conversion-only project, or `--dbt`. A stored false on a SqlServer full-migration project is overwritten. On other dialects, say nothing about bindings. AI-First ETL under `source/_etl_aifirst/` is **not** part of `scai code convert` — Step 4.5 handles it independently.
 
 > **Skip `scai code convert` entirely** when there is nothing native to run against:
 > `source/` has no `.sql`, `source/_etl/` is missing or empty, `PBIT_PATH` is unset,
@@ -200,7 +201,7 @@ Before running, tell the user what the conversion will cover: the SQL and native
 > registered platforms") and go straight to Step 4.5. Do not invoke `scai code
 > convert` just to watch it emit an empty envelope.
 
-Otherwise, start from the base command:
+Otherwise, start from the base command. Launch it with `run_in_background=true`, or set the bash tool `timeout` to at least `900000` (15 minutes), then poll until the command finishes. The default 120 second timeout kills the process during the conversion engine's silent pause and a relaunch starts it over. Poll with `bash_output(bash_id=<id>, wait=true)` until `<status>completed</status>`, then read the `--json` envelope — the same wait as [add-code-units](../register-code-units/add-code-units/SKILL.md#if-the-import-times-out-or-runs-in-the-background). `--list-settings` can stay on the short timeout. The dbt fast-path command in Step 1.5 uses this same launch.
 
 ```bash
 scai code convert <SETTINGS_FLAGS> --json
@@ -208,21 +209,22 @@ scai code convert <SETTINGS_FLAGS> --json
 
 `--json` is always required so you can parse the result envelope. Substitute `<SETTINGS_FLAGS>` with the confirmed flags from Step 3.6 (or omit the token when empty). Then append one flag per decision already recorded in the steps above — nothing else. Do **not** pass `--etl-replatform-sources-path`; ETL already lives under `source/_etl/` from register.
 
-Append `--generate-source-bindable-format --generate-snowflake-bindable-format` (**default on / opt-out**) **only when `source_language` from `configure()` is SqlServer** (compare case-insensitively), and never on the dbt repointing path — they are invalid alongside `--dbt` and the engine rejects the command (see `dbt/SKILL.md` Step 2). They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Omit both flags when the user explicitly opts out. Deploy stays legacy-safe: projects converted earlier, with no bindings file, still use `-d snowflake_database`. Bare `scai code convert` without these flags (engine default) is also opt-out.
+On a SqlServer full-migration project (`source_language` from `configure()`, compared case-insensitively), append `--generate-source-bindable-format --generate-snowflake-bindable-format`, whatever `subagent_mode` says. They tokenise source (`${name}`) and Snowflake (`<%name%>`) catalog names and write `.scai/bindings/database-bindings.yaml`. Leave them off on a code-conversion-only project, on any other dialect, and on the dbt repointing path — they are invalid alongside `--dbt` and the engine rejects the command (see `dbt/SKILL.md` Step 2). Leaving them off is not an opt-out on a SqlServer full-migration project: `scai code convert` still emits bindable artifacts there, and a stored false is overwritten. Deploy stays legacy-safe: projects converted earlier, with no bindings file, still use `-d snowflake_database`. A convert that wrote an unedited bindings file restores catalog tokens in the SQL on deploy, with or without `-d`. The connection stays on the database passed with `-d` when that flag is set. An edited bindings file requires `--database-bindings` and cannot be combined with `-d`.
 
 Only SQL Server's conversion settings define the bindable-format flags today; on every other dialect scai rejects them (`CVT0013`, "Unrecognized option"). So on a non-SQL Server project, leave them off and say nothing about them — it is not an opt-out and not a scai version problem. If you are unsure whether this dialect supports them, `scai code convert --list-settings --json` lists the settings it accepts. If a convert ever fails with `CVT0013` on one of these flags, rerun without them and do **not** tell the user their scai is outdated or unsupported — the flag is simply not defined for their dialect.
 
 | Append | When |
 |--------|------|
-| `--generate-source-bindable-format --generate-snowflake-bindable-format` | `source_language` is SqlServer (interactive and `subagent_mode`). Skip on explicit opt-out, on any other dialect, and on the `--dbt` path, where scai rejects them. |
+| `--generate-source-bindable-format --generate-snowflake-bindable-format` | `source_language` is SqlServer and the project is a full migration (interactive and `subagent_mode`). Skip for a code-conversion-only project, on any other dialect, and on the `--dbt` path, where scai rejects them. A stored false is overwritten on a SqlServer full-migration convert. |
 | `--informatica-to-snowflake-scripting` | `SCRIPTING_MODE` was set in Step 2 (Informatica target is Snowflake Scripting) |
 | `--ssis-to-snowflake-scripting` | `SSIS_SCRIPTING_MODE` was set in Step 2 (SSIS target is Snowflake Scripting) |
 | `--consolidate-dbt-projects` | `CONSOLIDATE_DBT_PROJECTS` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt, or Informatica dbt) |
-| `--consolidate-as-single-dbt-project` | `CONSOLIDATE_AS_SINGLE_DBT_PROJECT` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt only, single-project choice) |
+| `--consolidate-as-single-dbt-project` | `CONSOLIDATE_AS_SINGLE_DBT_PROJECT` was set by `../dbt-consolidation/SKILL.md` (SSIS dbt only or Informatica dbt only, single-project choice) |
+| `--materialize-as-dynamic-table` | `MATERIALIZE_AS_DYNAMIC_TABLE` was set by `references/ssis-dynamic-tables.md` (SSIS dbt only) |
 | `--powerbi-repointing <PBIT_PATH>` | `PBIT_PATH` was set in Step 3 |
 | `--tableauRepointing <TABLEAU_PATH>` | `TABLEAU_PATH` was set in Step 3.5 |
 
-The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. The SSIS scripting flag and the SSIS dbt-consolidation flags come from the SSIS answer, so a scripting SSIS convert does not also pass a consolidation flag. `--consolidate-as-single-dbt-project` is exclusive with `--consolidate-dbt-projects` and with `--ssis-to-snowflake-scripting`: pass it only when the SSIS-only answer set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT`. Either platform's choice combines with `--powerbi-repointing` and/or `--tableauRepointing`, and with the other platform's choice. If none of the conditions hold, run the base command as-is.
+The two Informatica flags are mutually exclusive — they come from the same single-select answer, so at most one can apply. `--consolidate-as-single-dbt-project` is exclusive with `--consolidate-dbt-projects` and with the scripting flag of the platform that chose the single-project layout. It combines with the other platform's scripting flag: an Informatica dbt option 3 still appends `--consolidate-as-single-dbt-project` alongside `--ssis-to-snowflake-scripting`, and an SSIS dbt option 3 still appends it alongside `--informatica-to-snowflake-scripting`. A platform on Snowflake Scripting does not also pass that platform's consolidation flag. Pass `--consolidate-as-single-dbt-project` when the SSIS-only or Informatica-only answer set `CONSOLIDATE_AS_SINGLE_DBT_PROJECT`. `--materialize-as-dynamic-table` combines with either consolidation flag but never with `--ssis-to-snowflake-scripting`. Either platform's choice combines with `--powerbi-repointing` and/or `--tableauRepointing`, and with the other platform's choice. If none of the conditions hold, run the base command as-is.
 
 Substitute `<PBIT_PATH>` and `<TABLEAU_PATH>` with the actual paths you stored. Do not emit literal placeholder tokens to the shell.
 
@@ -233,10 +235,17 @@ one or more `kind: etl` rows with `extensions.sourcePlatform` set. Load
 `./etl-aifirst/MIGRATE.md` and follow it once per registered AI-First ETL unit,
 passing that unit's `id`, `extensions.sourcePlatform`, and `files.source.path` from
 the Step 2 `query_registry` response. It routes each platform (Talend, Alteryx,
-Informatica Cloud / IICS, DataStage, Pentaho, Azure Data Factory, or another name
-the user typed) through the AI-First convert action instead of the native engine,
+Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory, or another
+name the user typed) through the AI-First convert action instead of the native engine,
 reports its exit code, and returns here when done. It does not touch the SQL
 conversion Step 4 just produced.
+
+Before the first AI-First unit, tell the user plainly that these platforms are
+converted through the AI-First approach, not natively supported like SSIS and
+Informatica PowerCenter. AI-First is a model-assisted attempt at an end-to-end
+conversion, not native support: coverage is narrower than SSIS and Informatica
+PowerCenter, steps with no SnowConvert equivalent are written by a model or flagged
+for review, and each converted job must pass validation before it is trusted.
 
 For an AI-First-ETL-only project (Step 4 was skipped), Step 4.5 is the whole
 conversion — do not treat the missing native envelope as an error.
@@ -275,8 +284,9 @@ Do not go on to the assessment.
 |--------|-------------|
 | `-x, --show-ewis` | Show detailed EWI breakdown |
 | `--overwrite-working-directory` | Overwrite output files in `snowflake/` and registry |
-| `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; ETL stabilization and deploy are skipped for these units. |
-| `--ssis-to-snowflake-scripting` | Convert SSIS data flows to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; stabilization and deploy are not part of this flow. |
+| `--informatica-to-snowflake-scripting` | Convert Informatica mappings to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. Preview flavor; these units are stabilized before deploy. |
+| `--ssis-to-snowflake-scripting` | Convert SSIS data flows to standalone Snowflake stored procedures (Snowflake Scripting) instead of dbt projects. These units are stabilized before deploy. |
+| `--materialize-as-dynamic-table` | SSIS dbt only. Materialize OLE DB Destination models the package fully replaces (`TRUNCATE TABLE` or unfiltered `DELETE`, then one data flow reload) as Snowflake Dynamic Tables instead of `incremental`, and remove the emptying statement from the orchestration. Off by default; see `references/ssis-dynamic-tables.md`. |
 
 For dbt consolidation options, see `../dbt-consolidation/SKILL.md`.
 For Power BI options, see `../powerbi-repointing/SKILL.md`. For Tableau options, see `../tableau-repointing/SKILL.md`.
@@ -303,7 +313,10 @@ re-import their source for this: the settings apply to the project they have.
    that the import already in progress carries on. If you are in Step 3.6 now,
    load `./recommend-settings/SKILL.md` there; otherwise do nothing else now:
    Step 3.6 reads `true` and loads it before the convert runs. If the user named
-   a flag, pass it to recommend-settings so it is proposed.
+   a flag, pass it to recommend-settings so it is proposed. A request to change
+   the SSIS OLE DB Destination materialization goes to
+   [references/ssis-dynamic-tables.md](references/ssis-dynamic-tables.md)
+   instead; the catalog does not list that flag.
 4. **Conversion has already run:** load `./recommend-settings/SKILL.md` now to
    collect `<SETTINGS_FLAGS>`. Applying them means converting again with
    `--overwrite-working-directory`, which replaces the converted code under
@@ -343,7 +356,7 @@ snowflake/
 │       ├── procedure/
 │       └── function/
 └── _etl/                              # Converted ETL code — both native (SSIS / Informatica PowerCenter)
-                                       # and AI-First (Talend / Alteryx / IICS / DataStage / Pentaho / ADF /…)
+                                       # and AI-First (Talend / Alteryx / IICS / DataStage / Hop / Pentaho / ADF /…)
                                        # land here once Step 4 and Step 4.5 finish, so downstream skills
                                        # find every converted package under one root
     └── <package_name>/
@@ -364,7 +377,7 @@ snowflake/
     └── conversion-reports.zip
 source/
 └── _etl_aifirst/                       # AI-First ETL inputs, one directory per platform, written by register
-    └── <platform>/                     # (Talend, Alteryx, IICS, DataStage, Pentaho, ADF, …)
+    └── <platform>/                     # (Talend, Alteryx, IICS, DataStage, Hop, Pentaho, ADF, …)
 reports/
 └── AiFirstIssues/                     # Present only after Step 4.5 (AI-First "Something else" ETL path)
     └── <package_name>/
@@ -385,6 +398,7 @@ The envelope's own status is the check — don't go looking for corroboration.
 
 - [ ] The convert command exited successfully and the envelope reports no conversion errors
 - [ ] If dbt consolidation was offered, follow the CHECKPOINT addendum in `../dbt-consolidation/SKILL.md`
+- [ ] If the SSIS Dynamic Table question was asked, follow the CHECKPOINT addendum in `references/ssis-dynamic-tables.md`
 - [ ] If Power BI reports were included, follow the CHECKPOINT addendum in `../powerbi-repointing/SKILL.md`
 - [ ] If Tableau workbooks were included, follow the CHECKPOINT addendum in `../tableau-repointing/SKILL.md`
 
@@ -401,8 +415,10 @@ Show a concise result line using only values from the JSON envelope:
 > `<etlReplatforming.processedFiles>` files processed. Converted code is in
 > `snowflake/`; conversion reports are available through AIM Assessment.
 
-If the envelope has no `etlReplatforming` result, omit the ETL sentence. Never
-invent a missing count.
+If the envelope has no `etlReplatforming` result, omit the ETL sentence. If it has
+no `codeConversion.codeUnitsConverted`, omit that clause:
+never fill it from `linesOfCode`, which counts lines, not code units.
+Never invent a missing count.
 
 Then show the JSON envelope from `scai code convert --json` **as-is**, in a
 fenced `json` block.
@@ -429,7 +445,7 @@ an EWI code, or a specific file, dig in *then*; the reference sections above
 are for that.
 
 *If `SCRIPTING_MODE` was set*, also tell the user:
-> Informatica mappings were converted to Snowflake Scripting stored procedures (preview). **ETL Stabilization is not supported for Snowflake Scripting conversions (dbt only)**, and deploy is not part of this preview flow - both are skipped for these ETL units. The generated procedures and Task graph are under `snowflake/_etl/` for review.
+> Informatica mappings were converted to Snowflake Scripting stored procedures (preview). The generated procedures and Task graph are under `snowflake/_etl/`. Each mapping is stabilized before it deploys.
 
 *If `SSIS_SCRIPTING_MODE` was set*, follow "After a Snowflake Scripting conversion" in [references/ssis-target.md](references/ssis-target.md).
 

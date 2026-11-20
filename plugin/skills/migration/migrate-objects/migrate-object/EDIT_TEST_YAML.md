@@ -9,7 +9,7 @@ Always load the [`step-based-yaml.md` cheat sheet](../references/step-based-yaml
 1. Read the existing YAML at `<project_dir>/<files.artifacts.path>/test/*.yml` (from `query_registry`; use verbatim — do not reconstruct).
 2. Identify which recipe matches the failure (table below).
 3. Apply the recipe — keep `test_cases:` untouched unless the recipe says otherwise.
-4. Re-run `scai test capture --where "source.canonicalName ILIKE '%<obj>%'"` to refresh the baseline.
+4. Re-run `scai test capture --keep-baselines --where "source.canonicalName ILIKE '%<obj>%'"` to refresh the baseline.
 5. Re-run `scai test validate ...` to confirm the fix.
 
 | Failure smell | Recipe |
@@ -378,4 +378,4 @@ BTEQ YAML uses `validation.steps[].script` with `bindings` + `files.reads/writes
 - A binding resolved wrong (schema/db mismatch) → fix the `bindings.<NAME>` value or its `source`/`target`.
 - A declared output wasn't compared → ensure it's listed under `files.writes`.
 
-Full shape: [../references/BTEQ_TEST_YAML.md](../references/BTEQ_TEST_YAML.md). After editing, re-run `scai test capture --where "id IN (...)"` then `scai test validate ...` (same as procs).
+Full shape: [../references/BTEQ_TEST_YAML.md](../references/BTEQ_TEST_YAML.md). After editing, re-run `scai test capture --keep-baselines --where "id IN (...)"` then `scai test validate ...` (same as procs).

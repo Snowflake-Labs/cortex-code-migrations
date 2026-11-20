@@ -23,10 +23,6 @@ The platform of an ETL code unit is recorded on its registry entry as `source.pl
 
 This skill is the **orchestrated (registry-backed) entry point** for ETL stabilization. It claims the unit and records the result on the registry, then delegates the actual fixing to `etl-stabilization`.
 
-## Do not stabilize SSIS Snowflake Scripting output
-
-SSIS converted to Snowflake Scripting is a conversion preview: it ends after conversion and is never stabilized or deployed. Before claiming the unit, check whether it is SSIS (`source.platform = ssis`) and either `configure` reports `etl_ssis_target = scripting` or `.scai/config/project.yml` lists `ssis` under `etl_scripting_platforms`. If so, stop here. Do not claim the unit, run `etl-stabilization`, or call `deploy`. Tell the user the conversion is a preview and that the generated procedures and Task graph under `snowflake/_etl/` are for review only. The `deploy` tool refuses these units regardless.
-
 ## Step 0: Claim Ownership
 
 The ETL unit must be claimed before stabilization begins, so it is registered in `MIGRATION_REGISTRY.claims`, shows the current user as owner, and appears in `my_objects_summary` alongside SQL objects. Resolve `<etl_id>` first: the executor passes `object_id`; if entered by name ("fix ETL package …"), locate the unit via `migration_status(mode="my_objects_summary")` (already-claimed) or `migration_status(mode="next_objects")` (not yet claimed).
@@ -58,7 +54,7 @@ Read the unit (the executor passes `object_id`, or call `migration_status(mode="
 | Field | Used as |
 |---|---|
 | `files.source.path` | source definition file (e.g. `.dtsx` for SSIS, `.xml` for Informatica) — `{SOURCE_FILE_PATH}` for `etl-stabilization` |
-| `source.platform` | `{PLATFORM_ID}` for `etl-stabilization` (skip its Step 1b auto-detect prompt) |
+| `source.platform`, else `extensions.sourcePlatform` (Apache Hop may record `apacheHop` only there) | `{PLATFORM_ID}` for `etl-stabilization` (skip its Step 1b auto-detect prompt) |
 | `parts[]` → derived converted folder | `{PACKAGE_FOLDER}` for `etl-stabilization` |
 
 **Deriving the converted folder.** Where the converted output lives depends on the conversion flavor:
@@ -69,7 +65,9 @@ Read the unit (the executor passes `object_id`, or call `migration_status(mode="
 
 Resolve `{PACKAGE_FOLDER}` as the parent directory of any part whose `target.format == "snowflakeSQL"`. The dbt sub-project folders should sit alongside that orchestration file under the same parent — verify before handing off. If `parts[]` is empty or no part has a `target` yet, the converted output has not been produced — the `convert` task should have run first. Surface that to the user and stop; do not try to stabilize an unconverted ETL unit.
 
-**Snowflake Scripting ETL** (project `etl_target = snowflake_scripting`) — each converted mapping is its own `kind=etl` unit with an **empty `parts[]`**; the converted stored procedure is on the code-unit root at `files.converted.path` (`target.format: "snowflakeSQL"`), and there are **no dbt sub-project folders**. Resolve `{PACKAGE_FOLDER}` as the parent directory of `files.converted.path`. An empty `parts[]` here is **expected** — not a sign of missing conversion; only treat the unit as unconverted if `files.converted.path` is also absent.
+**SSIS Snowflake Scripting ETL** (SSIS listed under `etl_scripting_platforms` in `.scai/config/project.yml`, or `configure` reports `etl_ssis_target = scripting`) — each package is one `kind=etl` unit. Its data flows convert to stored procedures instead of dbt projects, so no part has `target.format: "dbt"` and there are **no dbt sub-project folders**. Resolve `{PACKAGE_FOLDER}` as the parent directory of a part whose `target.format == "snowflakeSQL"`; when `parts[]` has no target, use the parent directory of `files.converted.path`, as below. The package's orchestration `.sql` (the Task graph) and its data-flow procedures sit under that folder in `snowflake/_etl/` — verify before handing off. The unit is stabilized and deployed exactly as an Informatica Snowflake Scripting one is.
+
+**Informatica Snowflake Scripting ETL** (project `etl_target = snowflake_scripting`) — each converted mapping is its own `kind=etl` unit with an **empty `parts[]`**; the converted stored procedure is on the code-unit root at `files.converted.path` (`target.format: "snowflakeSQL"`), and there are **no dbt sub-project folders**. Resolve `{PACKAGE_FOLDER}` as the parent directory of `files.converted.path`. An empty `parts[]` here is **expected** — not a sign of missing conversion; only treat the unit as unconverted if `files.converted.path` is also absent.
 
 ## Step 2: Hand Off to `etl-stabilization`
 

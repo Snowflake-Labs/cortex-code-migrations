@@ -4,9 +4,9 @@ description: >
   Synthetic Testbed Generator. Setup `generateTestbed` bootstraps non-table
   coupling state. A `testbed_generator` helper generates one table via
   INCREMENTAL.md. An explicit whole-workload run uses WHOLE-WORKLOAD.md.
-  Triggers: generate testbed, mine testbed, validate testbed, compile testbed,
-  enrich testbed, run testbed phases, resume testbed, inspect unsolved
-  constraints, testbed data source.
+  Triggers: generate synthetic data, generate testbed, mine testbed, validate
+  testbed, compile testbed, enrich testbed, run testbed phases, resume
+  testbed, inspect unsolved constraints, testbed data source.
 parent_skill: baseline-capture
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -31,7 +31,34 @@ If you are generating one table's CSV for a single `objectId`, follow
 [INCREMENTAL.md](INCREMENTAL.md).
 
 If the user asked to mine, validate, enrich, compile, or generate the whole
-workload, follow [WHOLE-WORKLOAD.md](WHOLE-WORKLOAD.md).
+workload, follow [WHOLE-WORKLOAD.md](WHOLE-WORKLOAD.md). Naming one object is
+not a whole-workload request.
+
+## Named object with no table
+
+Enter this skill for "generate synthetic data" for one named object.
+
+If that object is not a table, read its dependency closure. When the closure
+has no table, the procedure reads no tables — still run the testbed phases.
+An empty closure is **not** permission to skip the tool when the user asked
+to generate synthetic data for that object:
+
+1. Follow [INCREMENTAL.md](INCREMENTAL.md) with that object's `objectId`
+   (`mine` → `validate` → `compile` → `generate`). Skip `enrich` only when
+   the readiness view is ready with nothing to enrich.
+2. When generate leaves **0 CSVs** / `TBD0017` / "not a table": the hop still
+   needs project testbed deliverables. Query the registry for a real **table**
+   in this project (prefer `OverlayClean` when present). Run
+   [INCREMENTAL.md](INCREMENTAL.md) for **that table's** `objectId` until
+   `.scai/testbed/manifest.json` and `testbed/generate/generate-summary.json`
+   exist. That is producing the project CSV pool, not inventing a fake table
+   name for the procedure.
+3. Do not enter `synthetic-seeder`.
+4. Do not shell `scai test`, `scai test seed`, `scai test capture`, or
+   `scai testbed load`.
+5. Leave the converted SQL unchanged.
+6. Stop only when those two deliverable paths exist (or the table generate
+   failed with a tool error you surface). Refusing the phases fails the hop.
 
 ## Setup bootstrap
 

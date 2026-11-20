@@ -360,7 +360,8 @@ def detect_columns_without_a_recipe(run: RunInputs) -> list[Finding]:
         own_in = {c.get("Name") for c in _cols(el, "InputColumns")}
         for col in _cols(el, "OutputColumns"):
             name = col.get("Name")
-            if col.get("Expression") or name in ups or name in own_in:
+            if (col.get("Expression") or name in ups or name in own_in
+                    or col.get("SourceColumn") in ups):
                 continue
             found.append(Finding(
                 proposal={
@@ -682,6 +683,178 @@ def detect_filled_models(run: RunInputs) -> list[Finding]:
     return found
 
 
+# The keyed writes whose model keeps one input row per key, and the order that picks the row.
+# Must match the producer: ProducerWriteModes orders an upsert by every written column, and the
+# engine's OLE DB Command translator orders an update by the key alone.
+_ONE_ROW_PER_KEY = {
+    "UpsertTargetTransformation": "the values of the written columns ({columns}), in that order",
+    "UpdateTargetTransformation": "the key alone, so which of them is kept is not determined",
+}
+
+
+def detect_one_row_per_key(run: RunInputs) -> list[Finding]:
+    """A keyed write whose model keeps one input row per key value."""
+    found = []
+    for node in (run.ir or {}).get("nodes", []):
+        el = node.get("element") or {}
+        order = _ONE_ROW_PER_KEY.get(el.get("$kind") or "")
+        if order is None:
+            continue
+        columns = ", ".join(str(c.get("Name")) for c in _cols(el, "OutputColumns"))
+        keys = ", ".join(str(k) for k in (el.get("KeyColumns") or []))
+        found.append(Finding(
+            proposal={
+                "category": "SEM", "construct": "write:keyed-table",
+                "reason": "one-input-row-per-key",
+                "title": "Keyed write keeps one input row per key value",
+                "text": "Element '{element}' of kind '{kind}' writes its table matched "
+                        "on a key, and the generated model keeps one input row per key "
+                        "value before the write, because a MERGE applies each key once. "
+                        "When the input carries rows that share a key and differ, the "
+                        "values written are those of one of them. {detail}",
+                "impact": "output-unverified",
+                "distinguisher": "the element IS translated and writes the right table "
+                                 "with the right key; only input rows that share a key "
+                                 "are reduced to one, which no other type describes.",
+            },
+            element=str(el.get("Name") or node.get("id")),
+            element_id=str(node.get("id") or ""),
+            native_kind=str(el.get("_unsupported") or el.get("$kind")),
+            detail=f"Key: {keys}. The row kept is the first by {order.format(columns=columns)}; "
+                   f"the representation states no input row order.",
+            evidence=f"IR node $kind={el.get('$kind')!r} with KeyColumns [{keys}]",
+            detector="one_row_per_key"))
+    return found
+
+
+# The stateful writes whose result depends on the order of the input rows, and the order the
+# producer's strategy macro (ProducerStatefulSinkMacros) applies them in.
+_BATCH_ROW_ORDER = {
+    "DimensionTargetTransformation":
+        "rows sharing a natural key ({keys}) are applied in the order of their tracked values"
+        " (after the stream date, when there is one), and new technical keys are handed out by"
+        " that occurrence and then the natural key",
+    "CombinationTargetTransformation":
+        "new technical keys are handed out in the order of the key columns ({keys})",
+    "SynchronizeTargetTransformation":
+        "of several 'update' rows sharing a key ({keys}), the one written is the first by the"
+        " updated columns' values",
+}
+
+
+def detect_batch_row_order(run: RunInputs) -> list[Finding]:
+    """A stateful write whose result can depend on an input row order the IR does not state."""
+    found = []
+    for node in (run.ir or {}).get("nodes", []):
+        el = node.get("element") or {}
+        order = _BATCH_ROW_ORDER.get(el.get("$kind") or "")
+        if order is None:
+            continue
+        keys = ", ".join(str(k) for k in (el.get("KeyColumns") or []))
+        found.append(Finding(
+            proposal={
+                "category": "SEM", "construct": "write:stateful-table",
+                "reason": "input-rows-applied-in-a-fixed-order",
+                "title": "Stateful write applies its input rows in an order the source does not state",
+                "text": "Element '{element}' of kind '{kind}' processes its input one row at a "
+                        "time in stream order; the generated write is set-based and applies "
+                        "the rows in a fixed order instead. {detail}",
+                "impact": "output-unverified",
+                "distinguisher": "the element IS translated and writes the right table; only "
+                                 "the result for input rows whose order matters (repeated keys, "
+                                 "generated keys) can differ from the source's stream order.",
+            },
+            element=str(el.get("Name") or node.get("id")),
+            element_id=str(node.get("id") or ""),
+            native_kind=str(el.get("_unsupported") or el.get("$kind")),
+            detail=f"Here {order.format(keys=keys)}. The result equals the source's when the "
+                   f"stream arrives in that order.",
+            evidence=f"IR node $kind={el.get('$kind')!r} with KeyColumns [{keys}]",
+            detector="batch_row_order"))
+    return found
+
+
+# The IR's `unresolved` block (identify.Identification.unit_variables): references to a name no
+# parameter, project file or environment file sets. `builtin` names match the platform table's
+# structure.parameters.builtin_patterns; the rest are names nothing sets.
+_UNRESOLVED = {
+    "builtin": {
+        "construct": "reference:built-in-variable",
+        "reason": "built-in-run-time-name",
+        "title": "Run-time reference names a built-in that no generated value carries",
+        "text": "Element '{element}' of kind '{kind}' carries a run-time reference whose name "
+                "matches the platform table's built-in variable patterns. No CONFIG entry, "
+                "control variable or dbt var holds a value for it, so the generated model keeps "
+                "the reference as written. {detail}",
+        "distinguisher": "the name is a built-in of the platform, declared by the table's "
+                         "built-in patterns; no file the unit ships with can set it.",
+    },
+    "unresolved": {
+        "construct": "reference:unset-variable",
+        "reason": "run-time-name-without-a-value",
+        "title": "Run-time reference names a value nothing in the unit's files sets",
+        "text": "Element '{element}' of kind '{kind}' carries a run-time reference to a name "
+                "that no declared parameter, project configuration file or environment file "
+                "beside the document sets. No CONFIG entry, control variable or dbt var holds a "
+                "value for it, so the generated model keeps the reference as written. {detail}",
+        "distinguisher": "the name is not a built-in; a parameter, project variable or "
+                         "environment file entry would give it a value.",
+    },
+}
+
+
+def detect_unresolved_run_time_references(run: RunInputs) -> list[Finding]:
+    """A run-time reference no generated value carries: a built-in, or a name nothing sets."""
+    found = []
+    for ref in (run.ir or {}).get("unresolved", []):
+        shape = _UNRESOLVED.get(ref.get("kind") or "")
+        if shape is None:
+            continue
+        for site in ref.get("referenced_by") or [{}]:
+            found.append(Finding(
+                proposal={"category": "VAR", "construct": shape["construct"],
+                          "reason": shape["reason"], "title": shape["title"],
+                          "text": shape["text"], "impact": "output-unverified",
+                          "distinguisher": shape["distinguisher"]},
+                element=str(site.get("node") or ""),
+                element_id=str(site.get("node") or ""),
+                native_kind=str(site.get("attr") or ""),
+                detail=f"Reference: ${{{ref.get('name')}}} in field '{site.get('attr')}'.",
+                evidence=f"IR unresolved[] kind={ref.get('kind')!r} name={ref.get('name')!r}",
+                detector="unresolved_run_time_references"))
+    return found
+
+
+def detect_parameter_file_stage(run: RunInputs) -> list[Finding]:
+    """The unit reads an environment file: its values are the root CONFIG defaults, and a run that
+    uses another environment file has to put it on a stage first."""
+    pf = (run.ir or {}).get("parameter_file")
+    if not pf:
+        return []
+    return [Finding(
+        proposal={
+            "category": "VAR", "construct": "config:parameter-file",
+            "reason": "environment-file-swap-needs-stage",
+            "title": "A per-run override file must be put on a stage before a run can use it",
+            "text": "The unit's run-time values have per-run override files beside the "
+                    "document. The generated root task runs with one file's values as its "
+                    "CONFIG defaults and loads an override with LoadParameterFile when a run "
+                    "passes CONFIG 'param_file'. A run that uses another file needs it in the "
+                    "expected JSON shape on a stage, passed with EXECUTE TASK ... USING CONFIG. "
+                    "{detail}",
+            "impact": "output-incomplete",
+            "distinguisher": "the values are declared and carried and the default run "
+                             "completes; only the other override files are left to stage.",
+        },
+        element=str(pf.get("name") or ""),
+        element_id=str(pf.get("name") or ""),
+        native_kind="environment file",
+        detail=f"Defaults from: {pf.get('name')}. Files: {', '.join(pf.get('files') or [])}. "
+               f"Names they set: {', '.join(pf.get('sets') or [])}.",
+        evidence=f"IR parameter_file={pf.get('name')!r}",
+        detector="parameter_file_stage")]
+
+
 REPRESENTATION_DETECTORS = (
     detect_unrepresented_elements,
     detect_degraded_to_catch_all,
@@ -690,6 +863,10 @@ REPRESENTATION_DETECTORS = (
     detect_columns_without_a_recipe,
     detect_missing_predicate,
     detect_branch_collapse,
+    detect_one_row_per_key,
+    detect_batch_row_order,
+    detect_unresolved_run_time_references,
+    detect_parameter_file_stage,
 )
 
 ARTIFACT_DETECTORS = (
