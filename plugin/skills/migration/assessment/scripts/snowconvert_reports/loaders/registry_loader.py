@@ -13,11 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Load SnowConvert data from the registry (flat directory of JSON files)."""
+"""Load SnowConvert data from the registry (flat directory of JSON files).
+
+When ``snowflake_code_unit_registry`` is installed (it is in scai's Python
+environment), one indexed query replaces reading every file.
+"""
 
 from __future__ import annotations
 
 import json
+import time
 import warnings
 from pathlib import Path
 
@@ -28,6 +33,17 @@ from ..models.object_reference import ObjectReference
 from ..na_utils import NA_VALUES, is_na
 
 VALID_OBJECT_TYPES = {"table", "view", "procedure", "function"}
+
+# The Code Unit Registry opens ``<project>/registry`` and keeps its SQLite
+# index in ``registry/.index/``.
+_CUR_REGISTRY_DIR_NAME = "registry"
+_CUR_INDEX_DIR_NAME = ".index"
+
+# One parse of each registry directory per process. ``scai assessment report``
+# used to call :func:`load_registry_entries` about 11 times, re-reading every
+# JSON file on disk each time.
+_raw_registry_by_dir: dict[str, list[dict]] = {}
+_dropped_registry_by_dir: dict[str, list[dict]] = {}
 
 
 def _bracket(ident: str) -> str:
@@ -118,16 +134,125 @@ def temp_table_dependencies(entries: list[dict]) -> dict[str, set[str]]:
 
 def drop_temp_table_stubs(entries: list[dict]) -> list[dict]:
     """*entries* without temp-table stubs or the ``dependsOn`` edges to them,
-    so no report section lists one as an object or a missing dependency."""
+    so no report section lists one as an object or a missing dependency.
+
+    The input list and its nested ``dependsOn`` lists are not modified, so a
+    cached parse can be reused for both ``keep_temp_table_stubs`` views.
+    """
     stub_ids = {e.get("id") for e in entries if e.get("id") and is_temp_table_stub(e)}
     kept = [e for e in entries if not is_temp_table_stub(e)]
-    if stub_ids:
-        for entry in kept:
-            for deps in _dependency_lists(entry):
-                deps[:] = [
-                    d for d in deps if not (isinstance(d, dict) and d.get("id") in stub_ids)
-                ]
-    return kept
+    if not stub_ids:
+        return kept
+    return [_without_stub_edges(entry, stub_ids) for entry in kept]
+
+
+def clear_registry_cache() -> None:
+    """Drop cached registry parses. Tests call this so a later load re-reads disk."""
+    _raw_registry_by_dir.clear()
+    _dropped_registry_by_dir.clear()
+
+
+def _registry_cache_key(registry_dir: Path) -> str:
+    return str(registry_dir.resolve())
+
+
+def _without_stub_edges(entry: dict, stub_ids: set[str]) -> dict:
+    """Shallow-copy *entry* (and its ETL parts) with stub ``dependsOn`` ids removed."""
+    copied = dict(entry)
+    deps = entry.get("dependencies")
+    if isinstance(deps, dict):
+        dep_copy = dict(deps)
+        dep_copy["dependsOn"] = _filter_stub_deps(deps.get("dependsOn"), stub_ids)
+        copied["dependencies"] = dep_copy
+    parts = entry.get("parts")
+    if isinstance(parts, list):
+        copied["parts"] = [
+            _without_stub_edges(part, stub_ids) if isinstance(part, dict) else part
+            for part in parts
+        ]
+    return copied
+
+
+def _filter_stub_deps(deps: object, stub_ids: set[str]) -> object:
+    if not isinstance(deps, list):
+        return deps
+    return [
+        dep for dep in deps if not (isinstance(dep, dict) and dep.get("id") in stub_ids)
+    ]
+
+
+def _read_registry_files(registry_dir: Path) -> list[dict]:
+    started = time.perf_counter()
+    entries = _read_registry_with_cur(registry_dir)
+    if entries is not None:
+        elapsed = time.perf_counter() - started
+        print(
+            f"  Registry: {len(entries):,} entries in {elapsed:.1f}s (Code Unit Registry)",
+            flush=True,
+        )
+        return entries
+    return _read_registry_json_files(registry_dir)
+
+
+def _cur_projection(code_unit_cls) -> list[str]:
+    # ``signature.columns`` is most of every registry file and no report
+    # section reads it; ``signature.parameters`` names procedure overloads.
+    fields = [name for name in code_unit_cls.model_fields if name != "signature"]
+    return fields + ["signature.parameters"]
+
+
+def _read_registry_with_cur(registry_dir: Path) -> list[dict] | None:
+    """Query *registry_dir* through the Code Unit Registry's index.
+
+    Returns ``None`` when the library is not installed (the plugin runs these
+    scripts with the standard library only), when *registry_dir* is not a
+    project's ``registry`` folder, when it has no index yet, or when the query
+    fails, so the caller reads the JSON files instead.
+    """
+    if registry_dir.name != _CUR_REGISTRY_DIR_NAME:
+        return None
+    # Building the index inside the query is slower than reading the files.
+    if not any((registry_dir / _CUR_INDEX_DIR_NAME).glob("*.db")):
+        return None
+    try:
+        from snowflake_code_unit_registry import (
+            CodeUnit,
+            CodeUnitRegistry,
+            FindOptions,
+            ScaiError,
+        )
+    except ImportError:
+        return None
+    print(f"Loading registry from {registry_dir} (Code Unit Registry)...", flush=True)
+    try:
+        registry = CodeUnitRegistry.open(str(registry_dir.parent))
+        units = registry.find_all(FindOptions(fields=_cur_projection(CodeUnit)))
+    except ScaiError as exc:
+        warnings.warn(f"Code Unit Registry query failed, reading the JSON files instead: {exc}")
+        return None
+    entries = [unit.model_dump(mode="json", by_alias=True, exclude_none=True) for unit in units]
+    # Report sections list entries in load order; match the sorted file read.
+    entries.sort(key=lambda entry: f"{entry.get('id') or ''}.json")
+    return entries
+
+
+def _read_registry_json_files(registry_dir: Path) -> list[dict]:
+    paths = sorted(registry_dir.glob("*.json"))
+    started = time.perf_counter()
+    print(
+        f"Loading registry ({len(paths):,} files) from {registry_dir}...",
+        flush=True,
+    )
+    entries: list[dict] = []
+    for path in paths:
+        try:
+            with path.open(encoding="utf-8") as f:
+                entries.append(json.load(f))
+        except (json.JSONDecodeError, OSError) as exc:
+            warnings.warn(f"Skipping malformed registry file {path.name}: {exc}")
+    elapsed = time.perf_counter() - started
+    print(f"  Registry: {len(entries):,} entries in {elapsed:.1f}s", flush=True)
+    return entries
 
 
 def load_registry_entries(
@@ -136,17 +261,22 @@ def load_registry_entries(
     """Parse all JSON files in *registry_dir*, skipping malformed ones.
 
     Temp-table stubs are dropped (see :func:`drop_temp_table_stubs`) unless
-    *keep_temp_table_stubs* is set.
+    *keep_temp_table_stubs* is set. Parses of the same directory are reused
+    for the rest of the process.
     """
     registry_dir = Path(registry_dir)
-    entries: list[dict] = []
-    for path in sorted(registry_dir.glob("*.json")):
-        try:
-            with path.open(encoding="utf-8") as f:
-                entries.append(json.load(f))
-        except (json.JSONDecodeError, OSError) as exc:
-            warnings.warn(f"Skipping malformed registry file {path.name}: {exc}")
-    return entries if keep_temp_table_stubs else drop_temp_table_stubs(entries)
+    key = _registry_cache_key(registry_dir)
+    raw = _raw_registry_by_dir.get(key)
+    if raw is None:
+        raw = _read_registry_files(registry_dir)
+        _raw_registry_by_dir[key] = raw
+    if keep_temp_table_stubs:
+        return list(raw)
+    dropped = _dropped_registry_by_dir.get(key)
+    if dropped is None:
+        dropped = drop_temp_table_stubs(raw)
+        _dropped_registry_by_dir[key] = dropped
+    return list(dropped)
 
 
 entry_full_name = _entry_full_name

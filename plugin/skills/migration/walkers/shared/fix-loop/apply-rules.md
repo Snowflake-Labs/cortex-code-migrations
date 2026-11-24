@@ -4,6 +4,10 @@ Apply the step's `rules` to `files.converted`, then `walk(action="done")`. The
 server already ran `search_rules` on that file: do not search again. (When
 nothing matches it records this task itself and hands out `fixCode`.) No
 `rules` on the step means its search failed: `search_rules(file_path="<files.converted>")`.
+An `error` beside an empty `rules` is a failed search, not "no rules":
+`walk(action="done", failed="infra", reason=<the error>)`. `rules` beside an
+`error` still apply. `invalid_rules` are store rules Snowflake cannot compile,
+skipped; the search still ran.
 
 Process `rules` in ascending `priority` (already sorted). Re-read
 the file before each rule — an earlier fix may change later matches. Write every

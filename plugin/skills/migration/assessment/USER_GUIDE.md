@@ -264,8 +264,8 @@ The skill maintains context, so you don't need to start over.
 
 Before presenting final results, the skill starts or reuses the **live
 dashboard** and opens `/assessment`. A saved dashboard opt-out is respected.
-The skill still writes `assessment/{customer}_migration_plan_{timestamp}.html` as a shareable export and
-opens it as the fallback when the dashboard is disabled or unavailable.
+The skill still writes `assessment/report/index.html` and `assessment/assessment-report.zip` as a shareable export and
+opens the index as the fallback when the dashboard is disabled or unavailable.
 
 The generated HTML report opens on the **Migration Journey** page. For SQL Server,
 Teradata, and Redshift, **Discovery** appears next, followed by the conversion tabs grouped
@@ -290,7 +290,7 @@ the tab.
 
 ### Key Metrics
 
-- **Total Objects** - Number of objects in the migration
+- **Total Objects** - Every object in the wave plan, missing references included. Effort counts in-scope objects without missing references, and Object Exclusion counts every registered object of a known type, so their totals can differ
 - **Business Use Cases / Waves** - One wave per use case, plus a closing wave for objects no use case needs
 - **Exclusion Candidates** - Objects that may not need migration
 - **Circular Dependencies** - Objects with mutual dependencies (require attention)

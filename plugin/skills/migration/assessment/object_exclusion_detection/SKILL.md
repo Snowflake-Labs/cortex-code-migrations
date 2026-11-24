@@ -11,13 +11,16 @@ Run `scai assessment object-exclusion` in the SCAI project.
 
 ## Sub-Agent Mode
 
-When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, the parent provides a context block with the fields below. This sub-skill takes no user prompts in either mode, so the only behavioral change in sub-agent mode is the JSON return contract.
+The parent assessment skill runs this command itself during a full
+assessment (no Task, no `configure` per analysis). When this skill is
+invoked standalone, the caller provides a context block with the fields
+below. This sub-skill takes no user prompts in either mode.
 
 | Field | Required | Notes |
 |---|---|---|
 | `project_dir` | yes | absolute path to the SCAI project root |
 
-**On entry:** call the `configure` MCP tool with `project_dir` from the context block.
+**On entry (standalone only):** call the `configure` MCP tool with `project_dir` from the context block.
 
 Run `scai assessment object-exclusion` from `project_dir`.
 
@@ -28,7 +31,7 @@ Run `scai assessment object-exclusion` from `project_dir`.
   "sub_skill": "object-exclusion-detection",
   "status": "ok",
   "output_json": "<abs path to object_exclusion_analysis_*.json>",
-  "summary": "<one-line: temp/staging, deprecated, testing, duplicates counts>",
+  "summary": "<one-line: temp/staging, deprecated, testing, duplicates counts, of \"<total_objects_found> registered objects of a known type, in scope or not\">",
   "error": null
 }
 ```

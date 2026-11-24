@@ -34,6 +34,7 @@ returns the next step. No `query_source`, `sql_execute`, shell, or retry loop.
 | `same_error`, `empty` again after the specialist's pass, or it reports no legal fixture reaches the view | `walk(action="escalate")` with asks offering `unvalidated`, a person's call you never make. Never `walk done` on it: a view nothing compared is not validated. |
 | `error`, `class=infra`, or the tool itself fails | `walk(action="done", failed="infra")`. |
 | `error`, `side=source` | `walk(action="escalate")` with `text`. |
+| `walk_run` refuses the view: no tool can compare it | `walk(action="escalate")` with `text` saying why; only a person's `unvalidated` answer passes it. Never `done` it yourself: only a recorded `pass` completes validateView. |
 
 The reply's `fix` says the same. Helper `result`s: [general_task §4](../../../../agents/general_task.md#4-helpers);
 then `walk_run(op="validate_data")` once more.

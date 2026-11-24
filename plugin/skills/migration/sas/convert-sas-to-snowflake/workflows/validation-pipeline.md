@@ -18,7 +18,9 @@ Tools (stdlib Python, print only findings + one summary line — never `cat` the
 
 ## Step 1 inputs (asked once, with the other Step 1 questions — see SKILL.md)
 
-Questions are asked in SKILL.md Step 1 (Call B/C); this maps each answer to its use.
+Questions are asked in SKILL.md Step 1: Call A (paths, schemas, mode, depth), Call B (T2/T3
+data keys below; its own `ask_user_question`, never merged into Call A), Call C (LIBNAME
+mapping / T3 full-data; never merged into Call A or Call B). This maps each answer to its use.
 
 | `validation_selections` key | Answer feeds |
 |---|---|

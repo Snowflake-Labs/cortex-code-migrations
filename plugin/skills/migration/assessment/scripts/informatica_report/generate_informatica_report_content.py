@@ -49,6 +49,7 @@ from snowconvert_reports.loaders.registry_loader import load_registry_entries
 from snowconvert_reports.services.issue_effort_service import IssueEffortService
 
 from .informatica_dag_service import InformaticaDagService
+from pdf_print import ETL_TABLE_PRINT_PAGES, ETL_TABLE_PRINT_ROWS, print_note, print_omit_class
 
 
 
@@ -77,23 +78,26 @@ def generate_informatica_html_content(
         summary = data.get("summary", {})
         workflows = data.get("workflows", [])
         conversion_mode = summary.get("conversion_mode", "dbt")
+        ai_not_requested = _ai_not_requested(summary)
 
         # Generate detail pages if output_html_path is provided
         if output_html_path:
             mappings_dir = output_html_path.parent / "informatica_mappings"
             mappings_dir.mkdir(parents=True, exist_ok=True)
             _generate_workflow_detail_pages(
-                workflows, mappings_dir, output_html_path.name
+                workflows, mappings_dir, output_html_path.name, ai_not_requested=ai_not_requested
             )
 
         # Build the main content sections (matching SSIS order)
         ai_summary_html = _generate_ai_summary_section(data, informatica_json_path)
         metrics_html = _generate_metrics_section(summary, workflows)
+        heatmap_html = _render_mapping_ewi_heatmap(registry_dir)
         classification_html = _generate_workflow_classification(
             workflows,
             output_html_path,
             conversion_mode,
-            ewi_heatmap_html=_render_mapping_ewi_heatmap(registry_dir),
+            ai_not_requested=ai_not_requested,
+            ewi_heatmap_html="",
         )
         breakdown_html = _generate_component_breakdown(workflows)
 
@@ -113,6 +117,7 @@ def generate_informatica_html_content(
             {metrics_html}
             {classification_html}
             {breakdown_html}
+            {heatmap_html}
         </div>
         """
 
@@ -145,6 +150,28 @@ def generate_informatica_html_content(
         </div>
         """
         return error_html, "", ""
+
+
+# summary.review_mode `scai assessment etl generate` records when the user did not ask for AI analysis.
+AI_NOT_REQUESTED_MODE = "generate-only"
+
+
+def _ai_not_requested(summary: Dict) -> bool:
+    """True when the user left "AI analysis of Informatica workflows" unchecked."""
+    return summary.get("review_mode") == AI_NOT_REQUESTED_MODE
+
+
+AIM_ANALYSIS_NOTE = "Ask AIM to run ETL AI analysis."
+
+
+def _missing_analysis_label(_ai_not_requested: bool) -> str:
+    """What a workflow without an AI analysis shows in its tooltip and detail page."""
+    return "AI analysis pending. Ask AIM to run AI analysis on this workflow."
+
+
+def _is_ai_classified(entry: Dict) -> bool:
+    classification = ((entry.get("ai_analysis") or {}).get("classification") or "").strip()
+    return bool(classification) and classification != "Unclassified"
 
 
 def _strip_document_wrapper(html_content: str) -> str:
@@ -196,32 +223,8 @@ def _generate_mode_badge(conversion_mode: str) -> str:
 
 
 def _generate_ai_summary_section(data: Dict, json_path: Path) -> str:
-    """Generate AI Summary section.
-
-    Priority:
-    1. If an LLM-generated ai_informatica_summary.html exists (referenced by
-       data["summary"]["ai_summary"]), load and embed it.
-    2. Otherwise, produce a deterministic fallback from JSON data.
-    """
-    # --- Try loading LLM-generated summary ---
-    summary_rel_path = data.get("summary", {}).get("ai_summary", "")
-    if summary_rel_path:
-        candidate = (json_path.parent / summary_rel_path).resolve()
-        if candidate.exists():
-            try:
-                raw_html = candidate.read_text(encoding="utf-8").strip()
-                cleaned = _strip_document_wrapper(raw_html)
-                if cleaned:
-                    return f"""
-        <section id="informatica-executive-summary">
-            <h2>AI Summary</h2>
-            {cleaned}
-        </section>
-        """
-            except Exception:
-                pass  # Fall through to auto-generated fallback
-
-    # --- Fallback: rich auto-generated summary from JSON data ---
+    """Generate Summary from the generate JSON. LLM HTML must not replace it."""
+    del json_path
     return _build_rich_summary_fallback(data)
 
 
@@ -267,9 +270,10 @@ def _workflow_has_custom_transform(entry: Dict) -> bool:
 
 
 def _build_rich_summary_fallback(data: Dict) -> str:
-    """Build a full 7-section AI Summary from JSON data alone."""
+    """Build Summary from generate JSON. Classification/approach need AI labels."""
     summary = data.get("summary", {})
     workflows = data.get("workflows", [])
+    ai_not_requested = _ai_not_requested(summary)
     conversion_mode = summary.get("conversion_mode", "dbt")
 
     total_workflows = summary.get("total_workflows", 0)
@@ -388,6 +392,10 @@ def _build_rich_summary_fallback(data: Dict) -> str:
     </p>
   </div>"""
 
+    has_ai_classification = any(
+        _is_workflow_entry(wf) and _is_ai_classified(wf) for wf in workflows
+    )
+
     # --- Section 2: Classification Breakdown ---
     class_rows = ""
     ordered_classes = sorted(classification_counts.items(), key=lambda x: -x[1])
@@ -420,7 +428,7 @@ def _build_rich_summary_fallback(data: Dict) -> str:
         </tr>"""
         row_bg = not row_bg
 
-    sec2 = f"""
+    sec2 = "" if not has_ai_classification else f"""
   <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Workflow Classification Breakdown</h3>
   <div style="overflow-x: auto; margin-bottom: 1.5rem;">
     <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
@@ -471,36 +479,9 @@ def _build_rich_summary_fallback(data: Dict) -> str:
     </div>
   </div>"""
 
-    # --- Section 4: Connector Types ---
-    pill_colors = {
-        "Teradata": "#29B5E8", "Oracle": "#11567F", "Flat File": "#22C55E",
-        "DB2": "#8A999E", "ODBC": "#6366F1", "Sybase": "#EC4899",
-        "Informix": "#F97316", "SQL Server": "#3B82F6",
-    }
     all_db_types = set(source_db_types.keys()) | set(target_db_types.keys())
-    pills_html = ""
-    for db in sorted(all_db_types, key=lambda d: -(source_db_types.get(d, 0) + target_db_types.get(d, 0))):
-        color = pill_colors.get(db, "#64748b")
-        pills_html += f'    <span style="display: inline-block; background: {color}; color: white; padding: 0.3rem 0.75rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">{html.escape(db)}</span>\n'
 
-    dominant = sorted(all_db_types, key=lambda d: -(source_db_types.get(d, 0) + target_db_types.get(d, 0)))
-    dominant_name = dominant[0] if dominant else "Unknown"
-    dominant_count = source_db_types.get(dominant_name, 0) + target_db_types.get(dominant_name, 0)
-    connector_desc = f"{dominant_name} dominates with {dominant_count:,} total connection references."
-    if "Flat File" in all_db_types:
-        ff_count = source_db_types.get("Flat File", 0) + target_db_types.get("Flat File", 0)
-        connector_desc += f" Flat file connections ({ff_count:,} refs) handle file-based data exchange."
-    connector_desc += f" Migration requires replacing source connections with Snowflake native tables and {target_short}."
-
-    sec4 = f"""
-  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Connector &amp; Session Types</h3>
-  <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem;">
-{pills_html}  </div>
-  <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 1.5rem; line-height: 1.6;">
-    {connector_desc}
-  </p>"""
-
-    # --- Section 5: Complexity Drivers ---
+    # --- Complexity Drivers ---
     if success_rate >= 95:
         rate_color, rate_bg = "#16a34a", "#f0fdf4"
     elif success_rate >= 80:
@@ -556,8 +537,12 @@ def _build_rich_summary_fallback(data: Dict) -> str:
     row_bg = False
     for label, count in ordered_classes:
         if label == "Unclassified":
-            strategy = "Pending classification"
-            considerations = "Run AI analysis (Step 3) to classify workflows"
+            if ai_not_requested:
+                strategy = "Not classified"
+                considerations = "AI analysis pending. Ask AIM to classify these workflows"
+            else:
+                strategy = "Pending classification"
+                considerations = "Run AI analysis (Step 3) to classify workflows"
         elif label == "Data Transformation":
             strategy = f"<strong>{target_transform}</strong>"
             considerations = f"{success_rate}% auto-conversion rate; mappings convert to {target_short}"
@@ -580,7 +565,7 @@ def _build_rich_summary_fallback(data: Dict) -> str:
         </tr>"""
         row_bg = not row_bg
 
-    sec6 = f"""
+    sec6 = "" if not has_ai_classification else f"""
   <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Recommended Migration Approach</h3>
   <div style="overflow-x: auto; margin-bottom: 1.5rem;">
     <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
@@ -645,13 +630,12 @@ def _build_rich_summary_fallback(data: Dict) -> str:
 
     return f"""
         <section id="informatica-executive-summary">
-            <h2>AI Summary</h2>
+            <h2>Summary</h2>
             <section id="ai-summary" class="section">
   <p style="color: #64748b; font-size: 0.875rem; margin-bottom: 1.5rem;">High-level, decision-ready overview of the Informatica PowerCenter workload for data engineers and solution architects preparing a migration to Snowflake.</p>
 {sec1}
 {sec2}
 {sec3}
-{sec4}
 {sec5}
 {sec6}
 {sec7}
@@ -703,14 +687,6 @@ def _generate_metrics_section(summary: Dict, workflows: List[Dict]) -> str:
     total_exec = sum(status_totals.values()) if status_totals else 0
     success_rate = round((success_count / total_exec) * 100, 1) if total_exec > 0 else 0
 
-    # Determine success rate color
-    if success_rate >= 70:
-        rate_color = "#10b981"
-    elif success_rate >= 40:
-        rate_color = "#f59e0b"
-    else:
-        rate_color = "#ef4444"
-
     return f"""
     <section id="informatica-metrics">
         <h2>Key Metrics</h2>
@@ -737,12 +713,12 @@ def _generate_metrics_section(summary: Dict, workflows: List[Dict]) -> str:
             </div>
             <div class="metric-card">
                 <div class="metric-label">Conversion Rate</div>
-                <div class="metric-value" style="color: {rate_color};">{success_rate}%</div>
+                <div class="metric-value">{success_rate}%</div>
                 <div class="metric-description">Successful conversions</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">EWIs</div>
-                <div class="metric-value" style="color: #ef4444;">{total_ewis:,}</div>
+                <div class="metric-value">{total_ewis:,}</div>
                 <div class="metric-description">Conversion issues found</div>
             </div>
         </div>
@@ -793,6 +769,14 @@ def _generate_donut_chart_svg(data: Dict[str, int], colors: Dict[str, str], size
 
         large_arc = 1 if angle > 180 else 0
         color = colors.get(label, '#9ca3af')
+
+        # A 360° SVG arc has the same start and end, so browsers draw nothing.
+        if angle >= 359.9:
+            paths.append(
+                f'<circle cx="{center}" cy="{center}" r="{radius}" fill="{color}"/>'
+            )
+            start_angle = end_angle
+            continue
 
         path = f'''
             <path d="M {x1_outer} {y1_outer}
@@ -936,6 +920,7 @@ def _generate_workflow_classification(
     workflows: List[Dict],
     output_html_path: Path = None,
     conversion_mode: str = "dbt",
+    ai_not_requested: bool = False,
     ewi_heatmap_html: str = "",
 ) -> str:
     """Generate Workflow Classification section (equivalent to SSIS Package Classification).
@@ -961,7 +946,7 @@ def _generate_workflow_classification(
     pending_count = 0
 
     rows_html = ""
-    for wf in workflows:
+    for index, wf in enumerate(workflows):
         name = html.escape(wf.get("name", "Unknown"))
         path = wf.get("path", "")
         metrics = wf.get("metrics", {})
@@ -970,7 +955,7 @@ def _generate_workflow_classification(
 
         classification = ai_analysis.get("classification", "Unclassified") or "Unclassified"
         complexity = metrics.get("workflow_complexity", {}).get("complexity", "\u2014")
-        if classification == "Unclassified":
+        if classification == "Unclassified" and not ai_not_requested:
             complexity = "\u2014"
 
         analysis_text = ai_analysis.get("analysis", "").strip()
@@ -1022,12 +1007,13 @@ def _generate_workflow_classification(
                     <div class="ai-tooltip-content">{tooltip_text}</div>
                 </div>'''
         else:
-            tooltip_html = '''<div class="ai-tooltip">
-                    <div class="ai-tooltip-pending">\u23F3 AI analysis pending</div>
+            pending_icon = "" if ai_not_requested else "\u23F3 "
+            tooltip_html = f'''<div class="ai-tooltip">
+                    <div class="ai-tooltip-pending">{pending_icon}{_missing_analysis_label(ai_not_requested)}</div>
                 </div>'''
 
         rows_html += f"""
-            <tr class="workflow-row" data-classification="{html.escape(classification)}" data-complexity="{html.escape(complexity)}" data-name="{html.escape(name.lower())}">
+            <tr class="workflow-row{print_omit_class(index, ETL_TABLE_PRINT_ROWS)}" data-classification="{html.escape(classification)}" data-complexity="{html.escape(complexity)}" data-name="{html.escape(name.lower())}">
                 <td style="position: relative;">{name_html}{tooltip_html}</td>
                 <td><span style="display: inline-block; background: #f3f4f6; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500;">{html.escape(classification)}</span></td>
                 <td style="text-align: center;"><span style="display: inline-block; background: #f3f4f6; color: {complexity_color}; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500;">{html.escape(complexity)}</span></td>
@@ -1037,17 +1023,17 @@ def _generate_workflow_classification(
 
     # Analysis status banner
     total_workflows = len(workflows)
+    workflow_noun = "workflow" if total_workflows == 1 else "workflows"
     if pending_count > 0:
         analysis_status_html = f"""
             <div class="warning-box">
-                <strong>Analysis Status:</strong> {analyzed_count} of {total_workflows} workflows analyzed.
-                {pending_count} workflow{'s' if pending_count != 1 else ''} pending AI analysis.
+                {analyzed_count} of {total_workflows} {workflow_noun} analyzed, {AIM_ANALYSIS_NOTE}
             </div>
             """
     else:
         analysis_status_html = f"""
             <div class="info-box" style="background: #D1FAE5; border-left-color: #10b981;">
-                <strong>Analysis Status:</strong> All {analyzed_count} workflows have been analyzed.
+                All {analyzed_count} {workflow_noun} have been analyzed.
             </div>
             """
 
@@ -1059,6 +1045,7 @@ def _generate_workflow_classification(
         data_transform_target = "dbt projects on Snowflake, with sessions converting to Snowflake Tasks"
         mixed_target = "Snowflake ingestion and dbt transformation layers"
 
+    unclassified_guide = AIM_ANALYSIS_NOTE
     classification_guide_html = f"""
             <div class="info-box">
                 <strong>Classification Guide:</strong>
@@ -1067,7 +1054,7 @@ def _generate_workflow_classification(
                     <li><strong>Data Transformation:</strong> Workflows that transform data between internal layers. Good candidates to migrate with Snowflake AIM for Data Warehouses to {data_transform_target}.</li>
                     <li><strong>Mixed: Ingestion + Transformation:</strong> Workflows combining external data ingestion with internal transformations. Decompose into separate {mixed_target}.</li>
                     <li><strong>Configuration &amp; Control:</strong> Workflows focused on orchestration, timer-based scheduling, or system operations. Migrate to Snowflake Tasks and Snowflake Scripting.</li>
-                    <li><strong>Unclassified:</strong> Pending AI analysis.</li>
+                    <li><strong>Unclassified:</strong> {unclassified_guide}</li>
                 </ul>
             </div>
     """
@@ -1112,6 +1099,7 @@ def _generate_workflow_classification(
             </div>
             <div id="informaticaWorkflowCount" style="margin-top: 0.75rem; color: #6b7280; font-size: 0.875rem;"></div>
         </div>
+        {print_note(f"The PDF lists about the first {ETL_TABLE_PRINT_PAGES} pages of the workflow table ({ETL_TABLE_PRINT_ROWS} rows). Component Conversion Breakdown still prints in full.") if len(workflows) > ETL_TABLE_PRINT_ROWS else ""}
 
         <table id="informaticaWorkflowTable">
             <thead>
@@ -1318,7 +1306,7 @@ def _generate_component_breakdown(workflows: List[Dict]) -> str:
 
 
 def _generate_workflow_detail_pages(
-    workflows: List[Dict], output_dir: Path, main_report_filename: str,
+    workflows: List[Dict], output_dir: Path, main_report_filename: str, ai_not_requested: bool = False,
 ) -> None:
     """Generate individual HTML detail pages for each workflow."""
     # output_dir is the informatica_mappings/ subdir; parent is main output dir
@@ -1380,7 +1368,9 @@ def _generate_workflow_detail_pages(
     for wf in workflows:
         name = wf.get("name", "unknown")
         safe_name = _safe_filename(name)
-        detail_html = _build_workflow_detail_html(wf, main_report_filename, dag_base_path="..", dag_root=dag_root)
+        detail_html = _build_workflow_detail_html(
+            wf, main_report_filename, dag_base_path="..", dag_root=dag_root, ai_not_requested=ai_not_requested
+        )
 
         detail_path = output_dir / f"workflow_{safe_name}.html"
         with open(detail_path, "w", encoding="utf-8") as f:
@@ -1389,7 +1379,13 @@ def _generate_workflow_detail_pages(
     print(f"  Generated {len(workflows)} Informatica workflow detail pages in: {output_dir}")
 
 
-def _build_workflow_detail_html(wf: Dict, main_report_filename: str, dag_base_path: str = "..", dag_root: Path = None) -> str:
+def _build_workflow_detail_html(
+    wf: Dict,
+    main_report_filename: str,
+    dag_base_path: str = "..",
+    dag_root: Path = None,
+    ai_not_requested: bool = False,
+) -> str:
     """Build a standalone HTML page for one workflow's details.
 
     Matches the SSIS package detail page design:
@@ -1412,7 +1408,8 @@ def _build_workflow_detail_html(wf: Dict, main_report_filename: str, dag_base_pa
 
     complexity_data = metrics.get("workflow_complexity", {})
     classification = ai_analysis.get("classification", "Unclassified") or "Unclassified"
-    complexity = complexity_data.get("complexity", "\u2014") if classification != "Unclassified" else "\u2014"
+    show_complexity = classification != "Unclassified" or ai_not_requested
+    complexity = complexity_data.get("complexity", "\u2014") if show_complexity else "\u2014"
     analysis_text = ai_analysis.get("analysis", "").strip()
 
     # The Components card, the success rate, and the breakdown badge are the rows
@@ -1507,9 +1504,9 @@ def _build_workflow_detail_html(wf: Dict, main_report_filename: str, dag_base_pa
             </div>
         '''
     else:
-        ai_analysis_content = '''
+        ai_analysis_content = f'''
             <div style="background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 12px; padding: 2rem; text-align: center;">
-                <div style="color: #94a3b8; font-size: 0.875rem;">AI analysis pending</div>
+                <div style="color: #94a3b8; font-size: 0.875rem;">{_missing_analysis_label(ai_not_requested)}</div>
             </div>
         '''
 

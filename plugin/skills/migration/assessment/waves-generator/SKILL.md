@@ -89,7 +89,10 @@ Run `scai assessment waves -h` for the latest list of flags.
 ## After Generating Waves
 
 Tell the user where the prioritized objects landed and how many waves were
-produced, from the JSON. For the HTML report, return to the parent skill's
+produced, from the JSON. When you quote the object count (`graph_summary`
+nodes), say that it includes missing references, unlike the effort total;
+the exclusion total counts every registered object of a known type, in scope
+or not. For the HTML report, return to the parent skill's
 report step (`scai assessment report`); never write HTML by hand.
 
 ## Troubleshooting

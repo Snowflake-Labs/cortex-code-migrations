@@ -57,12 +57,7 @@ Focus on the most impactful signals from the summary command output:
 - **Classify as Internal vs External:** Internal = databases within the platform (SQL Server DBs); External = files, APIs, FTP, cloud storage, external databases
 - Note data movement patterns (batch loads, incremental, CDC, staging to core, tiered destinations)
 
-**4) Connection Manager Types**
-- Identify all connection manager types from the summary output (OLEDB, FLATFILE, EXCEL, ADO.NET, ODBC, FTP, HTTP, custom/3rd-party)
-- Highlight dominant types and notable external integrations (ZappySys, Attunity, custom connectors)
-- Note any existing Snowflake connections (indicates partial migration)
-
-**5) Complexity Drivers**
+**4) Complexity Drivers**
 - **Unsupported Elements:** Count and list component types affected
 - **3rd-Party Components:** ZappySys, Attunity, custom connectors (impact: High/Medium)
 - **Script Tasks:** Count packages with C#/.NET scripts; note common use cases (Excel resolution, error handling, validation)
@@ -70,7 +65,7 @@ Focus on the most impactful signals from the summary command output:
 - **ForEach Loops + DML:** Packages with iterative row-by-row operations
 - **Most Complex Package:** Name, component count, key complexity factors (lookups, nested event handlers, etc.)
 
-**6) Recommended Migration Approach**
+**5) Recommended Migration Approach**
 
 Adapt recommendations based on `ssis_target`:
 
@@ -86,7 +81,7 @@ Adapt recommendations based on `ssis_target`:
 - **Ingestion packages:** Replace with External stages, COPY INTO, Snowpipe
 - **Configuration & Control:** Re-architect using Snowflake Tasks, stored procedures, notification integrations
 
-**7) Key Risks and Dependencies**
+**6) Key Risks and Dependencies**
 - Pick the top 4 risks based on impact (2 high-severity red, 2 medium-severity amber)
 - Common risks: ZappySys/3rd-party dependencies, script task prevalence, network share dependencies, stored procedure ecosystems, missing documentation, external APIs
 - For each risk: provide a title and a short description of the impact and mitigation approach
@@ -196,20 +191,7 @@ Use this structure with visual sections so it can be embedded into the HTML repo
     </div>
   </div>
 
-  <!-- 4. Connection Manager Types -->
-  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Connection Manager Types</h3>
-  <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem;">
-    <!-- Add badges for each connection type found. Use distinct colors. Examples: -->
-    <span style="display: inline-block; background: #11567F; color: white; padding: 0.3rem 0.75rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">OLEDB</span>
-    <span style="display: inline-block; background: #29B5E8; color: white; padding: 0.3rem 0.75rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">FLATFILE</span>
-    <span style="display: inline-block; background: #22C55E; color: white; padding: 0.3rem 0.75rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">EXCEL</span>
-    <!-- Add more as needed with different colors: #F59E0B, #7D44CF, #D45B90, #ef4444, #8A999E, #71D3DC, #94a3b8 -->
-  </div>
-  <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 1.5rem; line-height: 1.6;">
-    [Short paragraph noting dominant patterns and any notable external integrations. E.g., "OLEDB dominates across source/destination/logging connections. Notable external integrations include ZappySys connectors for MongoDB, S3, and SMTP."]
-  </p>
-
-  <!-- 5. Complexity Drivers -->
+  <!-- 4. Complexity Drivers -->
   <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Complexity Drivers</h3>
   <div style="overflow-x: auto; margin-bottom: 1.5rem;">
     <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
@@ -236,7 +218,7 @@ Use this structure with visual sections so it can be embedded into the HTML repo
     </table>
   </div>
 
-  <!-- 6. Recommended Migration Approach -->
+  <!-- 5. Recommended Migration Approach -->
   <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Recommended Migration Approach</h3>
   <div style="overflow-x: auto; margin-bottom: 1.5rem;">
     <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
@@ -277,7 +259,7 @@ Use this structure with visual sections so it can be embedded into the HTML repo
     </table>
   </div>
 
-  <!-- 7. Key Risks -->
+  <!-- 6. Key Risks -->
   <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Key Risks</h3>
   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0.5rem;">
     <!-- High severity risks (red) -->

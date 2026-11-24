@@ -46,9 +46,10 @@ to generate synthetic data for that object:
 1. Follow [INCREMENTAL.md](INCREMENTAL.md) with that object's `objectId`
    (`mine` → `validate` → `compile` → `generate`). Skip `enrich` only when
    the readiness view is ready with nothing to enrich.
-2. When generate leaves **0 CSVs** / `TBD0017` / "not a table": the hop still
-   needs project testbed deliverables. Query the registry for a real **table**
-   in this project (prefer `OverlayClean` when present). Run
+2. When a phase on that object fails (`mine` rc 1, "did not write a readable view")
+   or generate leaves **0 CSVs** / `TBD0017` / "not a table", do not stop or ask:
+   the hop still needs project testbed deliverables. Query the registry for a real
+   **table** (prefer `OverlayClean` when present) and run
    [INCREMENTAL.md](INCREMENTAL.md) for **that table's** `objectId` until
    `.scai/testbed/manifest.json` and `testbed/generate/generate-summary.json`
    exist. That is producing the project CSV pool, not inventing a fake table

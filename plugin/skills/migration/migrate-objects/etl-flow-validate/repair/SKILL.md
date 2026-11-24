@@ -91,6 +91,7 @@ Classify the exact failure in this order:
 | Failure | Repair |
 |---|---|
 | `codeStatus.validateEtlValidate.error` is not `comparison` (`tooling`, `UNRESOLVED_BINDING_TOKEN`, `DEPENDENT_TABLE_MISSING`) | The machine does not dispatch these. Entered by hand, stop with `not-applicable` and relay the stop reason; do not edit. |
+| Deploy failed with `DEP0041` (`cloudStatus.deployment.details.error` is `linked_predecessor`): the package waits for a task of another ETL package that is not deployed | The machine does not dispatch this. Entered by hand, stop with `not-applicable` and name the package it waits for; do not edit. |
 | `--check-env` failed | Stop. Surface the connection, credential, or platform-tooling error; do not edit conversion output. |
 | A compared table is missing on either side (`not found or has no columns`, `does not exist`) | Environment or arrange: `not-applicable`. Name the table and the side; do not edit code or YAML. |
 | The source launcher failed: `status.json` `status` is `FAILED`, `timed_out` or `canceled`, or the platform log shows an error | Source runtime: `not-applicable`. Quote the launcher message and the first log error; do not edit. |
@@ -102,6 +103,7 @@ Classify the exact failure in this order:
 | Deploy/CREATE error on a `snowflakeSQL` target | Edit only the failing `snowflakeSQL` target. |
 | Comparison proves a converted-code defect | Repair the responsible canonical dbt or `snowflakeSQL` target. |
 | A wall-clock or nondeterministic column: listed in the unit's `clock_columns.json` (its `reasons` say `clock` or `nondeterministic: <element>`), written by a transform the platform table lists under `runtime.wall_clock_transforms` or `runtime.nondeterministic_transforms`, computed by an expression transform from one of its `runtime.wall_clock_functions` alone, or recorded by the seed as a load-time default (the YAML header says which) | Exclude it on that table entry with `source_columns: {mode: exclude, list: [...]}` (and `target_columns` when the target name differs); do not rewrite code. The ETL YAML has no `excluded_columns` key. Only columns on those lists may be excluded: a difference on any other column is a finding to classify, never a column to drop. |
+| An SSIS path still reads `@<STAGE_PLACEHOLDER>`, or a stage under `@public.landing_stage/ssis/filesystem/` is wrong or empty | Deploy binds every SSIS root path to that landing-stage folder before it deploys, and the testbed stages the package's input files there. A placeholder left means deploy refused the unit and named why: `return-to-convert`. Never write or guess a stage path; a missing file there is an arrange gap, `not-applicable`. |
 | Designed SSIS source failure whose message matches `expected_failure.message` | The runner already completed that source branch and continued comparison. Leave it. Do not stop with `needs-user`. |
 | No exact failure, conflicting evidence, or multiple faithful interpretations | Stop with `needs-user`; ask one concrete question before editing. |
 
@@ -212,8 +214,10 @@ Do not comment out behavior or create stub tasks or procedures.
   source element says, whatever a comparison shows. The repair is done only
   when the recheck **and** the re-validation both pass.
 - Converted-artifact repair with a connection and database: run
-  `scai code deploy --where "id = '<ETL_ID>'" -c "<CONNECTION>" -d "<DATABASE>"`
-  for all repaired parts together. Do not hand-deploy SQL or dbt objects.
+  `scai code deploy --where "id = '<ETL_ID>'" -c "<CONNECTION>" -d "<DATABASE>" --etl-cross-package-placeholders`
+  for all repaired parts together (the flag lets a package linked to other packages
+  deploy on its own, as the `deploy` tool does on this flow). Do not hand-deploy
+  SQL or dbt objects.
 - Validation repair: after successful deploy, re-run
   `scai test etl-validate` for the unit.
 - Environment failure: do not run comparison until the pre-flight succeeds.

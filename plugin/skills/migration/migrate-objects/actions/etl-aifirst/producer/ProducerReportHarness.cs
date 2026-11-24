@@ -331,6 +331,10 @@ internal sealed class ProducerMigrationDataService(
 
   public bool SsisToSnowflakeScripting => false;
 
+  // Arrived on IMigrationDataService with engine 209.0.0, next to the Informatica and SSIS switches
+  // above. Off for the same reason: the report run never selects the Snowflake Scripting target.
+  public bool DataStageToSnowflakeScripting => false;
+
   public bool ConsolidateDbtProjects => false;
 
   public bool ConsolidateAsSingleDbtProject => false;

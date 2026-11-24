@@ -18,9 +18,10 @@ SQL (`files.converted`) and the failure of `failedTask`:
 | `validateView` / `migrateData` / `validateData` | That task's error or diff |
 | `verify` | Unresolved EWIs; for an open `invalidation` (source-less helper), its named inputs: `query_source` of the source builtin vs this helper (re-probe after the push) |
 
-`<files.artifacts>/speculative.sql`, when present, is a fix a `speculative_fixer` wrote
-early against stub data: diff it against the converted file and try its changes that address
-this failure first.
+A step with `speculative` carries a fix a `speculative_fixer` wrote early against stub
+data: `diff` goes from the converted file to it (`path`; past the size limit, read it and
+diff yourself). Before any other theory, apply its hunks that address this failure; a hunk
+that undoes a later fix is not one.
 
 Fix each failure on this object whose converted-SQL edit would match source.
 Do not change or deploy another object onto `common`.

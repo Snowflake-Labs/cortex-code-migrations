@@ -19,11 +19,11 @@ Tell the user:
 
 ## Step 0: Preflight
 
-1. `configure(project_dir=<project dir>, subagent_mode=true, snowflake_connection=<the user's target connection — the one they named for deployment, NOT the system-reminder "active SQL connection" which is the agent's inference account>)`. Read the appended migration-status block. Always migrate data — do not ask, and do not skip.
+1. `configure(project_dir=<project dir>, snowflake_connection=<user's deploy target, NOT the "active SQL connection">)`, **without** `subagent_mode`. Always migrate data — do not ask, and do not skip.
 
    On SQL Server, skip `data_infrastructure(mode="up")`: walkers run `migrate_data` / `validate_data` synchronously via `scai --direct`. For any other dialect, call `data_infrastructure(mode="up")` until it reports `ready` (follow `remediation` on `status="not_ready"`; a first local bring-up can take more than one call). `status="failed"` (a process exited at start), `"degraded"` (`skip_doctor` overrode doctor checks) or `"error"` (`doctor_failures`) never clears with another `up`: stop and escalate with the named checks. Relay `cost_reminder`.
 
-2. If `configure()` reports setup is not finished, read [../../setup/SKILL.md](../../setup/SKILL.md) then come back here.
+2. If setup is not finished, read [../../setup/SKILL.md](../../setup/SKILL.md), finish it, come back. Only then `configure(subagent_mode=true)`: the latch makes `configure` attach-only. Never kill or restart the MCP server.
 
 3. Quote any `schema_status_*: error(...)` from `configure()` to the user and in the final report. For `DMG0011` report the message's cause; suggest upgrading the orchestrator or re-enabling auto-update only if it says `migrate-schema` is unsupported.
 

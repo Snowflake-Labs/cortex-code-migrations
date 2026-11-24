@@ -47,6 +47,10 @@ the prompt names.
 - **A catalog the login cannot open escalates.** `failure_class=cannot_open_database` / 4060
   "Cannot open database … The login failed": the catalog is missing, inaccessible to the login, or
   unavailable. Escalate with the tool's `hint`; never call it a bad password.
+- **A missing CLR assembly is a rewrite.** `failure_class=clr_assembly_missing` / 6528 "Assembly
+  … was not found in the SQL catalog": a sandbox holds no .NET binaries, so nothing you change
+  deploys the routine. Change nothing and `escalate` with the asks "Leave it parked for a
+  rewrite" / "Skip the object", never one asking for the assembly.
 - **Rows or code?** Would the object succeed on a different legal dataset that fits the table DDL?
   Then the rows are the defect: change the fewest AIMSBX rows (or cells) that make it testable,
   with the same DML on both sides.

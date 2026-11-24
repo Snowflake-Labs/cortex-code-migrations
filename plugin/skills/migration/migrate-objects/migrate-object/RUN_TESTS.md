@@ -123,7 +123,9 @@ call `run_tests` again with `release_unowned=<job_id>`.
 JSON: `success`, `exit`, `total`, `passed`, `failed`, `errors`,
 `no_baseline`, optional capped `failing` (`name`, `status`, `error_message`),
 short `warnings`; a failed validate adds `results_table`. Capture also returns `captured_rows`. Use those counts.
-No result grids, empty baseline/actual tables, diffs, or coverage report.
+No result grids, empty baseline/actual tables, diffs, or coverage numbers.
+A full validate of a procedure adds `coverage_report`, the report folder, for
+people: do not act on it or report a coverage number.
 
 - `success: false` with `passed > 0` is mixed — read `failing`. Do not treat
   it as empty.

@@ -174,10 +174,13 @@ Do not offer them here.
   no user names, only a count of users. Re-run assessment and choose **I have the
   file**." The assessment continues now and does not wait.
 
-### 5.2 Dynamic SQL review
+### 5.2 Dynamic SQL
 
-Use `auto-review-all` when `assessment_options` contains `deep_dynamic_sql`;
-otherwise use `generate-only`. Do not ask again.
+Always `generate-only` on a full assessment. Do not ask. Ignore a leftover
+`deep_dynamic_sql` token in `assessment_options`; it is not a skip switch.
+Do not run AI review unless the user asks in this session. When they ask to
+review every pending occurrence, dispatch `auto-review-all` after generate.
+When they ask for specific IDs, dispatch `review-batch` with those IDs.
 
 ### 5.2b Conversion issues
 
@@ -195,9 +198,9 @@ packages, Informatica PowerCenter when they are PowerCenter `.xml` exports.
 Collect inputs for that platform only; the assessment runs one
 `scai assessment etl generate` for it.
 
-For SSIS, always generate baseline JSON. Use
-`auto-review-all` when `assessment_options` contains `ssis`; otherwise use
-`generate-only`. Do not ask again.
+For SSIS, always generate baseline JSON with `review_mode: generate-only`.
+Do not ask for AI analysis during assessment. The user can ask AIM later to
+analyze one, some, or all packages (~60s per package).
 
 Leave `etl_replatform_sources_path` empty unless the user named the ETL source
 directory (SSIS, Informatica, or any other ETL platform); the child auto-detects
@@ -221,9 +224,12 @@ When Informatica is in scope, first look for a target the project already record
 > 1. **dbt** — mappings become dbt models orchestrated by Snowflake Tasks
 > 2. **scripting** — mappings become Snowflake Scripting procedures
 
-Record `informatica.target` as `dbt` or `scripting`. When you asked for it, call `configure(etl_informatica_target=<target>)` at once, because `scai assessment etl generate` reads the target from `.scai/config/plugin.yml` and uses `dbt` without it. Then read `etl_informatica_target` from `<project_dir>/.scai/config/plugin.yml`: a session whose `subagent_mode` latch makes `configure` attach-only reports it not applied and leaves it unwritten. If the file does not record the chosen target, do not dispatch the Informatica children. Fail the Informatica row with `error: "Informatica target not recorded: plugin.yml has <stored or none>, expected <target>"`, and tell the user how to record it: end the subagent session with `configure(subagent_mode=false)` (this takes the project out of autonomous mode, and is allowed only when no walkers are running and no claims are open), then call `configure(etl_informatica_target=<target>)`. Pass the target to every Informatica child as `informatica_target`. Informatica always reviews every workflow
-(`review_mode: auto-review-all`); do not ask the ETL analysis-depth question,
-default to `generate-only`, or allow `skip` after Informatica is in scope.
+Record `informatica.target` as `dbt` or `scripting`. When you asked for it, call `configure(etl_informatica_target=<target>)` at once, because `scai assessment etl generate` reads the target from `.scai/config/plugin.yml` and uses `dbt` without it. Then read `etl_informatica_target` from `<project_dir>/.scai/config/plugin.yml`: a session whose `subagent_mode` latch makes `configure` attach-only reports it not applied and leaves it unwritten. If the file does not record the chosen target, do not dispatch the Informatica children. Fail the Informatica row with `error: "Informatica target not recorded: plugin.yml has <stored or none>, expected <target>"`, and tell the user how to record it: end the subagent session with `configure(subagent_mode=false)` (this takes the project out of autonomous mode, and is allowed only when no walkers are running and no claims are open), then call `configure(etl_informatica_target=<target>)`. Pass the target to every Informatica child as `informatica_target`.
+
+Informatica always generates its baseline JSON with `review_mode:
+generate-only`. Do not ask for AI analysis during assessment. The user can
+ask AIM later to analyze one, some, or all workflows (~60s per workflow). Do not
+`skip` Informatica once it is in scope.
 
 ### 5.4–5.6 No-input analyses
 
@@ -461,18 +467,18 @@ assessment_inputs:
     mode: have_extract | skip | later
     input_paths: [<abs .xel path (SQL Server) or metrics CSV path (Teradata/Redshift)>, ...]
   dynamic_sql:
-    review_mode: generate-only | auto-review-all | skip
+    review_mode: generate-only | auto-review-all | review-batch | skip
     output_dir: <project_dir>/assessment/json
   conversion_issues:
     run: true | false
   etl:
-    review_mode: generate-only | auto-review-all | skip
+    review_mode: generate-only | skip
     output_dir: <project_dir>/artifacts/assessment/etl
     etl_replatform_sources_path: <abs or empty>
   informatica:
     target: dbt | scripting
     output_dir: <project_dir>/artifacts/assessment/etl
-    review_mode: auto-review-all
+    review_mode: generate-only
   data_lineage:
     dispatch: true | false
     staged_pbits: [source/BI/PowerBI/<name>.pbit, ...]

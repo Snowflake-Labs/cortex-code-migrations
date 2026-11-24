@@ -123,6 +123,14 @@ Configure `dbms_cloud_credential_name` and `dbms_cloud_file_uri_prefix` in `[con
 
 Add `unload_s3_bucket` and `unload_iam_role_arn` to `[connections.source.redshift]`. Set `extraction.strategy: unload` and `externalStage` in workflow YAML.
 
+### BigQuery — `regular`
+
+The worker authenticates with the service-account key file from the `scai connection add-bigquery` connection; no driver install is needed. The host needs HTTPS egress to `bigquery.googleapis.com` and `oauth2.googleapis.com`.
+
+### BigQuery — `export_data`
+
+Fill `export_data_gcs_bucket` and `export_data_gcs_prefix` in `[connections.source.bigquery]` after `generate-config --extraction-strategy export_data`. The service account needs write access to that bucket. Set `extraction.strategy: export_data` and `externalStage` (a stage on the same GCS prefix) in workflow YAML. See the BigQuery EXPORT DATA section of the worker config reference.
+
 ### Teradata — `tpt`
 
 Install Teradata TTU on the worker host (`tbuild`) and configure the required `tpt_*` TOML fields.
@@ -171,7 +179,7 @@ After running, handle the result:
 > and an ODBC driver is then required. Legacy `regular` leaves the flag as generated. The `database`
 > field is the actual PostgreSQL database name.
 
-See [`../references/worker-config-reference.md`](../references/worker-config-reference.md) for the field reference and advanced options (e.g., Redshift UNLOAD, Teradata TPT / WRITE_NOS).
+See [`../references/worker-config-reference.md`](../references/worker-config-reference.md) for the field reference and advanced options (e.g., Redshift UNLOAD, BigQuery EXPORT DATA, Teradata TPT / WRITE_NOS).
 
 ## Step 2 — Start the Worker
 

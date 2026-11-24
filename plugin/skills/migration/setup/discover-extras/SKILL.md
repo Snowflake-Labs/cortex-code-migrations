@@ -1,6 +1,6 @@
 ---
 name: discover-extras
-description: Surface assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PL/SQL packages, custom shell scripts, etc.) and register them as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved Kind enum) so the orchestration layer (next_object + state machine) tracks them alongside built-in units. Triggers from the setup state machine as its last step; can also be re-entered any time the user identifies more custom assets. ETL platforms found here (SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory) are handed to the ETL register path as kind=etl, not registered as customKind.
+description: Surface assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PL/SQL packages, custom shell scripts, etc.) and register them as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved Kind enum) so the orchestration layer (next_object + state machine) tracks them alongside built-in units. Triggers from the setup state machine as its last step; can also be re-entered any time the user identifies more custom assets. ETL platforms found here (SSIS, Informatica PowerCenter, Apache Hop, Pentaho, or any other ETL platform) are handed to the ETL register path as kind=etl, not registered as customKind.
 parent_skill: setup
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -14,25 +14,23 @@ This step catches those and registers them in the registry as code units with `k
 ## ETL platforms found here
 
 If the files are an ETL platform the migration is going to convert — SSIS, Informatica
-PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho,
-or Azure Data Factory — this skill can be where they are found. Do not register them here.
+PowerCenter, Apache Hop, Pentaho, or any other ETL platform — this skill can be where
+they are found. Do not register them here.
 
 Hand them to **setup → register local ETL → convert**, registered as `kind: etl`:
 
 - SSIS and Informatica PowerCenter go through register-code-units into `source/_etl/`.
-- Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, and Azure
-  Data Factory go through the same register path into `source/_etl_aifirst/<platform>/`, via
+- Apache Hop, Pentaho, and every other ETL platform go through the same register path into `source/_etl_aifirst/<platform>/`, via
   `create_registry_unit`.
 
 Do not offer to register those ETL jobs as `customKind` cookbooks. A `customKind` unit
 skips both the native replatform and AI-First convert. Do not draft a cookbook, do not
-write `.scai/skills/talendJob.md` (or similar), and do not register those files
+write a `.scai/skills/<platform>Job.md` cookbook, and do not register those files
 as `customKind`.
 
-Say something like:
+Say something like (name the platform the user named; never offer other platform names):
 
-> "Those Talend jobs (or Alteryx workflows / IICS mappings / DataStage `.dsx` / Hop `.hpl` /
-> Pentaho `.ktr` / ADF pipelines / etc.) stay in this discovery step only long enough to hand
+> "Those ETL jobs (Hop `.hpl` / Pentaho `.ktr` / etc.) stay in this discovery step only long enough to hand
 > them to register. They are registered as `kind: etl`, not as a `customKind` cookbook.
 > Airflow, FiveTran, SSAS, and hand-maintained scripts stay here."
 
@@ -65,11 +63,11 @@ Use `ask_user_question` (multi-select) with these top categories. Keep the list 
 The Orchestration category is for ingest and orchestration that will keep running
 against Snowflake, not for ETL you want to convert. Do not list an ETL platform the
 migration is going to convert as an orchestration extra — SSIS, Informatica PowerCenter
-(both converted natively) and Talend, Alteryx, Informatica Cloud / IICS, DataStage,
-Apache Hop, Pentaho, Azure Data Factory (AI-First) all belong in register-and-convert. If the user
+(both converted natively) and Apache Hop, Pentaho and any other ETL platform (AI-First
+approach, not native support) all belong in register-and-convert. If the user
 picks orchestration and then names one of those, refuse the cookbook path in one
 sentence and hand those files to the ETL register path as `kind: etl` (setup → register local ETL → convert). Do not draft a cookbook,
-do not write `.scai/skills/talendJob.md` (or similar), and do not register those files
+do not write a `.scai/skills/<platform>Job.md` cookbook, and do not register those files
 as `customKind`.
 
 If the user picks **Nothing after all**, jump to **Step 4** and mark the step done — that records the step as answered so it isn't put to them again.
@@ -85,11 +83,11 @@ For every selected category, work through it in turn. The pattern is the same:
    - Scripts: `shellScript`, `powerShellScript`, `cronJob`, `manualScript`
    - Anything else: free-form. Pick something descriptive and stable — the agent uses it to group, filter, and route. Cannot be one of the four reserved Kind values (`databaseObject`, `script`, `etl`, `custom`).
 
-   The Orchestration recommendations deliberately drop `informaticaWorkflow`,
-   `talendJob`, `adfPipeline`, `alteryxWorkflow`, `datastageJob`, `pentahoJob`, and
-   `iicsMapping`. Those platforms convert through register-and-convert; giving them a
-   `customKind` cookbook would silently opt them out of the native or AI-First convert
-   path. Do not resurrect any of those slugs here.
+   The Orchestration recommendations deliberately carry no ETL platform slug
+   (`informaticaWorkflow`, `pentahoJob`, or any `<platform>Job` for an ETL tool). ETL
+   platforms convert through register-and-convert; giving them a `customKind` cookbook
+   would silently opt them out of the native or AI-First convert path. Do not add such a
+   slug here.
 
 2. Ask the user — lead with pointing you at the code, since that's the cheapest thing for them to do:
    > "For `<customKind>`, where does it live? Point me at a directory or repo path and I'll scan it and work out the names and dependencies myself. If you'd rather list them, I need a name per item, plus optionally a Snowflake `objectType`, a repo path, and what each one reads from — inline, or as a CSV/JSON/YAML paste."

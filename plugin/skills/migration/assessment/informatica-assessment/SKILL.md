@@ -21,6 +21,7 @@ When invoked from the parent `assessment` skill as a sub-agent, the parent provi
 | `output_dir` | except with `review-batch` | `<project_dir>/artifacts/assessment/etl`; the CLI writes the assessment JSON there, and `ai_informatica_summary.html` goes beside it |
 | `informatica_target` | yes | `dbt` or `scripting`. Use it for Step 3 and Step 4; **On entry** checks that the project stores it. |
 | `review_mode` | yes | `generate-only`, `review-batch`, `summary-only`, or `auto-review-all` |
+| `parent_review_mode` | with `generate-only` from the parent | always `generate-only` during assessment. On-demand review may send `auto-review-all` later. |
 | `batch_size` | with `review-batch` | how many pending workflows this agent reviews, at most 10 |
 | `assessment_json` | with `review-batch` and `summary-only` | the absolute JSON path the generate child returned. Return it as `output_json`; the commands find the artifact themselves, so never pass it to them |
 
@@ -46,6 +47,34 @@ When invoked from the parent `assessment` skill as a sub-agent, the parent provi
 ```
 
 On failure: `"status": "error"`, `"error": "<message>"`.
+
+## On-demand AI analysis
+
+Assessment never reviews workflows. When the user later asks AIM to run AI
+analysis on Informatica (analyze workflows, analyze ETL, and the like):
+
+1. **Ask first.** Do not start review in that reply. This is a question AIM
+   must wait on, not a default to all.
+2. If that message already names one or more workflows, confirm those names
+   and skip the menu.
+3. Otherwise ask this, with the pending count from
+   `scai assessment etl stats --platform informatica` when you have it (about
+   **60s per workflow**, because each one is scanned and written back on its
+   own):
+
+   > N workflows have no AI analysis yet. Each takes about 60 seconds.
+   >
+   > Do you want AI analysis for:
+   > 1. All of them
+   > 2. Some of them
+   > 3. One workflow
+
+   Do not start review until they answer. If they pick some or one and have
+   not named workflows, ask which names next.
+4. Then stay in this turn. Run review batches of at most **10 workflows**, one
+   after another, never side by side, as subagent-dispatch.md § Informatica
+   says. Then the summary child.
+5. Do not start this from the assessment scope card.
 
 ## Important Notes
 
@@ -75,9 +104,9 @@ On failure: `"status": "error"`, `"error": "<message>"`.
 4. **Follow ONLY Provided Analysis Methods**
    - Use ONLY the workflow defined in this skill
 
-5. **Complete ALL Steps**
-   - Step 4 (AI Summary) is MANDATORY before the assessment finishes
-   - Every checkpoint in the workflow must be completed
+5. **Complete ALL Steps of the selected mode**
+   - When the user selected AI analysis (`auto-review-all`), Step 4 (AI Summary) is MANDATORY before the assessment finishes
+   - Every checkpoint of the selected mode must be completed
 
 6. **Report Generation via Parent Skill ONLY**
    - The multi-report generator in the parent skill (`../SKILL.md`) is the ONLY approved method
@@ -130,12 +159,14 @@ Analysis Progress:
 From the project root:
 
 ```bash
-scai assessment etl generate
+scai assessment etl generate --review-mode <parent_review_mode>
 ```
 
 It prints the absolute path of the assessment JSON it wrote; that path is `output_json`. It writes two files with one timestamp to `<project_dir>/artifacts/assessment/etl/`:
 - `informatica_assessment_analysis_<timestamp>.json` — the assessment data the report reads
 - `informatica_dag_model_<timestamp>.json` — the workflow and mapping graphs
+
+`--review-mode` records what the user selected as `summary.review_mode`: `parent_review_mode` when the parent sent it, else your own `review_mode` when it is `generate-only` or `auto-review-all`. Never pass the generate phase's own `generate-only` when the parent sent `parent_review_mode=auto-review-all`: the report would then treat the run as generate-only (analyzer complexity, no pending count) instead of listing the workflows still pending. Under `generate-only` the banner says "AI analysis pending" and shows each workflow's complexity.
 
 If it exits non-zero, stop and show its error. Do not write an HTML file.
 
@@ -209,7 +240,7 @@ scai assessment etl summary --platform informatica
 
 3. Generate summary file: `<project_dir>/artifacts/assessment/etl/ai_informatica_summary.html`
    - Follow the structured HTML template in the guide
-   - Include all 7 sections: Workload Overview, Classification Breakdown, Sources & Destinations, Connector Types, Complexity Drivers, Recommended Migration Approach, Key Risks
+   - Include all 6 sections: Workload Overview, Classification Breakdown, Sources & Destinations, Complexity Drivers, Recommended Migration Approach, Key Risks
    - Use real data from the summary command output
    - Use inline styles (not CSS classes) since this is an embedded HTML snippet
    - **IMPORTANT: The file must be a fragment only** — do NOT include `<!DOCTYPE>`, `<html>`, `<head>`, `<body>`, or `<h1>` tags. The report generator provides the section heading (`<h2>AI Summary</h2>`) automatically.
@@ -222,7 +253,7 @@ scai assessment etl ai-summary --platform informatica "<project_dir>/artifacts/a
 
 **Verification Checklist:**
 - [ ] `<project_dir>/artifacts/assessment/etl/ai_informatica_summary.html` exists and is non-empty
-- [ ] Summary includes all 7 sections from the guide template
+- [ ] Summary includes all 6 sections from the guide template
 - [ ] Summary uses specific numbers (not vague terms like "many")
 - [ ] Summary registered with `ai-summary` command
 

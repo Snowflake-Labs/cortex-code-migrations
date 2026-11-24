@@ -163,13 +163,14 @@ plugin_ref() {
 ref_channel() {
   case "$1" in
     ""|main) echo stable ;;
+    dev) echo dev ;;
     preview|v[0-9]*.[0-9]*.[0-9]*-Pr|v[0-9]*.[0-9]*.[0-9]*-Pr.*) echo preview ;;
     v[0-9]*) if printf '%s\n' "$1" | grep -qxE 'v[0-9]+\.[0-9]+\.[0-9]+'; then echo stable; fi ;;
   esac
 }
-# channel_branch CHANNEL: the plugin branch of a channel. The plugin has no dev
-# channel: with dev, scai uses dev and the plugin uses preview.
-channel_branch() { case "$1" in preview|dev) echo preview ;; *) echo main ;; esac; }
+# channel_branch CHANNEL: the plugin branch of a channel. dev has no branch (it
+# installs from AIM storage); its own value keeps channel switches visible.
+channel_branch() { case "$1" in preview) echo preview ;; dev) echo dev ;; *) echo main ;; esac; }
 
 # Optional runtime override (opt-in): pin a specific scai or plugin version via the shared
 # config file. Absent config = default behavior (update to the channel's latest).
@@ -214,10 +215,16 @@ SETTINGS_CHANNEL="$(tr -d '\r\n' 2>/dev/null < "$SCAI_SETTINGS" | sed -n 's/.*"c
 # file, then the channel of the installed plugin source, then stable.
 PLUGIN_REF="$(plugin_ref "$PLUGIN_REGISTRY")"
 # A plugin installed from a fork or a local path is left alone.
+# A dev plugin is installed from AIM storage via PLUGIN_STORAGE_CACHE,
+# and a registry source there counts as the dev channel.
+PLUGIN_STORAGE_CACHE="$HOME/.snowflake/migration-plugin/storage"
 PLUGIN_FROM_REPO=false
-if grep -q "\"$PLUGIN_NAME\"" "$PLUGIN_REGISTRY" 2>/dev/null && grep -q "$PLUGIN_REPO" "$PLUGIN_REGISTRY"; then PLUGIN_FROM_REPO=true; fi
+if grep -q "\"$PLUGIN_NAME\"" "$PLUGIN_REGISTRY" 2>/dev/null; then
+  if grep -q "$PLUGIN_REPO" "$PLUGIN_REGISTRY" || grep -q "migration-plugin/storage/" "$PLUGIN_REGISTRY"; then PLUGIN_FROM_REPO=true; fi
+fi
 plugin_channel=""
 if $PLUGIN_FROM_REPO; then plugin_channel="$(ref_channel "$PLUGIN_REF")"; fi
+if $PLUGIN_FROM_REPO && grep -q "migration-plugin/storage/" "$PLUGIN_REGISTRY"; then plugin_channel=dev; fi
 SCAI_CHANNEL="$(printf '%s' "${SCAI_CHANNEL:-${SETTINGS_CHANNEL:-${plugin_channel:-stable}}}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
 case "$SCAI_CHANNEL" in
   stable|preview|dev) ;;
@@ -650,6 +657,86 @@ install_plugin_from_archive() {
   rm -rf "$tmp"
 }
 
+# json_field FILE KEY: the string value of KEY in a flat JSON file, without python3.
+json_field() { tr -d '\r\n' 2>/dev/null < "$1" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" || true; }
+
+file_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+
+# Dev plugin from AIM storage: latest.json names an immutable
+# plugin-<buildSha>.tar.gz. Verified by sha256, extracted under
+# PLUGIN_STORAGE_CACHE, and installed with `cortex plugin install file://...`
+# (a local git repo). Without git, copied into the Cortex plugin dir.
+install_plugin_from_storage() {
+  local base="$SCAI_STORAGE_BASE/linux/dev/plugin"
+  local tmp sha archive want got dir
+  tmp="$(mktemp -d)"
+  if ! curl -fsSL --max-time 15 "$base/latest.json" > "$tmp/latest.json"; then
+    log "WARNING: could not download $base/latest.json"
+    rm -rf "$tmp"; return 1
+  fi
+  sha="$(json_field "$tmp/latest.json" buildSha)"
+  archive="$(json_field "$tmp/latest.json" archive)"
+  want="$(json_field "$tmp/latest.json" sha256)"
+  # Only a well-formed build counts, and the archive name is pinned to the SHA, so a
+  # tampered latest.json cannot point the download at another path.
+  if ! printf '%s\n' "$sha" | grep -qxE '[0-9a-f]{40}' || ! printf '%s\n' "$want" | grep -qxE '[0-9a-fA-F]{64}' ||
+     [ "$archive" != "plugin-$sha.tar.gz" ]; then
+    log "WARNING: $base/latest.json is not a plugin build"
+    rm -rf "$tmp"; return 1
+  fi
+  if [ "$sha" = "$installed_sha" ]; then
+    log "$PLUGIN_NAME plugin up to date (v$installed, dev build ${sha:0:12}, storage)"
+    rm -rf "$tmp"; return 0
+  fi
+  if ! curl -fsSL --max-time 120 "$base/$archive" > "$tmp/plugin.tar.gz"; then
+    log "WARNING: could not download $base/$archive"
+    rm -rf "$tmp"; return 1
+  fi
+  got="$(file_sha256 "$tmp/plugin.tar.gz")"
+  if [ "$got" != "$want" ]; then
+    log "WARNING: $archive sha256 $got does not match $want; not installing"
+    rm -rf "$tmp"; return 1
+  fi
+  # Only this build's dir is replaced here; older builds go after a successful install, so
+  # a failed install never deletes the dir the Cortex registry still points at.
+  dir="$PLUGIN_STORAGE_CACHE/dev/$sha"
+  rm -rf "${dir:?}"; mkdir -p "$dir"
+  if ! tar -xzf "$tmp/plugin.tar.gz" -C "$dir" || [ ! -f "$dir/plugin/VERSION" ]; then
+    log "WARNING: $archive has no plugin/VERSION"
+    rm -rf "$tmp" "$dir"; return 1
+  fi
+  rm -rf "$tmp"
+  # cortex plugin install --force refuses a different source for an installed plugin
+  # ("already installed"), and every dev build has its own dir, so uninstall first.
+  if command -v git >/dev/null 2>&1 &&
+     ( cd "$dir/plugin" && git init -q && git add -A &&
+       git -c user.name=scai -c user.email=scai@localhost commit -qm "dev $sha" ) >>"$LOG" 2>&1 &&
+     { ! grep -q "\"$PLUGIN_NAME\"" "$PLUGIN_REGISTRY" 2>/dev/null ||
+       "$cortex_cli" plugin uninstall "$PLUGIN_NAME" </dev/null >>"$LOG" 2>&1; } &&
+     "$cortex_cli" plugin install "file://$dir/plugin" --force </dev/null >>"$LOG" 2>&1; then
+    for old in "$PLUGIN_STORAGE_CACHE/dev"/*; do
+      [ "$old" = "$dir" ] || rm -rf "$old"
+    done
+  else
+    log "cortex plugin install from $dir/plugin failed; copying into the Cortex plugin dir"
+    rm -rf "$CORTEX_HOME/plugins/$PLUGIN_NAME"; mkdir -p "$CORTEX_HOME/plugins/$PLUGIN_NAME"
+    cp -R "$dir/plugin"/. "$CORTEX_HOME/plugins/$PLUGIN_NAME"/
+  fi
+  log "Updated the $PLUGIN_NAME plugin to dev build ${sha:0:12} from AIM storage. It takes effect in the next session or after /plugin reload."
+}
+
+# Dev channel: the plugin comes from AIM storage (linux/dev/plugin), published
+# from develop by plugin-dev-cd.yml. The same VERSION repeats for days, so the
+# build SHA (plugin.json buildSha) decides.
+update_dev_plugin() {
+  installed_sha="$(json_field "$CORTEX_HOME/plugins/$PLUGIN_NAME/.cortex-plugin/plugin.json" buildSha)"
+  log "Fetching the $PLUGIN_NAME dev build from AIM storage..."
+  install_plugin_from_storage || log "WARNING: could not update the dev plugin from AIM storage"
+}
+
 # snowflake-migration plugin: `cortex plugin install <URL> --force` from the
 # branch of the resolved channel (see SCAI_CHANNEL above), or from the tag of a
 # pinned version. If that git clone fails, download the GitHub archive instead.
@@ -701,6 +788,9 @@ elif ! $PLUGIN_FROM_REPO; then
 else
   installed="$(tr -d '[:space:]' < "$CORTEX_HOME/plugins/$PLUGIN_NAME/VERSION" 2>/dev/null || true)"
   installed="${installed:-$VERSION}"
+  if [ -n "$plugin_channel" ] && [ "$SCAI_CHANNEL" = dev ] && [ -z "$PLUGIN_VERSION_PIN" ]; then
+    update_dev_plugin
+  else
   # An alpha branch (no channel) follows its own head. A pin installs its version tag.
   plugin_branch="$PLUGIN_REF"; pin=""
   if [ -n "$plugin_channel" ]; then plugin_branch="$(channel_branch "$SCAI_CHANNEL")"; pin="$PLUGIN_VERSION_PIN"; fi
@@ -717,7 +807,7 @@ else
     fi
     install_ref="$plugin_branch"
     # A channel switch installs the new channel's latest, also a lower version (as scai).
-    # Compare plugin branches: dev and preview share the preview branch.
+    # Compare plugin branches.
     if [ -n "$plugin_channel" ] && [ "$(channel_branch "$plugin_channel")" != "$plugin_branch" ]; then why="channel $plugin_channel -> $SCAI_CHANNEL"; fi
   fi
   if [ -n "$rejected" ]; then
@@ -740,6 +830,7 @@ else
         log "WARNING: GitHub archive fallback failed for $install_ref"
       fi
     fi
+  fi
   fi
 fi
 

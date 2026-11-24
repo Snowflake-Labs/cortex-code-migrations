@@ -37,6 +37,7 @@ naming both agents.
   retried with `reset`. The vocabulary is in
   [../../extensibility/TASKS.md](../../extensibility/TASKS.md#outcome-vocabulary).
 - A `completed` advance is refused when the task's status source disagrees.
+  `validateView` completes only on a comparison `validate_data` recorded.
 - Do not stamp a dependency wait: the walk derives `blocked` / `blockedOn` from
   the dependency's live status, and `error='dependency'` is refused.
 - An advanced entry with `nextTaskBlocked: true` names in `nextTaskBlockedOn` the
@@ -67,7 +68,7 @@ The authoritative contract is the `answerWith` field of
 | `skip_data` | Answers only a `migrateData` escalation. The table stays in scope with its structure deployed but no rows copied: `extensions.taskExclusions` excludes its `migrateData` and `validateData`, the walk continues, and each dependent gate follows its declared `onDependencyExcluded`. |
 | `needs_repair` | Leaves the object parked. It drops out of the open queue but still reads `needsHuman`, so it is never re-offered as work. A person's later answer at that task still settles the park (a hail_mary's does not). |
 | `mark_done` | Accepts a failed `validateData`, `validateView` or `runTests` as it is: the walk reads it as accepted, never passed, and moves on. A newer run or escalation on the task undoes it. Refused on any other task, and for an agent in the AIM app, where the user gives it on the escalation card. It settles a `needs_repair` park only where the task reads failed or completed; objects whose task has not run are listed under `notDone` and stay parked. |
-| `unvalidated` | At `captureBaseline`/`runTests`, `validateView`, or `etlValidate`/`validateEtlValidate` only, with `reason`, and never from a hail_mary: nothing about the object can be tested (no observable output, a view the test data never reaches, an ETL unit with no comparison pair). Those tasks read passed over, so `finish` needs no force; it counts as `unvalidated`, never tested or validated. |
+| `unvalidated` | At `captureBaseline`/`runTests`, `validateView`, or `etlValidate`/`validateEtlValidate` only, with `reason`, and never from a hail_mary: nothing about the object can be tested (no observable output, a view no tool can compare or the test data never reaches, an ETL unit with no comparison pair). Those tasks read passed over, so `finish` needs no force; it counts as `unvalidated`, never tested or validated. |
 
 Who may answer: an interactive session directly. Under `subagent_mode`, the
 autonomous parent may relay an explicit user reply from its own conversation,
@@ -121,7 +122,9 @@ person's call only: refused for every agent under `subagent_mode`.
 - `where` names the code unit(s) to reopen, not the waiter as a substitute.
 - Refused for the claim holder and for the parent: spawn a `task_invalidator`
   (it shares the attached server). The target must be in scope and in the
-  transitive `dependsOn` closure of a code unit claimed live in this session.
+  transitive `dependsOn` closure of a code unit claimed live in this session,
+  unless it is done and no session still claims it: a done unit is reopened
+  without a live claim, one per call.
 
 ### `bypass`
 

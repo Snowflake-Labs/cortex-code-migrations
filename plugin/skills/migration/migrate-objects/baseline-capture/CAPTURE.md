@@ -29,27 +29,39 @@ to load synthetic rows into the source, then shell `scai test seed` and
 `scai test capture --keep-baselines`. Do not call `run_tests` for that hop.
 Do not shell `scai testbed load` — `setup_sandbox` runs that load itself.
 
-A table seed writes no YAML. Call `setup_sandbox` for the table. Seed and
-capture the view whose SQL selects that table. Do not pass the table name to
-`scai test seed` or `scai test capture`. Do not stop after load. Do not run
-`scai test validate` on this hop.
+A table or view seed writes no YAML. Call `setup_sandbox` for the table. Seed
+a procedure that reads that table, directly or through a view. Then set the
+generated YAML's `source_query` to a `SELECT` over the table that returns the
+procedure's result set, so the YAML names the table, and capture. Do not pass
+the table name to `scai test seed` or `scai test capture`. Do not stop after
+load. Do not run `scai test validate` on this hop.
 
-For `OverlayClean` (user named the **table**): seed/capture **OverlayDoubled**
-only (source load via `setup_sandbox`; do not shell `scai testbed load`):
+For `OverlayClean` (user named the **table**): seed/capture the procedure
+**GetOverlayDouble**, which reads OverlayClean through the view OverlayDoubled
+(source load via `setup_sandbox`; do not shell `scai testbed load`):
 
 ```
 setup_sandbox(where="source.canonicalName ILIKE '%.OverlayClean'")
 ```
 
 ```bash
-scai test seed --where "source.canonicalName ILIKE '%.OverlayDoubled'"
-scai test capture --keep-baselines --where "source.canonicalName ILIKE '%.OverlayDoubled'"
+scai test seed --where "source.canonicalName ILIKE '%.GetOverlayDouble'"
 ```
 
-After seed, YAML under `artifacts/**/test/` for OverlayDoubled must exist
-**and** contain the literal string `OverlayClean`. If missing, set
-`source_query` to the view `SELECT` that names OverlayClean, then capture
-again.
+In its YAML under `artifacts/**/test/`, replace the generated
+`- source_query: EXECUTE ${defaultdb}.dbo.GetOverlayDouble` line with this
+line. Keep the database qualifier the generated line has, and leave
+`target_query` as generated:
+
+```yaml
+    - source_query: SELECT id, label, ${defaultdb}.dbo.OverlayDouble(id) AS doubled_id FROM ${defaultdb}.dbo.OverlayClean
+```
+
+```bash
+scai test capture --keep-baselines --where "source.canonicalName ILIKE '%.GetOverlayDouble'"
+```
+
+The YAML must contain the literal string `OverlayClean` before capture.
 
 For **`GetOverlayDouble`** (user named the **procedure**): seed/capture
 **GetOverlayDouble** — do not substitute OverlayDoubled:

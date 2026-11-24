@@ -32,6 +32,8 @@ The tool:
 7. Deduplicates rules by `id` (regex hits take precedence)
 8. Returns a JSON object with `rules` (sorted by priority) and `ewi_references`
 
+A rule whose `match_pattern` Snowflake's regex cannot compile (e.g. a `(?i)` / `(?is)` inline flag; the `is` flags are already applied) is skipped and named under `invalid_rules` (`id`, `name`, `error`); the other rules still match. An `error` key means one of the searches could not run: an empty `rules` beside it is not "no rules".
+
 ### Output Format
 
 ```json

@@ -10,8 +10,7 @@ license: Proprietary. See License-Skills for complete terms
 ## Not the right skill for ETL
 
 If the user's local files are ETL — SSIS `.dtsx`, Informatica PowerCenter XML repo
-export, Talend jobs, Alteryx `.yxmd`, Informatica Cloud / IICS mappings, DataStage
-`.dsx`, Apache Hop `.hpl` / `.hwf`, Pentaho `.ktr` / `.kjb`, Azure Data Factory pipelines, or any other ETL
+export, Apache Hop `.hpl` / `.hwf`, Pentaho `.ktr` / `.kjb`, or any other ETL
 platform — this is **not** the skill to run. `code-conversion-only` is for the SQL
 dialects listed in the table below (Sybase, Spark, Databricks, Greenplum, Netezza,
 Vertica, Hive, and legacy PostgreSQL / DB2 / BigQuery / Azure Synapse projects).

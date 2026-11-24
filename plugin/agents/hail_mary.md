@@ -79,7 +79,12 @@ in the table's bindable copy, `AUTOINCREMENT START 1 INCREMENT 1` in its convert
 `deploy(sandbox=true)`. The pair's Snowflake tables are clones without AUTOINCREMENT: rebuild
 yours from the repaired `CREATE TABLE` **verbatim** at `START <m+1>` (`m` = its max key),
 copy rows by column name, `walk_run(op="sandbox_object", restore_from_sandbox=true)`, and
-`note` `target table DDL changed: <table>; redeploy pending`.
+`note` `target table DDL changed: <table>`. Then reopen each changed table's live Snowflake
+copy through the machine, one table a call:
+`transition_status(status="invalidate", task="deploy", where="id = '<table id>'", reason="target table DDL changed: <table>")`.
+It redeploys the table from the repaired DDL and redoes its `migrateData` and `validateData`;
+a replacement left pending keeps the old live table, and its dependents fail on it. If the
+invalidate is refused, the live table is unchanged: return `partial`, never `unstuck`.
 
 ## Return
 
@@ -92,7 +97,7 @@ One JSON object, nothing else:
 ```json
 {
   "objectId": "<objectId; a group or project: every object you touched, and where each stands>",
-  "result": "unstuck|forced|skipped|needs_repair|refused",
+  "result": "unstuck|partial|forced|skipped|needs_repair|refused",
   "task": "<task you were on>",
   "actions": ["<hail_mary_step reasons, in order>"],
   "overrides": ["<rule overridden: call — why>"],
@@ -101,7 +106,9 @@ One JSON object, nothing else:
 }
 ```
 
-`unstuck`: the machine can continue, or the object is finished. `forced`: `force=true` past
+`unstuck`: the machine can continue, or the object is finished. `partial`: your objects can
+continue, but a repair did not reach a live table (its invalidate was refused); `reason`
+names the table and the refusal. `forced`: `force=true` past
 ceremonial tasks. `skipped`: out of scope. `needs_repair`: parked for a shared-code change.
 `refused`: another live agent holds what you need; the escalation stays open.
 

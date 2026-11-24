@@ -72,8 +72,20 @@ When `--config` is a workflow, doctor runs only the checks for that source. A fa
 | Oracle | Validation with `rowValidation` and a `CLOB`, `NCLOB`, `BLOB`, or `XMLTYPE` column | The source user cannot `EXECUTE` `DBMS_CRYPTO` |
 | BigQuery | Migration or validation config that names tables | A column is bare `BIGNUMERIC` or `BIGDECIMAL` (no precision and scale) |
 | Redshift | Any table uses extraction strategy `unload` | The worker config is missing `unload_s3_bucket` or `unload_iam_role_arn`, or the value is still a placeholder |
+| BigQuery | Any table uses extraction strategy `export_data` | Neither the workflow's `exportDataGcsBucket` nor the worker config's `export_data_gcs_bucket` names a real bucket. Skipped for an SPCS worker, whose bucket is `EXPORT_DATA_GCS_BUCKET` on the service spec |
 
 Other dialects emit none of these rows. Oracle with no LOB or XMLTYPE column passes without asking for the grant. A `columnTypeMappings` or `customColumnTransforms` entry that names the BigQuery column (or the bare type) passes that column.
+
+### Index column uniqueness
+
+For a validation with `rowValidation`, when a table names an `indexColumnList`, doctor checks from catalog metadata alone, with no data scan, that L3 aligns rows on a unique key. It sends one catalog query for all the tables (one per database on SQL Server). The row is never a Fail and never blocks `start`:
+
+- **Pass:** every table's `indexColumnList` contains all the columns of a primary key, or of an enforced unique constraint or index on NOT NULL columns (SQL Server, PostgreSQL, Oracle, Teradata).
+- **Warning:** the tables with no such key, plus views, which have no keys. A repeated key surfaces only as `DUPLICATE_SOURCE`, `DUPLICATE_TARGET` or `DUPLICATE_BOTH_SIDES` in the L3 results, and copies identical on both sides are not reported.
+- **Warning, no query:** Snowflake, BigQuery, Redshift and Azure Synapse do not enforce PRIMARY KEY or UNIQUE, so a declared key proves nothing.
+- **Warning:** the catalog query failed, or did not finish within 30 seconds. Doctor stops waiting and says it could not verify uniqueness.
+
+Tables with no `indexColumnList` get no row: L3 infers their key from the catalog.
 
 ## Source probes under `--spcs-mode full-spcs`
 
@@ -81,7 +93,7 @@ Doctor runs the partition-key and source-prerequisite probes from the machine ru
 
 - `Source connection` (Partition key section) gives the connection error and says doctor can't confirm the SPCS worker will reach the source.
 - Each partition-key row says doctor can't confirm the column has no NULLs and enough distinct values.
-- The Teradata `HASH_MD5`, Oracle `DBMS_CRYPTO` and BigQuery `BIGNUMERIC` rows say what they could not confirm. No probe runs, so a connection error never reads as a missing prerequisite. The Redshift UNLOAD row sends no query and is unchanged.
+- The Teradata `HASH_MD5`, Oracle `DBMS_CRYPTO` and BigQuery `BIGNUMERIC` rows say what they could not confirm. No probe runs, so a connection error never reads as a missing prerequisite. The Redshift UNLOAD and BigQuery EXPORT DATA rows send no query.
 
 To check these rows, run doctor from a machine that can reach the source. When this machine can reach it, the rows are checked as in every other mode. Hybrid, full-local, no `--spcs-mode`, and the pre-run doctor of `scai data migrate|validate start` (which runs a local worker) keep failing an unreachable source.
 

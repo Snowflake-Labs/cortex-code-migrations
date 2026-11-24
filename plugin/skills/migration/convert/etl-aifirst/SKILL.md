@@ -28,7 +28,7 @@ So the rule is a preference, not a capability test:
 |---|---|---|
 | SSIS (`.dtsx`) | native `scai code convert` (ETL already in `source/_etl/`) | natively converted |
 | Informatica Power Center (XML repo export) | native, same command | natively converted |
-| Alteryx (`.yxmd`), Azure Data Factory, DataStage (`.dsx`), Hop (`.hpl`/`.hwf`), Pentaho (`.ktr`/`.kjb`) | AI-First action | no native converter |
+| Apache Hop (`.hpl`/`.hwf`), Pentaho (`.ktr`/`.kjb`) | AI-First action | no native converter |
 | Anything else the user names | AI-First action | no native converter |
 
 A checked-in platform table exists for `ssis` and `informatica` as well. That is for
@@ -67,6 +67,8 @@ and orchestration SQL directly under the unit folder) and the reports into `repo
 verifies every file, and removes `$STAGE`. Only then write `files.converted.path`.
 
 Checked-in identities: `adf`, `alteryx`, `datastage`, `hop`, `informatica`, `pentaho`, `ssis`.
+They are internal routing data: never name a platform from this list to the user other
+than Apache Hop, Pentaho, SSIS and Informatica PowerCenter, unless the user named it.
 Pass the identity, not a table path — Stage 0 picks the checked-in table when one matches.
 
 For a platform with no checked-in table, pass the identity anyway. Stage 0 authors a

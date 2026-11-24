@@ -33,6 +33,7 @@ Record that exact version tag (e.g., `1.11.1`). Use it as `<version>` in all sub
 | Oracle        | `oracle`           |
 | Teradata      | `teradata`         |
 | PostgreSQL    | `postgresql`       |
+| BigQuery      | `bigquery`         |
 
 ## Step 2 — Affinity Label
 
@@ -93,6 +94,12 @@ kubectl create secret generic data-exchange-worker-secrets \
   --from-literal=SNOWFLAKE_USER='<snowflake_user>' \
   --from-literal=SNOWFLAKE_PASSWORD='<snowflake_password>' \
   --from-literal=SNOWFLAKE_WAREHOUSE='<warehouse>'
+```
+
+**BigQuery:** there is no source username or password. Replace the two `DATA_SOURCE_*` literals with the service-account key, base64-encoded (the worker decodes it; Application Default Credentials do not work in the container):
+
+```bash
+  --from-literal=BIGQUERY_CREDENTIALS_JSON_BASE64="$(base64 < <path_to_service_account_key.json> | tr -d '\n')" \
 ```
 
 **Wait for the user to confirm the secret has been created before continuing.**
@@ -191,6 +198,8 @@ spec:
       imagePullSecrets:
         - name: snowflake-registry-pull
 ```
+
+**BigQuery:** set `DATA_SOURCE_HOST` to `bigquery.googleapis.com`, `DATA_SOURCE_PORT` to `443`, and `DATA_SOURCE_DATABASE` to the dataset; add `DATA_SOURCE_PROJECT_ID` (the GCP project) and, when not `US`, `DATA_SOURCE_LOCATION`. Replace the `DATA_SOURCE_USERNAME` / `DATA_SOURCE_PASSWORD` entries with `BIGQUERY_CREDENTIALS_JSON_BASE64` from the same secret. The pods need egress to `bigquery.googleapis.com`, `oauth2.googleapis.com`, and `storage.googleapis.com` on 443.
 
 Show the generated file to the user.
 

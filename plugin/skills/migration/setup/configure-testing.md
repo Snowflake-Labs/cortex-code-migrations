@@ -74,6 +74,8 @@ Call `configure(ensure_metadata_schema=true)` (no other args). This:
 3. Re-runs `ensure_prereqs`. `clone_perms` now sees `testing_data_source`
    is set and probes whenever `isolation_strategy` is `clone` (the default) or
    `auto`; the reference doc says what `info` means.
+4. SQL Server testbed, validate flow: `testbed_source_odbc` runs
+   `scai testbed load --check-source`; setup waits on it.
 
 ## Parse status lines and route
 
@@ -91,6 +93,7 @@ everything is green.
 - `schema_status_validation: error("<msg>")` → surface `<msg>`; common cause is missing `CREATE SCHEMA on DATABASE` or the VALIDATION grant bundle. Reference doc covers both. Never `GRANT OWNERSHIP` on objects another role created.
 - `schema_status_dmv: error("<msg>")` → surface `<msg>`; `scai data migrate-schema` failed while installing DATA_MIGRATION / DATA_VALIDATION in the metadata database. Common cause is missing `CREATE SCHEMA` on that database.
 - `installing("…")` on any `schema_status_*` → still running, not a failure: tell the user, then call `configure()` with no arguments to keep waiting.
+- `prereq_status_testbed_source_odbc: failed("<msg>")` → surface `<msg>`, **stop**. No root: [install_odbc_user.py](../data-infrastructure/worker-local-setup/scripts/install_odbc_user.py) (EULA first), `LD_LIBRARY_PATH`/`ODBCSYSINI` set where the app starts, restart (`.env` is too late). Never change `testing_data_source` for it.
 - `prereq_status_clone_perms: failed("<msg>")` → surface `<msg>`. When it names `isolation_strategy`, the test config holds a value the test runner refuses and no test runs until it is one of the listed values. Otherwise surface `<msg>` once and continue. If the clone can't be created, no case in the run is validated. A run of only read-only procedures needs no clone. See the reference doc. If the account can't grant CREATE DATABASE, the user can have pre-created databases named under `testing_sandbox_databases` in test_config.yaml (reference doc), then recheck.
 - `schema_status_metadata: error("...not visible...recreate_metadata_database=true")` → surface the message. Ask the user whether to restore/GRANT USAGE / repoint `metadata_database`, or start fresh. Only after they confirm starting fresh, call `configure(recreate_metadata_database=true)`. Do **not** treat this as a transient recheck.
 - `schema_status_metadata: error("...cannot tell whether...already bootstrapped...")` → surface. Pre-upgrade stamp under a non-default pin, or the latch names a different metadata database. If the user confirms the database already exists, call `configure(ensure_metadata_schema=true)` (recheck latches it). Only after they confirm starting **empty**, call `configure(recreate_metadata_database=true)`.

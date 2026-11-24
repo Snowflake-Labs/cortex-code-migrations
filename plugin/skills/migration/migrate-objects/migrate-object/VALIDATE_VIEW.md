@@ -1,8 +1,12 @@
 # Validate View
 
-Compare a deployed view between source and Snowflake to verify the migration produced equivalent results.
+Check that a deployed view returns the same data in Snowflake as on the source.
 
-Run this validation as a foreground subagent so its output stays out of the parent context window.
+Run it as a foreground subagent, to keep its output out of the parent's context.
+
+Only a tool's comparison passes a view: `validate_data` (Step 1). Your own
+counts or sample rows never do, and a `completed` advance that no recorded
+comparison confirms is refused.
 
 ## Step 0: Record skill start
 
@@ -30,38 +34,49 @@ If leftover sandbox yaml exists for this view
 (`.scai/bindings/sandbox/{hash}.yaml` after a make_testable mint), use
 that file's `source:` / `snow:` maps instead of the attach common yaml.
 
-## Or: run validate_data
+## Step 1: Compare with validate_data
 
-Instead of Steps 1–3, a data validation workflow can check the view:
-`validate_data(mode="setup", where="id = '<object_id>'")` writes it under
-`views:`, then `validate_data(mode="run", workflow_path=...)`.
+Either route records the comparison that completes `validateView`.
 
-- On SQL Server, setup gives a view without an `indexColumnList` a key for row
-  validation when the source confirms one, and lists it in
-  `applied_index_columns`. A view listed there with a null `indexColumnList`
-  got none, so row validation cannot run. `reason: no_unique_key`: use
-  Steps 1–3 instead. `reason: source_query_failed`: a key query failed on the
-  source (the log says why); fix that and run setup again, or use Steps 1–3.
+- **Row compare (SQL Server):** `validate_data(mode="run", where="id = '<object_id>'")`
+  compares every row of both sides. `verdict: pass` (or `accepted`) is
+  recorded: advance `completed` (Step 4b). `diverged`, `empty`, `same_error`
+  or `error`: classify with Step 4.
+- **Data validation workflow:** `validate_data(mode="setup", where="id = '<object_id>'")`
+  writes the view under `views:`, then `validate_data(mode="run", workflow_path=...)`.
+  - On SQL Server, setup gives a view without an `indexColumnList` a key for
+    row validation when the source confirms one, and lists it in
+    `applied_index_columns`. A view listed with `reason: no_unique_key` has no
+    key: setup turns on metrics validation (L2) for it instead
+    (`metricsValidation: true`, `rowValidation: false`). `reason:
+    source_query_failed`: a key query failed on the source (the log says why);
+    fix that and run setup again, or use the row compare.
+  - A direct run that passes stamps `validateView` completed itself: the result
+    lists the view in `validate_view.stamped`. Stop there.
+  - A view in `validate_view.not_stamped` failed: classify it with Step 4.
+  - An orchestrated run records the attempt. Once `job_status` shows it
+    finished, advance (Step 4b): the status check reads that run's verdict.
 
-- A direct run that passes stamps `validateView` completed itself: the result
-  lists the view in `validate_view.stamped`. Stop there.
-- A view in `validate_view.not_stamped` failed: classify it with Step 4.
-- An orchestrated run only records the attempt. Once `job_status` shows it
-  finished, stamp the outcome with Step 4b.
+No route can compare the view (`validate_data` refuses it, e.g. a view over
+the source's own system catalog): Step 4c.
 
 ## Re-check an override-accepted view
 
-When the user asks to revalidate a view whose diverge was override-accepted
-(e.g. after a compare fix), call
+When the user asks to revalidate an override-accepted diverge (e.g. after a
+compare fix), call
 `validate_data(mode="revalidate", where="id = '<object_id>'")`. It compares
 afresh, honours no acceptance, and lists the ones it dropped in
 `revoked_acceptances`. A `diverged` with `previously_accepted: true` goes back
 to `test_case_verifier`.
 
-## Step 1: Row Count Comparison
+## Step 2: Diagnose a failure
+
+These queries only help classify a failure in Step 4. They never pass a view:
+a matching count and 10 rows miss value differences.
 
 ```
 query_source("SELECT COUNT(*) FROM <source_database>.<source_schema>.<view_name>")
+query_source("SELECT TOP 10 * FROM <source_database>.<source_schema>.<view_name>")
 ```
 
 Compare with:
@@ -73,6 +88,9 @@ sql_execute(
   description="Count rows in the deployed target view"
 )
 ```
+
+(and `SELECT * ... LIMIT 10` the same way) for column names, types, NULL
+handling and collation.
 
 `query_source` is the source database — it does not apply bindings, so qualify
 with the `source:` catalog from `active_bindings`. `sql_execute` is Cortex
@@ -90,40 +108,14 @@ the user what
 [Cortex Code sql_execute: No Query ID](../references/troubleshooting.md#cortex-code-sql_execute-no-query-id)
 says.
 
-## Step 2: Spot Check
-
-```
-query_source("SELECT TOP 10 * FROM <source_database>.<source_schema>.<view_name>")
-```
-
-Compare with:
-
-```
-sql_execute(
-  connection="<snowflake_connection>",
-  sql="SELECT * FROM <snowflake_database>.<SCHEMA>.<VIEW_NAME> LIMIT 10",
-  description="Sample rows from the deployed target view"
-)
-```
-
-Check for:
-- Column name mismatches
-- Data type differences (e.g. datetime precision, numeric scale)
-- NULL handling differences
-- Character encoding or collation issues
-
 ## Step 3: Report
 
-Return a structured result:
-- **Row count match:** yes/no (source count vs Snowflake count)
-- **Column differences:** any mismatched column names or types
-- **Data differences:** any value mismatches from the spot check
-- **Verdict:** pass/fail
-- **If fail, classify the cause** — see Step 4.
+Return the `validate_data` verdict (columns that differ, sample rows) and, for
+a failure, its classification from Step 4.
 
 ## Step 4: Classify the Failure
 
-Before reporting fail, identify *why*. The classification drives how the parent advances the task and how the user is told about it.
+Before reporting fail, identify *why*: it decides how the task advances and what the user is told.
 
 | Cause | Signal | `error` code |
 |---|---|---|
@@ -146,8 +138,18 @@ Qualify retries from leftover yaml `source:` / `snow:` maps.
 
 Advance from this skill (or the parent walker) so `TASK_EVENTS` get an `advanced` row — do not leave completion to `next_task` alone:
 
-- **Pass** → `transition_status(status="advance", task="validateView", outcome="completed", where="id = '<object_id>'")`
+- **Pass** (Step 1 recorded it) → `transition_status(status="advance", task="validateView", outcome="completed", where="id = '<object_id>'")`. Refused without a recorded pass: run Step 1.
 - **Fail, DDL wrong** → `transition_status(status="advance", task="validateView", outcome="failed", error="sql", where="id = '<object_id>'")` — routes to `applyRules` → `fixCode`. Use ONLY when the SQL needs editing.
 - **Fail, infra** → `transition_status(status="advance", task="validateView", outcome="failed", error="infra", where="id = '<object_id>'")` — lands in the errored bucket; the user retries.
 - **Fixture / missing AIMSBX table** → do not stamp; follow Step 4a.
-- **Missing `migrateData`** → do not stamp a dependency wait. The walk already surfaces those tables on `blockedOn`; name them in your reply and leave the task unstamped.
+- **Missing `migrateData`** → do not stamp. The walk lists those tables on `blockedOn`; name them in your reply.
+
+### Step 4c: No tool can compare the view
+
+```
+transition_status(status="escalate", task="validateView", asks=["unvalidated", "skip"],
+                  reason="<why no tool can compare it>", where="id = '<object_id>'")
+```
+
+Only a person's `unvalidated` answer (with a reason) passes the view over; it
+counts as unvalidated, never as verified.

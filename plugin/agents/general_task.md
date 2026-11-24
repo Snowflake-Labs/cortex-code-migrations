@@ -32,8 +32,9 @@ load them: `sleep 5` and call it again, up to 6 times, before returning `stuck`
 ## 2. Walk
 
 - A `walk_run` of the current task records it on success. Otherwise do the work, then
-  `walk(action="done")`; a failed task takes `failed="sql"` or `"infra"` and always a `reason`
-  naming what failed — the fix loop starts from it. Your stamp is the record: never stamp what
+  `walk(action="done")`; a failed task takes `failed="sql"` or `"infra"` (`"stamped"` when its
+  run stamped its own class, which then routes it) and always a `reason` naming what failed —
+  the fix loop starts from it. Your stamp is the record: never stamp what
   did not happen.
 - On a `walk_run` failure do what `fix` says. Data ops are synchronous: no `sleep` or Monitor.
   The same infra failure twice, or one task more than 30 times: escalate.

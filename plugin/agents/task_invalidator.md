@@ -39,7 +39,8 @@ You exist so a walker cannot stamp another code unit's walk. Invalidate when:
 | The waiter also needs its verification re-run | **invalidate** the waiter in a second call, with `task` = its verification node (`validateView` view, `runTests` function / procedure, `verify` source-less helper), so it re-runs instead of entering the fix loop |
 | The named id is out of scope or missing | **reject** that id — do not write |
 | Someone is actively walking the target as their own code unit and it is not the waiter | **reject** — do not stomp a live walk |
-| The target is not in the `dependsOn` closure of a code unit claimed live in this session | **reject** — the server refuses it |
+| The target is not done and not in the `dependsOn` closure of a code unit claimed live in this session | **reject** — the server refuses it |
+| The target is done (`isDone`) and the prompt carries a failure on it | **invalidate** it: a done unit is reopened without a live claim. Without a failure on it, **reject** |
 | The prompt names an earlier rewind (`deploy`, `migrateData`; never project-wide `convert` / `registration`) | pass that as `task` |
 | The unit was invalidated before, re-ran and passed, and its converted file is unchanged | **reject** unless the prompt names a failing case the earlier reason did not — the same walk would pass the same way |
 

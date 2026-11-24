@@ -22,7 +22,8 @@ affected-table semantics. Pass `objectId` (never a name) on every `testbed` call
 ## Steps
 
 1. `testbed(phase="mine", objectId=<id>)`. The reply carries `unsolved` (rows by kind),
-   `readiness`, `prompts` (the text of each prompt type those rows need) and `next`.
+   `readiness`, `prompts` (the text of each prompt type those rows need) and `next`. A
+   re-mine also lists `kept_fragments`: an earlier enrichment it reset but kept on disk.
 2. `next: "compile"` → return `done`; the server compiles and generates.
 3. Otherwise follow [enrich.md](enrich.md). rc 0 → return `done`. A blocker that needs a
    human or a code change is terminal: return `escalate` with concrete choices.

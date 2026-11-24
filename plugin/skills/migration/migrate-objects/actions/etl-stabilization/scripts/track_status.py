@@ -19,6 +19,7 @@
 Essential commands (always used):
     python track_status.py init <scan.json>
     python track_status.py update <session_status.json> <element_name> --status <status> [--reason <reason>]
+    python track_status.py batch-update <session_status.json> --updates-file <path>
     python track_status.py set-test-env <session_status.json> <database> <schema>
     python track_status.py init-roadmap <session_status.json> --phases-json '<json>'
     python track_status.py init-roadmap <session_status.json> --phases-file <path>
@@ -98,16 +99,18 @@ VALID_DBT_NODE_STATUSES = {"pending", "passing", "fixed", "failed", "skipped", "
 VALID_TRANSITIONS: dict[str, set[str]] = {
     "pending": {"in_progress", "fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review", "return-to-convert", "residual"},
     "in_progress": {"fixed", "skipped", "needs-user", "failed", "no-fix-needed", "orch-tested", "proc-tested", "test-passed", "test-failed", "auto-fixed-needs-review", "return-to-convert", "residual"},
-    "orch-tested": {"fixed", "failed", "needs-user", "no-fix-needed", "test-passed", "test-failed", "auto-fixed-needs-review", "in_progress"},
-    "proc-tested": {"fixed", "failed", "needs-user", "no-fix-needed", "test-passed", "test-failed", "auto-fixed-needs-review", "in_progress"},
+    "orch-tested": {"fixed", "failed", "needs-user", "no-fix-needed", "test-passed", "test-failed", "auto-fixed-needs-review", "in_progress", "residual"},
+    "proc-tested": {"fixed", "failed", "needs-user", "no-fix-needed", "test-passed", "test-failed", "auto-fixed-needs-review", "in_progress", "residual"},
     "fixed": {"test-passed", "test-failed", "in_progress"},
     "test-passed": {"in_progress"},
-    "test-failed": {"in_progress", "fixed", "needs-user"},
-    "needs-user": {"in_progress", "fixed", "skipped", "auto-fixed-needs-review"},
-    "auto-fixed-needs-review": {"in_progress", "test-passed", "test-failed", "needs-user"},
+    "test-failed": {"in_progress", "fixed", "needs-user", "residual"},
+    "needs-user": {"in_progress", "fixed", "skipped", "auto-fixed-needs-review", "residual", "return-to-convert"},
+    "auto-fixed-needs-review": {"in_progress", "test-passed", "test-failed", "needs-user", "residual"},
     "failed": {"in_progress", "fixed"},
     "skipped": {"in_progress"},
     "no-fix-needed": {"test-passed", "in_progress"},
+    "residual": {"in_progress", "needs-user", "test-passed", "test-failed"},
+    "return-to-convert": {"in_progress"},
 }
 
 
@@ -355,6 +358,64 @@ def cmd_update(status_path: Path, element_name: str, status: str, reason: str | 
         save_json(status_path, session)
         _refresh_state_md(session, status_path)
     print(f"Updated '{element_name}' -> {status}")
+
+
+# ---------------------------------------------------------------------------
+# batch-update  (performance-improvement-proposal)
+# ---------------------------------------------------------------------------
+
+def cmd_batch_update(status_path: Path, updates: list[dict]) -> None:
+    """Apply many element status updates under one lock / one STATE rewrite.
+
+    updates: list of {"name": str, "status": str, "reason": str | None}
+    """
+    if not updates:
+        print("No updates")
+        return
+
+    with _locked(status_path):
+        session = load_json(status_path)
+        by_name = {el["name"]: el for el in session["elements"]}
+        applied = 0
+        for item in updates:
+            element_name = item["name"]
+            status = item["status"]
+            reason = item.get("reason")
+            if status not in VALID_STATUSES:
+                print(f"Error: invalid status '{status}' for '{element_name}'", file=sys.stderr)
+                sys.exit(1)
+            found = by_name.get(element_name)
+            if found is None:
+                print(f"Error: element '{element_name}' not found", file=sys.stderr)
+                sys.exit(1)
+            current = found["status"]
+            allowed = VALID_TRANSITIONS.get(current)
+            if allowed and status not in allowed:
+                print(f"Warning: unusual transition '{current}' -> '{status}' for '{element_name}'", file=sys.stderr)
+            if status in ("return-to-convert", "residual") and reason is None:
+                print(f"Error: '{status}' status requires --reason", file=sys.stderr)
+                sys.exit(1)
+            if status == "needs-user" and reason is None:
+                print("Error: 'needs-user' status requires --reason documenting prior fix attempts", file=sys.stderr)
+                sys.exit(1)
+            if status == "skipped":
+                if reason is None:
+                    print("Error: 'skipped' status requires --reason. Valid: " + ", ".join(sorted(VALID_SKIP_REASONS)), file=sys.stderr)
+                    sys.exit(1)
+                if reason not in VALID_SKIP_REASONS:
+                    print(f"Error: invalid skip reason '{reason}'. Valid skip reasons: " + ", ".join(sorted(VALID_SKIP_REASONS)), file=sys.stderr)
+                    sys.exit(1)
+            found["status"] = status
+            if reason is not None:
+                found["reason"] = reason
+            elif "reason" in found and status not in ("skipped", "failed", "needs-user", "test-failed", "orch-tested", "return-to-convert", "residual"):
+                del found["reason"]
+            applied += 1
+        session["last_updated"] = now_iso()
+        save_json(status_path, session)
+        _refresh_state_md(session, status_path)
+    print(f"Batch-updated {applied} element(s)")
+
 
 
 # ---------------------------------------------------------------------------
@@ -1818,6 +1879,37 @@ def main() -> None:
             sys.exit(1)
 
         cmd_update(status_path, element_name, status, reason)
+
+    elif command == "batch-update":
+        if len(sys.argv) < 3:
+            print("Usage: python track_status.py batch-update <session_status.json> --updates-file <path>", file=sys.stderr)
+            sys.exit(1)
+        status_path = Path(sys.argv[2])
+        if not status_path.is_file():
+            print(f"Error: '{status_path}' not found", file=sys.stderr)
+            sys.exit(1)
+        updates_file = None
+        i = 3
+        while i < len(sys.argv):
+            if sys.argv[i] == "--updates-file" and i + 1 < len(sys.argv):
+                updates_file = Path(sys.argv[i + 1])
+                i += 2
+            else:
+                print(f"Error: unexpected argument '{sys.argv[i]}'", file=sys.stderr)
+                sys.exit(1)
+        if updates_file is None or not updates_file.is_file():
+            print("Error: --updates-file is required and must exist", file=sys.stderr)
+            sys.exit(1)
+        payload = json.loads(updates_file.read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and "updates" in payload:
+            updates = payload["updates"]
+        elif isinstance(payload, list):
+            updates = payload
+        else:
+            print("Error: updates file must be a list or {\"updates\": [...]}", file=sys.stderr)
+            sys.exit(1)
+        cmd_batch_update(status_path, updates)
+
 
     elif command == "set-test-env":
         if len(sys.argv) < 5:

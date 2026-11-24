@@ -12,6 +12,10 @@ decide there is nothing new; either way `walk(action="done")`.
      (detection regex), `replacement_find`, `replacement_replace`.
    - Context-dependent → `replacement_mode="ai"`, `match_pattern`, `ai_context`
      (what to look for, how to fix, edge cases).
+
+   `match_pattern` runs in Snowflake's `REGEXP_INSTR` with flags `is`
+   (case-insensitive, `.` matches newlines) already applied: no inline flags
+   such as `(?i)`/`(?is)`, no `(?:…)`, lookarounds or backreferences.
 3. **Duplicates.** `find_similar_rules(query=<pattern description>)`, or
    `list_rules(detailed=true)` when it errors. A match → no new rule. Both
    erroring → no new rule: an empty `rules` beside an `error` is not "none".
@@ -21,6 +25,8 @@ decide there is nothing new; either way `walk(action="done")`.
    runs first), `source_platforms` / `object_types` (JSON array strings),
    `source_object` (this object, `database.schema.name`).
    `status: "duplicate"` names the rules already matching it: apply those, no new rule.
+   An error saying `match_pattern` is not a valid Snowflake regular expression →
+   rewrite the pattern as it says and call `create_rule` again.
 
 The rule tools failing → `walk(action="done", failed="infra"|"sql", reason=…)`: the
 walk records the skip and the object still finishes. A step saying it failed earlier is a re-run.
