@@ -185,7 +185,8 @@ def generate_ssis_html_content(
         
         # Combine all sections with the EXACT same structure as standalone
         # CSS is returned separately so it can be injected into the main <head>
-        # Section order: AI Summary -> Key Metrics -> Package Classification -> Component Breakdown
+        heatmap_html = generator.generate_ewi_heatmap()
+        # Section order: Summary -> Key Metrics -> Package Classification -> Component Breakdown -> Heatmap
         html_content = f"""
         <div id="ssis-report">
             <h1>SSIS Assessment Report</h1>
@@ -195,6 +196,7 @@ def generate_ssis_html_content(
             {unassessed_section}
             {package_summary}
             {not_supported_section}
+            {heatmap_html}
         </div>
         """
         

@@ -121,7 +121,9 @@ person's call only: refused for every agent under `subagent_mode`.
 - `where` names the code unit(s) to reopen, not the waiter as a substitute.
 - Refused for the claim holder and for the parent: spawn a `task_invalidator`
   (it shares the attached server). The target must be in scope and in the
-  transitive `dependsOn` closure of a code unit claimed live in this session.
+  transitive `dependsOn` closure of a code unit claimed live in this session,
+  unless it is done and no session still claims it: a done unit is reopened
+  without a live claim, one per call.
 
 ### `bypass`
 

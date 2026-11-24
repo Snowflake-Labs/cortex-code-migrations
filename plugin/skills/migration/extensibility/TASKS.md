@@ -153,7 +153,7 @@ Every entry below names the task id, what your override needs as input, and the 
 - **Done when:** Session config has `git_main_branch` set.
 
 #### `registerCode`
-- **Inputs:** Either a configured source connection (extracted via scai), a folder of source files to register as-is, native ETL packages under `source/_etl/**` (SSIS `.dtsx` / Informatica PowerCenter), or AI-First ETL sources under `source/_etl_aifirst/**` (Talend, Alteryx, IICS, DataStage, Apache Hop, Pentaho, ADF, and other platforms SnowConvert does not natively convert — registered via `create_registry_unit`).
+- **Inputs:** Either a configured source connection (extracted via scai), a folder of source files to register as-is, native ETL packages under `source/_etl/**` (SSIS `.dtsx` / Informatica PowerCenter), or AI-First ETL sources under `source/_etl_aifirst/**` (Apache Hop, Pentaho, and other platforms SnowConvert does not natively convert — registered via `create_registry_unit`).
 - **Done when:** Project is initialized and an import succeeded: at least one unit is registered in the Code Unit Registry (SQL, native ETL, dbt, or AI-First ETL via `create_registry_unit`), or `reports/AddReport.*.csv` exists, which `scai code add` writes only after a successful add (code-conversion-only projects register no units). Files under `source/` alone are not enough: a failed `scai code add` or `scai code extract` can leave them there.
 
 #### `convertCode`
@@ -166,15 +166,15 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `runAssessment`
 - **Inputs:** A converted project from the `convertCode` task.
-- **Done when:** `scai assessment report` has finished: it writes `<report>.result.json` beside the HTML as its last step, on success and on PDF failure, under `<project_dir>/**/assessment/**/` with `*migration_plan*` (the default name) or `*report*` (the legacy name) in the stem. The HTML and PDF alone do not: the HTML lands before the PDF render, and the command still archives the conversion reports after the PDF. Or a waves-only run wrote `<project_dir>/.scai/assessment-waves-only-complete`. Files under `artifacts/assessment/` never count: the analysis children write their own pages there (SSIS and Informatica DAGs are named after packages, so a `send_gl_report_email` package matches `*report*`) long before the report exists.
+- **Done when:** `scai assessment report` has finished: it writes `<project_dir>/assessment/report/index.result.json` beside the HTML hub as its last step, on success and on PDF failure. The HTML and PDF alone do not: the HTML lands before the PDF render, and the command still archives the conversion reports after the PDF. Or `<project_dir>/assessment/multi_report.html` exists, the report an earlier release wrote, so a project assessed before the hub layout is not asked to assess again. Or a waves-only run wrote `<project_dir>/.scai/assessment-waves-only-complete`. Reports anywhere else, including the older stamped names directly under `assessment/` and the analysis children's pages under `artifacts/assessment/`, never count, and setup does not search the project for them.
 
 #### `configureSandboxProfile`
 - **Inputs:** Chosen source and Snowflake connections; confirmed source→Snowflake database bindings written to `.scai/bindings/database-bindings.yaml`.
-- **Done when:** Session config has `snowflake_connection`, a `sandbox_profile` that resolves to a `sandbox: true` profile in `.scai/config/profiles.local.yaml`, and `source_connection` unless `migration_scope` is `deploy_only` or `no_source_connection=true` — a finished project without one comes back to this step. Call `configure(sandbox_profile=..., source_connection=..., snowflake_connection=..., ensure_target_database=true)` after `scai profile create --sandbox`; never `snowflake_database` once the bindings file exists. `no_source_connection=true` replaces `source_connection` only for a project with nothing to extract whose AI-First ETL runs through an `external_command` launcher; `configure` refuses it otherwise.
+- **Done when:** Session config has `snowflake_connection`, a `sandbox_profile` that resolves to a `sandbox: true` profile in `.scai/config/profiles.local.yaml`, and `source_connection` unless `migration_scope` is `deploy_only` or `no_source_connection=true`, and, when ETL units exist under a bindings profile, a `snow: AIM_DB:` entry in the bindings file — a finished project without one comes back to this step. Call `configure(sandbox_profile=..., source_connection=..., snowflake_connection=..., ensure_target_database=true)` after `scai profile create --sandbox`; never `snowflake_database` once the bindings file exists. `no_source_connection=true` replaces `source_connection` only for a project with nothing to extract whose AI-First ETL runs through an `external_command` launcher; `configure` refuses it otherwise.
 
 #### `configureTesting`
 - **Inputs:** Source and Snowflake connections from `configureSandboxProfile` (or `configureSnowflakeTarget` on the Snowflake-source path); the testing path choice from `chooseTestingPath`; optionally a query-log CSV.
-- **Done when:** Session config has `testing_data_source` set — call `configure(testing_data_source=...)`.
+- **Done when:** Session config has `testing_data_source` set — call `configure(testing_data_source=...)`. A SQL Server testbed on the validate ETL route also needs the `testbed_source_odbc` prereq to have passed: `configure(ensure_metadata_schema=true)` runs `scai testbed load --check-source`, which opens the source the way the walkers' testbed loads will.
 
 #### `generateTestbed`
 - **Inputs:** A converted, assessed workload with testbed mining artifacts under `artifacts/**/testbed/*.testbed.json`. A source connection is still required downstream.
@@ -186,7 +186,7 @@ Every entry below names the task id, what your override needs as input, and the 
 
 #### `dataStrategy`
 - **Inputs:** A source language chosen in setup and the intent to migrate/validate table data (the data-infrastructure step establishes that intent).
-- **Done when:** Session config has `data_validation_type` set. Non-Snowflake sources also need `data_migration_type` — the data-migration-setup and data-validation-setup wizards (`progress_setup(mode="data_migration"|"data_validation")`) have both run to completion. Snowflake-source projects skip the migration wizard.
+- **Done when:** The data-validation-setup wizard and, for non-Snowflake sources, the data-migration-setup wizard (`progress_setup(mode="data_validation"|"data_migration")`) have run to completion: every question they ask, the re-run strategy included, is answered. Snowflake-source projects skip the migration wizard.
 
 #### `configureExtractionSource`
 - **Done when:** Session config has `source_connection` set — call `configure(source_connection=...)`. A project with nothing to extract whose ETL is AI-First (source side run by an `external_command` launcher) may instead record `configure(no_source_connection=true)`.

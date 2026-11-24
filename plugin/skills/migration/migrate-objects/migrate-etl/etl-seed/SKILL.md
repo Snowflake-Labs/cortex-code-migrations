@@ -43,7 +43,7 @@ Add `--append` when a YAML already exists for the unit — it re-emits the table
 scai test seed --where "id = '{ETL_ID}'" --append
 ```
 
-Platform is auto-detected per unit from the registry — no `--platform` flag. On success the file is written to `artifacts/{ETL_ID}/etl-test/<name>.yml` with the execution block and table pairs filled from the CUR. When an `external_command:` section is present, the side it names is emitted as `{type: external_command, wait_seconds: <n>}` — two keys and nothing else, since the command itself lives only in `test_config.yaml` — and the other side keeps its native block. Tune `wait_seconds` per unit if one package runs longer than the shared default. Review every generated YAML as described in [After a successful seed](#after-a-successful-seed) before reporting the result.
+Platform is auto-detected per unit from the registry — no `--platform` flag. On success the file is written to `<files.artifacts.path>/etl-test/<name>.yml` (e.g. `artifacts/_etl/<unit>/Package/etl-test/Package.yml`) with the execution block and table pairs filled from the CUR. When an `external_command:` section is present, the side it names is emitted as `{type: external_command, wait_seconds: <n>}` — two keys and nothing else, since the command itself lives only in `test_config.yaml` — and the other side keeps its native block. Tune `wait_seconds` per unit if one package runs longer than the shared default. Review every generated YAML as described in [After a successful seed](#after-a-successful-seed) before reporting the result.
 
 **A failed seed is not yours to replace.** When `scai test seed` exits with an error — a failed connection test such as `Cannot open database …`, for one — do not write the YAML yourself from the CUR, the package or the Snowflake catalog. Report the command and its error to the user. Re-run it only after fixing the environment properly (starting the service, selecting the right registered connection — never repointing or editing a connection just to pass the test); otherwise this is a **STOPPING POINT**: ask the user how to proceed, and leave `etlSeed` started (Step 4).
 
@@ -74,7 +74,7 @@ Only after the underlying issue is understood should you add a missing pair by h
 
 ## Step 3: Fill `index_columns` and Confirm
 
-`scai test seed` leaves `index_columns` blank. Open `artifacts/{ETL_ID}/etl-test/<name>.yml` and, for each table entry, set the join key used to align rows between source and target. Keep the shape the seeder wrote — the parser rejects keys from the other one:
+`scai test seed` leaves `index_columns` blank. Open `<files.artifacts.path>/etl-test/<name>.yml` and, for each table entry, set the join key used to align rows between source and target. Keep the shape the seeder wrote — the parser rejects keys from the other one:
 
 | File (top-level keys) | Entry | Keys go |
 |---|---|---|

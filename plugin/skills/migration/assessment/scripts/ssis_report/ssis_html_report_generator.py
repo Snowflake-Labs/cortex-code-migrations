@@ -38,6 +38,7 @@ from snowconvert_reports.console_utils import DONE, WARN  # noqa: E402
 from snowconvert_reports.services.issue_effort_service import IssueEffortService  # noqa: E402
 
 from snowconvert_reports.ewi_heatmap import render_ewi_heatmap  # noqa: E402
+from pdf_print import ETL_TABLE_PRINT_PAGES, ETL_TABLE_PRINT_ROWS, print_note, print_omit_class  # noqa: E402
 
 
 def _normalize_package_path(path: str) -> str:
@@ -106,6 +107,16 @@ def format_display_name(name: str) -> str:
     return name
 
 
+# summary.review_mode `scai assessment etl generate` records when the user did not ask for AI analysis.
+AI_NOT_REQUESTED_MODE = 'generate-only'
+AIM_ANALYSIS_NOTE = "Ask AIM to run ETL AI analysis."
+
+
+def _is_ai_classified(entry: Dict[str, Any]) -> bool:
+    classification = ((entry.get('ai_analysis') or {}).get('classification') or '').strip()
+    return bool(classification) and classification != 'Unclassified'
+
+
 class HTMLReportGenerator:
     """Generates standalone HTML assessment reports."""
     
@@ -151,6 +162,9 @@ class HTMLReportGenerator:
         
         # Packages with AI analysis are in the main data structure
         self.packages = self.data.get('packages', [])
+        # The user left "AI analysis of SSIS packages" unchecked: no package is waiting
+        # on an analysis, so the report says it was not requested instead of pending.
+        self.ai_not_requested = self.data.get('summary', {}).get('review_mode') == AI_NOT_REQUESTED_MODE
         self.unassessed_packages = find_unassessed_packages(self.packages, registry_packages or [])
         
         # Load executive summary if provided
@@ -498,7 +512,7 @@ class HTMLReportGenerator:
                 <div class="sidebar-title">SSIS Assessment</div>
                 <div class="sidebar-subtitle">Migration Analysis</div>
             </div>
-            <a href="#executive-summary" class="nav-link">AI Summary</a>
+            <a href="#executive-summary" class="nav-link">Summary</a>
             <a href="#metrics" class="nav-link">Key Metrics</a>
             <a href="#package-summary" class="nav-link">Package Classification</a>
             <a href="#not-supported" class="nav-link">Component Breakdown</a>
@@ -516,21 +530,267 @@ class HTMLReportGenerator:
         """
     
     def generate_executive_summary(self) -> str:
-        """Generate executive summary section."""
+        """Generate Summary from generate JSON. LLM HTML must not replace it."""
+        return self._build_rich_summary_fallback()
+
+    def generate_ewi_heatmap(self) -> str:
+        return render_ewi_heatmap(
+            self.packages,
+            severity_of=IssueEffortService.from_bundled_reference().get_severity,
+        )
+
+    def _build_rich_summary_fallback(self) -> str:
+        """Workload overview, S&D, complexity drivers; classification only after AI."""
         summary = self.data.get('summary', {})
-        
-        if self.executive_summary:
-            return f"""
-            {self.executive_summary}
-            """
+        packages = self.data.get('packages', [])
+        total_packages = summary.get('packages', len(packages))
+        total_ewis = summary.get('EWIs') or summary.get('total_ewis') or 0
+        total_fdms = summary.get('FDMs') or summary.get('total_fdms') or 0
+        not_supported = summary.get('not supported elements') or {}
+        if isinstance(not_supported, dict):
+            ns_count = 0
+            ns_names = []
+            for name, value in not_supported.items():
+                ns_names.append(str(name))
+                if isinstance(value, (int, float)):
+                    ns_count += int(value)
+                elif isinstance(value, list):
+                    ns_count += len(value)
+                else:
+                    ns_count += 1
+            ns_detail = ", ".join(sorted(ns_names)) if ns_names else "None"
         else:
-            # Default summary if no AI-generated summary provided
-            return f"""
+            ns_count = int(not_supported or 0) if not isinstance(not_supported, list) else len(not_supported)
+            ns_detail = "None"
+
+        source_counts: Dict[str, int] = {}
+        dest_counts: Dict[str, int] = {}
+        status_counts = {'Success': 0, 'Partial': 0, 'NotSupported': 0}
+        largest_name = ""
+        largest_components = 0
+        classification_counts: Dict[str, int] = {}
+        complexity_counts: Dict[str, int] = {}
+
+        for package in packages:
+            ai = package.get('ai_analysis') or {}
+            c = ai.get('classification') or 'Unclassified'
+            if not str(c).strip():
+                c = 'Unclassified'
+            classification_counts[c] = classification_counts.get(c, 0) + 1
+            cx = (package.get('metrics') or {}).get('package_complexity', {}).get('complexity', 'Unknown')
+            complexity_counts[cx] = complexity_counts.get(cx, 0) + 1
+
+            pkg_components = 0
+            for component in package.get('control_flow_components', []):
+                pkg_components += 1
+                status = component.get('status')
+                if status in status_counts:
+                    status_counts[status] += 1
+            for data_flow in package.get('data_flows', []):
+                for component in data_flow.get('components', []):
+                    pkg_components += 1
+                    status = component.get('status')
+                    if status in status_counts:
+                        status_counts[status] += 1
+                    subtype = component.get('subtype') or 'Unknown'
+                    ctype = (component.get('type') or '').lower()
+                    if ctype == 'source' or subtype.lower().endswith('source'):
+                        source_counts[subtype] = source_counts.get(subtype, 0) + 1
+                    elif ctype == 'destination' or subtype.lower().endswith('destination'):
+                        dest_counts[subtype] = dest_counts.get(subtype, 0) + 1
+            if pkg_components > largest_components:
+                largest_components = pkg_components
+                largest_name = package.get('name', 'Unknown')
+
+        total_status = sum(status_counts.values())
+        success_count = status_counts['Success']
+        success_rate = round((success_count / total_status) * 100, 1) if total_status else 0
+        has_ai_classification = any(_is_ai_classified(pkg) for pkg in packages)
+
+        complexity_desc_parts = []
+        easy_total = complexity_counts.get('Very Easy', 0) + complexity_counts.get('Easy', 0)
+        if easy_total and total_packages:
+            complexity_desc_parts.append(f"{round(easy_total / total_packages * 100)}% Easy/Very Easy")
+        medium = complexity_counts.get('Medium', 0)
+        if medium and total_packages:
+            complexity_desc_parts.append(f"{round(medium / total_packages * 100)}% Medium")
+        hard_total = complexity_counts.get('Complex', 0) + complexity_counts.get('Very Complex', 0)
+        if hard_total and total_packages:
+            complexity_desc_parts.append(f"{round(hard_total / total_packages * 100)}% Complex")
+        complexity_desc = ", ".join(complexity_desc_parts) if complexity_desc_parts else "not assessed"
+
+        sec1 = f"""
+  <div style="background: #f0f9ff; border-left: 4px solid #29B5E8; border-radius: 8px; padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;">
+    <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Workload Overview</h3>
+    <p style="font-size: 0.9rem; color: #334155; line-height: 1.7; margin: 0;">
+      This SSIS workload comprises <strong>{total_packages:,} package{'s' if total_packages != 1 else ''}</strong> with <strong>{summary.get('total components', total_status):,} total components</strong>. Complexity distribution: {complexity_desc}. Conversion success rate: <strong>{success_rate}%</strong> ({success_count:,} of {total_status:,} components).
+    </p>
+  </div>"""
+
+        class_rows = ""
+        ordered_classes = sorted(classification_counts.items(), key=lambda x: -x[1])
+        class_colors = {
+            "Data Transformation": "#F59E0B",
+            "Configuration & Control": "#22C55E",
+            "Ingestion": "#29B5E8",
+            "Mixed: Ingestion + Transformation": "#8B5CF6",
+            "Unclassified": "#9CA3AF",
+        }
+        row_bg = False
+        for label, count in ordered_classes:
+            pct = round((count / total_packages) * 100, 1) if total_packages else 0
+            color = class_colors.get(label, "#9CA3AF")
+            bg = ' background: #fafafa;' if row_bg else ''
+            class_rows += f"""
+        <tr style="border-bottom: 1px solid #e2e8f0;{bg}">
+          <td style="padding: 10px 14px;"><span style="display: inline-block; width: 10px; height: 10px; background: {color}; border-radius: 3px; margin-right: 8px;"></span>{html.escape(label)}</td>
+          <td style="text-align: center; padding: 10px 14px; font-weight: 600;">{count}</td>
+          <td style="text-align: center; padding: 10px 14px;">{pct}%</td>
+        </tr>"""
+            row_bg = not row_bg
+        sec2 = "" if not has_ai_classification else f"""
+  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Package Classification Breakdown</h3>
+  <div style="overflow-x: auto; margin-bottom: 1.5rem;">
+    <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+      <thead>
+        <tr style="background: #f1f5f9;">
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #29B5E8;">Classification</th>
+          <th style="text-align: center; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #29B5E8;">Packages</th>
+          <th style="text-align: center; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #29B5E8;">% of Total</th>
+        </tr>
+      </thead>
+      <tbody>{class_rows}
+      </tbody>
+    </table>
+  </div>"""
+
+        def _count_rows(counts: Dict[str, int]) -> str:
+            rows = ""
+            for name, count in sorted(counts.items(), key=lambda x: -x[1]):
+                rows += f"""
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 6px 0; color: #334155; font-weight: 500;">{html.escape(name)}</td>
+          <td style="padding: 6px 0; text-align: right; color: #64748b;">{count:,} components</td>
+        </tr>"""
+            return rows or """
+        <tr><td style="padding: 6px 0; color: #64748b;" colspan="2">None recorded</td></tr>"""
+
+        sec3 = f"""
+  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Sources &amp; Destinations</h3>
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.5rem;">
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem;">
+      <h4 style="font-size: 0.85rem; font-weight: 600; color: #11567F; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.03em;">Sources</h4>
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.8125rem;">{_count_rows(source_counts)}
+      </table>
+    </div>
+    <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem 1.25rem;">
+      <h4 style="font-size: 0.85rem; font-weight: 600; color: #11567F; margin-bottom: 0.5rem; text-transform: uppercase; letter-spacing: 0.03em;">Destinations</h4>
+      <table style="width: 100%; border-collapse: collapse; font-size: 0.8125rem;">{_count_rows(dest_counts)}
+      </table>
+    </div>
+  </div>"""
+
+        if success_rate >= 95:
+            rate_color, rate_bg = "#16a34a", "#f0fdf4"
+        elif success_rate >= 80:
+            rate_color, rate_bg = "#c2410c", "#fff7ed"
+        else:
+            rate_color, rate_bg = "#dc2626", "#fef2f2"
+
+        sec5 = f"""
+  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Complexity Drivers</h3>
+  <div style="overflow-x: auto; margin-bottom: 1.5rem;">
+    <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+      <thead>
+        <tr style="background: #f1f5f9;">
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #FF9F36;">Complexity Factor</th>
+          <th style="text-align: center; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #FF9F36;">Impact</th>
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #FF9F36;">Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 10px 14px; font-weight: 500;">EWI Issues</td>
+          <td style="text-align: center; padding: 10px 14px;"><span style="background: #fef2f2; color: #dc2626; padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.8rem;">{total_ewis}</span></td>
+          <td style="padding: 10px 14px; color: #475569;">Conversion warnings requiring manual review</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #e2e8f0; background: #fafafa;">
+          <td style="padding: 10px 14px; font-weight: 500;">FDM Differences</td>
+          <td style="text-align: center; padding: 10px 14px;"><span style="background: #fff7ed; color: #c2410c; padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.8rem;">{total_fdms}</span></td>
+          <td style="padding: 10px 14px; color: #475569;">Functional differences between SSIS and Snowflake behavior requiring UAT validation</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 10px 14px; font-weight: 500;">Not Supported Components</td>
+          <td style="text-align: center; padding: 10px 14px;"><span style="background: #fef2f2; color: #dc2626; padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.8rem;">{ns_count}</span></td>
+          <td style="padding: 10px 14px; color: #475569;">{html.escape(ns_detail)} — requires manual rewrite</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #e2e8f0; background: #fafafa;">
+          <td style="padding: 10px 14px; font-weight: 500;">Conversion Success Rate</td>
+          <td style="text-align: center; padding: 10px 14px;"><span style="background: {rate_bg}; color: {rate_color}; padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.8rem;">{success_rate}%</span></td>
+          <td style="padding: 10px 14px; color: #475569;">{success_count:,} of {total_status:,} components converted successfully</td>
+        </tr>
+        <tr style="border-bottom: 1px solid #e2e8f0;">
+          <td style="padding: 10px 14px; font-weight: 500;">Largest Package</td>
+          <td style="text-align: center; padding: 10px 14px;"><span style="background: #fff7ed; color: #c2410c; padding: 2px 10px; border-radius: 10px; font-weight: 600; font-size: 0.8rem;">{largest_components} components</span></td>
+          <td style="padding: 10px 14px; color: #475569;">{html.escape(largest_name)}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>"""
+
+        approach_rows = ""
+        row_bg = False
+        for label, count in ordered_classes:
+            if label == "Unclassified":
+                strategy = "Not classified"
+                considerations = AIM_ANALYSIS_NOTE
+            elif label == "Data Transformation":
+                strategy = "<strong>dbt models + Snowflake Tasks</strong>"
+                considerations = f"{success_rate}% auto-conversion rate; data flows convert to dbt"
+            elif label == "Configuration & Control":
+                strategy = "<strong>Snowflake Tasks with inline SQL</strong>"
+                considerations = "Lightweight orchestration; replace with Snowflake Task DAGs"
+            elif label == "Ingestion":
+                strategy = "<strong>External stages + COPY INTO</strong>"
+                considerations = "Replace external sources with Snowflake ingestion patterns"
+            else:
+                strategy = "<strong>Ingestion + dbt models</strong>"
+                considerations = "Decompose into separate ingestion and transformation layers"
+            bg = ' background: #fafafa;' if row_bg else ''
+            approach_rows += f"""
+        <tr style="border-bottom: 1px solid #e2e8f0;{bg}">
+          <td style="padding: 10px 14px; font-weight: 500;">{html.escape(label)}</td>
+          <td style="text-align: center; padding: 10px 14px; font-weight: 600;">{count}</td>
+          <td style="padding: 10px 14px; color: #475569;">{strategy}</td>
+          <td style="padding: 10px 14px; color: #475569;">{considerations}</td>
+        </tr>"""
+            row_bg = not row_bg
+        sec6 = "" if not has_ai_classification else f"""
+  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Recommended Migration Approach</h3>
+  <div style="overflow-x: auto; margin-bottom: 1.5rem;">
+    <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
+      <thead>
+        <tr style="background: #f1f5f9;">
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #22C55E;">Classification</th>
+          <th style="text-align: center; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #22C55E;">Count</th>
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #22C55E;">Migration Strategy</th>
+          <th style="text-align: left; padding: 10px 14px; font-weight: 600; color: #334155; border-bottom: 2px solid #22C55E;">Key Considerations</th>
+        </tr>
+      </thead>
+      <tbody>{approach_rows}
+      </tbody>
+    </table>
+  </div>"""
+
+        return f"""
         <section id="executive-summary" class="section">
-            <h2>AI Summary</h2>
-            <p>This report provides a comprehensive analysis of {summary.get('packages', 0)} SSIS packages 
-            identified for migration to Snowflake. The assessment includes detailed component analysis, 
-            conversion readiness metrics, and AI-powered migration recommendations.</p>
+            <h2>Summary</h2>
+            <p style="color: #64748b; font-size: 0.875rem; margin-bottom: 1.5rem;">High-level, decision-ready overview of the SSIS workload for data engineers and solution architects preparing a migration to Snowflake.</p>
+{sec1}
+{sec2}
+{sec3}
+{sec5}
+{sec6}
         </section>
         """
     
@@ -791,6 +1051,13 @@ class HTMLReportGenerator:
         </section>
         """
     
+    def _missing_analysis_label(self) -> str:
+        """What a package without an AI analysis shows in its tooltip and detail page."""
+        return 'AI analysis pending. Ask AIM to run AI analysis on this package.'
+
+    def _unclassified_guide(self) -> str:
+        return AIM_ANALYSIS_NOTE
+
     def generate_package_summary(self, output_folder: Optional[Path] = None) -> str:
         """Generate package summary table from JSON with links to detail pages."""
         # Calculate classification and complexity distribution
@@ -823,7 +1090,7 @@ class HTMLReportGenerator:
             # Get complexity from JSON - only show if package is classified (has AI analysis)
             package_json = self.get_package_data_from_json(package_path)
             complexity = '—'  # Default to dash for unclassified
-            if package_json and classification != 'Unclassified':
+            if package_json and (classification != 'Unclassified' or self.ai_not_requested):
                 complexity = package_json.get('metrics', {}).get('package_complexity', {}).get('complexity', '—')
             
             # Count classifications
@@ -876,12 +1143,12 @@ class HTMLReportGenerator:
                     <div class="ai-tooltip-content">{tooltip_text}</div>
                 </div>'''
             else:
-                tooltip_html = '''<div class="ai-tooltip">
-                    <div class="ai-tooltip-pending">AI analysis pending</div>
+                tooltip_html = f'''<div class="ai-tooltip">
+                    <div class="ai-tooltip-pending">{self._missing_analysis_label()}</div>
                 </div>'''
             
             rows_html += f"""
-            <tr class="package-row" data-classification="{classification}" data-complexity="{complexity}" data-name="{package_name.lower()}" data-path="{package_path.lower()}">
+            <tr class="package-row{print_omit_class(idx - 1, ETL_TABLE_PRINT_ROWS)}" data-classification="{classification}" data-complexity="{complexity}" data-name="{package_name.lower()}" data-path="{package_path.lower()}">
                 <td style="position: relative;">{package_name_html}{tooltip_html}</td>
                 <td><span style="display: inline-block; background: #f3f4f6; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500;">{classification}</span></td>
                 <td style="text-align: center;"><span style="display: inline-block; background: #f3f4f6; color: {complexity_color}; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.85rem; font-weight: 500;">{complexity}</span></td>
@@ -890,30 +1157,26 @@ class HTMLReportGenerator:
             """
         
         # Generate classification and complexity distribution charts (dual donut)
-        ewi_heatmap_html = render_ewi_heatmap(
-            self.packages,
-            severity_of=IssueEffortService.from_bundled_reference().get_severity,
-        )
         classification_dist_html = self._generate_classification_and_complexity_charts(
             classification_counts,
             complexity_counts,
             total_packages,
-            ewi_heatmap_html=ewi_heatmap_html,
+            ewi_heatmap_html="",
         )
         
         # Generate analysis status summary
         analysis_status_html = ""
+        package_noun = "package" if total_packages == 1 else "packages"
         if pending_count > 0:
             analysis_status_html = f"""
-            <div class="info-box" style="background-color: #fff3cd; border-left: 4px solid #ffc107; margin-top: 1rem;">
-                <strong>Analysis Status:</strong> {analyzed_count} of {total_packages} packages analyzed. 
-                {pending_count} package{'s' if pending_count != 1 else ''} pending AI analysis.
+            <div class="warning-box">
+                {analyzed_count} of {total_packages} {package_noun} analyzed, {AIM_ANALYSIS_NOTE}
             </div>
             """
         else:
             analysis_status_html = f"""
             <div class="info-box" style="background-color: #d1e7dd; border-left: 4px solid #198754; margin-top: 1rem;">
-                <strong>Analysis Status:</strong> All {analyzed_count} packages have been analyzed.
+                All {analyzed_count} {package_noun} have been analyzed.
             </div>
             """
         
@@ -929,7 +1192,7 @@ class HTMLReportGenerator:
                     <li><strong>Data Transformation:</strong> Packages that transform data between internal database layers. Good candidates to migrate with Snowflake AIM for Data Warehouses to dbt projects on Snowflake, with control flow elements converting to Snowflake Tasks and Snowflake Scripting.</li>
                     <li><strong>Mixed: Ingestion + Transformation:</strong> Packages that both ingest data from external sources and apply transformations within the same workflow. Decompose into separate Snowflake ingestion (Snowpipe/Tasks) and dbt transformation layers.</li>
                     <li><strong>Configuration &amp; Control:</strong> Packages focused on orchestration, metadata management, or system operations rather than moving business data. Often contain foreach loops, file tasks, script tasks, and execute package tasks. Migrate to Snowflake Tasks and Snowflake Scripting, or re-architect based on use case.</li>
-                    <li><strong>Unclassified:</strong> Pending AI analysis.</li>
+                    <li><strong>Unclassified:</strong> {self._unclassified_guide()}</li>
                 </ul>
             </div>
 
@@ -960,6 +1223,7 @@ class HTMLReportGenerator:
                 </div>
                 <div id="packageCount" style="margin-top: 0.75rem; color: #6b7280; font-size: 0.875rem;"></div>
             </div>
+            {print_note(f"The PDF lists about the first {ETL_TABLE_PRINT_PAGES} pages of the package table ({ETL_TABLE_PRINT_ROWS} rows). Component Conversion Breakdown still prints in full.") if total_packages > ETL_TABLE_PRINT_ROWS else ""}
             
             <table id="packageTable">
                 <thead>
@@ -1035,6 +1299,14 @@ class HTMLReportGenerator:
             large_arc = 1 if angle > 180 else 0
             
             color = colors.get(label, '#9ca3af')
+
+            # A 360° SVG arc has the same start and end, so browsers draw nothing.
+            if angle >= 359.9:
+                paths.append(
+                    f'<circle cx="{center}" cy="{center}" r="{radius}" fill="{color}"/>'
+                )
+                start_angle = end_angle
+                continue
             
             # Create path for arc segment
             path = f'''
@@ -1481,7 +1753,11 @@ class HTMLReportGenerator:
         
         metrics = package_json_data.get('metrics', {})
         complexity_data = metrics.get('package_complexity', {})
-        complexity = complexity_data.get('complexity', '—') if classification != 'Unclassified' else '—'
+        complexity = (
+            complexity_data.get('complexity', '—')
+            if classification != 'Unclassified' or self.ai_not_requested
+            else '—'
+        )
         connection_managers = package_json_data.get('connection_managers', [])
         data_flows = package_json_data.get('data_flows', [])
         control_flow_dag_file = package_json_data.get('control_flow_dag_file', '')
@@ -1579,14 +1855,14 @@ class HTMLReportGenerator:
                 </div>
             '''
         else:
-            ai_analysis_content = '''
+            ai_analysis_content = f'''
                 <div style="background: #f8fafc; border: 1px dashed #cbd5e1; border-radius: 12px; padding: 2rem; text-align: center;">
                     <div style="color: #94a3b8; font-size: 0.875rem;">
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin: 0 auto 0.5rem; display: block; opacity: 0.5;">
                             <circle cx="12" cy="12" r="10"/>
                             <path d="M12 16v-4M12 8h.01"/>
                         </svg>
-                        AI analysis pending
+                        {self._missing_analysis_label()}
                     </div>
                 </div>
             '''
@@ -1907,6 +2183,7 @@ class HTMLReportGenerator:
     {self.generate_unassessed_packages_section()}
     {self.generate_package_summary(output_folder)}
     {self.generate_not_supported_section()}
+    {self.generate_ewi_heatmap()}
     
     </main>
     

@@ -58,11 +58,11 @@ If the strategy was already chosen (e.g. a prior migration set it lazily), the f
 
 ### Target table type before extraction
 
-For Redshift, Teradata, and SQL Server the wizard asks the **target table type** (native vs Iceberg)
-**before** the extraction strategy, because Iceberg narrows which extraction mechanisms are valid: an
+For Redshift, Teradata, SQL Server, Azure Synapse, and BigQuery the wizard asks the **target table type** (native vs Iceberg)
+**before** the extraction strategy, because Iceberg narrows which extraction methods are valid: an
 Iceberg target loads from external cloud storage, so only cloud strategies that unload Parquet there are
-offered (SQL Server → `cet_as` / `cloud_direct`, Redshift → `unload` / `cloud_direct`, Teradata →
-`write_nos` / `cloud_direct`) — worker internal-stage reads (`odbc`, `bcp`) are not. Iceberg is valid
+offered (SQL Server → `cet_as` / `cloud_direct`, Synapse → `cet_as` / `cloud_direct`, Redshift → `unload` / `cloud_direct`, Teradata →
+`write_nos` / `cloud_direct`, BigQuery → `export_data` only) — worker reads (`odbc`, `bcp`, `regular`) are not. Iceberg is valid
 only when the source object is fully relational; if the source is itself an Iceberg (or
 external / catalog-backed) table, do not continue. Other dialects skip the table-type question and go
 straight to their extraction ladder.
@@ -101,7 +101,7 @@ a loop until `completed`. An already-chosen strategy returns `completed: true` a
 
 The choices persist to `plugin.yml` as `data_migration_type`,
 `data_migration_extraction_strategy` (the user-facing method, including worker methods),
-`data_migration_target_table_type` (asked only for Redshift, Teradata, and SQL Server),
+`data_migration_target_table_type` (asked only for the Iceberg-capable dialects above),
 `data_validation_type`, and
 `data_validation_sync_strategy`. `data_migration_sync_strategy` is set by the re-run question or an
 explicit `migrate_data(mode="setup", sync_strategy=...)`.

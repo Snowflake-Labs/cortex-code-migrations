@@ -23,6 +23,10 @@ When the executor dispatches this skill as the `applyRules` task:
    transition_status(status="advance", task="applyRules", outcome="completed", where="id = '<object_id>'")
    ```
    The machine routes to `fixCode`. Do not leave completion to `next_task` alone.
+   A `search_rules` reply with `error` and no `rules` is a failed search, not "nothing to apply":
+   ```
+   transition_status(status="advance", task="applyRules", outcome="failed", error="infra", where="id = '<object_id>'")
+   ```
 
 ## Inputs
 

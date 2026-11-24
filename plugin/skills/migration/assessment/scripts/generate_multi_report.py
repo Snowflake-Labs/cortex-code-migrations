@@ -35,6 +35,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import traceback
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -45,6 +46,13 @@ _scripts_dir = str(Path(__file__).resolve().parent)
 if _scripts_dir not in sys.path:
     sys.path.insert(0, _scripts_dir)
 
+from dynamic_sql_ewi_details import (  # noqa: E402
+    DETAILS_BY_CODE as DSQL_EWI_DETAILS,
+    FALLBACK_RECOMMENDATION as DSQL_EWI_FALLBACK_REC,
+    FALLBACK_WHY as DSQL_EWI_FALLBACK_WHY,
+    KPI_TOOLTIPS as DSQL_KPI_TOOLTIPS,
+    enrich_ewi_details,
+)
 from snowconvert_reports.console_utils import DONE  # noqa: E402
 from snowconvert_reports.ewi_heatmap import EWI_HEATMAP_CSS  # noqa: E402
 from snowconvert_reports.services.assessment_metadata import (  # noqa: E402
@@ -195,9 +203,15 @@ VIRTUALIZATION_ENABLED = False
 # Flip to False to hide Workload Insights from every supported report.
 WORKLOAD_INSIGHTS_ENABLED = True
 
-# The PDF prints this many rows of each Object Exclusion classification; the HTML keeps every row.
-EXCLUSION_PRINT_ROWS_PER_CLASSIFICATION = 10
+from pdf_print import (  # noqa: E402
+    EXCLUSION_PRINT_PAGES,
+    EXCLUSION_PRINT_ROWS,
+    PRINT_CLIP_INCHES_PER_PAGE,
+    print_note,
+)
 
+# Kept for tests that still import the old name; PDF now caps the whole table (~3 pages).
+EXCLUSION_PRINT_ROWS_PER_CLASSIFICATION = EXCLUSION_PRINT_ROWS
 
 def generate_ai_summary(summary: Dict, temp_staging: List, deprecated: List, testing: List) -> str:
     """Generate AI summary of the exclusion analysis"""
@@ -461,7 +475,7 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
     
     rows = []
     row_id = 0
-    rows_in_classification = {}
+    printed_rows = 0
     
     for obj in all_objects:
         full_name = html_escape_module.escape(str(obj['full_name']))
@@ -471,8 +485,8 @@ def generate_exclusion_table_rows(temp_staging: List, deprecated: List, testing:
         classification = obj['classification']
         classification_label = obj['classification_label']
         raw = obj['raw']
-        rows_in_classification[classification] = rows_in_classification.get(classification, 0) + 1
-        print_class = ' print-omit' if rows_in_classification[classification] > EXCLUSION_PRINT_ROWS_PER_CLASSIFICATION else ''
+        printed_rows += 1
+        print_class = ' print-omit' if printed_rows > EXCLUSION_PRINT_ROWS else ''
         
         # Get reason from matched patterns (use combined patterns if available, else from raw).
         # Patterns come straight from SCAI as regex strings; translate them to
@@ -742,7 +756,7 @@ def flatten_dynamic_sql_json(data: Dict) -> List[Dict]:
 
     ``{ metadata: {...}, codeUnits: { <id>: { codeUnitId, procedureName,
     fileName, codeUnitStartLine, linesOfCode, procedure,
-    occurrences: [{id, line, status, category, complexity, notes,
+    occurrences: [{id, line, issueCode, status, category, complexity, notes,
     generatedSql, sqlClassification}] } } }``
 
     Code-unit metadata fields live at the top of each code-unit entry (not
@@ -750,6 +764,8 @@ def flatten_dynamic_sql_json(data: Dict) -> List[Dict]:
     The renderer expects snake_case keys, so we translate at flatten time.
     """
     flattened = []
+    metadata = data.get('metadata') if isinstance(data.get('metadata'), dict) else {}
+    catalog = metadata.get('ewiCatalog')
     code_units = data.get('codeUnits', {}) or {}
 
     for code_unit_id, cu_data in code_units.items():
@@ -783,8 +799,12 @@ def flatten_dynamic_sql_json(data: Dict) -> List[Dict]:
                 'code_unit_start_line': code_unit_start_line,
                 'lines_of_code': lines_of_code,
                 'status': occ.get('status', 'PENDING'),
+                'issue_code': occ.get('issueCode', '') or '',
                 'category': category,
-                'complexity': occ.get('complexity', '') or '',
+                'complexity': dynamic_sql_complexity_from_ewi(
+                    occ.get('issueCode', '') or '',
+                    catalog,
+                ),
                 'notes': occ.get('notes', '') or '',
                 'generated_sql': occ.get('generatedSql', '') or '',
                 'sql_classification': occ.get('sqlClassification', '') or '',
@@ -793,58 +813,100 @@ def flatten_dynamic_sql_json(data: Dict) -> List[Dict]:
     return flattened
 
 
+def dynamic_sql_complexity_from_ewi(issue_code: Any, ewi_catalog: Optional[Dict]) -> str:
+    """Map an occurrence's issue code to the engine catalog severity.
+
+    Catalog severities are Critical, High, Medium, or Low. The report uses
+    those tokens as complexity so code-unit max and filters stay the same.
+    """
+    catalog = ewi_catalog if isinstance(ewi_catalog, dict) else {}
+    code = str(issue_code or '').strip()
+    entry = catalog.get(code) if code else None
+    if not isinstance(entry, dict):
+        return ''
+    severity = str(entry.get('severity') or '').strip().lower()
+    if severity in ('critical', 'high', 'medium', 'low'):
+        return severity
+    return ''
+
+
 def _is_pending_dynamic_sql_status(status: Any) -> bool:
     normalized = str(status or '').strip().upper()
     return normalized == '' or normalized == 'PENDING'
 
 
-def dynamic_sql_pattern_chart_steps(flattened: List[Dict]) -> List[Dict]:
-    """Aggregate reviewed occurrences into Pattern Categories chart steps.
+def dynamic_sql_pattern_chart_steps(
+    flattened: List[Dict],
+    ewi_catalog: Optional[Dict] = None,
+) -> List[Dict]:
+    """Bar-chart steps for unresolved-occurrence categories (engine EWIs).
 
-    Matches the Vue ``sortedPatterns`` computed: count each category tag across
-    analyzed rows, sort by occurrence count then code-unit count, and report
-    percentage of analyzed occurrences (multi-tag rows can sum above 100%).
+    Same rows as the table: every occurrence, including PENDING, labelled with
+    the catalog title (or the issue code when the title is missing).
     """
-    analyzed = [
-        row for row in (flattened or [])
-        if isinstance(row, dict) and not _is_pending_dynamic_sql_status(row.get('status'))
+    return [
+        {
+            'label': row['title'],
+            'count': row['count'],
+            'code_unit_count': row['code_unit_count'],
+            'percentage': row['percentage'],
+        }
+        for row in dynamic_sql_ewi_table_rows(flattened, ewi_catalog)
     ]
-    analyzed_count = len(analyzed)
+
+
+def dynamic_sql_ewi_table_rows(
+    flattened: List[Dict],
+    ewi_catalog: Optional[Dict],
+) -> List[Dict]:
+    """Count every occurrence by issue code and join engine catalog fields.
+
+    Includes PENDING rows so generate-only reports are not empty.
+    """
+    catalog = ewi_catalog if isinstance(ewi_catalog, dict) else {}
     totals: Dict[str, int] = {}
     units: Dict[str, set] = {}
-    for row in analyzed:
-        code_unit_id = str(row.get('code_unit_id') or 'unknown')
-        categories = row.get('category') or []
-        if not isinstance(categories, list):
+    for row in flattened or []:
+        if not isinstance(row, dict):
             continue
-        for cat in categories:
-            name = str(cat).strip() if cat is not None else ''
-            if not name:
-                continue
-            totals[name] = totals.get(name, 0) + 1
-            units.setdefault(name, set()).add(code_unit_id)
+        code = str(row.get('issue_code') or '').strip() or 'UNKNOWN'
+        totals[code] = totals.get(code, 0) + 1
+        units.setdefault(code, set()).add(str(row.get('code_unit_id') or 'unknown'))
 
-    steps = []
-    for name, count in totals.items():
-        code_unit_count = len(units.get(name, set()))
-        percentage = round((count / analyzed_count) * 1000) / 10 if analyzed_count else 0.0
-        steps.append({
-            'label': name,
+    total = sum(totals.values())
+    rows = []
+    for code, count in totals.items():
+        entry = catalog.get(code)
+        if not isinstance(entry, dict):
+            entry = {}
+        details = enrich_ewi_details(code, entry)
+        rows.append({
+            'code': code,
+            'title': str(entry.get('title') or code),
+            'severity': str(entry.get('severity') or 'Unknown'),
+            'description': str(entry.get('description') or ''),
+            'what_it_is': details['what_it_is'],
+            'why_flagged': details['why_flagged'],
+            'snowflake_recommendation': details['snowflake_recommendation'],
+            'doc_url': details['doc_url'],
             'count': count,
-            'code_unit_count': code_unit_count,
-            'percentage': percentage,
+            'code_unit_count': len(units.get(code, set())),
+            'percentage': round((count / total) * 1000) / 10 if total else 0.0,
         })
-    steps.sort(key=lambda step: (-step['count'], -step['code_unit_count'], step['label']))
-    return steps
+    rows.sort(key=lambda row: (-row['count'], row['code']))
+    return rows
 
 
-def load_waves_data(waves_json: Path, reports_dir: Path = None, registry_dir: Path = None):
-    """Load waves/dependency analysis data and generate HTML content for the waves report tab."""
+def load_waves_data(
+    waves_json: Path,
+    reports_dir: Path = None,
+    registry_dir: Path = None,
+):
+    """Load dependency analysis data and generate HTML content for the Dependencies tab."""
     if not WAVES_SUPPORT:
         return None
 
     try:
-        # Generate the full waves HTML report to a temp file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.html', encoding='utf-8', delete=False) as tmp:
             tmp_path = Path(tmp.name)
 
@@ -919,22 +981,10 @@ def load_waves_data(waves_json: Path, reports_dir: Path = None, registry_dir: Pa
         
         """ + raw_waves_js
         
-        # Replace problematic getElementById calls with safe version
-        waves_js = waves_js.replace(
-            "document.getElementById('pipelineView').addEventListener(",
-            "safeAddEventListener('pipelineView', "
-        ).replace(
-            "document.getElementById('pipelineView').addEventListener",
-            "safeAddEventListener('pipelineView'"
-        )
-        
-        # Clean up temp files
-        # TEMPORARILY DISABLED FOR DEBUGGING
-        # try:
-        #     tmp_path.unlink()
-        # except:
-        #     pass
-        print(f"DEBUG: Temp waves HTML saved at: {tmp_path}", file=sys.stderr)
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
         
         return {
             'html_content': waves_html_content,
@@ -1062,6 +1112,10 @@ def _count_temporal_tables(overview_stats: Dict) -> int:
 _WORKLOAD_INVENTORY_LABELS = {
     "PARAMETER_REF": "PARAMETER REFERENCES",
 }
+# What each object total counts. The steps read the registry with different
+# rules, so every total names its own rule instead of a bare "objects".
+WAVE_PLAN_TOTAL_SCOPE = "Every object in the wave plan, missing references included"
+EXCLUSION_TOTAL_SCOPE = "Every registered object of a known type, in scope or not"
 _PARAMETER_REFERENCES_TOOLTIP = (
     "Object names in scripts and mappings that still contain a parameter, "
     "so the referenced object could not be identified."
@@ -1088,11 +1142,15 @@ def _render_workload_inventory_cards(
     if temporal_tables_count > 0:
         table_subsets.append((temporal_tables_count, 'temporal'))
 
+    # Without a waves JSON the card shows the exclusion total, which sets its
+    # own rule in ``total_scope``.
+    total_scope = overview_stats.get('total_scope', WAVE_PLAN_TOTAL_SCOPE)
     cards = [f'''
                 <div class="effort-card">
                     <div class="effort-card-num">{overview_stats.get('total_objects', total_objects)}</div>
                     <div class="effort-card-lbl">Total Objects</div>
                     <div class="effort-card-lbl">In {overview_stats.get('total_waves', 'N/A')} Waves</div>
+                    <div class="effort-card-scope">{total_scope}</div>
                 </div>
                 ''']
     for obj_type, count in objects_by_type.items():
@@ -1296,6 +1354,7 @@ def generate_multi_report(
     plugin_version: Optional[str] = None,
 ) -> None:
     """Generate multi-tab HTML report"""
+    started = time.perf_counter()
 
     # Load data
     exclusion_data = None
@@ -1316,9 +1375,16 @@ def generate_multi_report(
         if not exclusion_json:
             default_tab = 'dynamic-sql'
 
+    output_file = Path(output_file)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
     if waves_json:
         print(f"Loading waves data from {waves_json}...")
-        waves_info = load_waves_data(waves_json, snowconvert_reports_dir, registry_dir=registry_dir)
+        waves_info = load_waves_data(
+            waves_json,
+            snowconvert_reports_dir,
+            registry_dir=registry_dir,
+        )
         if waves_info:
             if not exclusion_json and not dynamic_sql_json:
                 default_tab = 'waves'
@@ -1544,7 +1610,6 @@ def generate_multi_report(
     # Process dynamic SQL data
     flattened_dynamic_sql = flatten_dynamic_sql_json(dynamic_sql_data) if dynamic_sql_data else []
     dynamic_sql_meta = dynamic_sql_data.get('metadata', {}) if dynamic_sql_data else {}
-    
     # Load overview and missing objects data
     overview_stats = None
     missing_objects_data = None
@@ -1670,12 +1735,63 @@ def generate_multi_report(
     
     with open(output_file, 'w', encoding='utf-8') as f:
         f.write(html_content)
+
+    archive_dir = None
+    zip_path = None
+    try:
+        _waves_scripts = str(Path(__file__).parent.parent / "waves-generator" / "scripts")
+        if _waves_scripts not in sys.path:
+            sys.path.insert(0, _waves_scripts)
+        from report_pages import publish_shareable_report
+
+        archive_dir, zip_path = publish_shareable_report(
+            output_file.parent,
+            extra_files={output_file.name},
+        )
+    except Exception as exc:
+        print(f"Warning: could not archive/zip the report folder: {exc}", file=sys.stderr)
     
     print(f"\n{DONE} Multi-tab HTML report generated successfully!")
     print(f"  Output: {output_file}")
     print(f"  Size: {output_file.stat().st_size:,} bytes")
+    for sidecar in (
+        output_file.parent / "discovery.html",
+        output_file.parent / "overview.html",
+        output_file.parent / "dependencies.html",
+        output_file.parent / "exclusion.html",
+        output_file.parent / "conversion-issues.html",
+        output_file.parent / "dynamic-sql.html",
+        output_file.parent / "etl.html",
+        output_file.parent / "effort-estimates.html",
+        output_file.parent / "data-migration.html",
+        output_file.parent / "testing.html",
+        output_file.parent / "print.html",
+    ):
+        if sidecar.is_file():
+            print(f"  {sidecar.name}: {sidecar.stat().st_size:,} bytes")
+    if archive_dir:
+        print(f"  Snapshot: {archive_dir}")
+    if zip_path:
+        print(f"  Zip: {zip_path}")
+    print(f"  Elapsed: {time.perf_counter() - started:.1f}s")
     print(f"\nOpen the report in your browser:")
     print(f"  open {output_file}")
+
+
+def _empty_tab(tab_id: str, extra_class: str = "") -> str:
+    cls = f"tab-content {extra_class}".strip()
+    return (
+        f'            <div class="{cls}" '
+        f":class=\"{{active: activeTab === '{tab_id}'}}\"></div>\n"
+    )
+
+
+def _section_href(tab: str, home: str) -> str:
+    if tab == "journey":
+        return home
+    from report_pages import SECTION_FILES
+
+    return SECTION_FILES[tab]
 
 
 def generate_html_template(
@@ -1736,6 +1852,7 @@ def generate_html_template(
     business_use_cases_css: str = "",
 ) -> str:
     """Generate the complete HTML template"""
+    home_href = Path(output_file).name if output_file else "index.html"
     dynamic_sql_meta_json = json.dumps(dynamic_sql_meta or {}, ensure_ascii=False)
     
     logo_base64 = ""
@@ -1771,6 +1888,7 @@ def generate_html_template(
     if overview_stats is None:
         overview_stats = {
             'total_objects': total_objects_excl,
+            'total_scope': EXCLUSION_TOTAL_SCOPE,
             'total_waves': 0,
             'objects_by_type': {},
             'conversion_stats': {}
@@ -1861,7 +1979,7 @@ def generate_html_template(
             <div style="margin: 0 0 12px 0; background: #F8FBFC; border: 1px solid #B6D5F3; border-left: 4px solid #29B5E8; border-radius: 8px; padding: 10px 12px; color: #2A3342; font-size: 0.85rem; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;">
                 <div>
                     To fully <strong>analyze and download all missing objects</strong>, open
-                    <a href="#all-objects" onclick="document.querySelector('.nav-link[data-tab=\\'waves\\']').click(); setTimeout(function(){{ window.location.hash = 'all-objects'; }}, 0);" style="color: #005C8F; font-weight: 700; text-decoration: underline;">Dependencies Report (All Objects)</a>
+                    <a href="dependencies.html#all-objects" style="color: #005C8F; font-weight: 700; text-decoration: underline;">Dependencies Report (All Objects)</a>
                     and filter by <strong>Status = Missing</strong>.
                 </div>
             </div>
@@ -1947,8 +2065,8 @@ def generate_html_template(
     renders_redshift_workload = workload_insights_dialect == 'redshift' or (
         not workload_insights_dialect and registry_dialect == 'redshift'
     )
-    discovery_nav_html = """
-                <a @click="activeTab = 'discovery'" class="nav-section" data-tab="discovery" :class="{active: activeTab === 'discovery'}">
+    discovery_nav_html = f"""
+                <a href="{_section_href('discovery', home_href)}" class="nav-section" data-tab="discovery" :class="{{active: activeTab === 'discovery'}}">
                     <span>Discovery</span>
                 </a>
     """
@@ -2006,17 +2124,17 @@ def generate_html_template(
     effort_nav_sublist = ""
     if has_effort_tab:
         effort_nav_overview_sublink = (
-            '<a @click="scrollToSection(\'#effort-estimates\', \'overview\')" '
+            '<a href="overview.html#effort-estimates" '
             'class="nav-sublink">Estimated Effort to Migrate</a>'
         )
         effort_nav_link = (
-            '<a @click="activeTab = \'effort-estimates\'" class="nav-link" '
+            f'<a href="{_section_href("effort-estimates", home_href)}" class="nav-link" '
             'data-tab="effort-estimates" :class="{active: activeTab === \'effort-estimates\'}">'
             'Effort Estimates</a>'
         )
         effort_nav_sublist = (
             '<div v-if="activeTab === \'effort-estimates\'" class="nav-sublist">'
-            '<a @click="scrollToSection(\'#effort-calculator\', \'effort-estimates\')" class="nav-sublink">Calculator</a>'
+            '<a href="effort-estimates.html#effort-calculator" class="nav-sublink">Calculator</a>'
             '</div>'
         )
 
@@ -2024,8 +2142,8 @@ def generate_html_template(
     # anchors live in optional pane content has to be gated on that same content.
     waves_nav_sublist = (
         '<div v-if="activeTab === \'waves\'" class="nav-sublist">'
-        '<a @click="scrollToSection(\'#overview\', \'waves\')" class="nav-sublink">Overview</a>'
-        '<a @click="scrollToSection(\'#all-objects\', \'waves\')" class="nav-sublink">All Objects</a>'
+        '<a href="dependencies.html#overview" class="nav-sublink">Overview</a>'
+        '<a href="dependencies.html#all-objects" class="nav-sublink">All Objects</a>'
         '</div>'
         if has_waves and waves_info
         else ""
@@ -2033,6 +2151,13 @@ def generate_html_template(
     etl_nav_sublist = build_etl_nav_sublist(
         has_ssis=has_ssis,
         has_informatica=has_informatica,
+    )
+    exclusion_nav_link = (
+        f'<a href="{_section_href("exclusion", home_href)}" class="nav-link" '
+        'data-tab="exclusion" :class="{active: activeTab === \'exclusion\'}">'
+        "Exclusion Report</a>"
+        if has_exclusion
+        else ""
     )
 
     # Overview tab HTML
@@ -2205,7 +2330,7 @@ def generate_html_template(
         journey_steps = [step for step in journey_steps if step[0] != 'virtualization']
     journey_cards_html = "".join(
         f"""
-                <div class="journey-card" @click="activeTab = '{tab}'">
+                <a href="{_section_href(tab, home_href)}" class="journey-card">
                     <div class="journey-badge">{step}</div>
                     <div class="journey-card-body">
                         <h3>{title}{' <span class="nav-preview-badge">Preview</span>' if tab == 'business-use-cases' else ''}</h3>
@@ -2216,7 +2341,7 @@ def generate_html_template(
                             <path d="M6 3l5 5-5 5" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
                     </span>
-                </div>
+                </a>
         """
         for step, (tab, title, desc) in enumerate(journey_steps, start=1)
     )
@@ -2397,7 +2522,9 @@ def generate_html_template(
         else:
             data_lineage_content = f"""
             <div v-pre>
+            <div class="print-clip print-clip-1-page">
                 {dl_content}
+            </div>
             </div>
         """
     else:
@@ -2490,6 +2617,7 @@ def generate_html_template(
                 <div v-show="lineageView === 'data'" id="data-lineage-panel"
                      role="region" aria-label="Data Lineage">
                     {data_lineage_content}
+                    {print_note("The PDF shows only the first page of Data Lineage.")}
                 </div>
                 <div v-show="lineageView === 'object'" id="object-lineage-panel"
                      class="empty-state object-lineage-notice print-omit" role="region" aria-labelledby="object-lineage-title">
@@ -2532,7 +2660,7 @@ def generate_html_template(
                         <div class="metric-card" style="cursor: pointer;" onclick="navigateToCategory('all')">
                             <div class="metric-label">Total in Database</div>
                             <div class="metric-value">{total_objects_excl}</div>
-                            <div class="metric-description">Objects found in source project</div>
+                            <div class="metric-description">{EXCLUSION_TOTAL_SCOPE}</div>
                         </div>
                         <div class="metric-card" style="cursor: pointer;" onclick="navigateToCategory('all')">
                             <div class="metric-label">Total Flagged</div>
@@ -2588,7 +2716,7 @@ def generate_html_template(
                         Flagged Objects for Review
                     </h2>
                     <p style="color: #64748B; margin-bottom: 1rem;">Showing {flagged_count} objects that match naming patterns for temporary, deprecated, testing, or duplicate categories. These objects require review before migration.</p>
-                    <p class="print-only print-note">This PDF lists the first {EXCLUSION_PRINT_ROWS_PER_CLASSIFICATION} objects of each classification. All {flagged_count} flagged objects are in the HTML report (multi_report.html) and its CSV and Excel downloads.</p>
+                    {print_note(f"The PDF shows about the first {EXCLUSION_PRINT_PAGES} pages of flagged objects. All {flagged_count} flagged objects stay in the HTML.") if flagged_count > EXCLUSION_PRINT_ROWS else ""}
                     <div class="export-buttons print-omit" style="margin-bottom: 1.5rem;">
                         <button class="export-btn-compact" onclick="downloadCSV('all')">Download All (CSV)</button>
                         <button class="export-btn-compact" onclick="downloadExcel('all')">Download All (Excel)</button>
@@ -2608,7 +2736,7 @@ def generate_html_template(
                     </div>
                     
                     <!-- Objects Table -->
-                    <div>
+                    <div class="print-clip print-clip-3-page">
                         <table class="exclusion-table" id="exclusion-objects-table">
                             <thead>
                                 <tr>
@@ -2802,7 +2930,10 @@ def generate_html_template(
         flattened_for_chart = []
     if not isinstance(flattened_for_chart, list):
         flattened_for_chart = []
-    pattern_chart_steps = dynamic_sql_pattern_chart_steps(flattened_for_chart)
+    ewi_catalog = None
+    if isinstance(dynamic_sql_meta, dict):
+        ewi_catalog = dynamic_sql_meta.get('ewiCatalog')
+    pattern_chart_steps = dynamic_sql_pattern_chart_steps(flattened_for_chart, ewi_catalog)
     pattern_chart_height = max(160, 40 * len(pattern_chart_steps) + 48) if pattern_chart_steps else 160
 
     dynamic_sql_pattern_js = ""
@@ -2927,10 +3058,55 @@ def generate_html_template(
                             </button>
                         </div>
                         <div style="position:relative;height:{pattern_chart_height}px;">
-                            <canvas id="dynamicSqlPatternChart" aria-label="Dynamic SQL pattern categories"></canvas>
+                            <canvas id="dynamicSqlPatternChart" aria-label="Unresolved occurrences categories"></canvas>
                         </div>
                     </div>
             """
+        dsq_copy_icon = """
+                        <svg class="dsq-copy-svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>"""
+        dsq_check_icon = """
+                        <svg class="dsq-copy-svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>"""
+        dynamic_sql_occ_prompt = f"""
+                <div v-if="isPendingStatus(occ.status)" class="dsq-ai-off-prompt">
+                    <p class="dsq-ai-off-lead"><strong>Not analyzed by AI yet.</strong> Use this prompt to run AI analysis for this occurrence.</p>
+                    <div class="dsq-ai-off-code">
+                        <button type="button" class="dsq-copy-btn" :class="{{ copied: dsqlCopied === ('occ-' + occ.id) }}" :aria-label="dsqlCopied === ('occ-' + occ.id) ? 'Copied' : 'Copy prompt'" @click="copyDsqlPrompt('occ-' + occ.id)">
+                            <template v-if="dsqlCopied === ('occ-' + occ.id)">{dsq_check_icon}</template>
+                            <template v-else>{dsq_copy_icon}</template>
+                        </button>
+                        <pre :id="'dsql-prompt-occ-' + occ.id" class="dsq-ai-off-pre">Run deep dynamic SQL analysis for occurrence {{{{ occ.id }}}} in procedure {{{{ selectedCodeUnit.name }}}} of this project. Analyze only that occurrence.</pre>
+                    </div>
+                </div>
+        """
+        dynamic_sql_all_prompt = f"""
+                <div v-if="pendingOccurrencesCount > 0" class="dsq-ai-off-prompt" style="margin-bottom: 24px;">
+                    <p class="dsq-ai-off-lead"><strong>Not all occurrences are analyzed by AI yet.</strong> Use this prompt to run AI analysis for all pending occurrences.</p>
+                    <div class="dsq-ai-off-code">
+                        <button type="button" class="dsq-copy-btn" :class="{{ copied: dsqlCopied === 'all' }}" :aria-label="dsqlCopied === 'all' ? 'Copied' : 'Copy prompt'" @click="copyDsqlPrompt('all')">
+                            <template v-if="dsqlCopied === 'all'">{dsq_check_icon}</template>
+                            <template v-else>{dsq_copy_icon}</template>
+                        </button>
+                        <pre id="dsql-prompt-all" class="dsq-ai-off-pre">Run deep dynamic SQL analysis for all pending occurrences in this project.</pre>
+                    </div>
+                </div>
+        """
+        dynamic_sql_unit_prompt = f"""
+                <div v-if="codeUnitAllPending(selectedCodeUnit)" class="dsq-ai-off-prompt">
+                    <p class="dsq-ai-off-lead"><strong>Not analyzed by AI yet.</strong> Use this prompt to run AI analysis for all pending occurrences in this procedure.</p>
+                    <div class="dsq-ai-off-code">
+                        <button type="button" class="dsq-copy-btn" :class="{{ copied: dsqlCopied === 'unit' }}" :aria-label="dsqlCopied === 'unit' ? 'Copied' : 'Copy prompt'" @click="copyDsqlPrompt('unit')">
+                            <template v-if="dsqlCopied === 'unit'">{dsq_check_icon}</template>
+                            <template v-else>{dsq_copy_icon}</template>
+                        </button>
+                        <pre id="dsql-prompt-unit" class="dsq-ai-off-pre">Run deep dynamic SQL analysis for all pending occurrences in code unit {{{{ selectedCodeUnit.code_unit_id }}}} of this project.</pre>
+                    </div>
+                </div>
+        """
         dynamic_sql_html = """
             <!-- Dynamic SQL Report Tab -->
             <div class="tab-content" :class="{active: activeTab === 'dynamic-sql'}">
@@ -2944,76 +3120,73 @@ def generate_html_template(
                             Deep dive into code patterns that require special attention during migration to Snowflake.
                         </p>
                     </div>
-                    <div class="metrics-row">
-                        <div class="metric-item">
-                            <div class="metric-label">Unresolved occurrences</div>
-                            <div class="metric-value">{{ totalOccurrences }}</div>
-                            <div class="metric-sub">Unresolved dynamic SQL instances</div>
+                    <div class="effort-cards dsq-kpis">
+                        <div class="effort-card" data-tooltip="<!--DSQL_KPI_UNITS-->">
+                            <div class="effort-card-num">{{ uniqueCodeUnits }}</div>
+                            <div class="effort-card-lbl">Code units</div>
+                            <div class="effort-card-lbl">With unresolved occurrences</div>
                         </div>
-                        <div class="metric-item">
-                            <div class="metric-label">Analyzed</div>
-                            <div class="metric-value">{{ analyzedOccurrencesCount }}</div>
-                            <div class="metric-sub">Reviewed unresolved occurrences</div>
-                        </div>
-                        <div class="metric-item" v-if="pendingOccurrencesCount > 0">
-                            <div class="metric-label">Pending</div>
-                            <div class="metric-value metric-value-warn">{{ pendingOccurrencesCount }}</div>
-                            <div class="metric-sub">Excluded from code units</div>
-                        </div>
-                        <div class="metric-item">
-                            <div class="metric-label">Code units</div>
-                            <div class="metric-value">{{ uniqueCodeUnits }}</div>
-                            <div class="metric-sub">With reviewed unresolved occurrences</div>
-                        </div>
-                        <div class="metric-item">
-                            <div class="metric-label">High priority</div>
-                            <div class="metric-value metric-value-warn">{{ highPriority }}</div>
-                            <div class="metric-sub">Critical + High (reviewed)</div>
+                        <div class="effort-card" data-tooltip="<!--DSQL_KPI_UNRESOLVED-->">
+                            <div class="effort-card-num">{{ totalOccurrences }}</div>
+                            <div class="effort-card-lbl">Unresolved occurrences</div>
+                            <div class="effort-card-lbl">Unresolved dynamic SQL instances</div>
                         </div>
                     </div>
 
-                    <h3 class="text-xl font-semibold text-sf-dark-blue mb-4">Pattern Categories</h3>
-""" + pattern_chart_card + """
+                    <h3 class="text-xl font-semibold text-sf-dark-blue mb-4">Unresolved occurrences categories</h3>
+                    <!--DSQL_CHART-->
                     <table class="w-full border-collapse" style="border: 1px solid #8A999E;">
                         <thead class="bg-sf-blue text-white">
                             <tr>
-                                <th class="p-3 text-left">Category</th>
+                                <th class="p-3 text-left">Title</th>
+                                <th class="p-3 text-left">Code</th>
+                                <th class="p-3 text-center">Severity</th>
                                 <th class="p-3 text-center">Unresolved occurrences</th>
                                 <th class="p-3 text-center">Code Units</th>
                                 <th class="p-3 text-center">Percentage</th>
                             </tr>
                         </thead>
                         <tbody class="text-sm">
-                            <tr v-for="(pattern, index) in sortedPatterns" :key="index" 
-                                class="border-b border-sf-gray hover:bg-blue-50"
-                                :style="index % 2 === 0 ? 'background: #FFFFFF' : 'background: #F9FAFB'">
-                                <td class="p-3 font-semibold">{{ pattern.name }}</td>
-                                <td class="p-3 text-center">{{ pattern.count }}</td>
-                                <td class="p-3 text-center">{{ pattern.codeUnitCount }}</td>
-                                <td class="p-3 text-center">{{ pattern.percentage }}%</td>
+                            <tr v-if="sortedEwis.length === 0">
+                                <td class="p-3" colspan="6" style="color: #64748B;">No unresolved Dynamic SQL occurrences in this analysis.</td>
                             </tr>
-                        </tbody>
-                    </table>
-
-                    <h3 class="text-xl font-semibold text-sf-dark-blue mb-4" style="margin-top: 28px;">SQL Classification</h3>
-                    <table class="w-full border-collapse" style="border: 1px solid #8A999E;">
-                        <thead class="bg-sf-blue text-white">
-                            <tr>
-                                <th class="p-3 text-left">Type</th>
-                                <th class="p-3 text-center">Unresolved occurrences</th>
-                                <th class="p-3 text-center">Code Units</th>
-                                <th class="p-3 text-center">Percentage</th>
-                            </tr>
-                        </thead>
-                        <tbody class="text-sm">
-                            <tr v-for="(entry, index) in sortedSqlClassifications" :key="entry.name + '_' + index"
-                                class="border-b border-sf-gray hover:bg-blue-50"
-                                :style="index % 2 === 0 ? 'background: #FFFFFF' : 'background: #F9FAFB'">
-                                <td class="p-3 font-semibold">{{ entry.name }}</td>
-                                <td class="p-3 text-center">{{ entry.count }}</td>
-                                <td class="p-3 text-center">{{ entry.codeUnitCount }}</td>
-                                <td class="p-3 text-center">{{ entry.percentage }}%</td>
-                            </tr>
+                            <template v-for="(entry, index) in sortedEwis" :key="entry.code">
+                                <tr class="dsq-ewi-row border-b border-sf-gray hover:bg-blue-50"
+                                    :class="{open: dsqlOpenEwi === entry.code}"
+                                    :style="index % 2 === 0 ? 'background: #FFFFFF' : 'background: #F9FAFB'"
+                                    @click="toggleDsqlEwi(entry.code)">
+                                    <td class="p-3 font-semibold">
+                                        <span class="expand-icon" aria-hidden="true">&#9656;</span>{{ entry.title }}
+                                    </td>
+                                    <td class="p-3">{{ entry.code }}</td>
+                                    <td class="p-3 text-center">{{ entry.severity }}</td>
+                                    <td class="p-3 text-center">{{ entry.count }}</td>
+                                    <td class="p-3 text-center">{{ entry.codeUnitCount }}</td>
+                                    <td class="p-3 text-center">{{ entry.percentage }}%</td>
+                                </tr>
+                                <tr v-show="dsqlOpenEwi === entry.code" class="dsq-ewi-details">
+                                    <td class="p-3" colspan="6">
+                                        <div class="dsq-ewi-body">
+                                            <div class="dsq-ewi-block dsq-ewi-what">
+                                                <h4>What it is</h4>
+                                                <p>{{ entry.whatItIs }}</p>
+                                            </div>
+                                            <div class="dsq-ewi-block dsq-ewi-why">
+                                                <h4>Why it was flagged</h4>
+                                                <p>{{ entry.whyFlagged }}</p>
+                                            </div>
+                                            <div class="dsq-ewi-block dsq-ewi-rec">
+                                                <h4>Snowflake recommendation</h4>
+                                                <p>{{ entry.snowflakeRecommendation }}</p>
+                                            </div>
+                                            <a v-if="entry.docUrl" class="dsq-ewi-doc" :href="entry.docUrl" target="_blank" rel="noopener" @click.stop>
+                                                Reference: {{ entry.code }}
+                                            </a>
+                                            <span v-else class="dsq-ewi-doc-fallback">Reference: {{ entry.code }}</span>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </template>
                         </tbody>
                     </table>
                 </section>
@@ -3028,6 +3201,7 @@ def generate_html_template(
                 </section>
 
                 <section id="code-units" style="margin-bottom: 48px;">
+                    <!--DSQL_ALL_PROMPT-->
                     <h2 class="text-3xl font-bold text-sf-dark-blue mb-6 border-b-2 border-sf-blue pb-2">Code Units</h2>
 
                     <div class="dsq-layout">
@@ -3044,20 +3218,12 @@ def generate_html_template(
                                     <option value="medium">Medium</option>
                                     <option value="low">Low</option>
                                 </select>
-                                <select v-model="categoryFilter" class="filter-select">
-                                    <option value="all">All categories</option>
-                                    <option v-for="category in allCategories" :key="category" :value="category">{{ category }}</option>
-                                </select>
-                                <select v-model="sqlClassificationFilter" class="filter-select">
-                                    <option value="all">All SQL types</option>
-                                    <option v-for="cls in allSqlClassifications" :key="cls" :value="cls">{{ cls }}</option>
-                                </select>
                                 <button @click="clearFilters" class="btn-primary">Reset</button>
                                 <span class="text-sm text-sf-gray dsq-count">
                                     Showing {{ filteredCodeUnits.length }} of {{ uniqueCodeUnits }} code units
                                 </span>
                                 <span v-if="pendingOccurrencesCount > 0" class="text-xs dsq-count-note">
-                                    {{ pendingOccurrencesCount }} pending unresolved occurrence{{ pendingOccurrencesCount === 1 ? '' : 's' }} hidden
+                                    {{ pendingOccurrencesCount }} pending unresolved occurrence{{ pendingOccurrencesCount === 1 ? '' : 's' }}
                                 </span>
                             </div>
 
@@ -3084,9 +3250,6 @@ def generate_html_template(
                                 >
                                     <div class="dsq-cell dsq-name">
                                         <div class="dsq-name-strong dsq-truncate" :title="unit.name">{{ unit.name }}</div>
-                                        <div class="dsq-subtext">
-                                            <span v-if="unit.pendingCount > 0" class="dsq-pending-tag">+{{ unit.pendingCount }} pending</span>
-                                        </div>
                                     </div>
                                     <div class="dsq-cell dsq-complexity" :title="unit.maxComplexity" :data-level="unit.maxComplexity">
                                         {{ unit.maxComplexity }}
@@ -3115,15 +3278,13 @@ def generate_html_template(
                                     <div class="dsq-codeunit-grid">
                                         <div class="dsq-kvs dsq-kvs-compact">
                                             <div class="dsq-k">Complexity</div><div class="dsq-v">{{ selectedCodeUnit.maxComplexity }}</div>
-                                            <div class="dsq-k">Analyzed unresolved occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
-                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-k">Pending unresolved occurrences</div>
-                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-v">{{ selectedCodeUnit.pendingCount }}</div>
+                                            <div class="dsq-k">Unresolved occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
                                             <div class="dsq-k">Filename</div>
                                             <div class="dsq-v dsq-vpath" :title="selectedCodeUnit.filename">{{ selectedCodeUnit.filename }}</div>
                                         </div>
 
                                         <div class="dsq-codeunit-patterns">
-                                            <div class="dsq-k" style="margin-bottom: 6px;">Patterns</div>
+                                            <div class="dsq-k" style="margin-bottom: 6px;">EWIs</div>
                                             <div class="dsq-patterns-wrap">
                                                 <div class="dsq-patterns-text" :title="(selectedCodeUnit.categories || []).join(', ')">
                                                     {{ formatPatternList(selectedCodeUnit.categories, showAllPatterns ? 999 : 6) }}
@@ -3143,12 +3304,13 @@ def generate_html_template(
                                 </div>
 
                                 <div class="dsq-detail-body">
-                                    <details v-for="(occ, idx) in selectedCodeUnit.occurrences" :key="occ.id" class="dsq-occ" :open="idx === 0">
+                                    <!--DSQL_UNIT_PROMPT-->
+                                    <details v-if="!codeUnitAllPending(selectedCodeUnit)" v-for="(occ, idx) in selectedCodeUnit.occurrences" :key="occ.id" class="dsq-occ" :open="idx === 0">
                                         <summary class="dsq-occ-summary">
                                             <div class="dsq-occ-title">
                                                 <div class="dsq-occ-top">Occurrence {{ idx + 1 }}</div>
                                                 <div class="dsq-occ-meta">
-                                                    Line {{ occ.line }} · {{ Array.isArray(occ.category) ? occ.category.join(', ') : '' }}
+                                                    <span v-if="!isPendingStatus(occ.status)">Line {{ occ.line }} · </span>{{ occ.issue_code || '' }}
                                                     <span v-if="isPendingStatus(occ.status)" class="dsq-occ-status" data-status="pending">Pending</span>
                                                 </div>
                                             </div>
@@ -3188,11 +3350,12 @@ def generate_html_template(
 
                                             <!-- SQL tab -->
                                             <div v-if="getOccurrenceTab(occ.id) === 'sql'" class="dsq-occ-pane">
+<!--DSQL_OCC_PROMPT-->
                                                 <div class="dsq-sql-stack">
                                             <div class="dsq-sql-block">
-                                                <div class="dsq-sql-meta">
-                                                    <span class="dsq-sql-label">SQL classification</span>
-                                                    <span class="dsq-sql-value">{{ occ.sql_classification || 'Unknown' }}</span>
+                                                <div class="dsq-sql-meta" v-if="occ.issue_code">
+                                                    <span class="dsq-sql-label">EWI</span>
+                                                    <span class="dsq-sql-value">{{ occ.issue_code }}</span>
                                                 </div>
                                                         <div class="section-title">Generated SQL</div>
                                                         <div class="dsq-hint">Best-effort example of the SQL this code builds at runtime (may not match exact runtime values).</div>
@@ -3207,6 +3370,7 @@ def generate_html_template(
 
                                             <!-- Analysis tab -->
                                             <div v-else-if="getOccurrenceTab(occ.id) === 'analysis'" class="dsq-occ-pane">
+<!--DSQL_OCC_PROMPT-->
                                                 <div class="text-block">{{ occ.parsedNotes.justification || occ.notes || 'No analysis available.' }}</div>
                                             </div>
 
@@ -3217,6 +3381,7 @@ def generate_html_template(
 
                                             <!-- Migration tab -->
                                             <div v-else class="dsq-occ-pane">
+<!--DSQL_OCC_PROMPT-->
                                                 <pre class="dsq-code">{{ occ.parsedNotes.migration_considerations || 'No migration considerations provided.' }}</pre>
                                             </div>
                                         </div>
@@ -3258,15 +3423,13 @@ def generate_html_template(
                                             <div class="dsq-codeunit-grid">
                                                 <div class="dsq-kvs dsq-kvs-compact">
                                             <div class="dsq-k">Complexity</div><div class="dsq-v">{{ selectedCodeUnit.maxComplexity }}</div>
-                                            <div class="dsq-k">Analyzed unresolved occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
-                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-k">Pending unresolved occurrences</div>
-                                            <div v-if="selectedCodeUnit.pendingCount > 0" class="dsq-v">{{ selectedCodeUnit.pendingCount }}</div>
+                                            <div class="dsq-k">Unresolved occurrences</div><div class="dsq-v">{{ selectedCodeUnit.occurrenceCount }}</div>
                                                     <div class="dsq-k">Filename</div>
                                                     <div class="dsq-v dsq-vpath" :title="selectedCodeUnit.filename">{{ selectedCodeUnit.filename }}</div>
                                                 </div>
 
                                                 <div class="dsq-codeunit-patterns">
-                                                    <div class="dsq-k" style="margin-bottom: 6px;">Patterns</div>
+                                                    <div class="dsq-k" style="margin-bottom: 6px;">EWIs</div>
                                                     <div class="dsq-patterns-wrap">
                                                         <div class="dsq-patterns-text" :title="(selectedCodeUnit.categories || []).join(', ')">
                                                             {{ formatPatternList(selectedCodeUnit.categories, showAllPatterns ? 999 : 6) }}
@@ -3285,12 +3448,13 @@ def generate_html_template(
                                         </div>
 
                                         <div class="dsq-detail-body">
-                                            <details v-for="(occ, idx) in selectedCodeUnit.occurrences" :key="occ.id" class="dsq-occ" :open="idx === 0">
+                                            <!--DSQL_UNIT_PROMPT-->
+                                            <details v-if="!codeUnitAllPending(selectedCodeUnit)" v-for="(occ, idx) in selectedCodeUnit.occurrences" :key="occ.id" class="dsq-occ" :open="idx === 0">
                                                 <summary class="dsq-occ-summary">
                                                     <div class="dsq-occ-title">
                                                         <div class="dsq-occ-top">Occurrence {{ idx + 1 }}</div>
                                                         <div class="dsq-occ-meta">
-                                                            Line {{ occ.line }} · {{ Array.isArray(occ.category) ? occ.category.join(', ') : '' }}
+                                                            <span v-if="!isPendingStatus(occ.status)">Line {{ occ.line }} · </span>{{ occ.issue_code || '' }}
                                                             <span v-if="isPendingStatus(occ.status)" class="dsq-occ-status" data-status="pending">Pending</span>
                                                         </div>
                                                     </div>
@@ -3305,11 +3469,12 @@ def generate_html_template(
                                                     </div>
 
                                                     <div v-if="getOccurrenceTab(occ.id) === 'sql'" class="dsq-occ-pane">
+<!--DSQL_OCC_PROMPT-->
                                                         <div class="dsq-sql-stack">
                                                             <div class="dsq-sql-block">
-                                                                <div class="dsq-sql-meta">
-                                                                    <span class="dsq-sql-label">SQL classification</span>
-                                                                    <span class="dsq-sql-value">{{ occ.sql_classification || 'Unknown' }}</span>
+                                                                <div class="dsq-sql-meta" v-if="occ.issue_code">
+                                                                    <span class="dsq-sql-label">EWI</span>
+                                                                    <span class="dsq-sql-value">{{ occ.issue_code }}</span>
                                                                 </div>
                                                                 <div class="section-title">Generated SQL</div>
                                                                 <div class="dsq-hint">Best-effort example of the SQL this code builds at runtime (may not match exact runtime values).</div>
@@ -3323,6 +3488,7 @@ def generate_html_template(
                                                     </div>
 
                                                     <div v-else-if="getOccurrenceTab(occ.id) === 'analysis'" class="dsq-occ-pane">
+<!--DSQL_OCC_PROMPT-->
                                                         <div class="text-block">{{ occ.parsedNotes.justification || occ.notes || 'No analysis available.' }}</div>
                                                     </div>
 
@@ -3331,6 +3497,7 @@ def generate_html_template(
                                                     </div>
 
                                                     <div v-else class="dsq-occ-pane">
+<!--DSQL_OCC_PROMPT-->
                                                         <pre class="dsq-code">{{ occ.parsedNotes.migration_considerations || 'No migration considerations provided.' }}</pre>
                                                     </div>
                                                 </div>
@@ -3344,6 +3511,21 @@ def generate_html_template(
                 </section>
             </div>
         """
+        dynamic_sql_html = (
+            dynamic_sql_html
+            .replace("<!--DSQL_CHART-->", pattern_chart_card)
+            .replace("<!--DSQL_OCC_PROMPT-->", dynamic_sql_occ_prompt)
+            .replace("<!--DSQL_ALL_PROMPT-->", dynamic_sql_all_prompt)
+            .replace("<!--DSQL_UNIT_PROMPT-->", dynamic_sql_unit_prompt)
+            .replace(
+                "<!--DSQL_KPI_UNITS-->",
+                html_escape_module.escape(DSQL_KPI_TOOLTIPS["code_units"], quote=True),
+            )
+            .replace(
+                "<!--DSQL_KPI_UNRESOLVED-->",
+                html_escape_module.escape(DSQL_KPI_TOOLTIPS["unresolved"], quote=True),
+            )
+        )
     else:
         dynamic_sql_html = """
             <div class="tab-content print-compact" :class="{active: activeTab === 'dynamic-sql'}">
@@ -3399,13 +3581,82 @@ def generate_html_template(
             </div>
         </div>
     """
-        virtualization_nav_html = """
-                <a @click="activeTab = 'virtualization'" class="nav-section" data-tab="virtualization" :class="{active: activeTab === 'virtualization'}">
+        virtualization_nav_html = f"""
+                <a href="{_section_href('virtualization', home_href)}" class="nav-section" data-tab="virtualization" :class="{{active: activeTab === 'virtualization'}}">
                     <span>Virtualization</span>
                 </a>
         """
 
-    return f"""<!DOCTYPE html>
+    conversion_issues_html = render_conversion_issues_tab(
+        conversion_issues_artifact,
+        project_dir,
+        include_samples=True,
+    )
+
+    for _part_name, _part in (
+        ("journey", journey_overview_html),
+        ("discovery", discovery_html),
+        ("use-cases", business_use_cases_html),
+        ("pending", pending_objects_html),
+        ("overview", overview_html),
+        ("conversion-issues", conversion_issues_html),
+        ("effort", effort_tab_html),
+        ("exclusion", exclusion_html),
+        ("dynamic-sql", dynamic_sql_html),
+        ("waves", waves_html),
+        ("waves-js", waves_js),
+        ("etl", etl_tab_content),
+        ("ssis", ssis_html),
+        ("informatica", informatica_html),
+        ("json-exclusion", json_data_exclusion),
+        ("json-dynamic", json_data_dynamic),
+        ("data-migration", data_migration_html),
+        ("testing", testing_html),
+    ):
+        _n = len(_part or "")
+        print(
+            f"  [html-part] {_part_name}: {_n:,} chars ({_n / (1024 * 1024):.1f} MiB)",
+            flush=True,
+        )
+
+    def _compose(
+        *,
+        initial_active_tab: str,
+        journey_overview_html: str,
+        discovery_html: str,
+        business_use_cases_html: str,
+        pending_objects_html: str,
+        overview_html: str,
+        conversion_issues_html: str,
+        effort_tab_html: str,
+        exclusion_html: str,
+        dynamic_sql_html: str,
+        waves_html: str,
+        etl_tab_content: str,
+        data_migration_html: str,
+        testing_html: str,
+        virtualization_html: str,
+        waves_js: str,
+        json_data_dynamic: str,
+        export_data_json: str,
+        ssis_js: str,
+        informatica_js: str,
+        data_lineage_js: str,
+        anti_patterns_js: str,
+        workload_insights_javascript: str,
+        data_migration_js: str,
+        testing_js: str,
+        exclusion_category_js: str,
+        dynamic_sql_pattern_js: str,
+        effort_overrides_js: str,
+    ) -> str:
+        """One page of the report: the shared shell, sidebar, styles and Vue app.
+
+        Every file in the report folder is rendered by this same template, so the
+        look and the behaviour cannot drift apart. Only the pane (and the data that
+        pane's scripts read) is filled in; the other panes stay empty.
+        """
+        return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -3449,6 +3700,7 @@ def generate_html_template(
         #workload-inventory + .effort-cards .effort-card[data-tooltip] {{ cursor: help; }}
         .effort-card-num {{ font-size: 28px; font-weight: 800; color: #1E252F; }}
         .effort-card-lbl {{ font-size: 14px; font-weight: 400; color: #5D6A85; line-height: 1.25rem; margin-top: 4px; }}
+        .effort-card-scope {{ font-size: 12px; font-weight: 400; color: #5D6A85; line-height: 1.1rem; margin-top: 4px; }}
         .effort-card-sub {{ font-size: 12px; font-weight: 400; color: #5D6A85; line-height: 1.1rem; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #D5DAE4; }}
         .effort-table-wrap {{ overflow-x: auto; margin-bottom: 24px; }}
         .effort-table {{ width: 100%; border-collapse: collapse; background: white; border-radius: 8px; overflow: hidden; border: 1px solid #E2E8F0; }}
@@ -3868,6 +4120,8 @@ def generate_html_template(
             border-radius: 12px;
             padding: 20px 24px;
             cursor: pointer;
+            color: inherit;
+            text-decoration: none;
             transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
         }}
         .journey-card:hover {{
@@ -4665,6 +4919,79 @@ def generate_html_template(
             font-size: 0.85rem;
             color: #65757F;
         }}
+
+        .dsq-ai-off-prompt {{
+            background: #F8FAFC;
+            padding: 16px 18px;
+            border-radius: 8px;
+            border-left: 4px solid #29B5E8;
+            margin-bottom: 16px;
+        }}
+        .dsq-ai-off-lead {{
+            margin: 0 0 8px 0;
+            color: #102E46;
+        }}
+        .dsq-ai-off-hint {{
+            margin: 8px 0 0 0;
+            color: #475569;
+        }}
+        .dsq-ai-off-code {{
+            position: relative;
+        }}
+        .dsq-ai-off-pre {{
+            margin: 0;
+            padding: 14px 40px 14px 14px;
+            background: #102E46;
+            color: #E2E8F0;
+            border-radius: 6px;
+            white-space: pre-wrap;
+            font-size: 0.85rem;
+            line-height: 1.5;
+        }}
+        .dsq-copy-btn {{
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 28px;
+            height: 28px;
+            padding: 0;
+            border: 0;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.12);
+            color: #E2E8F0;
+            cursor: pointer;
+        }}
+        .dsq-copy-btn:hover {{
+            background: rgba(255, 255, 255, 0.22);
+        }}
+        .dsq-copy-btn.copied {{
+            color: #86EFAC;
+        }}
+        .dsq-copy-svg {{
+            display: block;
+        }}
+        #dynamic-sql-executive-summary .effort-card[data-tooltip] {{ cursor: help; }}
+        .dsq-ewi-row {{ cursor: pointer; }}
+        .dsq-ewi-row .expand-icon {{
+            display: inline-block; margin-right: 8px; transition: transform 0.15s; color: #102E46;
+        }}
+        .dsq-ewi-row.open .expand-icon {{ transform: rotate(90deg); }}
+        .dsq-ewi-details > td {{ background: #f8fafc; }}
+        .dsq-ewi-body {{ padding: 6px 4px 10px; }}
+        .dsq-ewi-block {{
+            border-left: 4px solid #005C8F; padding: 6px 12px; margin-top: 10px; background: #fff;
+        }}
+        .dsq-ewi-block h4 {{ margin: 0 0 4px; font-size: 13px; }}
+        .dsq-ewi-block p {{ margin: 0; color: #5D6A85; }}
+        .dsq-ewi-block.dsq-ewi-why {{ border-left-color: #FF9F36; }}
+        .dsq-ewi-block.dsq-ewi-rec {{ border-left-color: #10b981; }}
+        .dsq-ewi-doc, .dsq-ewi-doc-fallback {{
+            display: inline-block; margin-top: 10px; font-size: 12px; color: #11567F;
+        }}
+
         .dsq-k {{
             color: #8A999E;
             font-weight: 700;
@@ -5366,6 +5693,24 @@ def generate_html_template(
         }}
         html.is-printing .print-omit {{ display: none !important; }}
         html.is-printing .print-only {{ display: block !important; }}
+        html.is-printing .print-clip-1-page {{
+            max-height: {PRINT_CLIP_INCHES_PER_PAGE}in;
+            overflow: hidden;
+        }}
+        html.is-printing .print-clip-3-page {{
+            max-height: {PRINT_CLIP_INCHES_PER_PAGE * EXCLUSION_PRINT_PAGES}in;
+            overflow: hidden;
+        }}
+        @media print {{
+            .print-clip-1-page {{
+                max-height: {PRINT_CLIP_INCHES_PER_PAGE}in;
+                overflow: hidden;
+            }}
+            .print-clip-3-page {{
+                max-height: {PRINT_CLIP_INCHES_PER_PAGE * EXCLUSION_PRINT_PAGES}in;
+                overflow: hidden;
+            }}
+        }}
         .print-note {{
             margin: 8px 0 16px;
             padding: 8px 12px;
@@ -6026,14 +6371,6 @@ def generate_html_template(
             position: relative;
         }}
         
-        .scrollable-waves-container {{
-            max-height: 600px;
-            overflow-y: auto;
-            border: 1px solid #B6D5F3;
-            border-radius: 6px;
-            padding: 10px;
-            margin: 20px 0;
-        }}
         
         .filter-buttons {{
             display: flex;
@@ -6461,56 +6798,54 @@ def generate_html_template(
                 {assessment_name_html}
             </div>
             <nav style="padding: 16px 0;">
-                <a @click="activeTab = 'journey'" class="nav-section" data-tab="journey" :class="{{active: activeTab === 'journey'}}">
+                <a href="{home_href}" class="nav-section" data-tab="journey" :class="{{active: activeTab === 'journey'}}">
                     <span>Migration Journey</span>
                 </a>
                 {discovery_nav_html}
-                <a class="nav-section" @click="selectSection(planningTabs, 'business-use-cases')">
+                <a href="{_section_href('business-use-cases', home_href)}" class="nav-section" data-tab="business-use-cases">
                     <span>Wave Planning</span> <span class="nav-preview-badge">Preview</span>
                 </a>
                 <div class="nav-group" v-show="planningTabs.includes(activeTab)">
-                    <a @click="activeTab = 'business-use-cases'" class="nav-link" data-tab="business-use-cases" :class="{{active: activeTab === 'business-use-cases'}}">
+                    <a href="{_section_href('business-use-cases', home_href)}" class="nav-link" data-tab="business-use-cases" :class="{{active: activeTab === 'business-use-cases'}}">
                         Business use cases
                     </a>
-                    <a @click="activeTab = 'pending-objects'" class="nav-link" data-tab="pending-objects" :class="{{active: activeTab === 'pending-objects'}}">
+                    <a href="{_section_href('pending-objects', home_href)}" class="nav-link" data-tab="pending-objects" :class="{{active: activeTab === 'pending-objects'}}">
                         Other objects
                     </a>
                 </div>
-                <a class="nav-section" @click="selectSection(codeEtlTabs, '{default_tab}')">
+                <a href="{_section_href('overview', home_href)}" class="nav-section">
                     <span>Code/ETL Conversion</span>
                 </a>
                 <div class="nav-group" v-show="codeEtlTabs.includes(activeTab)">
-                    <a @click="activeTab = 'overview'" class="nav-link" data-tab="overview" :class="{{active: activeTab === 'overview'}}">
+                    <a href="{_section_href('overview', home_href)}" class="nav-link" data-tab="overview" :class="{{active: activeTab === 'overview'}}">
                         Overview
                     </a>
                     <div v-if="activeTab === 'overview'" class="nav-sublist">
-                        <a @click="scrollToSection('#workload-inventory', 'overview')" class="nav-sublink">Workload Inventory</a>
+                        <a href="overview.html#workload-inventory" class="nav-sublink">Workload Inventory</a>
                         {effort_nav_overview_sublink}
-                        <a @click="scrollToSection('#how-to-use', 'overview')" class="nav-sublink">How to Use This Report</a>
-                        <a @click="scrollToSection('#missing-objects', 'overview')" class="nav-sublink">Missing Objects Analysis</a>
+                        <a href="overview.html#how-to-use" class="nav-sublink">How to Use This Report</a>
+                        <a href="overview.html#missing-objects" class="nav-sublink">Missing Objects Analysis</a>
                     </div>
                     {effort_nav_link}
                     {effort_nav_sublist}
                     {render_conversion_issues_nav()}
-                    <a @click="activeTab = 'waves'" class="nav-link" data-tab="waves" :class="{{active: activeTab === 'waves'}}">
+                    <a href="{_section_href('waves', home_href)}" class="nav-link" data-tab="waves" :class="{{active: activeTab === 'waves'}}">
                         Dependencies Report
                     </a>
                     {waves_nav_sublist}
-                    <a @click="activeTab = 'exclusion'" class="nav-link" data-tab="exclusion" :class="{{active: activeTab === 'exclusion'}}">
-                        Exclusion Report
-                    </a>
-                    <a @click="activeTab = 'dynamic-sql'" class="nav-link" data-tab="dynamic-sql" :class="{{active: activeTab === 'dynamic-sql'}}">
+                    {exclusion_nav_link}
+                    <a href="{_section_href('dynamic-sql', home_href)}" class="nav-link" data-tab="dynamic-sql" :class="{{active: activeTab === 'dynamic-sql'}}">
                         Dynamic SQL Report
                     </a>
-                    <a @click="activeTab = 'etl'" class="nav-link" data-tab="etl" :class="{{active: activeTab === 'etl'}}">
+                    <a href="{_section_href('etl', home_href)}" class="nav-link" data-tab="etl" :class="{{active: activeTab === 'etl'}}">
                         ETL Report
                     </a>
                     {etl_nav_sublist}
                 </div>
-                <a @click="activeTab = 'data-migration'" class="nav-section" data-tab="data-migration" :class="{{active: activeTab === 'data-migration'}}">
+                <a href="{_section_href('data-migration', home_href)}" class="nav-section" data-tab="data-migration" :class="{{active: activeTab === 'data-migration'}}">
                     <span>Data Migration &amp; Validation</span>
                 </a>
-                <a @click="activeTab = 'testing'" class="nav-section" data-tab="testing" :class="{{active: activeTab === 'testing'}}">
+                <a href="{_section_href('testing', home_href)}" class="nav-section" data-tab="testing" :class="{{active: activeTab === 'testing'}}">
                     <span>Testing</span>
                 </a>
                 {virtualization_nav_html}
@@ -6523,7 +6858,7 @@ def generate_html_template(
             {business_use_cases_html}
             {pending_objects_html}
             {overview_html}
-            {render_conversion_issues_tab(conversion_issues_artifact)}
+            {conversion_issues_html}
             {effort_tab_html}
             {exclusion_html}
             {dynamic_sql_html}
@@ -6569,8 +6904,9 @@ def generate_html_template(
          * @property {{number}} code_unit_start_line - Start line
          * @property {{number}} lines_of_code - LOC count
          * @property {{string}} maxComplexity - Highest complexity (critical/high/medium/low)
-         * @property {{number}} occurrenceCount - Number of analyzed occurrences
-         * @property {{number}} pendingCount - Pending occurrences excluded from display
+         * @property {{number}} occurrenceCount - Number of unresolved occurrences
+         * @property {{number}} pendingCount - Pending occurrences (still used to hide occurrence cards until a review exists)
+
          * @property {{string[]}} categories - Pattern categories
          * @property {{DynamicSqlOccurrence[]}} occurrences - Analyzed occurrences
          */
@@ -6597,6 +6933,7 @@ def generate_html_template(
                 code_unit_start_line: Number(occ.code_unit_start_line) || 0,
                 lines_of_code: Number(occ.lines_of_code) || 0,
                 status: String(occ.status || 'PENDING'),
+                issue_code: String(occ.issue_code || ''),
                 category: Array.isArray(occ.category) ? occ.category : [],
                 complexity: String(occ.complexity || 'low'),
                 notes: String(occ.notes || ''),
@@ -6621,6 +6958,7 @@ def generate_html_template(
                 code_unit_start_line: 0,
                 lines_of_code: 0,
                 status: 'UNKNOWN',
+                issue_code: '',
                 category: [],
                 complexity: 'low',
                 notes: 'No data available',
@@ -6639,8 +6977,31 @@ def generate_html_template(
             return normalized === '' || normalized === 'PENDING';
         }}
 
+        const dsqlEwiDetails = {json.dumps(DSQL_EWI_DETAILS)};
+        const dsqlEwiFallbackWhy = {json.dumps(DSQL_EWI_FALLBACK_WHY)};
+        const dsqlEwiFallbackRec = {json.dumps(DSQL_EWI_FALLBACK_REC)};
+        function dsqlEwiDocUrl(code) {{
+            const match = String(code || '').toUpperCase().match(/^SSC-EWI-([A-Z]*)(\\d+)$/);
+            if (!match) return '';
+            const pages = {{ '': 'generalEWI', SSIS: 'ssisEWI', TS: 'sqlServerEWI' }};
+            const page = pages[match[1]];
+            if (!page) return '';
+            return 'https://docs.snowflake.com/en/migrations/aim-for-datawarehouses/code-conversion/issues-and-troubleshooting/conversion-issues/'
+                + page + '#' + String(code).toLowerCase();
+        }}
+        function enrichDsqlEwi(code, entry) {{
+            const src = entry && typeof entry === 'object' ? entry : {{}};
+            const known = dsqlEwiDetails[code] || {{}};
+            return {{
+                whatItIs: src.what_it_is || known.what_it_is || src.description || src.title || code,
+                whyFlagged: src.why_flagged || known.why_flagged || dsqlEwiFallbackWhy,
+                snowflakeRecommendation: src.snowflake_recommendation || known.snowflake_recommendation || dsqlEwiFallbackRec,
+                docUrl: src.doc_url || dsqlEwiDocUrl(code) || ''
+            }};
+        }}
+
         // Load and validate data
-        const exportData = {json_data_exclusion};
+        const exportData = {export_data_json};
         const isAdaptive = {str(is_adaptive).lower()};
         const rawDynamicSqlData = {json_data_dynamic};
         const dynamicSqlMeta = {dynamic_sql_meta_json};
@@ -6667,6 +7028,8 @@ def generate_html_template(
                     lineageView: '{initial_lineage_view}',
                     queryLogsView: 'analysis',
                     objectLineagePromptCopied: false,
+                    dsqlCopied: '',
+                    dsqlOpenEwi: null,
                     sourceDialect: {source_dialect_json},
                     // Must list every nav-link inside the group: the group is
                     // v-show'd on membership, so an omitted tab hides its own sub-nav.
@@ -6675,7 +7038,6 @@ def generate_html_template(
                     jsonData: dynamicSqlData,
                     searchQuery: '',
                     complexityFilter: 'all',
-                    categoryFilter: 'all',
                     sqlClassificationFilter: 'all',
                     selectedCodeUnitId: null,
                     showAllPatterns: false,
@@ -6749,19 +7111,10 @@ def generate_html_template(
                             
                             const analyzedOccurrences = allOccurrences.filter(occ => !isPendingStatus(occ && occ.status));
                             const pendingCount = allOccurrences.length - analyzedOccurrences.length;
-                            if (analyzedOccurrences.length === 0) {{
-                                return null;
-                            }}
-                            
                             const categories = new Set();
-                            analyzedOccurrences.forEach(occ => {{
-                                if (Array.isArray(occ.category)) {{
-                                    occ.category.forEach(cat => {{
-                                        if (cat && typeof cat === 'string') {{
-                                            categories.add(cat.trim());
-                                        }}
-                                    }});
-                                }}
+                            allOccurrences.forEach(occ => {{
+                                const code = occ && occ.issue_code ? String(occ.issue_code).trim() : '';
+                                if (code) categories.add(code);
                             }});
                             
                             const firstOcc = analyzedOccurrences[0] || allOccurrences[0] || {{}};
@@ -6772,8 +7125,8 @@ def generate_html_template(
                                 filename: firstOcc.filename || 'Unknown',
                                 code_unit_start_line: firstOcc.code_unit_start_line || 0,
                                 lines_of_code: firstOcc.lines_of_code || 0,
-                                maxComplexity: this.getMaxComplexity(analyzedOccurrences),
-                                occurrenceCount: analyzedOccurrences.length,
+                                maxComplexity: this.getMaxComplexity(allOccurrences),
+                                occurrenceCount: allOccurrences.length,
                                 pendingCount,
                                 categories: Array.from(categories),
                                 occurrences: allOccurrences.map(occ => ({{
@@ -6809,16 +7162,7 @@ def generate_html_template(
                             const matchesComplexity = this.complexityFilter === 'all' || 
                                 unit.maxComplexity === this.complexityFilter;
                             
-                            const matchesCategory = this.categoryFilter === 'all' || 
-                                (Array.isArray(unit.categories) && unit.categories.includes(this.categoryFilter));
-
-                            const matchesSqlClass = this.sqlClassificationFilter === 'all' ||
-                                (Array.isArray(unit.occurrences) && unit.occurrences.some(o => {{
-                                    const cls = String((o && o.sql_classification) || 'UNKNOWN').trim().toUpperCase();
-                                    return cls === this.sqlClassificationFilter;
-                                }}));
-                            
-                            return matchesSearch && matchesComplexity && matchesCategory && matchesSqlClass;
+                            return matchesSearch && matchesComplexity;
                         }});
                     }} catch (error) {{
                         console.error('Error in filteredCodeUnits:', error);
@@ -6840,12 +7184,40 @@ def generate_html_template(
                 uniqueCodeUnits() {{ 
                     return Array.isArray(this.codeUnitCards) ? this.codeUnitCards.length : 0;
                 }},
-                highPriority() {{ 
-                    if (!Array.isArray(this.analyzedOccurrences)) return 0;
-                    return this.analyzedOccurrences.filter(r => {{
-                        const complexity = ((r && r.complexity) || 'low').toLowerCase();
-                        return complexity === 'critical' || complexity === 'high';
-                    }}).length;
+                sortedEwis() {{
+                    const catalog = (dynamicSqlMeta && dynamicSqlMeta.ewiCatalog) ? dynamicSqlMeta.ewiCatalog : {{}};
+                    const totals = {{}};
+                    const units = {{}};
+                    if (Array.isArray(this.jsonData)) {{
+                        this.jsonData.forEach(row => {{
+                            const code = String((row && row.issue_code) || '').trim() || 'UNKNOWN';
+                            const codeUnitId = (row && row.code_unit_id) ? String(row.code_unit_id) : 'unknown';
+                            totals[code] = (totals[code] || 0) + 1;
+                            if (!units[code]) units[code] = new Set();
+                            units[code].add(codeUnitId);
+                        }});
+                    }}
+                    const total = Object.values(totals).reduce((sum, n) => sum + n, 0) || 1;
+                    return Object.keys(totals).map(code => {{
+                        const entry = catalog[code] || {{}};
+                        const count = totals[code];
+                        const details = enrichDsqlEwi(code, entry);
+                        return {{
+                            code,
+                            title: entry.title || code,
+                            severity: entry.severity || 'Unknown',
+                            count,
+                            codeUnitCount: units[code] ? units[code].size : 0,
+                            percentage: ((count / total) * 100).toFixed(1),
+                            whatItIs: details.whatItIs,
+                            whyFlagged: details.whyFlagged,
+                            snowflakeRecommendation: details.snowflakeRecommendation,
+                            docUrl: details.docUrl
+                        }};
+                    }}).sort((a, b) => {{
+                        if (b.count !== a.count) return b.count - a.count;
+                        return String(a.code).localeCompare(String(b.code));
+                    }});
                 }},
                 sortedPatterns() {{
                     /**
@@ -6925,40 +7297,23 @@ def generate_html_template(
 
                     return entries.sort((a, b) => b.count - a.count);
                 }},
-                allCategories() {{ 
-                    const patterns = Array.isArray(this.sortedPatterns) ? this.sortedPatterns : [];
-                    return patterns.map(p => p.name).filter(Boolean).sort();
-                }},
                 allSqlClassifications() {{
                     const entries = Array.isArray(this.sortedSqlClassifications) ? this.sortedSqlClassifications : [];
                     return entries.map(e => e.name).filter(Boolean).sort();
                 }},
                 keyFindings() {{
                     const findings = [];
-                    const sortedPatterns = Array.isArray(this.sortedPatterns) ? this.sortedPatterns : [];
+                    const ewis = Array.isArray(this.sortedEwis) ? this.sortedEwis : [];
                     
-                    if (sortedPatterns.length > 0) {{
-                        const top = sortedPatterns[0];
-                        if (top && top.name && top.count !== undefined) {{
-                            findings.push(`<strong>${{top.name}}</strong> is the most common pattern (${{top.count}} occurrences).`);
+                    if (ewis.length > 0) {{
+                        const top = ewis[0];
+                        if (top && top.code && top.count !== undefined) {{
+                            findings.push(`<strong>${{top.code}}</strong> is the most common Dynamic SQL EWI (${{top.count}} unresolved occurrences).`);
                         }}
                     }}
                     
-                    if (!Array.isArray(this.analyzedOccurrences)) {{
-                        return findings;
-                    }}
-                    
-                    const complexityCounts = {{
-                        critical: this.analyzedOccurrences.filter(r => r && (r.complexity || '').toLowerCase() === 'critical').length,
-                        high: this.analyzedOccurrences.filter(r => r && (r.complexity || '').toLowerCase() === 'high').length
-                    }};
-                    
-                    if (complexityCounts.critical > 0 || complexityCounts.high > 0) {{
-                        findings.push(`<strong>${{complexityCounts.critical + complexityCounts.high}} high-priority items</strong> require immediate attention.`);
-                    }}
-
                     if (this.pendingOccurrencesCount > 0) {{
-                        findings.push(`<strong>${{this.pendingOccurrencesCount}}</strong> occurrence${{this.pendingOccurrencesCount === 1 ? '' : 's'}} pending review and excluded from code units.`);
+                        findings.push(`<strong>${{this.pendingOccurrencesCount}}</strong> occurrence${{this.pendingOccurrencesCount === 1 ? '' : 's'}} pending AI review.`);
                     }}
                     
                     return findings;
@@ -7087,6 +7442,33 @@ def generate_html_template(
                 isPendingStatus(status) {{
                     return isPendingStatus(status);
                 }},
+                codeUnitAllPending(unit) {{
+                    return !!unit && unit.pendingCount > 0 && unit.pendingCount === unit.occurrenceCount;
+                }},
+                copyDsqlPrompt(which) {{
+                    const source = document.getElementById('dsql-prompt-' + which);
+                    if (!source) return;
+                    const text = (source.innerText || source.textContent || '').trim();
+                    const flash = () => {{
+                        this.dsqlCopied = which;
+                        setTimeout(() => {{ if (this.dsqlCopied === which) this.dsqlCopied = ''; }}, 1500);
+                    }};
+                    const fallback = () => {{
+                        const area = document.createElement('textarea');
+                        area.value = text;
+                        document.body.appendChild(area);
+                        area.select();
+                        try {{ document.execCommand('copy'); flash(); }} finally {{ area.remove(); }}
+                    }};
+                    if (navigator.clipboard && navigator.clipboard.writeText) {{
+                        navigator.clipboard.writeText(text).then(flash).catch(fallback);
+                    }} else {{
+                        fallback();
+                    }}
+                }},
+                toggleDsqlEwi(code) {{
+                    this.dsqlOpenEwi = this.dsqlOpenEwi === code ? null : code;
+                }},
                 getMaxComplexity(occurrences) {{
                     const complexityOrder = {{ critical: 0, high: 1, medium: 2, low: 3 }};
                     let max = 'low';
@@ -7157,7 +7539,6 @@ def generate_html_template(
                 clearFilters() {{
                     this.searchQuery = '';
                     this.complexityFilter = 'all';
-                    this.categoryFilter = 'all';
                     this.sqlClassificationFilter = 'all';
                     // Selection will be set by watcher once filtered list updates
                 }},
@@ -7182,6 +7563,13 @@ def generate_html_template(
                 }}
             }},
             mounted() {{
+                try {{
+                    const params = new URLSearchParams(window.location.search);
+                    const tab = params.get('tab');
+                    if (tab) this.activeTab = tab;
+                    const discoveryTab = params.get('discoveryTab');
+                    if (discoveryTab) this.discoveryTab = discoveryTab;
+                }} catch (e) {{}}
                 // Initialize selection (first visible code unit) for a better default UX
                 if (Array.isArray(this.filteredCodeUnits) && this.filteredCodeUnits.length > 0) {{
                     this.selectedCodeUnitId = this.filteredCodeUnits[0].code_unit_id;
@@ -7768,8 +8156,6 @@ def generate_html_template(
     <!-- Dependencies Report JavaScript (separate script block for global scope) -->
     <script>
         {waves_js}
-        console.log("typeof openWaveModal:", typeof openWaveModal);
-        console.log("typeof waveNames:", typeof waveNames);
     </script>
 
     <!-- Data Migration & Validation tab JavaScript (runs after the Vue app mounts) -->
@@ -7829,7 +8215,7 @@ def generate_html_template(
                 tip.style.top = y + 'px';
             }}
 
-            const tooltipCard = '.tab-content.dependencies-tab .metric-card[data-tooltip], #workload-inventory + .effort-cards .effort-card[data-tooltip]';
+            const tooltipCard = '.tab-content.dependencies-tab .metric-card[data-tooltip], #workload-inventory + .effort-cards .effort-card[data-tooltip], #dynamic-sql-executive-summary .effort-card[data-tooltip]';
 
             document.addEventListener('mouseover', function(e) {{
                 const card = e.target.closest(tooltipCard);
@@ -7882,6 +8268,143 @@ def generate_html_template(
 </html>
 """
 
+    blank = dict(
+        initial_active_tab="journey",
+        journey_overview_html=_empty_tab("journey"),
+        discovery_html=_empty_tab("discovery"),
+        business_use_cases_html=_empty_tab("business-use-cases"),
+        pending_objects_html=_empty_tab("pending-objects"),
+        overview_html=_empty_tab("overview"),
+        conversion_issues_html=_empty_tab("conversion-issues", "ci-tab"),
+        effort_tab_html=_empty_tab("effort-estimates"),
+        exclusion_html=_empty_tab("exclusion"),
+        dynamic_sql_html=_empty_tab("dynamic-sql"),
+        waves_html=_empty_tab("waves", "dependencies-tab"),
+        etl_tab_content=_empty_tab("etl"),
+        data_migration_html=_empty_tab("data-migration"),
+        testing_html=_empty_tab("testing"),
+        virtualization_html=_empty_tab("virtualization"),
+        waves_js="",
+        json_data_dynamic="[]",
+        export_data_json="[]",
+        ssis_js="",
+        informatica_js="",
+        data_lineage_js="",
+        anti_patterns_js="",
+        workload_insights_javascript="",
+        data_migration_js="",
+        testing_js="",
+        exclusion_category_js="",
+        dynamic_sql_pattern_js="",
+        effort_overrides_js="",
+    )
+    # Page file -> the pane it carries and the script data that pane reads.
+    pages = {
+        "discovery": (
+            dict(
+                discovery_html=discovery_html,
+                data_lineage_js=data_lineage_js,
+                anti_patterns_js=anti_patterns_js,
+                workload_insights_javascript=workload_insights_javascript,
+            ),
+        ),
+        "business-use-cases": (dict(business_use_cases_html=business_use_cases_html),),
+        "pending-objects": (dict(pending_objects_html=pending_objects_html),),
+        "overview": (
+            dict(overview_html=overview_html, effort_overrides_js=effort_overrides_js),
+        ),
+        "effort-estimates": (
+            dict(effort_tab_html=effort_tab_html, effort_overrides_js=effort_overrides_js),
+        ),
+        "conversion-issues": (dict(conversion_issues_html=conversion_issues_html),),
+        "waves": (dict(waves_html=waves_html, waves_js=waves_js),),
+        "exclusion": (
+            dict(
+                exclusion_html=exclusion_html,
+                exclusion_category_js=exclusion_category_js,
+                export_data_json=json_data_exclusion,
+            ),
+        ),
+        "dynamic-sql": (
+            dict(
+                dynamic_sql_html=dynamic_sql_html,
+                dynamic_sql_pattern_js=dynamic_sql_pattern_js,
+                json_data_dynamic=json_data_dynamic,
+            ),
+        ),
+        "etl": (
+            dict(etl_tab_content=etl_tab_content, ssis_js=ssis_js, informatica_js=informatica_js),
+        ),
+        "data-migration": (
+            dict(data_migration_html=data_migration_html, data_migration_js=data_migration_js),
+        ),
+        "testing": (dict(testing_html=testing_html, testing_js=testing_js),),
+    }
+    if virtualization_html:
+        pages["virtualization"] = (dict(virtualization_html=virtualization_html),)
+    if not has_exclusion:
+        pages.pop("exclusion")
+
+    if not output_file:
+        return _compose(**{**blank, "journey_overview_html": journey_overview_html})
+
+    from report_pages import PRINT_HTML_NAME, SECTION_FILES, clear_stale_section_pages
+
+    report_dir = Path(output_file).parent
+    keep = {SECTION_FILES[tab] for tab in pages}
+    keep.add(PRINT_HTML_NAME)
+    keep.add(Path(output_file).name)
+    clear_stale_section_pages(report_dir, keep)
+    for tab, (panes,) in pages.items():
+        for key, value in panes.items():
+            if isinstance(value, str) and not value.strip() and key.endswith("_html"):
+                panes[key] = blank[key]
+        (report_dir / SECTION_FILES[tab]).write_text(
+            _compose(**{**blank, **panes, "initial_active_tab": tab}),
+            encoding="utf-8",
+        )
+    # One file for headless --print-to-pdf. Screen pages stay split so Chrome can
+    # open them; this sibling keeps every pane in one document the way the print
+    # stylesheet expects. All Objects JS stays off: that table is print-omit.
+    print_html = _compose(
+        **{
+            **blank,
+            "journey_overview_html": journey_overview_html,
+            "discovery_html": discovery_html,
+            "business_use_cases_html": business_use_cases_html,
+            "pending_objects_html": pending_objects_html,
+            "overview_html": overview_html,
+            "conversion_issues_html": conversion_issues_html,
+            "effort_tab_html": effort_tab_html,
+            "exclusion_html": exclusion_html,
+            "dynamic_sql_html": dynamic_sql_html,
+            "waves_html": waves_html,
+            "etl_tab_content": etl_tab_content,
+            "data_migration_html": data_migration_html,
+            "testing_html": testing_html,
+            "virtualization_html": virtualization_html or blank["virtualization_html"],
+            "json_data_dynamic": json_data_dynamic,
+            "export_data_json": json_data_exclusion,
+            "ssis_js": ssis_js,
+            "informatica_js": informatica_js,
+            "data_lineage_js": data_lineage_js,
+            "anti_patterns_js": anti_patterns_js,
+            "workload_insights_javascript": workload_insights_javascript,
+            "data_migration_js": data_migration_js,
+            "testing_js": testing_js,
+            "exclusion_category_js": exclusion_category_js,
+            "dynamic_sql_pattern_js": dynamic_sql_pattern_js,
+            "effort_overrides_js": effort_overrides_js,
+        }
+    )
+    print_path = report_dir / PRINT_HTML_NAME
+    print_path.write_text(print_html, encoding="utf-8")
+    print(
+        f"  {PRINT_HTML_NAME}: {print_path.stat().st_size:,} bytes",
+        flush=True,
+    )
+    return _compose(**{**blank, "journey_overview_html": journey_overview_html})
+
 
 def print_usage():
     """Print usage information"""
@@ -7923,7 +8446,7 @@ _INFORMATICA_ETL_NAV_LINKS = (
 
 def _etl_nav_sublinks(links: Tuple[Tuple[str, str], ...]) -> str:
     return "".join(
-        f'<a @click="scrollToSection(\'{anchor}\', \'etl\')" class="nav-sublink">{label}</a>'
+        f'<a href="etl.html{anchor}" class="nav-sublink">{label}</a>'
         for anchor, label in links
     )
 

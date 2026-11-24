@@ -52,6 +52,9 @@ flagged row per key. Emit `value/unique_where.md` for it (`columns` = the key, `
 
 One fragment per prompt type, passed inline as `enrich`'s `fragments` map
 (`{"<prompt_type>": {…}}`); the tool writes each to `<obj>/fragments/<prompt_type>.json`.
+A re-mine keeps the fragments an earlier enrich wrote and `mine` lists them as `kept_fragments`:
+enrich reads them with the ones you pass, and an inline type replaces its file. Pass only the
+types the new rows need that they do not already cover, then follow `rerun`.
 `flag_for_llm` is a router: resolve it into another type; never emit it.
 
 **Table names.** Copy a row's `table` / `right_table` verbatim: the 3-part

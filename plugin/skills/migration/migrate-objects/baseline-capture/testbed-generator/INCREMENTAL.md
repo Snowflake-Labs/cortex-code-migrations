@@ -2,6 +2,11 @@
 
 Generate this table's CSV. You have one `objectId`.
 
+If that `objectId`'s `source.objectType` is not `table`, follow
+[SKILL.md § Named object with no table](SKILL.md#named-object-with-no-table)
+first. It still runs these phases on that object, then on one real table until
+the project deliverables exist. Do not stop because the object is not a table.
+
 Never call `transition_status`, `setup_sandbox`, `deploy`, or a data tool.
 
 ## Paths
@@ -44,6 +49,9 @@ call; retry the phase.
    A later table's first mine reads the views already written and runs nothing.
    Each scoped enrich that ends ready does the same for the wave's tables whose
    enrichment, and whose parents' CSVs, are now done.
+   A re-mine of this table removes its views and critic files but keeps
+   `fragments/`; the reply lists them as `kept_fragments` and the next enrich
+   re-checks them. Keep them unless enrich rejects them.
    If the message still says `table pipeline busy`, retry.
 2. Read the fresh scoped unsolved view. Do not reopen a constraint that is not listed.
    Call `testbed(phase="validate", objectId=<id>)` and read

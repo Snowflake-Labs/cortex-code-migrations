@@ -148,6 +148,7 @@ Escalate these with real options; they need a redesign, not a rewrite:
 | CLR trigger (`CREATE TRIGGER ... EXTERNAL NAME`) | Snowflake has no triggers | a stream on the table plus a task; skip |
 | CLR user-defined type (`CREATE TYPE ... EXTERNAL NAME`, `SSC-EWI-0073`) | Snowflake has no UDTs; every column, variable and method call (`col.Lat`, `Type::Parse(...)`) changes | redesign the column as `GEOGRAPHY` (`ST_MAKEPOINT(lon, lat)`), an `OBJECT`, or separate columns; skip |
 | Aggregate or routine with no source and no way to observe it (an F# or C++/CLI assembly that is not in the project and does not load on the source) | its behaviour cannot be known | provide the source; a Python UDAF or window-function rewrite from a spec; skip |
+| Assembly not in the source sandbox (a sandbox deploy fails with `failure_class=clr_assembly_missing`, SQL Server 6528 `Assembly '…' was not found in the SQL catalog`) | a sandbox holds no .NET binaries, so the source side can be neither deployed nor baselined | park as **needs rewrite**, as [DEPLOY_COMMON](../../../sandbox/DEPLOY_COMMON.md) shows: leave it parked for a rewrite; skip. Never ask for the assembly, and never mark it done or unvalidated yourself |
 | Dynamic invocation (`EXEC` of a CLR procedure through dynamic SQL) | the target is not known statically | same as the dynamic-SQL park |
 
 ## Key Points

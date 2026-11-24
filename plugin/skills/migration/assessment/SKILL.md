@@ -38,7 +38,7 @@ those inputs into the project.
    `anti-patterns`, `effort-estimate`, `sql-dynamic`, `conversion-issues`,
    `data-lineage`, see [Command reference](#command-reference));
    there is no `scai assess` or `scai code assess`. Projects with AI-First ETL
-   (Hop, Alteryx, ...) take the same path; their units appear in the waves.
+   (Apache Hop, Pentaho, ...) take the same path; their units appear in the waves.
 4. Generate the final HTML export only with `scai assessment report`.
 5. Gather remaining user input before dispatch. When `assessment_options` is
    already set (AIM collected Q1 and `assessment_name` on one
@@ -49,8 +49,9 @@ those inputs into the project.
    `scai assessment waves` runs with its defaults. Still
    collect only the remaining Step 4 inputs selected by those tokens. Then
    follow the Step 5 dispatch reference: when Power BI templates are staged,
-   Data Lineage runs alone first; then send the other in-scope Task calls in
-   one message; business use cases run last, as three agents and a merge. Do not prompt again until
+   Data Lineage runs as a Task first; then the parent runs the in-scope
+   `scai assessment` commands in parallel; then remaining LLM Tasks;
+   business use cases run last, as three agents and a merge. Do not prompt again until
    results are collected.
 6. A child failure does not block siblings. Validate each return and offer one
    retry of failed children using the same captured inputs.
@@ -87,7 +88,8 @@ assessment card's first question:
 <!-- next-skill-commands:begin -->
 Assessment commands, each run from `<project_dir>` (`waves` takes no `--project-dir`).
 They are the only ones: no `scai assess`, `scai assessment run`, or `scai code assess`.
-Each analysis runs in its own sub-agent per Step 5; the report runs last (Step 7).
+The parent runs the CLI analyses in parallel per Step 5; LLM work uses
+sub-agents; the report runs last (Step 7).
 - Waves: `scai assessment waves`
 - Object exclusion: `scai assessment object-exclusion`
 - Effort estimate: `scai assessment effort-estimate`
@@ -146,11 +148,9 @@ name (default from `metadata_tools.py --show-assessment-name`):
 
 ```text
 Business use cases, size-based waves of about 100–200 objects, standard
-analyses, lineage, and the report always run.
+analyses (including Dynamic SQL generate), lineage, and the report always run.
 What else do you want? Select all that apply:
-- Deep Dynamic SQL review
 - Discovery (SQL Server, Teradata, or Redshift only)
-- AI analysis of SSIS packages (when present)
 - None of these
 ```
 
@@ -172,25 +172,30 @@ Follow it to stage optional Power BI templates, collect every applicable answer,
 and create the in-context `assessment_inputs` snapshot. Do not dispatch until
 that snapshot is complete.
 
-## Step 5: Sub-Agent Dispatch
+## Step 5: CLI fan-out, then LLM Tasks
 
-**Before creating Task calls, read
+**Before running commands or creating Task calls, read
 [references/subagent-dispatch.md](references/subagent-dispatch.md) in full.**
 Use its exact gates, context fields, command requirements, and JSON return
 contracts.
 
 When `data_lineage.dispatch` is true and `staged_pbits` is non-empty, this
-step is **three steps**:
+step is **four steps**:
 
-1. **Enrichment first.** Dispatch only `data-lineage`. Then call
+1. **Enrichment first.** Dispatch only the `data-lineage` Task. Then call
    `hub(mode="wait", confirm=true, cursor=<last>)`. Do not end the turn.
-2. **Then the parallel fan-out.** Once `data-lineage` has returned, fire one
-   Task call per remaining in-scope sub-skill except `business-use-cases`. A
-   wait can return before that (on a timeout or another wake); if
-   `data-lineage` is still running, wait again. Do not include `data-lineage`
-   again.
-3. **Then business use cases**, the last part of the assessment. Once every
-   fan-out agent has returned, dispatch the **context pass** alone and wait for
+2. **Then the parent CLI fan-out.** Once `data-lineage` has returned, from
+   `project_dir` start every remaining in-scope `scai assessment` command in
+   one tool-use message as parallel shells (object-exclusion, effort-estimate,
+   anti-patterns, sql-dynamic generate, etl generate, workload-insights,
+   conversion-issues is not in this list). Wait until they have all exited.
+   Synthesize each row of the common JSON contract from the exit code and
+   artifact. Do not wrap those commands in Task. Do not call `configure` for
+   each of them.
+3. **Then remaining LLM Tasks** (conversion-issues when in scope).
+4. **Then business use cases**, the last part of the assessment. Once the CLI
+   fan-out and every LLM child has returned, dispatch the **context pass**
+   alone and wait for
    it: it reads the code and writes `artifacts/assessment/assessment-context-ai.md`.
    Then dispatch the **lineage search** and the **other-objects search**
    together, both reading that file, and wait for both. Then merge their
@@ -199,15 +204,17 @@ step is **three steps**:
    the earlier steps wrote, and the plan writes the registry, so nothing else
    runs beside them.
 
-SSIS with `auto-review-all`, and Informatica always, add review batches and
-a summary to the fan-out, as subagent-dispatch.md § SSIS and § Informatica
-say. For each platform the batches run one after
-another, never side by side. The project's one ETL platform gets one
-`scai assessment etl generate`. Business use cases wait for them too.
+The project's one ETL platform gets one `scai assessment etl generate`, run by
+the parent in the CLI fan-out with `--review-mode generate-only`. Do not dispatch
+SSIS or Informatica review batches or an AI summary during assessment. If the
+user later asks AIM to analyze packages or workflows, ask all / some / one first
+(etl-assessment / informatica-assessment on-demand AI analysis), then review in
+batches of at most 10, one after another, never side by side.
+Business use cases wait for generate too.
 
 When `data_lineage.dispatch` is false, or `staged_pbits` is empty, skip the
-first step and send the fan-out in one message. Include `data-lineage` in that
-fan-out when it is in scope. Business use cases still run last, after it.
+first step. Run `scai assessment data-lineage` in the CLI fan-out when it is
+in scope. Business use cases still run last, after it.
 
 **Wait in the same turn; do not end it.** After each dispatch message, call
 `hub(mode="wait", confirm=true, cursor=<last>)`. Do not call
@@ -222,16 +229,18 @@ the dispatch message itself, ahead of the Task calls, so the user sees it while
 the analyses run. In two or three plain sentences, with no table or checklist:
 
 - name every analysis you launched, e.g. "object exclusion, effort
-  estimate, anti-patterns, dynamic SQL and SSIS"; say which are slow and why,
+  estimate, anti-patterns, dynamic SQL and SSIS"; say which are parent CLI
+  commands and which are LLM tabs; say which are slow and why,
   such as per-item review, and that business use cases and their waves come
   last because they build on these results;
-- say that each one runs as its own tab above the conversation, where the user
-  can watch it, and that any command it asks to run shows a permission card
-  that needs approval before that analysis can go on;
+- say that each LLM child runs as its own tab above the conversation, where
+  the user can watch it, and that any command it asks to run shows a
+  permission card that needs approval before that analysis can go on; CLI
+  commands show a permission card on this turn;
 - say that on a large project the slow ones can run for many minutes, and that
   you post a short line every few minutes until they finish;
 - say how the user will know the step is done: you report each analysis as it
-  finishes, then you build the combined report (`{customer}_migration_plan_{timestamp}.html`), which
+  finishes, then you build the combined report (`assessment/report/index.html` and `assessment-report.zip`), which
   ends the step.
 
 **Update as they finish, and while they run.** Each time the hub wait returns,
@@ -251,11 +260,12 @@ run, and that you will offer to re-run it with the results (Step 8's retry).
 
 ## Step 6: Wait + Verify Outputs
 
-Collect a JSON object from every child. After `hub(mode="wait")` returns, read
-a finished child with `agent_output(wait=false)`. Do not call `wait=true`, and
+Collect a JSON object for every analysis: synthesize CLI rows from the
+command's exit and artifact, and after `hub(mode="wait")` returns, read a
+finished child with `agent_output(wait=false)`. Do not call `wait=true`, and
 do not end the turn to wait for a notification. Data Lineage adds `manifest`;
 all other
-children return:
+rows return:
 
 ```json
 {
@@ -307,31 +317,22 @@ when:
 
 Offer the retry for any of them in Step 8.
 
-Conversion issues does not skip a missing registry: `ASM0045` is `error`. Zero pairs is `ok`. When `assessment_conversion_issues` is not `yes`, synthesize `skipped` and do not dispatch it. An `ok` return with one or more summary rows is complete only when every summary row has a non-empty `problem_description` and `recommended_fix`. Empty fields mean the child stopped after the first command: fail it with `error: "conversion-issues enrichment missing"` and offer the retry. The parent does not upload the ZIP; the HTML tab shows the ZIP path and the Share issues link.
+Conversion issues does not skip a missing registry: `ASM0045` is `error`. Zero pairs is `ok`. When `assessment_conversion_issues` is not `yes`, synthesize `skipped` and do not dispatch it. An `ok` return with one or more summary rows is complete only when every summary row has a non-empty `problem_description`. Empty fields mean the child stopped after the first command: fail it with `error: "conversion-issues enrichment missing"` and offer the retry. The parent does not upload the ZIP; the HTML tab shows the ZIP path and the Share issues link.
 
-When `etl.review_mode` is `auto-review-all`, the etl-assessment row comes from
-the SSIS summary child (subagent-dispatch.md § SSIS), after every review batch
-has returned. It is `ok` only when `scai assessment etl stats` shows 0 pending
-packages; run it yourself rather than trusting a child's counts. Otherwise
-fail the row with `error: "<n> SSIS packages still pending AI analysis"` and
-offer Step 8's retry, which re-sends review batches for the PENDING packages
-only, then the summary. A review batch that returned `error` fails the row the
-same way.
+The etl-assessment row comes from the parent SSIS generate
+(subagent-dispatch.md § SSIS). It is `ok` when that command exited 0 and
+the JSON it printed exists and is non-empty. Assessment is generate-only: do not fail the row for packages still without AI analysis, and do not require
+`ai_ssis_summary.html`.
 
-The informatica-assessment row comes from the Informatica summary child
-(subagent-dispatch.md § Informatica), after every review batch has returned.
-When the target was not recorded (input-collection.md § 5.3b), or any
-Informatica child returned `Informatica target not recorded`, the row is that
-error whatever `stats` shows: an earlier artifact may still be on disk.
-It is `ok` only when `scai assessment etl stats --platform informatica` shows
-0 pending workflows; run it yourself rather than trusting a child's counts.
-Otherwise fail the row with
-`error: "<n> Informatica workflows still pending AI analysis"` and offer
-Step 8's retry, which re-sends review batches while workflows are pending,
-then the summary. A generate or review batch that returned `error` fails the
-row with that error. When the row is `ok`, also verify
-`<project_dir>/artifacts/assessment/etl/ai_informatica_summary.html` exists and
-is non-empty. Otherwise fail with `error: "AI summary missing or empty"`.
+When the Informatica target was not recorded (input-collection.md § 5.3b), or
+any Informatica child returned `Informatica target not recorded`, the row is
+that error: an earlier artifact may still be on disk.
+
+When Informatica is in scope, the informatica-assessment row comes from the
+parent Informatica generate: it is `ok` when that command exited 0 and the
+JSON it printed exists and is non-empty. That run writes no AI summary; the
+report builds its own from generate JSON. Do not fail the row for workflows
+still without AI analysis.
 
 Create a `results` table in this order:
 
@@ -379,14 +380,15 @@ scai assessment report \
   --plugin-version "<plugin_version>" \
   --project-dir "<project_dir>" \
   [--ssis-json "<path>" when etl-assessment is ok, or failed only on pending packages] \
-  [--informatica-json "<path the Informatica generate child returned>" when informatica-assessment is ok]
+  [--informatica-json "<path `scai assessment etl generate` printed>" when informatica-assessment is ok]
 ```
 
 Do not pass `--output` on the common path. The CLI writes
-`<project_dir>/assessment/{customer}_migration_plan_{yyyyMMdd_HHmmss}.html`
-(UTC) and prints that path. It also writes a sibling PDF of every tab beside
-the HTML. It needs Chrome, Edge, or Chromium. If the PDF cannot be rendered,
-the HTML is still written and the command fails.
+`<project_dir>/assessment/report/index.html` (wave pages, objects, and ETL
+sidecars in that folder), `assessment/assessment-report.zip`, and
+`assessment/reports/report_<yyyyMMdd_HHmmss>/`. It also writes a sibling PDF of
+the index beside it. It needs Chrome, Edge, or Chromium. If the PDF cannot be
+rendered, the HTML is still written and the command fails.
 
 Always pass `--project-dir` and successful SSIS/Informatica outputs explicitly.
 Pass `--plugin-version` so the report names the plugin build; leave it out only
@@ -537,7 +539,13 @@ opener. Go straight to the closing message below.
 
 Present the closing message with:
 
-- opening line: `migration_status.in_scope` objects in `wave_count` waves;
+- opening line: `migration_status.in_scope` objects to migrate (missing
+  references not counted) in `wave_count` waves. Totals in the child summaries
+  count differently, so name the rule wherever one is quoted: waves count every
+  object in the plan with missing references, effort prices in-scope objects
+  without them, exclusion counts every registered object of a known type, and
+  coverage counts deployable objects (no schemas, databases or missing
+  references). Never quote two of these as if they were the same total;
 - summary table: Register, Convert, ETL conversion, Business use cases,
   Object exclusion, Dynamic SQL, SSIS/Informatica, Missing objects;
 - 2–4 triggered findings only (staging ≥30%, unresolved external references,

@@ -57,8 +57,9 @@ Run from `project_dir`. The command writes:
 
 ## Sub-agent contract
 
-On entry, call `configure()` with `project_dir` from the parent's context
-block. Take no user prompts. On completion return JSON only:
+The parent assessment skill runs this command itself during a full
+assessment. When invoked standalone, call `configure()` with `project_dir`
+from the parent's context block. Take no user prompts. On completion return JSON only:
 
 ```json
 {

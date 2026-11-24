@@ -60,6 +60,7 @@ Record that exact version tag (e.g., `1.11.1`). Use it as `<version>` in all sub
 | Oracle        | `oracle`           |
 | Teradata      | `teradata`         |
 | PostgreSQL    | `postgresql`       |
+| BigQuery      | `bigquery`         |
 
 ## Step 2 — Affinity Label
 
@@ -83,6 +84,8 @@ Tell the user:
 Wait for the user to confirm or override, then set it: `configure(affinity="<label>")`. **Note the final label — it is used in Steps 4 and 5 as `AGENT_AFFINITY`; it must equal the workflow affinity.**
 
 **Azure Synapse:** `scai data worker setup` provisions this dialect. Set `DATA_SOURCE_TYPE` to `azure_synapse`. Dedicated vs serverless is `DATA_SOURCE_POOL_TYPE` (`dedicated` / `serverless`). SQL auth uses the username/password secrets in Step 3. Service principal (`--auth service-principal`) becomes `DATA_SOURCE_MODE=azure_ad`; the same Snowflake password secret is mounted as `DATA_SOURCE_CLIENT_ID` / `DATA_SOURCE_CLIENT_SECRET`. `interactive` cannot run on a headless worker.
+
+**BigQuery:** `scai data worker setup` provisions this dialect from a connection added with `scai connection add-bigquery --auth service-account`. Application Default Credentials are refused: the container has no metadata server to read them from. Setup reads the service-account JSON key file, refuses anything that is not a `service_account` key or is over 64 KiB, and stores the key base64-encoded in the PASSWORD field of a Snowflake secret mounted as `BIGQUERY_CREDENTIALS_JSON_BASE64`. No username or password is mounted, so Step 3's secrets do not apply. The spec sets `DATA_SOURCE_TYPE=bigquery`, `DATA_SOURCE_HOST=bigquery.googleapis.com`, `DATA_SOURCE_PORT=443`, `DATA_SOURCE_DATABASE=<dataset>`, `DATA_SOURCE_PROJECT_ID=<gcp_project>`, and `DATA_SOURCE_LOCATION` when the connection has one (the worker defaults to `US`). Egress covers `bigquery.googleapis.com:443`, `oauth2.googleapis.com:443`, and `storage.googleapis.com:443`. For `export_data`, the worker config's `export_data_gcs_bucket` / `export_data_gcs_prefix` become `EXPORT_DATA_GCS_BUCKET` / `EXPORT_DATA_GCS_PREFIX`. A deployed worker bound to another GCP project is refused, as for any other source: re-run with `--yes` to drop and recreate it, or pass `--service-name <name>` for a separate worker.
 
 ## Step 3 — Snowflake Secrets for Source Credentials
 
@@ -110,6 +113,17 @@ Substitute `<username>` with the source database username. For `<password>`: **d
 Note the exact secret names — they are referenced in Step 4.
 
 **Wait for the user to confirm the secrets are created before continuing.**
+
+**BigQuery (custom spec only):** skip the username/password secrets above. Store the base64 of the service-account key file in one PASSWORD secret; the user fills the key in their own Snowflake session (`base64 < key.json | tr -d '\n'`), never in the chat:
+
+```sql
+CREATE SECRET <project>_BIGQUERY_KEY
+  TYPE = PASSWORD
+  USERNAME = '<service_account_email>'
+  PASSWORD = '<base64_of_key_file>';
+```
+
+The custom path also needs an `EXTERNAL_ACCESS_INTEGRATION` whose network rule allows `bigquery.googleapis.com:443`, `oauth2.googleapis.com:443`, and `storage.googleapis.com:443`.
 
 > **Non-SPCS / local workers:** Snowflake Secrets above apply to SPCS container services only. For external vaults, AWS Secrets Manager REST providers, or `$(...)` command substitution in worker TOML, see [Advanced: Secrets management](../references/worker-config-reference.md#advanced-secrets-management).
 
@@ -167,6 +181,15 @@ CREATE SERVICE <metadata_database>.DATA_MIGRATION.DATA_EXCHANGE_SERVICE
   $$
   MIN_INSTANCES = <replica_count>
   MAX_INSTANCES = <replica_count>;
+```
+
+**BigQuery:** set `DATA_SOURCE_HOST: bigquery.googleapis.com`, `DATA_SOURCE_PORT: 443`, `DATA_SOURCE_DATABASE: <dataset>`, and add `DATA_SOURCE_PROJECT_ID: <gcp_project>` (plus `DATA_SOURCE_LOCATION: <location>` when not `US`). Replace the two `secrets` entries with the key secret, which needs `secretKeyRef` because it is a PASSWORD secret:
+
+```yaml
+          secrets:
+            - snowflakeSecret: <project>_BIGQUERY_KEY
+              secretKeyRef: password
+              envVarName: BIGQUERY_CREDENTIALS_JSON_BASE64
 ```
 
 **Resource sizing:** The `memory: 2Gi / cpu: 0.1` values above match `scai data worker setup` (`SpcsServiceSpec` defaults; no resource limits). A `CPU_X64_S` pool can schedule them. Raise the request only if the user has a measured need; a `cpu: 6` request needs `CPU_X64_M`.

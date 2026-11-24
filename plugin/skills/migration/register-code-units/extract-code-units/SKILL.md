@@ -224,17 +224,29 @@ yes/no — extras already collected that on the setup/register card.
 
 - If `has_etl_code` is **`false`** (explicitly): say that next we'll convert these to Snowflake SQL — then go straight on (below); the sentence announces the next step, it does not end the turn.
 - If `has_etl_code` is **not set**: return to the parent register skill and collect the extras card there, then re-read `has_etl_code`.
-- If `has_etl_code` is **`true`** (explicitly): ask which platform via `ask_user_question` (`multiSelect = false`):
+- If `has_etl_code` is **`true`** (explicitly): the platform question is the fixed
+  `chooseEtlPlatform` setup card, not a question you write. Read `etl_platforms` from
+  `configure()`. If it is set, use it and do not ask again. If it is not set, call
+  `progress_setup()` with no answers and handle the `chooseEtlPlatform` prompt it returns
+  as setup/SKILL.md step 3 says (`multiSelect = true`, every label and description exactly
+  as served). Only if `progress_setup()` does not return that prompt, ask the card below in
+  one `ask_user_question` call, copying it word for word, and save the answer with
+  `configure(etl_platforms="<comma-separated values>")`. Then handle each picked platform.
 
-> "Which ETL platform is it?"
+Never shorten, reword or drop an option's description: the "AI-First approach, not
+native support" sentence must reach the user on every AI-First option. Never name, as
+examples or suggestions, any ETL platform other than SSIS, Informatica PowerCenter,
+Apache Hop and Pentaho.
+
+<!-- platform-card:begin (must match chooseEtlPlatform in setup.json) -->
+> "Which ETL platform is your ETL code from? Select all that apply."
 >
-> 1. **SSIS** — `.dtsx` packages (converted natively)
-> 2. **Informatica Power Center** — XML repo export (converted natively)
-> 3. **Apache Hop or Pentaho**: Hop `.hpl` / `.hwf`, Pentaho `.ktr` / `.kjb` (AI-First
->    approach, not native support: converted end to end, then validated against the
->    original)
-> 4. **Another ETL platform**: Talend, Alteryx, Informatica Cloud / IICS, DataStage,
->    Azure Data Factory, or something else (AI-First approach, not native support)
+> - **SSIS**: SQL Server Integration Services .dtsx packages. Native support: converted directly, not through the AI-First approach.
+> - **Informatica PowerCenter**: PowerCenter XML repository exports. Native support: converted directly, not through the AI-First approach.
+> - **Apache Hop (AI-First, not native support)**: Hop pipelines and workflows (.hpl, .hwf). AI-First approach, not native support: a model-assisted conversion with narrower coverage than SSIS and Informatica PowerCenter; each converted job is trusted only after it passes validation against the original.
+> - **Pentaho (AI-First, not native support)**: Pentaho transformations and jobs (.ktr, .kjb). AI-First approach, not native support: a model-assisted conversion with narrower coverage than SSIS and Informatica PowerCenter; each converted job is trusted only after it passes validation against the original.
+> - **Another ETL platform (AI-First, not native support)**: Any other ETL tool; you name it next. AI-First approach, not native support: a model-assisted conversion with narrower coverage than SSIS and Informatica PowerCenter; each converted job is trusted only after it passes validation against the original.
+<!-- platform-card:end -->
 
 - **SSIS / Informatica Power Center:** ask for the ETL folder path and
   run (do **not** pass `--overwrite` — the extracted SQL is already in `source/`):
@@ -253,14 +265,14 @@ yes/no — extras already collected that on the setup/register card.
   [add-code-units Step 3](../add-code-units/SKILL.md#if-the-import-times-out-or-runs-in-the-background)
   says before you go on.
 
-- **Apache Hop or Pentaho / Another ETL platform:** these files never go through `scai code add` —
+- **Apache Hop / Pentaho / Another ETL platform:** these files never go through `scai code add` —
   the native `EtlFileClassifier` under `source/_etl/` only understands SSIS and
   Informatica PowerCenter. Instead:
-  1. For **Apache Hop or Pentaho**, take the platform from the files (`.hpl` / `.hwf`
-     are `hop`, `.ktr` / `.kjb` are `pentaho`) or ask which one; when the folder holds
-     both, register each set separately. Otherwise ask which platform. Accept a free-form
-     name if it is not in the list. Store the
-     lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `hop`, `adf`, …).
+  1. For **Apache Hop** or **Pentaho**, the slug is `hop` or `pentaho`; check it against
+     the files (`.hpl` / `.hwf` are `hop`, `.ktr` / `.kjb` are `pentaho`), and when the
+     folder holds both, register each set separately. For **Another ETL platform**, ask
+     "Which ETL platform is it?" as a plain question with no examples, accept the name
+     the user gives, and store it as a lower-case slug.
      For Hop, `hop` and `apacheHop` are the same intake: the helper vendors under
      `source/_etl_aifirst/hop/` and enumerates `units[].platform` as `apacheHop`.
   2. Ask for the folder path containing the platform's source documents.

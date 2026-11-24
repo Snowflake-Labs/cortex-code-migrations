@@ -22,6 +22,7 @@ When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, t
 | `etl_replatform_sources_path` | no | absolute path to the SSIS `.dtsx` source directory; falls back to auto-detection per [Step 1](#step-1-locate-input-files-auto-detected) |
 | `etl_assessment_skill_dir` | yes | absolute directory containing this SKILL.md. It lives under the installed plugin root at `skills/migration/assessment/etl-assessment`. Pass it to `uv run --project`. Never pass `project_dir`. |
 | `review_mode` | yes | `generate-only`, `review-batch`, `summary-only`, `auto-review-all`, or `skip` |
+| `parent_review_mode` | with `generate-only` from the parent | always `generate-only` during assessment. On-demand review may send `auto-review-all` later. |
 | `package_paths` | with `review-batch` | the relative package paths this agent reviews, at most 10 |
 | `ssis_target` | yes when SSIS is in scope | `dbt` or `scripting`. Persist it and use it for Step 3 and Step 4. |
 
@@ -48,6 +49,33 @@ When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, t
 ```
 
 On `skip`: `"status": "skipped"`, `"output_json": null`. On failure: `"status": "error"`, `"error": "<message>"`.
+
+## On-demand AI analysis
+
+Assessment never reviews packages. When the user later asks AIM to run AI
+analysis on SSIS (analyze packages, analyze ETL, and the like):
+
+1. **Ask first.** Do not start review in that reply. This is a question AIM
+   must wait on, not a default to all.
+2. If that message already names one or more packages, confirm those names
+   and skip the menu.
+3. Otherwise ask this, with the pending count from `scai assessment etl stats`
+   when you have it (about **60s per package**, because each one is scanned
+   and written back on its own):
+
+   > N packages have no AI analysis yet. Each takes about 60 seconds.
+   >
+   > Do you want AI analysis for:
+   > 1. All of them
+   > 2. Some of them
+   > 3. One package
+
+   Do not start review until they answer. If they pick some or one and have
+   not named packages, ask which names next.
+4. Then stay in this turn. Run review batches of at most **10 packages**, one
+   after another, never side by side, as subagent-dispatch.md § SSIS says.
+   Then the summary child.
+5. Do not start this from the assessment scope card.
 
 ## Important Notes
 
@@ -139,8 +167,10 @@ Resolve `<conversion_reports_dir>` as the first directory that contains both `ET
 Run the C# assessment generator from the project root (it auto-detects all paths from the configured project):
 
 ``` bash
-scai assessment etl generate
+scai assessment etl generate --review-mode <parent_review_mode>
 ```
+
+`--review-mode` records what the user selected as `summary.review_mode` in the JSON: `parent_review_mode` when the parent sent it, else your own `review_mode` (`generate-only` or `auto-review-all`). Never pass the generate phase's own `generate-only` when the parent sent `parent_review_mode=auto-review-all`: the report would then treat the run as generate-only (analyzer complexity, no pending count) instead of listing the packages still pending. Under `generate-only` the banner says "AI analysis pending".
 
 This writes two timestamped files to `<project>/artifacts/assessment/etl/`:
 - `etl_assessment_analysis_<timestamp>.json` — the main assessment data

@@ -132,26 +132,53 @@ prerequisites for step transitions -- context pressure does not exempt them. Fil
 **Pre-check:** if `<output_dir>/conversion_state.json` exists, offer **Resume** from
 `current_step` or **Restart** (delete state, start fresh).
 
-Ask everything in one upfront round, before any work, as consecutive `ask_user_question` calls
-(max 4 questions each). Never drop a question to fit a call -- add a call. No other questions
-follow except the Step 4/Step 10 stops in interactive mode.
+`ask_user_question` allows **4 questions per call**. Call A is already 4; Call B (T2/T3) is
+already 4. Do **not** merge Call B into Call A. Do **not** merge Call C into Call A or Call B.
+Never drop a question to fit a call -- add a call. Do not re-ask a header the user already
+answered. No other questions follow except the Step 4/Step 10 stops in interactive mode.
 
-- **Call A:** SAS source + output dir; target and validation (writable scratch) schemas; mode
-  (**1:1 Direct** default / **Optimize & Consolidate**); depth (**T1** compile, no credits / **T2** +
-  unit test on test data / **T3** + end-to-end on full data / none).
-- **Call B (depth T2/T3 only), defaults in bold:**
-  1. Source tables: in Snowflake at `<schema>` / **not in Snowflake**
-  2. DDL: file path (`.sql` CREATE TABLEs or `table,column,type` CSV) / **none -- infer from SAS**
-  3. Test data: tables or stage path / **synthetic**
-  4. SAS outputs to compare: path or tables / **none -- LLM trace**
-- **Call C (only when applicable):** Step 2.5 external-source mapping; T3 full-data location.
-  Merge into Call B if the total stays <= 4.
+Issue Call A **before reading `.sas` files** or scanning `LIBNAME`. Then Call B if depth is T2
+or T3. Then scan (Step 2.5) and issue Call C only when that scan finds an external source or
+depth is T3.
+
+**Call A** — one `ask_user_question`, exactly these 4, in this order (`multiSelect: false`):
+
+1. header `Paths` — "SAS source directory and converted-SQL output directory?"
+   Labels: paths from the user's request (include `./sas` → `./converted` when they said that) /
+   I'll specify different paths.
+2. header `Schemas` — "Target schema and writable validation (scratch) schema (`DATABASE.SCHEMA`)?"
+   Labels: I'll type both / Use placeholders.
+3. header `Mode` — "Which conversion mode?"
+   Labels: **1:1 Direct** / Optimize & Consolidate.
+4. header `Depth` — "How deep should I validate the conversion?"
+   Labels: **T1** compile, no credits / **T2** + unit test on test data / **T3** + end-to-end on
+   full data / none (convert only).
+
+**Call B (depth T2/T3 only)** — the **next** `ask_user_question` after Call A returns T2 or T3.
+Skip Call B when depth is T1 or none. Exactly these 4, in this order (defaults in **bold**):
+
+1. header `Source tables` — "Where do the source tables live?"
+   Labels: in Snowflake at `<schema>` / **not in Snowflake**.
+2. header `DDL` — "Do you have table DDL?"
+   Labels: path to `.sql` CREATE TABLEs or `table,column,type` CSV / **none -- infer from SAS**.
+3. header `Test data` — "What test data should T2 use?"
+   Labels: tables or stage path / **synthetic**.
+4. header `SAS outputs` — "Are there SAS outputs to compare against?"
+   Labels: path or tables / **none -- LLM trace**.
+
+**Call C** — a **third** `ask_user_question` after Call A (and Call B when it ran), never merged
+into either. Only when Step 2.5 found an external `LIBNAME` / `CONNECT TO`, or depth is T3
+(full-data location). One question per mapping plus T3 full-data if needed; split across calls
+if more than 4.
 
 Write `conversion_state.json` (`metadata`: output_dir, target_schema, validation_schema,
 migration_mode, `validation_selections` per `workflows/validation-pipeline.md`, timestamps,
 `current_step: "1"`) and the first `checkpoint_log.jsonl` line, then run
 `python3 tool/sql_check.py selections --state <output_dir>/conversion_state.json`. Non-zero exit
-lists missing answers: ask them now (still Step 1) and re-run before Step 2.
+lists missing answers: ask them now (still Step 1) and re-run before Step 2. T2/T3 must record
+`source_location`, `ddl` (`infer` or `user:<path>`), `test_data` (`synthetic` or `user:<path>`),
+and `baseline` (`trace` or `sas_outputs:<location>`). Do not invent those values to pass the
+gate.
 
 ### Step 2: Load References
 
@@ -160,10 +187,10 @@ loaded at the step that needs it (Context Budget table).
 
 ### Step 2.5: External Sources and the Table Registry
 
-Scan for external database references: `LIBNAME` with an engine (`sqlsvr`, `oracle`, `teradata`,
-`odbc`, `oledb`, `postgres`, `mysql`, `mssql`), `CONNECT TO`, and `DSN=` / `qualifier=` /
-`schema=`. For each: engine, DSN/qualifier, schema, tables read through it. Show them in the Step 1
-prompt:
+Scan for external database references **after Call A** (and Call B when depth is T2/T3): `LIBNAME`
+with an engine (`sqlsvr`, `oracle`, `teradata`, `odbc`, `oledb`, `postgres`, `mysql`, `mssql`),
+`CONNECT TO`, and `DSN=` / `qualifier=` / `schema=`. For each: engine, DSN/qualifier, schema,
+tables read through it. Ask the mapping in **Call C** (not Call A, not Call B):
 
 ```
 | LIBNAME | Engine | DSN/Qualifier | Schema | Tables Referenced |

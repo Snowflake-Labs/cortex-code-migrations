@@ -79,13 +79,18 @@ the next step automatically. The flow:
      ask or reword it; end the turn, then call `progress_setup()` next turn.
    - **Otherwise** (e.g. Cortex Code CLI) — ask `next_prompt`, then each
      `then_ask` entry in order, in **one** `ask_user_question` call, never
-     as prose. Show each option's `label`, never its `value`. Then submit
+     as prose. Show each option's `label` and `description` exactly as
+     served, never its `value`. Then submit
      the answers as below.
 
    When the user has **already** said the answer in conversation, record it
    instead of waiting or asking. Do not ask them to say it again.
    Exception: the isolation opt-in is never taken from conversation; it needs
    an explicit answer to that exact question (configure-testing.md).
+   Exception: `chooseMigrationExtras` is never inferred from a request that only
+   names a SQL/ETL conversion. Show that prompt's options (ETL, Power BI,
+   Tableau, None) unless the user already answered this card or named those
+   extras. A convert-only prompt is not "no Power BI".
    - Submit the option's `value`, never its label. If they picked
      **Something else**, submit what they typed — not `other`.
    - If they picked **Snowflake** for the dialect, omit `code_source`.
@@ -189,6 +194,7 @@ means `migration/dbt/setup.md`, a sibling of `setup/`.
 | `configureExtractionSource`      | inline `next_prompt` listing existing connections when scai has any (extract all objects from the picked database). Otherwise sub-skill: `setup/configure-source-connection.md` |
 | `chooseMigrationExtras`          | inline prompt — **multi-select** extras (ETL / Power BI / Tableau / None). Arrives with `chooseConversionSettings` queued in `then_ask`. Both are asked as in step 3, never as yes/no questions. Stores `migration_extras` (and derived `has_etl_code` / `has_power_bi` / `has_tableau`). |
 | `chooseConversionSettings`       | inline prompt (queued in `then_ask` from `chooseMigrationExtras`). Stores `tailor_conversion_settings` for the `convert` skill. |
+| `chooseEtlPlatform`              | inline prompt — **multi-select** ETL platform card, only when the user picked the ETL extra. Fixed text: ask every option's label and description exactly as served, never shortened (each AI-First option says it is not native support). Stores `etl_platforms` for the register skill. |
 | `registerCode`                   | sub-skill: `register-code-units/SKILL.md`                         |
 | `convertCode`                    | sub-skill: `convert/SKILL.md`                                     |
 | `dbtRepoint`                     | sub-skill: `dbt/SKILL.md` (dbt path only — agentic YAML/macro refinement after `--dbt`) |

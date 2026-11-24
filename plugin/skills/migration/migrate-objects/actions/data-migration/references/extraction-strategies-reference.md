@@ -187,11 +187,15 @@ See DMVF docs: `teradata-odbc-extraction.md`, `tpt-extraction.md`, `write-nos-ex
 
 ## Azure Synapse (`synapse`)
 
+Dedicated and serverless pools share this `sourceLanguage`; pool type is worker config, not a second
+wizard dialect.
+
 1. **`cet_as`** (recommended): CETAS to Azure Blob; requires external data source, Parquet format, and a
    Snowflake external stage on the same prefix.
-2. **`regular`**: ODBC fallback.
+2. **`cloud_direct`**: worker streams Parquet to object storage; write credentials + matching stage ready.
+3. **`regular`**: ODBC fallback (native tables only).
 
-Synapse has **no BCP** path.
+Synapse has **no BCP** path. Iceberg offers only `cet_as` and `cloud_direct` — not `regular`.
 
 ## BigQuery (`BigQuery`)
 

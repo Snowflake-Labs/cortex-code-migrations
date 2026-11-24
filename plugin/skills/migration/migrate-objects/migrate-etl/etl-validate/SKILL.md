@@ -33,7 +33,7 @@ transition_status(status="started", task="{TASK}", where="id = '{ETL_ID}'")
 ## Step 0b: Platforms Without a Built-in Executor
 
 Only `ssis` (SQL Agent / SSISDB) and `informatica` (`pmcmd` / dbt Cloud) have a built-in
-executor. Any other `kind: etl` platform — DataStage, Talend, an in-house shell or binary
+executor. Any other `kind: etl` platform — another ETL tool, an in-house shell or binary
 orchestrator — is rejected by `--platform` and by the seeder **unless** the project declares an
 `external_command:` section in `.scai/settings/test_config.yaml`:
 
@@ -180,7 +180,7 @@ An SSIS source run whose error message contains `expected_failure.message` on th
   `transition_status(status="advance", task="{TASK}", outcome="completed", where="id = '{ETL_ID}'")`
 - One or more packages failed → registry should read `failed` with the CLI's `error` class (table above). Surface the failed package names, the class, and the row-level differences or the `details` evidence, then advance **without** an `error` — the stamped class is kept and routes the walk:
   `transition_status(status="advance", task="{TASK}", outcome="failed", where="id = '{ETL_ID}'")`
-  Never pass a different `error` (`sql` included); for `validateEtlValidate` the server refuses to replace the CLI's class. For a class other than `comparison`, the response names the stop and its next step; relay it and stop. Do not start a repair yourself.
+  Never pass a different `error` (`sql` included); for `validateEtlValidate` the server refuses to replace the CLI's class. For a class other than `comparison`, the response names the stop and its next step; relay it and stop. Do not start a repair yourself. A walker, which has no `transition_status`, reports a `validateEtlValidate` failure with `walk(action="done", failed="stamped", reason=…)`, which keeps the CLI's class. A `done` without `failed` is refused while the stamp reads failed: nothing was validated.
 
 If the CLI exited non-zero but the stamp is missing (registry write failed), say so explicitly and do **not** advance green — ask the user to re-run or investigate the registry write error.
 

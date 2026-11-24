@@ -34,6 +34,9 @@ it (in Step 6) or pick another.
 ## Step 3: Resolve source and target connections
 
 Call `configure()` and read `source_connection` and `snowflake_connection`.
+A `snowflake_connection_chosen: no` line means project init only signed in
+with that connection and the user never picked it: treat the Snowflake
+target as **missing**.
 
 Show this **verbatim** first, asked anything or not:
 
@@ -52,7 +55,8 @@ sandbox will use **Source:** `<source_connection>` and **Snowflake:**
 1. **Source connection** — existing source connections for this dialect.
    Always include **Create a new connection** last. **Never** offer "no
    source connection", "synthetic only", or "skip".
-2. **Target Snowflake connection** — existing Snowflake connections, a
+2. **Target Snowflake connection** — existing Snowflake connections (a
+   not-chosen `snowflake_connection` among them, never recommended), a
    `last_used_snowflake_connection:` first as `<name> (recommended)`,
    description "Last used": only a recommendation, so save nothing until
    the user picks. Always include **Create a new connection** last.
@@ -89,6 +93,12 @@ Then one `ask_user_question` with one question per database with code
 (`multiSelect = false`), headed by the source database: suggested target
 labelled **(recommended)**; freeform override allowed. Reject duplicate
 targets; re-ask on conflict.
+
+When the result has `etlTarget`, add one more question in that card:
+"Which Snowflake database should the ETL packages deploy into?", suggesting
+its `boundTarget`, else `snowflake_database:`, else the first target, as
+**(recommended)**. A binding profile passes scai no `-d`, so ETL deploys
+take their database only from this `snow:` entry.
 
 ## Step 5: Check the target DBs
 
@@ -140,7 +150,8 @@ after changing the Snowflake connection or a mapping. Only after Yes:
    AIM reads only this file, so every profile points at it: edit it in
    place. Per database with code keep its `source:` entry (a
    placeholder's is the connection's default) and set `snow:` to the
-   confirmed target. Drop `source:` and `snow:` entries for databases with
+   confirmed target, and `snow: <etlTarget.token>:` to the ETL answer
+   (no `source:` entry for it). Drop `source:` and `snow:` entries for databases with
    no registered code only after the Step 4 inventory is complete; else keep
    them all. Never replace the file with a source→target-only list, or
    drop a database with code to fit one profile.
