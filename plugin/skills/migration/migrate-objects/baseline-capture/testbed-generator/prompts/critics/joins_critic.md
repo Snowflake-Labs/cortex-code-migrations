@@ -22,9 +22,14 @@ direction, so never judge direction from the side order. Without the key anchors
   `fk_parent_mismatch`: both tables are on the edge, so the harness drops that REJECT.
 - Proposed parent is the edge's other side and the direction holds → **ACCEPT**.
 
-### correlated_groups — real correlation or coincidence?
+### correlated_groups — real correlation, with values the source uses?
 The backbone confirmed the group maps to a `branch_predicate` gap. Ask whether the source jointly implies
 the tuple (the columns co-vary in the same predicate/branch), or the pairing is coincidental.
+A `flag` entry also carries `anchors.ungrounded_values`: each `{tuple, table, column, literal, grounded_in}`
+is a tuple value found in no mined span of a column whose mined literals are `grounded_in`.
+- A value the source does not use for that column → **REJECT**, mode `a`, one verdict per anchor:
+  `{"kind": "correlated_groups", "table": <table>, "column": <column>, "verdict": "REJECT", "mode": "a",
+  "citation": {"type": "invented_literal", "literal": <literal>}}`.
 - No joint support in the source → **REVISE**, mode `b`.
 - Jointly implied → **ACCEPT**.
 

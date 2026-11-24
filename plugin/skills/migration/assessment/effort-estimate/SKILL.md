@@ -21,14 +21,16 @@ Writes `<project_dir>/artifacts/assessment/effort-estimates-YYYYMMDD_HHMMSS.json
 
 ## Sub-agent contract
 
-On entry, call `configure` with `project_dir` from the parent's context block. Take no user prompts. On completion return **JSON only**:
+The parent assessment skill runs this command itself during a full
+assessment. When invoked standalone, call `configure` with `project_dir`
+from the context block. Take no user prompts. On completion return **JSON only**:
 
 ```json
 {
   "sub_skill": "effort-estimate",
   "status": "ok",
   "output_json": "<abs path to effort-estimates-*.json>",
-  "summary": "<one-line: ddl_objects, total_estimated_hours>",
+  "summary": "<one-line: \"<ddl_objects> priced objects (in scope, missing references not counted)\", total_estimated_hours>",
   "error": null
 }
 ```

@@ -44,6 +44,8 @@ This guide only handles the current `deploy` task. It does not select an ETL flo
 
 **If an ETL deploy fails, report and stop.** The `deploy` result lists each failed part under `errors` (object, part path, Snowflake error, suggestion) and says the next step in `next_step`. Tell the user those errors, stamp `transition_status(status="advance", task="deploy", outcome="failed", error="sql", where="id = '<etl_id>'")`, and stop work on that unit. Never deploy an ETL unit by hand: no `snow dbt deploy`, no `CREATE TASK` / `EXECUTE DBT PROJECT` through `sql_execute`, no edits to `dbt_project.yml`, `profiles.yml` or the task SQL under `snowflake/**`. The pre-deploy checks below are for converted SQL objects, not ETL output.
 
+An `errors` entry with `errorCode` `DEP0041` (validate flow only) is not a code failure: the package waits for a task of another ETL package that is not deployed, and scai created nothing of it and already recorded the failure. Do **not** stamp it (`error="sql"` would send it to code repair); report the entry and stop that unit.
+
 ## Pre-deploy file checks
 
 Converted files may contain issues that need manual fixes before deployment:

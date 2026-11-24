@@ -73,6 +73,8 @@ If context-dependent:
 - Write `match_pattern` (detection regex)
 - Write `ai_context` describing: what to look for, how to fix it, edge cases to watch for
 
+`match_pattern` is a Snowflake regular expression: search runs it with `REGEXP_INSTR` and flags `is` (case-insensitive, `.` matches newlines) already applied. POSIX extended syntax plus `\d \s \w \b`; no inline flags such as `(?i)` or `(?is)`, no `(?:…)` groups, lookarounds or backreferences. `create_rule` refuses a pattern Snowflake cannot compile.
+
 Always generate `examples` from the actual before/after.
 
 ### Step 4: Check for Duplicates

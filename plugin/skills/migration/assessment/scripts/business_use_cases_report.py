@@ -11,6 +11,8 @@ import html
 import json
 from pathlib import Path
 
+from pdf_print import print_note
+
 BUSINESS_USE_CASES_CSS = """
         #business-use-cases-report h1,
         #pending-objects-report h1 {
@@ -475,7 +477,11 @@ def render_pending_objects_html(
         f"{pending:,} {outside} not in a business use case. They still migrate: each wave "
         "below deploys a group of them with everything it needs."
     )
-    body = f'<div class="buc-stats">{stats}</div>{_reasons(summary, context)}{cards}'
+    clipped = (
+        f"{print_note('The PDF shows about the first page of Other objects waves.')}"
+        f'<div class="print-clip print-clip-1-page">{cards}</div>'
+    )
+    body = f'<div class="buc-stats">{stats}</div>{_reasons(summary, context)}{clipped}'
     return _pending_page(lead, PENDING_NOTICE, body)
 
 

@@ -86,11 +86,13 @@ means you are in the app with autonomous turned on; trust it over your own
 guess about where you are running.
 
 Inside the app, if the user asks to run the wave unattended — "autonomous",
-"auto-pilot", "just migrate everything", "run objects in parallel" — load
-[autonomous/SKILL.md](autonomous/SKILL.md) instead of the loop below and follow
-it. That skill claims work itself and dispatches one subagent per ready task
-group, up to the project parallelism configured during setup, escalating only
-when one gets stuck.
+"auto-pilot", "just migrate everything", "run objects in parallel", "work the
+whole wave" — load [autonomous/SKILL.md](autonomous/SKILL.md) **now**, before
+assessment, data-infrastructure, deploy, or the loop below. That skill's Step 0
+calls `configure`, drives leftover setup, and comes back. Do not postpone the
+load until setup "looks done", and do not do that work yourself. The child
+claims objects and dispatches one subagent per ready task group, up to the
+project parallelism configured during setup, escalating only when one gets stuck.
 
 Everything below is the interactive loop: one batch at a time, the user picks
 every group and every claim. It stays the default — do not offer autonomous mode

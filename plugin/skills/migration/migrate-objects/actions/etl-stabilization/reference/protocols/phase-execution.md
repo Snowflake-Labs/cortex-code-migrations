@@ -120,7 +120,7 @@ Orchestrator performs directly (no agent):
 - Update `{UNIT}/stabilization/tracking/STATE.md` with phase completion
 - Mark phase as `[x] Complete` in ROADMAP
 
-> **Concurrency rule:** ALL `track_status.py` calls in this protocol are made by the orchestrator, never by agents. Run them **sequentially** — one per bash invocation, never batched in the same message.
+> **Concurrency rule (performance-improvement-proposal):** ALL `track_status.py` calls are orchestrator-only, never by agents. Prefer **`track_status.py batch-update --updates-file <json>`** for multi-element status changes (one lock, one STATE rewrite). Sequential one-bash-per-element updates are allowed only for a single element. Do not spawn parallel bash writers against the same `session_status.json`.
 
 ### j. Checkpoint (optional)
 Create `checkpoints/phase_{N}/` with copies of orch SQL and session_status.json for recovery.
@@ -297,7 +297,7 @@ Read per-project learning files at `{UNIT}/stabilization/phases/phase-{N}/dbt_le
 - Update `{UNIT}/stabilization/tracking/STATE.md` with phase completion
 - Mark phase as `[x] Complete` in ROADMAP
 
-> **Concurrency rule:** ALL `track_status.py` calls are orchestrator-only, run sequentially.
+> **Concurrency rule (performance-improvement-proposal):** ALL `track_status.py` calls are orchestrator-only. Prefer `batch-update` for multi-element changes; avoid parallel writers on one session file.
 
 ### h. Phase Transition
 Read the ROADMAP's next phase section (`## Phase {NEXT_N}`). Create the cortex task for the next phase directly: `cortex ctx task add "Phase {NEXT_N}: {NEXT_PHASE_NAME} ({unit_name})"`, `cortex ctx task start <task_id>`, then add every ROADMAP step in ONE `cortex ctx step add -t <task_id> "step 1" "step 2" ...` call (it accepts multiple step texts). Write `Cortex task: <task_id>` into STATE.md. Verify with `cortex ctx show tasks` that this id is listed. Do not confirm the task by title. Mark Step {NEXT_N}.0 as `[x]` in the ROADMAP. Mark this cortex step done (which completes the current phase's cortex task). Continue with Step {NEXT_N}.1.

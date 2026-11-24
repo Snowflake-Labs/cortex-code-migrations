@@ -29,6 +29,23 @@ If the sync pulled in new commits, `git_activity` will say so. If your branch wa
 
 Configured in `.scai/config/plugin.yml` under `git.main_branch` (default: `main`). This is the branch that `finish` pushes to and that `migration_status` syncs from.
 
+## Shared and Per-User Files
+
+Everyone working on the project commits the same `.scai/config` settings; each person keeps their own connections and machine state in files git ignores.
+
+| File | Kept | Holds |
+|------|------|-------|
+| `.scai/config/project.yml` | shared, committed | `project_name`, `source_language` and `project_id` |
+| `.scai/config/plugin.yml` | shared, committed | `metadata_database`, `database_prefix`, `run_mode`, `git.main_branch`, the sandbox profile, `tasks.*` and data placement |
+| `.scai/config/project.local.yml` | per user, gitignored | this person's source and Snowflake connection names, role and warehouse |
+| `.scai/config/plugin.local.yml` | per user, gitignored | machine state the plugin writes, such as the installed schema version |
+| `.scai/config/profiles.local.yaml` | per user, gitignored | this person's named profiles (`scai profile`), each pairing a source and a Snowflake connection |
+| `.scai/config/dew_configuration.toml` | per user, gitignored | the local data exchange worker's configuration |
+
+`metadata_database` is shared on purpose. Claims, task attempts and escalations are keyed by the project's `project_id`, so every teammate must point at the same metadata database, or each one sees a different migration. Never change it in `plugin.yml` for one person: moving it is a team decision, committed once. A setting the user wants only for themselves never goes into `project.yml` or `plugin.yml`, and when you change `plugin.yml` for them, tell them the change reaches every teammate once it is committed.
+
+`scai project init` writes these ignore lines. A project created before them may lack some, so when a user asks about sharing the repo, check `.gitignore` lists the four per-user files and offer to add the missing ones.
+
 ## Conflict Scenarios
 
 | Scenario | How it surfaces |

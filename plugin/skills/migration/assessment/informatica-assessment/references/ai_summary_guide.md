@@ -60,19 +60,14 @@ Focus on the most impactful signals from the summary command output:
 - **Classify as Internal vs External:** Internal = databases within the data platform; External = flat files, FTP, APIs, external databases not being migrated
 - Note data movement patterns (batch loads, incremental, staging to core)
 
-**4) Connector & Session Types**
-- Identify database connection types from SOURCE/TARGET DATABASETYPE attributes
-- Highlight dominant connection types and notable external integrations
-- Note any file-based sources (flat files, XML) requiring alternative ingestion solutions
-
-**5) Complexity Drivers**
+**4) Complexity Drivers**
 - **Not Supported Elements:** Count and list component types affected
 - **Custom Transformations:** Java Transformation, Custom Transformation (impact: High — requires manual rewrite)
 - **SQL Overrides:** Source Qualifier or Lookup with custom SQL (impact: Medium — needs manual review)
 - **Complex Orchestration:** Workflows with decisions, timers, conditional routing
 - **Most Complex Workflow:** Name, mapping count, key complexity factors
 
-**6) Recommended Migration Approach**
+**5) Recommended Migration Approach**
 
 Adapt recommendations based on `informatica_target`:
 
@@ -88,7 +83,7 @@ Adapt recommendations based on `informatica_target`:
 - **Ingestion workflows:** Replace with External stages, COPY INTO, Snowpipe, or Fivetran connectors
 - **Configuration & Control:** Re-architect using Snowflake Tasks with inline SQL, stored procedures, notification integrations
 
-**7) Key Risks and Dependencies**
+**6) Key Risks and Dependencies**
 - Pick the top 4 risks based on impact (2 high-severity red, 2 medium-severity amber)
 - Common risks: Custom/Java Transformation dependencies, SQL override complexity, external database connections, file-based ingestion patterns, complex orchestration logic
 - For each risk: provide a title and a short description of the impact and mitigation approach
@@ -192,20 +187,7 @@ Use this structure with visual sections so it can be embedded into the HTML repo
     </div>
   </div>
 
-  <!-- 4. Connector & Session Types -->
-  <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Connector Types</h3>
-  <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 1.5rem;">
-    <!-- Add badges for each database type found. Use distinct colors. Examples: -->
-    <span style="display: inline-block; background: #11567F; color: white; padding: 0.3rem 0.75rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">Oracle</span>
-    <span style="display: inline-block; background: #29B5E8; color: white; padding: 0.3rem 0.75rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">Teradata</span>
-    <span style="display: inline-block; background: #22C55E; color: white; padding: 0.3rem 0.75rem; border-radius: 12px; font-size: 0.8rem; font-weight: 600;">Flat File</span>
-    <!-- Add more as needed with different colors: #F59E0B, #7D44CF, #D45B90, #ef4444, #8A999E, #71D3DC, #94a3b8 -->
-  </div>
-  <p style="font-size: 0.85rem; color: #64748b; margin-bottom: 1.5rem; line-height: 1.6;">
-    [Short paragraph noting dominant database types and any notable external integrations. E.g., "Teradata dominates as the primary source/target. Notable external patterns include flat file ingestion from FTP and ODBC connections to operational Oracle databases."]
-  </p>
-
-  <!-- 5. Complexity Drivers -->
+  <!-- 4. Complexity Drivers -->
   <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Complexity Drivers</h3>
   <div style="overflow-x: auto; margin-bottom: 1.5rem;">
     <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
@@ -232,7 +214,7 @@ Use this structure with visual sections so it can be embedded into the HTML repo
     </table>
   </div>
 
-  <!-- 6. Recommended Migration Approach -->
+  <!-- 5. Recommended Migration Approach -->
   <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Recommended Migration Approach</h3>
   <div style="overflow-x: auto; margin-bottom: 1.5rem;">
     <table style="width: 100%; border-collapse: collapse; font-size: 0.875rem;">
@@ -273,7 +255,7 @@ Use this structure with visual sections so it can be embedded into the HTML repo
     </table>
   </div>
 
-  <!-- 7. Key Risks -->
+  <!-- 6. Key Risks -->
   <h3 style="font-size: 1rem; font-weight: 600; color: #11567F; margin-bottom: 0.75rem;">Key Risks</h3>
   <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 0.5rem;">
     <!-- High severity risks (red) -->

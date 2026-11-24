@@ -13,14 +13,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Extract data-type usage from captured CREATE TABLE DDL.
+"""Extract data-type usage from registry ``signature.columns`` or CREATE TABLE DDL.
 
-A bounded extractor, not a parser. The registry carries no column or type
-fields, so the DDL each in-scope table points at is the only in-project carrier
-of column types. Anything this cannot resolve -- computed columns, table-valued
-or nested types, a file it cannot read -- yields nothing, because the report
-names the volume inventory script as authoritative and a wrong type is worse
-than an absent one.
+Prefer the registry: every table already stores its columns there. Reading the
+DDL file is the fallback for older entries, or for tests that omit the
+signature. Anything neither source can resolve -- computed columns, nested
+types, a missing file -- yields nothing, because the report names the volume
+inventory script as authoritative and a wrong type is worse than an absent one.
 """
 
 from __future__ import annotations
@@ -239,6 +238,28 @@ def _unquote(identifier: str) -> str:
     if close and len(identifier) >= 2 and identifier.endswith(close):
         return identifier[1:-1].replace(close * 2, close)
     return identifier
+
+
+def columns_from_signature(entry: dict) -> tuple[ScannedColumn, ...]:
+    """Columns from a registry entry's ``signature.columns``, if they are typed."""
+    raw = (entry.get("signature") or {}).get("columns") or []
+    columns: list[ScannedColumn] = []
+    if not isinstance(raw, list):
+        return ()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "").strip()
+        declared = (item.get("type") or "").strip()
+        if not name or not declared:
+            continue
+        normalized = _normalize_type(declared)
+        if not normalized:
+            continue
+        columns.append(
+            ScannedColumn(name=name, declared_type=declared, type_name=normalized)
+        )
+    return tuple(columns)
 
 
 def scan_ddl_columns(ddl: str) -> tuple[ScannedColumn, ...]:

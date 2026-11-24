@@ -1,13 +1,13 @@
 ---
 name: sql-dynamic-pattern-analyzer
-description: Analyzes Dynamic SQL occurrences from SnowConvert issues, classifies patterns, scores complexity, and records migration considerations. Use for SQL Server, Redshift, Oracle, or Teradata to Snowflake migrations. Driven entirely by `scai assessment sql-dynamic`; no custom scripts.
+description: Analyzes Dynamic SQL occurrences from SnowConvert issues and records migration considerations. Use for SQL Server, Redshift, Oracle, or Teradata to Snowflake migrations. Driven entirely by `scai assessment sql-dynamic`; no custom scripts.
 parent_skill: assessment
 license: Proprietary. See License-Skills for complete terms
 ---
 
 # Analyzing SQL Dynamic Patterns
 
-Analyzes Dynamic SQL occurrences flagged by SnowConvert (issue codes `SSC-EWI-0030`, `SSC-EWI-0125`, `SSC-EWI-0126` and `SSC-EWI-0129`), classifies them against a dialect-specific pattern catalog, scores complexity, and records migration considerations. All operations go through the `scai assessment sql-dynamic` command — there are no Python helpers, no CSV/JSON scripts, no bash loops.
+Analyzes Dynamic SQL occurrences flagged by SnowConvert (issue codes `SSC-EWI-0030`, `SSC-EWI-0125`, `SSC-EWI-0126` and `SSC-EWI-0129`) and records migration considerations. Do not tag pattern categories or SQL classification. Complexity shown in the report comes from the SnowConvert EWI catalog, not from this analysis. All operations go through the `scai assessment sql-dynamic` command — there are no Python helpers, no CSV/JSON scripts, no bash loops.
 
 ## Sub-Agent Mode
 
@@ -17,15 +17,26 @@ When invoked from a parent skill (e.g., `assessment/SKILL.md`) as a sub-agent, t
 |---|---|---|
 | `project_dir` | yes | absolute path to the SCAI project root |
 | `output_dir` | yes | typically `<project_dir>/assessment/json` |
-| `review_mode` | yes | `generate-only`, `auto-review-all`, or `skip` |
+| `review_mode` | yes | `generate-only`, `auto-review-all`, `review-batch`, or `skip` |
+| `occurrence_ids` | with `review-batch` | integer IDs to review; skip any that are already REVIEWED |
 
-**On entry:** call the `configure` MCP tool with `project_dir` from the context block. Snowflake credentials are not required — `scai assessment sql-dynamic` reads only local CSVs and source files.
+**On entry:** the parent assessment skill runs `generate-only` itself (no
+Task). For `auto-review-all` or `review-batch`, call `configure` with
+`project_dir` only if this session has not already configured that project.
+Snowflake credentials are not required — `scai assessment sql-dynamic` reads only local CSVs and source files.
 
 **Branching by `review_mode`:**
 
-- `generate-only` — run only `scai assessment sql-dynamic generate` (Workflow Step 1) and return. The output JSON will contain `PENDING` occurrences; that is expected.
-- `auto-review-all` — generate, then loop `show-code-unit` → analyze → `update --status REVIEWED` for **every** PENDING occurrence (Workflow Steps 2–6). Run `stats` at the end and confirm zero PENDING. The single-record / unique-analysis rule from [Critical Rules](#critical-rules) (NO BATCH UPDATES) still applies — each occurrence gets its own analysis.
+- `generate-only` — run only `scai assessment sql-dynamic generate` (Workflow Step 1) and return. The output JSON will contain `PENDING` occurrences; that is expected. Do not start AI review.
+- `auto-review-all` — generate if the analysis JSON is missing. Then follow [Review loop](#review-loop) for every PENDING occurrence. Run `stats` once at the end and confirm zero PENDING.
+- `review-batch` — do not generate. Follow [Review loop](#review-loop) only for the IDs in `occurrence_ids` (skip already REVIEWED). Return remaining PENDING in `summary`.
 - `skip` — return immediately with `"status": "skipped"`. The parent should not have dispatched in this case; this branch is defensive.
+
+**Standalone report prompts** (pasted from the Dynamic SQL report Copy button): treat these as in-session review, not generate-only. Do not spawn a subagent. Do not re-run `generate`.
+
+- `Run deep dynamic SQL analysis for all pending occurrences in this project.` → `auto-review-all`.
+- `Run deep dynamic SQL analysis for all pending occurrences in code unit <code_unit_id> of this project.` → `review-batch` for every PENDING occurrence in that code unit (`show-code-unit --code-unit-id <code_unit_id>` then review those IDs). Do not match by procedure name; names can collide across databases/schemas.
+- `Run deep dynamic SQL analysis for occurrence <id> in procedure <name> of this project. Analyze only that occurrence.` → `review-batch` with that one `occurrence_ids` value. Occurrence IDs are unique in the analysis JSON.
 
 **On completion**, return **JSON only**:
 
@@ -48,33 +59,26 @@ On `skip`: `"status": "skipped"`, `"output_json": null`. On failure: `"status": 
 **NO BATCH UPDATES:** Each `update` invocation processes **ONE** record with **ONE** unique analysis.
 - Do **not** "walk IDs" sequentially as a batch just because they are adjacent.
 - Do **not** use shell loops (e.g. `for id in ...; do scai assessment sql-dynamic update ...; done`) to apply the same update across many records.
-- Do **not** copy/paste identical notes across multiple IDs; each occurrence must have its own specific rationale, even within the same code unit.
+- Do **not** copy/paste identical notes across multiple IDs.
 
-**CODE-UNIT-BASED WORKFLOW:** Use `show-file` (or `show-code-unit`) to view all occurrences within a procedure/function. Analyze each code unit separately by reading its source code.
-- The generated analysis JSON stores the **full procedure source text inside each code unit** under the `procedure` field, alongside `fileName`, `procedureName`, `codeUnitStartLine`, and `linesOfCode`. Treat the JSON as the "source bundle" for analysis.
+**ONE REVIEW PATH:** The [Review loop](#review-loop) is the only way to AI-review. Do not add `show-file`, per-occurrence `show`, extra `stats`, or a CSV dialect hunt on top of it.
 
-**QUALITY OVER SPEED:** This work is often fast, but do not "rush" by batching, reusing notes, or skipping code review. Aim for consistent, defensible analyses per occurrence.
+## Dialect
 
-## Source Platform Detection
+Pick the catalog from the project, in this order. Do not ask the user.
 
-**CRITICAL FIRST STEP:** Before classifying patterns, determine the source platform.
+1. `source_language` from `configure()` or `<project_dir>/.scai/config/project.yml`.
+2. Syntax in the procedure text from `show-code-unit` (see indicators below).
+3. `SourceLanguage` in `TopLevelCodeUnits.*.csv` only if 1 and 2 are missing. Search `<project_dir>/.scai/reports/SnowConvert/`, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit.
 
-**Detection methods:**
-1. Resolve `<conversion_reports_dir>` as the first directory that contains the needed CSV: `<project_dir>/.scai/reports/SnowConvert/`, then `<project_dir>/reports/SnowConvert/`, then `<project_dir>/Reports/SnowConvert/`. Stop at the first hit. Do not use a leftover older folder when `.scai` already has the file. Read `SourceLanguage` from `<conversion_reports_dir>/TopLevelCodeUnits.*.csv` (e.g. `Transact` for SQL Server, `RedShift` for Redshift, `Oracle` for Oracle, `Teradata` for Teradata).
-2. Examine code syntax in the procedure source (visible in the analysis JSON):
-   - **SQL Server indicators:** `sp_executesql`, `EXEC(@sql)`, `QUOTENAME()`, `sys.*` catalog views.
-   - **Redshift indicators:** `EXECUTE ... USING`, `QUOTE_IDENT()`, `QUOTE_LITERAL()`, `pg_catalog.*`, `plpgsql` functions.
-   - **Oracle indicators:** `EXECUTE IMMEDIATE`, `DBMS_SQL.*`, `DBMS_ASSERT.*`, `ALL_*`/`USER_*`/`DBA_*` catalog views, `PRAGMA AUTONOMOUS_TRANSACTION`, `:varname` named bind variables, `@dblink` references.
-   - **Teradata indicators:** `REPLACE PROCEDURE ... BEGIN ... END`, `EXECUTE IMMEDIATE <sql> USING ...` with positional `?` placeholders, `DBC.TablesV` / `DBC.ColumnsV` / `DBC.DatabasesV` / `DBC.IndicesV` catalog views, `REPLACE MACRO` / `EXEC macro_name(...)`, `VOLATILE TABLE`, `MULTISET` / `SET` table semantics, `SET QUERY_BAND`, BTEQ `&variable` substitution and `BT` / `ET` transaction control.
-3. Review source file extensions and DDL: `.sql`, `.prc`, `.fnc`.
+| `source_language` / CSV / syntax | Catalog |
+|---|---|
+| SqlServer, Transact, TSQL, `sp_executesql` / `EXEC(@sql)` / `QUOTENAME()` / `sys.*` | `reference/PATTERNS_TRANSACT.md` |
+| Redshift, RedShift, `QUOTE_IDENT()` / `pg_catalog.*` / plpgsql | `reference/PATTERNS_REDSHIFT.md` |
+| Oracle, `EXECUTE IMMEDIATE` / `DBMS_SQL.*` / `DBMS_ASSERT.*` / `:varname` / `@dblink` | `reference/PATTERNS_ORACLE.md` |
+| Teradata, `DBC.TablesV` / `REPLACE MACRO` / `VOLATILE TABLE` / BTEQ `&variable` | `reference/PATTERNS_TERADATA.md` |
 
-**Pattern catalog selection:**
-- **SQL Server → Snowflake:** `reference/PATTERNS_TRANSACT.md`
-- **Redshift → Snowflake:** `reference/PATTERNS_REDSHIFT.md`
-- **Oracle → Snowflake:** `reference/PATTERNS_ORACLE.md`
-- **Teradata → Snowflake:** `reference/PATTERNS_TERADATA.md`
-
-⚠️ Always confirm the source platform with the user if it is unclear. Pattern definitions differ significantly between platforms.
+Read that **one** catalog once per session for Snowflake mappings in the notes: the table of contents, then only the pattern sections that could apply. Skip sections that clearly do not (e.g. Cross-System I/O when there is no linked-server or file access). Do not write pattern names or SQL classification onto the occurrence.
 
 ## Inputs (auto-detected by parent)
 
@@ -93,12 +97,9 @@ The parent `assessment` skill resolves all inputs from `project_dir`. Do **not**
 
 ## Workflow
 
-1. **Generate** the analysis JSON from the project (or CSVs).
-2. **Show file / show-code-unit** to surface all occurrences in a procedure plus its source.
-3. **Analyze** each occurrence against the dialect's pattern catalog.
-4. **Update** each occurrence individually with `--status REVIEWED` and the per-occurrence fields.
-5. **Stats** to track progress.
-6. Repeat steps 2–4 until every occurrence is `REVIEWED`.
+1. **Generate** the analysis JSON from the project (or CSVs) when `review_mode` is `generate-only` or `auto-review-all` and the file is missing.
+2. **Review** PENDING targets with the [Review loop](#review-loop) when `review_mode` is `auto-review-all` or `review-batch`.
+3. **Stats** once after the last `update`.
 
 ### 1. Generate
 
@@ -120,133 +121,76 @@ scai assessment sql-dynamic generate \
 - Each code unit holds `codeUnitId`, `procedureName`, `fileName`, `codeUnitStartLine`, `linesOfCode`, the full `procedure` text, and an `occurrences` list.
 - Each occurrence starts with `status: PENDING` and empty analysis fields, ready for review. Its `issueCode` names the code that reported it.
 
-### 2. View occurrences for a code unit
+The JSON is the source bundle: the full procedure text lives on the code unit. Do not open source files separately.
 
-Group occurrences by file or by code unit:
+## Review loop
+
+This is the only AI-review path.
+
+1. Resolve the analysis JSON path (`<output_dir>/sql_dynamic_analysis.json` or the existing project file).
+2. Resolve the dialect ([Dialect](#dialect)).
+3. Group target PENDING occurrences by `code_unit_id`.
+4. For each code unit, call `show-code-unit` **once**:
 
 ```bash
-# All occurrences in the file containing a given record (or with no --id, list all files)
-scai assessment sql-dynamic show-file <analysis.json>
-scai assessment sql-dynamic show-file <analysis.json> --filename <fileName>
-
-# Full code unit view including the procedure source and every occurrence inside it
-scai assessment sql-dynamic show-code-unit <analysis.json> --code-unit-id "[DB].[schema].[ProcName]"
-
-# Single occurrence detail
-scai assessment sql-dynamic show <analysis.json> --id <N>
+scai assessment sql-dynamic show-code-unit <analysis.json> --code-unit-id "<code_unit_id>"
 ```
 
-**Analysis approach:**
-1. Use `show-file` to enumerate code units per file.
-2. Pick one code unit and read its full procedure source (`show-code-unit`).
-3. Open the dialect-appropriate `reference/PATTERNS_<DIALECT>.md` and classify each dynamic SQL site against the catalog.
-4. Update each occurrence individually (next step).
-5. Move on to the next code unit.
+That output is the procedure source and every occurrence. Do not call `show-file` or `show --id` for these records.
 
-### 3. Classify patterns
-
-**Reference per dialect (must read before classifying):**
-- **SQL Server migrations** → `reference/PATTERNS_TRANSACT.md`
-- **Redshift migrations** → `reference/PATTERNS_REDSHIFT.md`
-- **Oracle migrations** → `reference/PATTERNS_ORACLE.md`
-- **Teradata migrations** → `reference/PATTERNS_TERADATA.md`
-
-⚠️ Pick the correct catalog based on the source platform (see [Source Platform Detection](#source-platform-detection)).
-
-**Process:**
-1. Read every pattern in the appropriate catalog before reviewing the first occurrence.
-2. Compare the procedure source against each pattern.
-3. Identify all patterns that apply (multiple may apply to the same occurrence).
-4. Collect the analysis fields described below.
-5. Pass the patterns to `--category` as a pipe-separated string (`"Pattern-A | Pattern-B"`); SCAI stores them as a list.
-
-**Per-occurrence fields to collect:**
-
-**generated_sql (`--generated-sql`):**
-- The actual SQL that would be executed at runtime.
-- Include the dynamic-SQL construction logic so it is clear what is built.
-- Use representative values for variables; provide a complete best-effort statement (no ellipses or vague placeholders).
-
-**sql_classification (`--sql-classification`):**
-- DQL (SELECT) | DML (INSERT/UPDATE/DELETE) | DDL (CREATE/ALTER/DROP) | DCL (GRANT/REVOKE) | TCL (COMMIT/ROLLBACK) | UNKNOWN.
-- Drives operation-level prioritization. **Pattern tagging is separate** — do not infer patterns from the SQL classification; choose them from the dialect catalog and pass via `--category`.
-
-**notes (`--notes`):** A JSON object with three required keys (see [Notes Structure](#notes-structure)).
-
-### 4. Score complexity
-
-**Scale:** `low` (0–30), `medium` (31–60), `high` (61–85), `critical` (86–100).
-
-**Process:**
-1. Start from the base complexity of the matched pattern in `PATTERNS_<DIALECT>.md`.
-2. Read the actual code carefully.
-3. Override the base score **only if** the code materially differs from the pattern baseline.
-4. Document the override reasoning under `complexity` in the notes JSON.
-
-### 5. Update an occurrence
+5. Read the catalog as in [Dialect](#dialect).
+6. Analyze every target occurrence in that unit **from that one result**. Use the procedure once as shared context (how SQL is built and executed). Each occurrence still gets its own `update` with notes that are about **that line** (see [Notes](#notes)).
+7. Issue the `update` calls back to back with no commentary in between. Do not set complexity.
 
 ```bash
 scai assessment sql-dynamic update <analysis.json> \
   --id <N> \
   --line <line_number> \
   --status REVIEWED \
-  --category "Pattern-Name | Additional-Pattern" \
-  --complexity medium \
-  --sql-classification DDL \
   --generated-sql "CREATE TABLE dbo.TempTable (ID INT, Name VARCHAR(100))" \
   --notes '{
-    "justification": "Line X uses dynamic SQL to construct a table name from user-supplied variables...",
-    "complexity": "- Deep concatenation chains (5+ levels)\n- No input validation detected\n- Cross-schema dynamic references",
-    "migration_considerations": "- Recommend Snowflake IDENTIFIER() function\n- Add input validation before migration\n- Estimated effort: 4–6 hours per occurrence"
+    "justification": "Line X assigns @sql from concatenated @schema and @table and EXEC(@sql) runs it.",
+    "complexity": "Unquoted identifiers; NULL @schema yields a NULL statement.",
+    "migration_considerations": "Validate the two-part name, then IDENTIFIER(:schema || \".\" || :table). Estimated effort: 4–6 hours."
   }'
 ```
 
-**Command notes:**
-- The first positional argument is the analysis JSON path.
-- `--id` is required; it identifies the occurrence to update.
+- `--id` is required.
 - `--line` should be set after reading the procedure source — generated records start with `line = 0`. Keep `0` only when the source line cannot be reliably determined.
-- At least one of `--line`, `--status`, `--category`, `--complexity`, `--notes`, `--generated-sql`, `--sql-classification` must be supplied.
-- `--category` accepts pipe-separated names; SCAI splits them into a list internally.
+- Do not pass `--category` or `--sql-classification`. The report groups and filters by EWI (`issueCode`), not AI tags.
+- `generated_sql`: the SQL that would run, with representative values, complete (no ellipses).
 
-### 6. Track progress
+8. After the last `update` of the run:
 
 ```bash
 scai assessment sql-dynamic stats <analysis.json>
 ```
 
-Reports totals, per-status counts, and per-category counts. Repeat steps 2–5 until no `PENDING` records remain.
+Do not run `stats` between occurrences.
 
-## Notes Structure
+## Notes
 
-Each `--notes` value must be a JSON object with the three required keys below:
+Each `--notes` value is a JSON object with three keys. No minimum word count. Do not pad. Full sentences. Name real code.
 
 ```json
 {
-  "justification": "Why this is dynamic SQL, what it does, context.",
-  "complexity": "Technical factors affecting migration difficulty.",
-  "migration_considerations": "Snowflake-specific recommendations, alternatives, effort estimate."
+  "justification": "Why this line is dynamic SQL.",
+  "complexity": "What makes this line hard to migrate.",
+  "migration_considerations": "Snowflake mapping and effort."
 }
 ```
 
-**Field length and tone:**
-- `justification`: 40+ words, full sentences, reference specific code elements.
-- `complexity`: 30+ words, full sentences, list the technical drivers.
-- `migration_considerations`: 40+ words, full sentences, end with a concrete effort estimate.
-- Do **not** write "similar to occurrence ##"; restate the context explicitly for every record.
+**Required facts (not length):**
+- `justification`: the line number, the construct (`EXEC`, `sp_executesql`, concat into `@sql`, …), and what that line does.
+- `complexity`: the technical drivers for **this line** (unquoted identifiers, metadata cursor, NULL default, …).
+- `migration_considerations`: a concrete Snowflake mapping and a concrete hour estimate. End with `Estimated effort: …`.
 
-**Formatting tips:**
-- Use `\n` for line breaks within a multi-line field.
-- Single-quote the entire JSON in shell to avoid quote escaping headaches.
+**Shared procedure vs per-occurrence:**
+When several occurrences share a code unit, state how the procedure builds and executes SQL **once** (in the first occurrence's notes, or only in your reasoning). Later occurrences in the same unit must **not** retell that procedure story. Each occurrence's notes must still stand alone for **that line**: do not write "similar to occurrence N"; do not reuse another ID's notes. Name that line's variable, parse, or EXEC.
 
 ## Reference Files
 
-- `reference/PATTERNS_TRANSACT.md` — pattern catalog for SQL Server → Snowflake migrations.
-- `reference/PATTERNS_REDSHIFT.md` — pattern catalog for Redshift → Snowflake migrations.
-- `reference/PATTERNS_ORACLE.md` — pattern catalog for Oracle → Snowflake migrations.
-- `reference/PATTERNS_TERADATA.md` — pattern catalog for Teradata → Snowflake migrations.
-
-**Platform selection:**
-- Use `PATTERNS_TRANSACT.md` for SQL Server sources.
-- Use `PATTERNS_REDSHIFT.md` for Redshift sources.
-- Use `PATTERNS_ORACLE.md` for Oracle sources.
-- Use `PATTERNS_TERADATA.md` for Teradata sources.
+- `reference/PATTERNS_TRANSACT.md` — SQL Server → Snowflake
+- `reference/PATTERNS_REDSHIFT.md` — Redshift → Snowflake
+- `reference/PATTERNS_ORACLE.md` — Oracle → Snowflake
+- `reference/PATTERNS_TERADATA.md` — Teradata → Snowflake

@@ -50,6 +50,7 @@ If **no**, done — return to [SKILL.md](SKILL.md) Step 6.
 - If the fix is mechanical (simple find/replace), set `replacement_mode = 'regex'` and populate `replacement_find` / `replacement_replace`
 - If the fix requires context or judgment, set `replacement_mode = 'ai'` and populate `ai_context` with detection hints, fix strategy, and edge cases
 - Always populate `examples` with the before/after from the actual fix
+- Write `match_pattern` as a Snowflake regular expression: it runs with flags `is` (case-insensitive, `.` matches newlines) already applied, so no inline flags such as `(?i)`/`(?is)`, and no `(?:…)`, lookarounds or backreferences
 
 Use the `create_rule` tool with the appropriate parameters. The tool generates the ID, builds search text, and inserts the rule.
 

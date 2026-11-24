@@ -168,4 +168,4 @@ After the main branch is confirmed, briefly explain how git works in this migrat
 >
 > You don't need to manage branches or create PRs — the plugin handles all of that behind the scenes, and I'll tell you what happened after each operation."
 
-Keep this concise — don't elaborate further unless the user asks questions. If they want details, point them to the [collaboration model reference](../migrate-objects/references/collaboration-model.md).
+Keep this concise — don't elaborate further unless the user asks questions. If they want details, point them to the [collaboration model reference](../migrate-objects/references/collaboration-model.md). Its *Shared and Per-User Files* section says which `.scai/config` files teammates commit and which stay on each machine.

@@ -101,16 +101,17 @@ function Get-PluginRef {
 function Get-RefChannel {
     param([string]$Ref)
     if (-not $Ref -or $Ref -eq 'main') { return 'stable' }
+    if ($Ref -eq 'dev') { return 'dev' }
     if ($Ref -eq 'preview' -or $Ref -match '^v\d+\.\d+\.\d+-Pr(\.|$)') { return 'preview' }
     if ($Ref -match '^v\d+\.\d+\.\d+$') { return 'stable' }
     return ""
 }
 
-# The plugin branch of a channel. The plugin has no dev channel: with dev, scai
-# uses dev and the plugin uses preview.
+# The plugin branch of a channel. dev has no branch (it installs from
+# AIM storage); its own value keeps channel switches visible.
 function Get-ChannelBranch {
     param([string]$Channel)
-    switch ($Channel) { 'preview' { return 'preview' } 'dev' { return 'preview' } default { return 'main' } }
+    switch ($Channel) { 'preview' { return 'preview' } 'dev' { return 'dev' } default { return 'main' } }
 }
 
 # One channel for scai and the plugin: the first set of SCAI_CHANNEL, the scai
@@ -173,10 +174,14 @@ if (Test-Path $registryFile) {
         $registryText = $null
     }
 }
-# A plugin installed from a fork or a local path is left alone.
-$pluginFromRepo = [bool]($registryText -and $registryText -match "`"$PluginName`"" -and $registryText -match [regex]::Escape($PluginRepo))
+# A plugin installed from a fork or a local path is left alone. A dev plugin is
+# installed from AIM storage via $PluginStorageCache, and a registry
+# source there counts as the dev channel.
+$PluginStorageCache = Join-Path $HOME ".snowflake\migration-plugin\storage"
+$pluginFromStorage = [bool]($registryText -and $registryText -match "`"$PluginName`"" -and $registryText -match 'migration-plugin[\\/]+storage[\\/]+')
+$pluginFromRepo = [bool]($registryText -and $registryText -match "`"$PluginName`"" -and $registryText -match [regex]::Escape($PluginRepo)) -or $pluginFromStorage
 $PluginRef = Get-PluginRef $registryText
-$pluginChannel = if ($pluginFromRepo) { Get-RefChannel $PluginRef } else { "" }
+$pluginChannel = if ($pluginFromStorage) { 'dev' } elseif ($pluginFromRepo) { Get-RefChannel $PluginRef } else { "" }
 $env:SCAI_CHANNEL = Resolve-Channel $env:SCAI_CHANNEL $SettingsChannel $pluginChannel
 
 $cortexCh = if ($env:CORTEX_CHANNEL) { $env:CORTEX_CHANNEL } else { "(not set)" }
@@ -923,6 +928,154 @@ function ConvertTo-PluginVersion {
     return ""
 }
 
+# Runs cortex plugin install SOURCE --force with Git for Windows first on PATH
+# (cortex.exe cannot use a Cygwin or MSYS2 git). Returns the exit code.
+function Invoke-CortexPluginInstall {
+    param([string]$Source)
+    $prevPath = $env:PATH
+    if ($gitCmdDir) { $env:PATH = "$gitCmdDir;$env:PATH" }
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    # Cortex clones into a cache dir named after the full source URL; with the plugin's
+    # deepest files that passes MAX_PATH, so give cortex's git long paths (this process only).
+    $prevGitConfig = @($env:GIT_CONFIG_COUNT, $env:GIT_CONFIG_KEY_0, $env:GIT_CONFIG_VALUE_0)
+    $env:GIT_CONFIG_COUNT = '1'; $env:GIT_CONFIG_KEY_0 = 'core.longpaths'; $env:GIT_CONFIG_VALUE_0 = 'true'
+    try {
+        & $cortexCli plugin install $Source --force *>> $LogFile
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEAP
+        $env:PATH = $prevPath
+        $env:GIT_CONFIG_COUNT, $env:GIT_CONFIG_KEY_0, $env:GIT_CONFIG_VALUE_0 = $prevGitConfig
+    }
+}
+
+# Runs git in $Dir and returns whether it exited 0. Windows PowerShell 5.1 turns
+# native stderr (e.g. git's CRLF warning) into a terminating error under 'Stop',
+# so the preference is relaxed here and the exit code decides.
+function Invoke-GitIn {
+    param([string]$Git, [string]$Dir, [string[]]$GitArgs)
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Git -C $Dir -c core.autocrlf=false -c core.safecrlf=false @GitArgs *>> $LogFile
+        return $LASTEXITCODE -eq 0
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+}
+
+# Runs cortex plugin uninstall for the migration plugin, with the same PATH setup
+# as Invoke-CortexPluginInstall. Returns the exit code.
+function Invoke-CortexPluginUninstall {
+    $prevPath = $env:PATH
+    if ($gitCmdDir) { $env:PATH = "$gitCmdDir;$env:PATH" }
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $cortexCli plugin uninstall $PluginName *>> $LogFile
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEAP
+        $env:PATH = $prevPath
+    }
+}
+
+# Dev plugin from AIM storage: latest.json names an immutable
+# plugin-<buildSha>.tar.gz. Verified by sha256, extracted under
+# $PluginStorageCache, and installed with cortex plugin install file:///...
+# (a local git repo). Without git, copied into the Cortex plugin dir.
+function Install-PluginFromStorage {
+    param([string]$InstalledSha)
+    $base = "$ScaiStorageBase/linux/dev/plugin"
+    try {
+        $latest = Invoke-RestMethod -Uri "$base/latest.json" -TimeoutSec 15 -UseBasicParsing -ErrorAction Stop
+    } catch {
+        Log "WARNING: could not download $base/latest.json ($($_.Exception.Message))"
+        return $false
+    }
+    $sha = "$($latest.buildSha)"; $archive = "$($latest.archive)"; $want = "$($latest.sha256)"
+    # Only a well-formed build counts, and the archive name is pinned to the SHA, so a
+    # tampered latest.json cannot point the download at another path.
+    if ($sha -notmatch '^[0-9a-f]{40}$' -or $want -notmatch '^[0-9a-fA-F]{64}$' -or $archive -ne "plugin-$sha.tar.gz") {
+        Log "WARNING: $base/latest.json is not a plugin build"
+        return $false
+    }
+    $short = $sha.Substring(0, [math]::Min(12, $sha.Length))
+    if ($sha -eq $InstalledSha) {
+        Log "$PluginName plugin up to date (v$installed, dev build $short, storage)"
+        return $true
+    }
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("aim-plugin-" + [guid]::NewGuid().ToString("n"))
+    New-Item -ItemType Directory -Path $tmp | Out-Null
+    try {
+        $tgz = Join-Path $tmp "plugin.tar.gz"
+        Invoke-WebRequest -Uri "$base/$archive" -OutFile $tgz -TimeoutSec 120 -UseBasicParsing -ErrorAction Stop
+        $got = (Get-FileHash -LiteralPath $tgz -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($got -ne $want.ToLowerInvariant()) {
+            Log "WARNING: $archive sha256 $got does not match $want; not installing"
+            return $false
+        }
+        # Only this build's dir is replaced here; older builds go after a successful install,
+        # so a failed install never deletes the dir the Cortex registry still points at.
+        $devCache = Join-Path $PluginStorageCache "dev"
+        $dir = Join-Path $devCache $sha
+        if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        & tar.exe -xzf $tgz -C $dir *>> $LogFile
+        $pluginDir = Join-Path $dir "plugin"
+        if (-not (Test-Path -LiteralPath (Join-Path $pluginDir "VERSION"))) {
+            Log "WARNING: $archive has no plugin/VERSION"
+            return $false
+        }
+        $git = if ($gitCmdDir) { Join-Path $gitCmdDir "git.exe" } else { (Get-Command git -ErrorAction SilentlyContinue).Source }
+        $installedOk = $false
+        if ($git -and
+            (Invoke-GitIn $git $pluginDir @('init', '-q')) -and
+            (Invoke-GitIn $git $pluginDir @('add', '-A')) -and
+            (Invoke-GitIn $git $pluginDir @('-c', 'user.name=scai', '-c', 'user.email=scai@localhost', 'commit', '-qm', "dev $sha"))) {
+            $uri = [System.Uri]::new($pluginDir, [System.UriKind]::Absolute).AbsoluteUri
+            # cortex plugin install --force refuses a different source for an installed plugin
+            # ("already installed"), and every dev build has its own dir, so uninstall first.
+            $registry = Join-Path $cortexHome "plugins\registry.json"
+            if ((Test-Path -LiteralPath $registry) -and ((Get-Content -Raw -LiteralPath $registry) -match "`"$PluginName`"")) {
+                Invoke-CortexPluginUninstall | Out-Null
+            }
+            $installedOk = (Invoke-CortexPluginInstall $uri) -eq 0
+            if ($installedOk) {
+                Get-ChildItem -LiteralPath $devCache -Directory | Where-Object { $_.Name -ne $sha } |
+                    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+        }
+        if (-not $installedOk) {
+            Log "cortex plugin install from $pluginDir failed; copying into the Cortex plugin dir"
+            $dest = Join-Path $cortexHome "plugins\$PluginName"
+            if (Test-Path -LiteralPath $dest) { Remove-Item -LiteralPath $dest -Recurse -Force }
+            New-Item -ItemType Directory -Path $dest | Out-Null
+            Copy-Item -Path (Join-Path $pluginDir "*") -Destination $dest -Recurse -Force
+        }
+        Log "Updated the $PluginName plugin to dev build $short from AIM storage. It takes effect in the next session or after /plugin reload."
+        return $true
+    } catch {
+        Log "WARNING: could not install the dev plugin from storage ($($_.Exception.Message))"
+        return $false
+    } finally {
+        Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Dev channel: the plugin comes from AIM storage (linux/dev/plugin), published
+# from develop by plugin-dev-cd.yml. The same VERSION repeats for days, so the
+# build SHA (plugin.json buildSha) decides.
+function Update-DevPlugin {
+    $installedManifest = Read-JsonFile (Join-Path $cortexHome "plugins\$PluginName\.cortex-plugin\plugin.json") "installed plugin manifest"
+    $installedSha = if ($installedManifest) { "$($installedManifest.buildSha)" } else { "" }
+    Log "Fetching the $PluginName dev build from AIM storage..."
+    if (-not (Install-PluginFromStorage $installedSha)) {
+        Log "WARNING: could not update the dev plugin from AIM storage"
+    }
+}
+
 $start = Get-Date
 if (Test-Path (Join-Path $PluginRoot ".no-auto-update")) {
     Log "$PluginName plugin: .no-auto-update found in $PluginRoot, not updating"
@@ -934,6 +1087,9 @@ if (Test-Path (Join-Path $PluginRoot ".no-auto-update")) {
     $installedFile = Join-Path $cortexHome "plugins\$PluginName\VERSION"
     $installed = if (Test-Path $installedFile) { ConvertTo-PluginVersion (Get-Content $installedFile -Raw) } else { "" }
     if (-not $installed) { $installed = $Version }
+    if ($pluginChannel -and $env:SCAI_CHANNEL -eq 'dev' -and -not $PluginVersionPin) {
+        Update-DevPlugin
+    } else {
     # An alpha branch (no channel) follows its own head. A pin installs its version tag.
     $pluginBranch = $PluginRef
     $pin = ""
@@ -958,7 +1114,7 @@ if (Test-Path (Join-Path $PluginRoot ".no-auto-update")) {
         if ($fetched -and -not $published) { $rejected = if ($fetched.Length -gt 60) { $fetched.Substring(0, 60) } else { $fetched } }
         $installRef = $pluginBranch
         # A channel switch installs the new channel's latest, also a lower version (as scai).
-        # Compare plugin branches: dev and preview share the preview branch.
+        # Compare plugin branches.
         if ($pluginChannel -and (Get-ChannelBranch $pluginChannel) -ne $pluginBranch) { $why = "channel $pluginChannel -> $($env:SCAI_CHANNEL)" }
     }
     if ($rejected) {
@@ -995,6 +1151,7 @@ if (Test-Path (Join-Path $PluginRoot ".no-auto-update")) {
                 Log "WARNING: GitHub archive fallback failed for $installRef"
             }
         }
+    }
     }
 }
 

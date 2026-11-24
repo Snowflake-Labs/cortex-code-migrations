@@ -619,8 +619,7 @@ EFFORT_MIXIN_JS = r"""
       // The report's own Discovery tab, Optimization Opportunities panel: the
       // effort table and Discovery are one page, so this switches tabs, no popup.
       effortOpenOptimizationOpportunities() {
-        this.activeTab = "discovery";
-        this.discoveryTab = "optimization";
+        window.location.href = "discovery.html?discoveryTab=optimization";
       },
     },
   };
@@ -1194,7 +1193,7 @@ def render_overview_section_b_html(assessment: Dict[str, Any]) -> str:
                 <p style="margin: 0 0 12px 0; color: #475569; font-size: 0.9rem; line-height: 1.5;">
                     The Effort Estimates tab shows the full migration calculator — every component, its objects per complexity band, the editable hours per object, and the resulting total.
                 </p>
-                <a @click="activeTab = 'effort-estimates'"
+                <a href="effort-estimates.html"
                    style="display: inline-block; background: #005C8F; color: white; padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: 0.9rem; cursor: pointer; text-decoration: none;">
                     Open detailed effort calculator →
                 </a>

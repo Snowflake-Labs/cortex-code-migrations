@@ -8,6 +8,7 @@ You emit **multi-table value tuples** that must co-occur so a compound cross-tab
 { "correlated_groups": [ { "group_id": "<id>", "tables": [ { "table": "<SCHEMA.TABLE>", "columns": ["<COL>"] } ], "tuple_columns": ["<SCHEMA.TABLE.COL>"], "sample_tuples": [ ["<v>"] ], "repeat": 5 } ] }
 ```
 All fields required. A group must span **>= 2 tables**, carry **>= 1 `tuple_columns`**, supply **>= 3 `sample_tuples`** (each of the same arity as `tuple_columns`), and `repeat >= 1`. Every `tuple_columns` entry must be covered by a `tables[].columns` entry.
+A value on a column the source tests or assigns must be a literal the source uses for that column (the critic rejects any other as an invented literal); a join-key value is free, but every join partner in the tuple carries the same one.
 
 ## Negative constraint (the one rule)
 Emit **multi-table FK-keyed tuples**, never single-table per-table entries. A single-table group cannot fix the empty intersection that a compound cross-table predicate produces — it is rejected (`TBD0014`, "must span at least 2 tables").
@@ -23,7 +24,7 @@ the emitted type's own fields, and unknown fields are rejected.
 
 <!-- example:accept -->
 ```json
-{ "correlated_groups": [ { "group_id": "g_classify_region", "tables": [ { "table": "SALES.CUSTOMER", "columns": ["STATUS", "REGION_CODE"] }, { "table": "SALES.SALES_REP", "columns": ["REGION_CODE"] } ], "tuple_columns": ["SALES.CUSTOMER.STATUS", "SALES.CUSTOMER.REGION_CODE", "SALES.SALES_REP.REGION_CODE"], "sample_tuples": [ ["A", "NW", "NW"], ["A", "SE", "SE"], ["I", "EA", "EA"] ], "repeat": 5 } ] }
+{ "correlated_groups": [ { "group_id": "g_classify_region", "tables": [ { "table": "SALES.CUSTOMER", "columns": ["STATUS", "REGION_CODE"] }, { "table": "SALES.SALES_REP", "columns": ["REGION_CODE"] } ], "tuple_columns": ["SALES.CUSTOMER.STATUS", "SALES.CUSTOMER.REGION_CODE", "SALES.SALES_REP.REGION_CODE"], "sample_tuples": [ ["A", "NW", "NW"], ["A", "SE", "SE"], ["A", "EA", "EA"] ], "repeat": 5 } ] }
 ```
 
 A single-table group reproduces the empty intersection and is rejected:

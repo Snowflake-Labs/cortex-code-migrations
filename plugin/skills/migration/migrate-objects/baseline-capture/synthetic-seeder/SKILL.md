@@ -1,8 +1,8 @@
 ---
 name: synthetic-seeder
 description: >
-  Write step-based test YAML for migrated stored procedures and functions after
-  testbed rows already exist. Derives scenarios from source SQL branch analysis
+  Write step-based test YAML for migrated stored procedures and functions. Each
+  YAML carries its own INSERT steps, so no testbed CSV is needed. Derives scenarios from source SQL branch analysis
   and enriches the YAML with isolation metadata.
   Use when generating or refreshing test cases, not when generating the testbed
   rows. That is testbed-generator (mine, validate, enrich, compile, generate).
@@ -38,7 +38,7 @@ converted code. Each test is a step-based YAML artifact directly consumable by
 - Fix test SQL if Snowflake execution fails (up to 3 retries)
 
 **This skill does NOT:**
-- Generate testbed rows, CSVs, or the manifest. That is `testbed-generator`. If the user asked only to generate synthetic data and `testbed/generate/generate-summary.json` is absent, leave this skill and run `testbed-generator`.
+- Generate testbed rows, CSVs, or the manifest. That is `testbed-generator`. If the user asked only to generate synthetic data and `testbed/generate/generate-summary.json` is absent, leave this skill and run `testbed-generator`. A request for synthetic **test cases** stays here: it needs no testbed rows, so do not run any `testbed` phase.
 - Repair the migrated object — delegate failures caused by object bugs to `migrate-object`
 - Run `uv run migrate` or `run_migration_tests` — test execution is handled by `scai test capture` + `scai test validate`
 - Generate tests for TABLEs or VIEWs (procedures and functions only)
@@ -54,7 +54,7 @@ converted code. Each test is a step-based YAML artifact directly consumable by
 | `query_registry` | Look up code unit metadata and transitive dependencies for isolation enrichment |
 | `snowflake_sql_execute` | Execute SQL on Snowflake for validation |
 | `transition_status(status="started")` | Record a `started` TASK_EVENT at skill entry (`task=seedSynthetic`) |
-| `transition_status` | Advance `seedSynthetic` when YAMLs are populated (`status=advance`, `outcome=completed`) |
+| `transition_status` | Advance `seedSynthetic` (never `generateTestCases`) when YAMLs are populated (`status=advance`, `outcome=completed`) |
 
 ## On Entry
 

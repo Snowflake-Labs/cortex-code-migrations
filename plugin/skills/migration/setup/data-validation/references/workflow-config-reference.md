@@ -19,7 +19,7 @@
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `sourcePlatform` | String | (required) | Source dialect id (for example `sqlserver`, `redshift`, `oracle`, `teradata`, `postgresql`, `snowflake`) |
+| `sourcePlatform` | String | (required) | Source dialect id (for example `sqlserver`, `redshift`, `oracle`, `teradata`, `postgresql`, `bigquery`, `snowflake`) |
 | `targetPlatform` | String | `Snowflake` | Target platform |
 | `targetDatabase` | String | No | Default target database for tables without explicit target |
 | `validationConfiguration` | Object | See below | Global validation level toggles |
@@ -35,7 +35,7 @@
 | `targetPartitionSizeRows` | Integer | No | Global partition row target (mutually exclusive with `targetPartitionSizeMb`) |
 | `targetPartitionSizeMb` | Integer | No | Global partition size target in MB |
 | `validationCustomTypes` | Object | `{}` | Source datatype normalizations for L1 |
-| `validationCustomMetrics` | Object | `{}` | L2 metric overrides: per-datatype **or** per source column (see [Custom L2 metrics](#custom-l2-metrics-validationcustommetrics)) |
+| `validationCustomMetrics` | Object | `{}` | L2 metric overrides: per-datatype, per source column, or a `match` predicate (see [Custom L2 metrics](#custom-l2-metrics-validationcustommetrics)) |
 | `validationCustomNormalizations` | Object | `{}` | Per-platform L2/L3 normalization SQL |
 | `acceptedTransformations` | Array | No | Global accepted source→target value differences (L3) |
 | `validationCustomNormalizationRules` | Array | No | Granular L3 normalization expression overrides |
@@ -355,38 +355,47 @@ Each entry under `source` / `target` uses **exactly one** of:
 
 | Selector | Scope | Notes |
 |----------|-------|-------|
-| `datatype` | Every column of that type | Optional `replaceAll: true` replaces the built-in metric set for that type |
-| `column` | One source column | Value is `{table.fullyQualifiedName}.{columnName}` matching the table entry’s FQN + source column name. **`source` list only** — the orchestrator maps the override to the target column (via `columnMappings` when names differ). Do **not** put the PK in `columnSelectionList` with exclude mode to skip L2; that rejects index columns and would drop L3 |
+| `datatype` | Every column of that type | Optional `replaceAll: true` replaces the built-in metric set for that type. Allowed under `source` and `target`. |
+| `column` | One source column | Value is `{table.fullyQualifiedName}.{columnName}` matching the table entry’s FQN + source column name. **`source` list only** — the orchestrator maps the override to the target column (via `columnMappings` when names differ). Use this for **one named column**. |
+| `match` | Every source column that satisfies the predicates | **`source` list only**, like `column`. Predicates AND together; at least one is required. `role: index` matches the resolved `indexColumnList` (inferred primary keys included). `dataTypeFamily` / `notDataTypeFamily` use a closed family (`numeric`, `text`, `binary`, `temporal`, `boolean`, `other`) derived from the source catalog type. `replaceAll` is invalid with `match`. Prefer `match` over a `column` entry per table when the same override applies to every matching column. |
+
+Do **not** put a PK/index column in `columnSelectionList` with exclude mode to skip L2 — that rejects index columns and would drop L3.
 
 Metric list entries:
 
 | Field | Required | Description |
 |-------|----------|-------------|
-| `name` | Yes | Metric id (`avg`, `min`, `max`, `sum`, `count_distinct`, …) |
+| `name` | Yes | Metric id (`avg`, `min`, `max`, `sum`, `count_distinct`, …). `name: "*"` is **remove-only** (no `metricQuery`) and drops every L2 metric for the selector |
 | `metricQuery` | No | SQL expression. **Omit or leave empty to remove** that metric for the selector |
 | `metricReturnDatatype` | No | Expected return type when defining/replacing a metric |
 | `metricColumnModifier` | No | Optional wrapper applied to the column before the metric |
 
-**Common ask — skip useless aggregations on a VARCHAR / text primary key** (e.g. length-based `avg` on an order id) while keeping the key in L1 and L3:
+Precedence for a given column: explicit `column` > `match` > `datatype`. A `match` that hits no columns is not an error.
+
+**Common ask — skip or override L2 for every column that matches a predicate** while keeping those columns in L1 and L3, and keeping L2 on unmatched columns. Emit **one** `match` entry, not a `column` entry per table:
 
 ```yaml
 validationConfiguration:
   metricsValidation: true   # must be on for L2 overrides to matter
 validationCustomMetrics:
   source:
-    - column: public.orders.order_id
+    - match:
+        role: index                    # optional; omit to ignore role
+        dataTypeFamily: [text]         # and/or notDataTypeFamily: […]
+      metrics:
+        - name: "*"                    # or named metrics with no metricQuery
+  target: []
+```
+
+**One named column** (this table only, or one metric):
+
+```yaml
+validationCustomMetrics:
+  source:
+    - column: schema.table.column_name
       metrics:
         - name: avg
         # omit metricQuery → remove avg for this column only
-    # Or remove every VARCHAR aggregation on the PK:
-    # - column: public.orders.order_id
-    #   metrics:
-    #     - name: min
-    #     - name: max
-    #     - name: avg
-    #     - name: count_empty
-    #     - name: count_distinct
-    #     - name: count_null
   target: []
 ```
 
@@ -405,7 +414,7 @@ validationCustomMetrics:
   target: []
 ```
 
-Apply these edits **before** `validate_data(mode="run")` when the user asks to skip L2 metrics on specific columns. Prefer column-scoped removals over turning off `metricsValidation` for the whole workflow when they still want L2 on other columns.
+Apply these edits **before** `validate_data(mode="run")`. Prefer `match` when the same override applies to every matching column, `column` for one named column, and either over turning off `metricsValidation` for the whole workflow when they still want L2 on other columns. Do not add `match` to a generated workflow until the running worker understands it (this scai pin): older workers reject unknown selectors. If `data_infrastructure` reports the worker `out_of_date`, upgrade first or fall back to `column`.
 
 ## Advanced
 
@@ -468,6 +477,7 @@ Generated validation workflows include `sourcePlatform` from the project dialect
 | Oracle | `oracle` |
 | Teradata | `teradata` |
 | PostgreSQL | `postgresql` |
+| BigQuery | `bigquery` |
 
 Setup stamps the top-level `affinity` with the project-default label; it routes work to workers carrying the same label.
 
@@ -496,7 +506,7 @@ Teradata uses **database.table** naming — omit source `schemaName` (there is n
 | Limit validation to a subset of rows | `sourceWhereClause` + `targetWhereClause` (both sides; snake_case aliases accepted) |
 | Skip expensive L2 on wide tables | Disable `metricsValidation`, split it with `maxColumnsPerMetricsBatch`, or drop the `avg` / `sum` / `stddev` aggregates with `excludeMetrics: true` |
 | Keep metrics off (default / user said off) | Leave `metricsValidation: false` — **Full** mode does not mean enable L2 |
-| Skip L2 aggregations on one column (e.g. VARCHAR PK) without dropping L1/L3 | Top-level `validationCustomMetrics.source` with `column: {table.fullyQualifiedName}.{columnName}` and metric `name`s with **no** `metricQuery` — see [Custom L2 metrics](#custom-l2-metrics-validationcustommetrics). Do **not** exclude the index/PK via `columnSelectionList` |
+| Skip or override L2 metrics on a set of columns without dropping L1/L3 | Top-level `validationCustomMetrics.source` with one `match` (predicates + metrics). For a single named column, use `column: {table.fullyQualifiedName}.{columnName}` instead. See [Custom L2 metrics](#custom-l2-metrics-validationcustommetrics). Do **not** exclude an index/PK via `columnSelectionList`, and do **not** turn off `metricsValidation` when other columns should still get L2 |
 | Exclude columns from L3 row compare (timestamp / audit drift) | Per table: `useColumnSelectionAsExcludeList: true` and `columnSelectionList: [created_at]` (or `CREATED_AT`, `updated_at`, …). Common for SQL Server `DATETIME2` → Snowflake `TIMESTAMP_*` precision or write-time drift. |
 | Whitelist known formatting differences | `acceptedTransformations` |
 | Reduce source locking | `queryModifiers` on table or worker TOML |

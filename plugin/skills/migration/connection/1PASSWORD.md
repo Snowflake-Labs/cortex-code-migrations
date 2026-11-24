@@ -213,6 +213,42 @@ Oracle skill's Step 4 tests the connection.
 
 ---
 
+## BigQuery
+
+BigQuery authenticates with a service-account JSON key file, not a username and password.
+The connection stores the file's path, so the key has to be on disk; keep it as a 1Password
+document and write it once to a file only the user can read.
+
+Search for an existing 1Password item:
+
+```bash
+op item list | grep -i bigquery
+```
+
+Write the key file and add the connection:
+
+```bash
+umask 077 && mkdir -p ~/.scai/keys && \
+op document get <ITEM_NAME> --vault=<VAULT_NAME> --out-file ~/.scai/keys/<CONNECTION_NAME>.json
+
+op run --env-file=<(cat <<'EOF'
+BQ_PROJECT="op://vault_name/item_name/project_id"
+BQ_DATASET="op://vault_name/item_name/dataset"
+EOF
+) -- bash -c 'scai connection add-bigquery \
+  -s <CONNECTION_NAME> \
+  --auth service-account \
+  --project "$BQ_PROJECT" \
+  --dataset "$BQ_DATASET" \
+  --location US \
+  --credentials-file ~/.scai/keys/<CONNECTION_NAME>.json'
+```
+
+Use `--auth service-account` when the connection will back an SPCS worker: `scai data worker setup`
+refuses Application Default Credentials (`--auth adc`).
+
+---
+
 ## Troubleshooting
 
 | Issue | Solution |

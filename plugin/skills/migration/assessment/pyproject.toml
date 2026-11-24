@@ -1,6 +1,8 @@
 # Dependency manifest for assessment skill scripts that are run via
 # `uv run --project ai/plugin/skills/migration/assessment python .../scripts/...`
 # (see SKILL.md). Scripts are stdlib-only — no external deps needed at runtime.
+# When snowflake-code-unit-registry is importable (scai's Python environment
+# ships it), the registry loader queries its index instead of reading every file.
 [project]
 name = "snowconvert-assessment-scripts"
 version = "0.1.0"

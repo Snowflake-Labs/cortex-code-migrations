@@ -90,8 +90,7 @@ ETL in this project reaches convert through one of two roots, kept apart on purp
   stated platform on `extensions.sourcePlatform`. Written by the register skills'
   `import_aifirst_etl.py` helper (lossless copy + enumeration) and the MCP
   `create_registry_unit` tool the register skill calls once per source document
-  (Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data
-  Factory, or anything else the user names).
+  (Apache Hop, Pentaho, or any other platform the user names).
 
 **Read both.** Check `source/_etl/` for a native platform, then ask the Code Unit
 Registry for AI-First platforms:
@@ -134,20 +133,20 @@ Classify the **native** ETL platform from the files when extensions are decisive
 
     Persist the choice with the MCP `configure` tool: `etl_informatica_target = "dbt"` or `"scripting"`. When the target is Snowflake Scripting, the `--informatica-to-snowflake-scripting` convert flag in Step 4 additionally records the project-level `etl_target` in `project.yml`, which gates deploy on stabilization for these units.
 
-    These questions are still required: the conversion target is not something `scai code add` can infer from the imported files. **Informatica Cloud / IICS is a different platform** — it is AI-First, not native, and the two Informatica flavors must not share this prompt.
+    These questions are still required: the conversion target is not something `scai code add` can infer from the imported files. Only Informatica PowerCenter is native: any other Informatica product is AI-First, not native, and must not share this prompt.
 
 Then handle the AI-First ETL side. If `query_registry` returned one or more `kind:
 etl` rows with `extensions.sourcePlatform` set, set `<AIFIRST_ETL_PATH> =
 source/_etl_aifirst/` and keep the returned rows for Step 4.5: each row carries the
 `id`, the platform on `extensions.sourcePlatform`, and the vendored source at
-`files.source.path`. Common platforms you will see include **Talend**, **Alteryx**
-(`.yxmd`), **Informatica Cloud / IICS**, **DataStage** (`.dsx`), **Apache Hop** (`.hpl`
-/ `.hwf`), **Pentaho** (`.ktr` / `.kjb`), and **Azure Data Factory**, but any other name the user typed is valid —
-Step 4.5 passes it through.
+`files.source.path`. Common platforms are **Apache Hop** (`.hpl` / `.hwf`) and
+**Pentaho** (`.ktr` / `.kjb`), but any other name the user typed is valid — Step 4.5
+passes it through. When you talk to the user, never name an ETL platform other than SSIS,
+Informatica PowerCenter, Apache Hop and Pentaho unless it is the name the user gave.
 
 If the registry has no AI-First ETL rows but the user tells you mid-conversation that
-they have an unsupported ETL platform, load
-`../register-code-units/add-code-units/SKILL.md` (Step 4, option 4) to run the copy
+they have an ETL platform SnowConvert does not support natively, load
+`../register-code-units/add-code-units/SKILL.md` (Step 4, the ETL platform card) to run the copy
 helper and call `create_registry_unit`, then come back here. Do not stash a raw
 external path as `<AIFIRST_ETL_PATH>` — the register step is where paths get vendored
 into the project.
@@ -234,9 +233,8 @@ Skip this step unless Step 2 set `<AIFIRST_ETL_PATH>` — the Code Unit Registry
 one or more `kind: etl` rows with `extensions.sourcePlatform` set. Load
 `./etl-aifirst/MIGRATE.md` and follow it once per registered AI-First ETL unit,
 passing that unit's `id`, `extensions.sourcePlatform`, and `files.source.path` from
-the Step 2 `query_registry` response. It routes each platform (Talend, Alteryx,
-Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory, or another
-name the user typed) through the AI-First convert action instead of the native engine,
+the Step 2 `query_registry` response. It routes each platform (Apache Hop, Pentaho, or
+another name the user typed) through the AI-First convert action instead of the native engine,
 reports its exit code, and returns here when done. It does not touch the SQL
 conversion Step 4 just produced.
 
@@ -356,7 +354,7 @@ snowflake/
 │       ├── procedure/
 │       └── function/
 └── _etl/                              # Converted ETL code — both native (SSIS / Informatica PowerCenter)
-                                       # and AI-First (Talend / Alteryx / IICS / DataStage / Hop / Pentaho / ADF /…)
+                                       # and AI-First (Apache Hop / Pentaho / any other platform)
                                        # land here once Step 4 and Step 4.5 finish, so downstream skills
                                        # find every converted package under one root
     └── <package_name>/
@@ -377,7 +375,7 @@ snowflake/
     └── conversion-reports.zip
 source/
 └── _etl_aifirst/                       # AI-First ETL inputs, one directory per platform, written by register
-    └── <platform>/                     # (Talend, Alteryx, IICS, DataStage, Hop, Pentaho, ADF, …)
+    └── <platform>/                     # (hop, pentaho, or the platform the user named)
 reports/
 └── AiFirstIssues/                     # Present only after Step 4.5 (AI-First "Something else" ETL path)
     └── <package_name>/

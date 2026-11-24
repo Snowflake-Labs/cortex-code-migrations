@@ -231,6 +231,31 @@ extraction:
   externalStage: MY_DB.MY_SCHEMA.S3_EXTERNAL_STAGE
 ```
 
+## Advanced: BigQuery EXPORT DATA
+
+BigQuery's only non-regular strategy is `export_data`: BigQuery runs `EXPORT DATA` and writes Parquet straight to a GCS bucket, so rows never pass through the worker. It is also the only BigQuery strategy for an Iceberg target.
+
+`scai data worker generate-config --extraction-strategy export_data` writes the fields beside `connection_name`. Replace the placeholders; `worker start` copies them into the hydrated source section, and `scai data worker setup` forwards them to an SPCS worker as `EXPORT_DATA_GCS_BUCKET`, `EXPORT_DATA_GCS_PREFIX`, `EXPORT_DATA_FILE_FORMAT`, and `EXPORT_DATA_OVERWRITE`.
+
+```toml
+[connections.source.bigquery]
+connection_name = "my-bigquery"
+export_data_gcs_bucket = "<BUCKET_NAME>"
+export_data_gcs_prefix = "<PREFIX>"  # Snowflake external stage URL must point at this prefix inside the storage
+export_data_file_format = "parquet"
+export_data_overwrite = true
+```
+
+The service account in the connection needs `bigquery.jobs.create` and read on the source tables, plus write on the bucket (`roles/storage.objectAdmin` on it, or a narrower custom role). BigQuery requires the bucket to be in a location compatible with the dataset's location. For Iceberg, the stage URL must sit on the external volume: see [object-store path restrictions](./object-store-path-restrictions.md).
+
+Corresponding workflow YAML:
+
+```yaml
+extraction:
+  strategy: export_data
+  externalStage: MY_DB.MY_SCHEMA.GCS_EXTERNAL_STAGE
+```
+
 ## Advanced: cloud_direct (any of S3 / GCS / Azure Blob)
 
 Worker streams Parquet to object storage (no local disk PUT). Used for PostgreSQL/Db2 L3 pushdown and as a fallback when the source cannot natively UNLOAD/EXPORT to the user's bucket.

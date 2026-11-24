@@ -3,12 +3,10 @@
 Read this file in full after `assessment_inputs` is complete. Substitute every
 placeholder and use absolute paths, except `staged_pbits` (see §6.8).
 
-When `data_lineage.dispatch` is true and `staged_pbits` is non-empty, dispatch
-is **three steps**: enrichment first, then the remaining fan-out, then
-business use cases last. When dispatch is false or `staged_pbits` is empty,
-skip the first step: send the fan-out in one message, then business use cases
-once it has returned. Business use cases are three agents and a merge the
-parent runs (§ Business use cases, after the fan-out). After each dispatch message, call
+Assessment is two phases. The parent already called `configure(project_dir=...)`.
+Deterministic `scai assessment` commands run from `project_dir` as parallel
+shells — no Task, no per-analysis `configure`. Sub-agents are only for work
+that needs an LLM. After each Task dispatch, call
 `hub(mode="wait", confirm=true, cursor=<last>)`. Do not call
 `agent_output(wait=true)`, and do not end the turn. Ending the turn exits a
 headless session and kills every child. Before waiting, tell the user what is
@@ -16,24 +14,35 @@ running, where to watch it and how completion is signalled. Write one line each
 time a wait returns: the analyses that finished, or what is still running (see
 SKILL.md Step 5).
 
+When `data_lineage.dispatch` is true and `staged_pbits` is non-empty, Power BI
+enrichment is a Task first; then the CLI fan-out; then remaining LLM children;
+then business use cases last. When `staged_pbits` is empty, skip that Task:
+the parent runs `scai assessment data-lineage` in the CLI fan-out. Business
+use cases are three agents and a merge the parent runs (§ Business use cases,
+after the fan-out).
+
 ## Contents
 
 - Common contract
-- Core assessment runners
-- ETL and Discovery runners
-- Data Lineage runner
+- Parent CLI fan-out
+- LLM runners
 - Business use cases runner, after the fan-out
 
 ## Common contract
 
-- Never dispatch an excluded analysis, a `review_mode: skip` analysis, or conversion issues when `conversion_issues.run` is false.
-- Every child calls `configure(project_dir=...)`; MCP state is not inherited.
-  A child that cannot load the tool, or whose call fails, stops and returns
-  `error` saying so; it never continues without it.
+- Never run an excluded analysis, a `review_mode: skip` analysis, or conversion issues when `conversion_issues.run` is false.
+- CLI analyses do not call `configure`. LLM children call
+  `configure(project_dir=...)`; MCP state is not inherited. A child that
+  cannot load the tool, or whose call fails, stops and returns `error`
+  saying so; it never continues without it.
+- A Task child of the default sub-agent type reaches this plugin's MCP tools
+  (`configure`, `query_registry` and the rest) once it has called `configure`,
+  so no other type is needed. Never run an analysis in the parent because you
+  doubt that: dispatch it.
 - Tell every child it is non-interactive and must not ask questions.
-- Each child writes only its own artifacts; never registry/source/other-child
+- Each analysis writes only its own artifacts; never registry/source/other-child
   output.
-- Every child returns JSON only:
+- Every analysis row is JSON only:
 
 ```json
 {
@@ -47,65 +56,141 @@ SKILL.md Step 5).
 
 Data Lineage adds `manifest`; the lineage search adds `wave_plan` (null),
 `catalog`, `context` and `top_use_cases`; the context pass adds `context_md`.
-After the dispatch message, call
+After a Task dispatch, call
 `hub(mode="wait", confirm=true, cursor=<last>)`. Do not end the parent turn.
 The parent reports each analysis as it finishes (see SKILL.md Step 5).
 
-## Core assessment runners
+## Parent CLI fan-out
+
+From `project_dir`, start every in-scope command in **one** tool-use message
+as parallel shells, then wait until they have all exited. Do not wrap them in
+Task. Synthesize each row of the common JSON contract from the exit code and
+the newest matching artifact. Exit 0 and a non-empty artifact is `ok`.
+`ASM0031`, `ASM0024`, and `ASM0034` are `skipped`, not `error`. Any other
+non-zero exit is `error` with the command's message.
 
 ### Object exclusion
 
-```text
-Read and follow plugin/skills/migration/assessment/object_exclusion_detection/SKILL.md.
-You are a non-interactive sub-agent. Do not ask questions.
-Context: project_dir.
-Call configure(project_dir), run scai assessment object-exclusion from the
-project, and return the common JSON contract for object-exclusion-detection
-with the newest artifacts/assessment/object_exclusion_analysis_*.json and
-temp/staging/deprecated/testing/duplicate counts.
+```bash
+scai assessment object-exclusion
 ```
+
+Newest `artifacts/assessment/object_exclusion_analysis_*.json`; summary from
+its temp/staging/deprecated/testing/duplicate counts.
 
 ### Effort estimates
 
-```text
-Read and follow plugin/skills/migration/assessment/effort-estimate/SKILL.md.
-You are a non-interactive sub-agent. Do not ask questions.
-Context: project_dir.
-Call configure(project_dir), run scai assessment effort-estimate, and return
-the common JSON contract for effort-estimate with the newest
-artifacts/assessment/effort-estimates-*.json and DDL/hour totals.
-ASM0031 is skipped, not error.
+```bash
+scai assessment effort-estimate
 ```
+
+Newest `artifacts/assessment/effort-estimates-*.json`; DDL/hour totals.
+`ASM0031` is skipped, not error.
 
 ### Anti-patterns
 
-Dispatch only for SQL Server, Redshift, Oracle, and Teradata.
+Run only for SQL Server, Redshift, Oracle, and Teradata.
 
-```text
-Read and follow plugin/skills/migration/assessment/anti-patterns/SKILL.md.
-You are a non-interactive sub-agent. Do not ask questions.
-Context: project_dir.
-Call configure(project_dir), run scai assessment anti-patterns, and return the
-common JSON contract for anti-patterns with the newest
-artifacts/assessment/anti-patterns-*.json and bucket/flag/unit counts.
-ASM0024 is skipped, not error.
+```bash
+scai assessment anti-patterns
 ```
+
+Newest `artifacts/assessment/anti-patterns-*.json`; bucket/flag/unit counts.
+`ASM0024` is skipped, not error.
 
 ### Dynamic SQL
 
-```text
-Read and follow plugin/skills/migration/assessment/analyzing-sql-dynamic-patterns/SKILL.md.
-You are a non-interactive sub-agent. Do not ask questions.
-Context: project_dir, output_dir=<project_dir>/assessment/json,
-review_mode=generate-only|auto-review-all.
-Call configure(project_dir). Run:
-scai assessment sql-dynamic generate --project-dir <project_dir>
-  --output <output_dir>/sql_dynamic_analysis.json
-For auto-review-all, follow the child skill's per-occurrence loop until stats
-shows zero PENDING; each update is one specifically analyzed record.
-Return the common JSON contract for analyzing-sql-dynamic-patterns with
-total/REVIEWED/PENDING counts.
+Always run on a full assessment. Do not skip it because `assessment_options`
+omitted Dynamic SQL.
+
+With `output_dir=<project_dir>/assessment/json`:
+
+```bash
+scai assessment sql-dynamic generate --project-dir <project_dir> --output <output_dir>/sql_dynamic_analysis.json
 ```
+
+`review_mode` is generate-only. Do not start AI review from assessment. If
+the user asked for AI review in this session, dispatch the
+`analyzing-sql-dynamic-patterns` child after this command: Copy prompts map
+to auto-review-all or review-batch as that skill says. That child calls
+`configure(project_dir)` only if this session has not already configured
+that project.
+
+### One ETL generate per project
+
+A project has one ETL platform, and `scai assessment etl generate` writes only
+that platform's artifact. Run `scai assessment etl generate` exactly once per
+assessment: the SSIS command when SSIS is in scope, the Informatica command
+when Informatica PowerCenter is. Never both, and never a second generate for
+the same project.
+
+**SSIS generate**, always `--review-mode <parent_review_mode>` where
+`parent_review_mode` is `generate-only`. Resolve `etl_assessment_skill_dir`
+first: the absolute directory of `etl-assessment/SKILL.md` under this plugin.
+
+```bash
+scai assessment etl generate --review-mode <parent_review_mode>
+```
+
+Locate newest `ETL.Elements.*.csv` and `ETL.Issues.*.csv`; auto-detect
+replatform sources when the snapshot path is empty. Then render DAG HTML from
+the newest `dag_model_*.json` with:
+
+```bash
+uv run --project "<etl_assessment_skill_dir>" python "<etl_assessment_skill_dir>/scripts/dag_renderer/render_dags.py" "$dag_model"
+```
+
+Never pass `project_dir` as `--project`. The etl-assessment row's
+`output_json` is the newest `etl_assessment_analysis_*.json`.
+
+**Informatica generate**, always `--review-mode <parent_review_mode>` where
+`parent_review_mode` is `generate-only`. Read
+`etl_informatica_target` from `<project_dir>/.scai/config/plugin.yml` first.
+If it is missing or differs from `informatica_target`, do not run generate;
+the Informatica row is `error: "Informatica target not recorded"` (see
+input-collection.md § 5.3b). If generate exits non-zero, that row is `error`
+with its message and write no HTML.
+
+```bash
+scai assessment etl generate --review-mode <parent_review_mode>
+scai assessment etl stats --platform informatica
+```
+
+Keep the JSON path generate printed: it is `assessment_json` for later
+review/summary Tasks and `--informatica-json` for the report. Under
+`generate-only` this parent generate is the only Informatica step.
+
+### Discovery
+
+Run only for SQL Server, Teradata, or Redshift when mode is `have_extract`
+and paths are non-empty. For `skip`, synthesize `skipped by user`. For `later`,
+synthesize `capture SQL provided; re-run assessment with the .xel files` on
+SQL Server, `probe and export SQL provided; re-run assessment with the
+metrics file` on Teradata, or `extract SQL provided; re-run assessment with
+the Redshift metrics file` on Redshift.
+
+```bash
+scai assessment workload-insights --input <abs path> [--input <abs path> ...]
+```
+
+Exactly one `--input` per path. Newest
+`artifacts/assessment/workload-insights-*.json`. `ASM0034` is skipped. Exit 0
+plus a written artifact is `ok` even when stdout reports a large/long parse or
+skipped-row warnings from a Teradata or Redshift extract. Never copy input
+files into the project.
+
+### Data Lineage without Power BI templates
+
+When `data_lineage.dispatch` is true and `staged_pbits` is empty:
+
+```bash
+scai assessment data-lineage
+```
+
+Verify the stable non-empty `artifacts/assessment/data-lineage.json`.
+`manifest` is null.
+
+## LLM runners
 
 ### Conversion issues
 
@@ -114,38 +199,34 @@ Read and follow plugin/skills/migration/assessment/conversion-issues/SKILL.md.
 You are a non-interactive sub-agent. Do not ask questions.
 Context: project_dir.
 Call configure(project_dir). The first command only collects issues and leaves
-problem_description and recommended_fix empty. That is not done.
+problem_description empty. That is not done.
 Run scai assessment conversion-issues. For each summary-panel pair, research
-the problem and the fix, write
+the problem, write
 artifacts/assessment/conversion-issues/updates.json, and rerun:
 scai assessment conversion-issues --updates artifacts/assessment/conversion-issues/updates.json
 Read conversion-issues.json again. Return ok only when every summary row has
-both fields non-empty, or when there are zero pairs. Do not return ok after
+problem_description non-empty, or when there are zero pairs. Do not return ok after
 the first command. ASM0045 is error, not skipped. Do not upload the ZIP.
 ```
 
-## ETL and Discovery runners
-
-### One ETL generate per project
-
-A project has one ETL platform, and `scai assessment etl generate` writes only
-that platform's artifact. Dispatch exactly one ETL generate child per
-assessment: the SSIS one when SSIS is in scope, the Informatica one when
-Informatica PowerCenter is. Never both, and never a second generate for the
-same project.
-
 ### SSIS
 
-SSIS runs in up to three dispatches, so that no agent holds more packages
-than it can read in full:
+SSIS AI review is on demand, after the parent CLI generate, in up to two Task
+dispatches, so that no agent holds more packages than it can read in full:
 
-1. **Generate**, in the fan-out, always `review_mode=generate-only`.
-2. **Review batches**, only when the snapshot's `etl.review_mode` is
-   `auto-review-all`. As soon as the generate child returns `ok`, run
-   `scai assessment etl summary` from the project root and take every
-   package listed `PENDING` under "AI Analysis per Package". Split those paths,
-   in listed order, into batches of at most **10 packages**, and send one
-   review child per batch, one at a time: send the next batch only after the
+1. **Generate**, run by the parent in the CLI fan-out (§ Parent CLI fan-out),
+   always `--review-mode <parent_review_mode>` with
+   `parent_review_mode=generate-only`. This is the only SSIS step during
+   assessment.
+2. **Review batches**, only when the user later asks AIM to analyze packages
+   and has answered all, some, or one (and which names, for some or one).
+   Do not start review until they answer. Tell them it takes about **60s per
+   package**. As soon as generate has returned `ok`, run
+   `scai assessment etl summary` from the project root and take every package
+   listed `PENDING` under "AI Analysis per Package" that the user asked for.
+   Split those paths, in listed order, into
+   batches of at most **10 packages**, and send one review child per batch,
+   one at a time: send the next batch only after the
    previous review child has returned. With no PENDING packages, go straight
    to the summary.
 3. **Summary**, alone, once every review child has returned.
@@ -158,27 +239,16 @@ with `etl update`, so never merge their outputs yourself.
 
 Generate:
 
-```text
-Read and follow plugin/skills/migration/assessment/etl-assessment/SKILL.md.
-You are a non-interactive sub-agent. Do not ask questions.
-Resolve etl_assessment_skill_dir before dispatch: the absolute directory of
-etl-assessment/SKILL.md under this plugin (plugin root +
-skills/migration/assessment/etl-assessment). The install root differs between
-a checkout and a packaged plugin, and the sub-agent runs from project_dir,
-where no relative ai project exists.
-Context: project_dir, output_dir=<project_dir>/artifacts/assessment/etl,
-etl_replatform_sources_path, ssis_target=dbt|scripting,
-review_mode=generate-only,
-etl_assessment_skill_dir=<absolute directory containing etl-assessment/SKILL.md>.
-Call configure(project_dir, etl_ssis_target=<ssis_target>). Locate newest ETL.Elements.*.csv and
-ETL.Issues.*.csv; auto-detect replatform sources when context is empty. From
-the project root run scai assessment etl generate. Render DAG HTML from the
-newest dag_model_*.json with:
+(parent CLI, not a Task). Resolve `etl_assessment_skill_dir` first:
+the absolute directory of `etl-assessment/SKILL.md` under this plugin.
+`parent_review_mode=generate-only`.
+
+```bash
+scai assessment etl generate --review-mode <parent_review_mode>
 uv run --project "<etl_assessment_skill_dir>" python "<etl_assessment_skill_dir>/scripts/dag_renderer/render_dags.py" "$dag_model"
-Never pass project_dir as --project. Return the common JSON contract for
-etl-assessment with the newest etl_assessment_analysis_*.json and package
-counts.
 ```
+
+Never pass `project_dir` as `--project`.
 
 Review batch (one per batch of at most 10 package paths):
 
@@ -218,19 +288,27 @@ etl_assessment_analysis_*.json and total/done/pending counts from stats.
 
 ### Informatica
 
-Informatica runs in three dispatches, like SSIS, so that no agent holds more
-workflows than it can read in full. It always reviews every workflow:
+Informatica AI review runs in two Task dispatches after the parent CLI
+generate, like SSIS, so that no agent holds more workflows than it can read
+in full:
 
-1. **Generate**, in the fan-out, `review_mode=generate-only`. Keep the JSON
-   path it returns: it is `assessment_json` for the next dispatches and
-   `--informatica-json` for the report.
-2. **Review batches**, as soon as the generate child returns `ok`. Run
+1. **Generate**, run by the parent in the CLI fan-out, always
+   `--review-mode <parent_review_mode>` with
+   `parent_review_mode=generate-only`. Keep the JSON path it prints: it is
+   `assessment_json` for later on-demand dispatches and `--informatica-json`
+   for the report. This is the only Informatica step during assessment.
+2. **Review batches**, only when the user later asks AIM to analyze workflows
+   and has answered all, some, or one (and which names, for some or one). Do
+   not start review until they answer. Tell them it takes about **60s per
+   workflow**. As soon as generate has returned `ok`, run
    `scai assessment etl stats --platform informatica` from the project root.
-   While it reports pending workflows, send one review child with
-   `batch_size=10`, and send the next only after it has returned. Run `stats`
-   again after each one. Stop when no workflow is pending, or when a batch
-   returned `error` or left the pending count unchanged.
-3. **Summary**, alone, once the last review child has returned.
+   While it reports pending workflows the user asked for, send one review child
+   with `batch_size=10`, and send the next only after it has returned. Run
+   `stats` again after each one. Stop when no requested workflow is pending,
+   or when a batch returned `error` or left the pending count unchanged.
+3. **Summary**, alone, once the last review child has returned, only for
+   on-demand analysis. Under assessment `generate-only` the parent generate is
+   the only Informatica step.
 
 The fan-out is not complete until the last Informatica dispatch has returned.
 Never run two review children at once: each `etl update` rewrites the whole
@@ -239,21 +317,13 @@ assessment JSON under its lock. Each child saves its workflows with
 
 Generate:
 
-```text
-Read and follow plugin/skills/migration/assessment/informatica-assessment/SKILL.md.
-You are a non-interactive sub-agent. Do not ask questions.
-Context: project_dir, output_dir=<project_dir>/artifacts/assessment/etl,
-informatica_target=dbt|scripting, review_mode=generate-only.
-Call configure(project_dir, etl_informatica_target=<informatica_target>).
-Then read etl_informatica_target from <project_dir>/.scai/config/plugin.yml.
-If it is missing or differs from informatica_target, return error naming both
-values and run nothing else.
-From the project root run scai assessment etl generate. If it exits non-zero,
-return error with its message and write no HTML. Then run
-scai assessment etl stats --platform informatica. Return the common JSON
-contract for informatica-assessment with output_json set to the path generate
-printed, and the workflow and pending counts from stats.
-```
+(parent CLI, not a Task).
+`parent_review_mode=generate-only`.
+From the project root run `scai assessment etl generate --review-mode <parent_review_mode>`.
+If it exits non-zero, return error with its message and write no HTML.
+Then run `scai assessment etl stats --platform informatica`. Return the common
+JSON contract for informatica-assessment with output_json set to the path
+generate printed.
 
 Review batch (one at a time, each up to 10 workflows):
 
@@ -305,37 +375,19 @@ total/done/pending counts from stats.
 
 ### Discovery
 
-Dispatch only for SQL Server, Teradata, or Redshift when mode is `have_extract`
-and paths are non-empty. For `skip`, synthesize `skipped by user`. For `later`,
-synthesize `capture SQL provided; re-run assessment with the .xel files` on
-SQL Server, `probe and export SQL provided; re-run assessment with the
-metrics file` on Teradata, or `extract SQL provided; re-run assessment with
-the Redshift metrics file` on Redshift.
-
-```text
-Read and follow plugin/skills/migration/assessment/workload-insights/SKILL.md.
-You are a non-interactive sub-agent. Do not ask questions.
-Context: project_dir, input_paths=<absolute .xel paths (SQL Server) or metrics
-CSV paths (Teradata or Redshift)>.
-Call configure(project_dir). From project_dir run scai assessment
-workload-insights with exactly one --input per path. Return the common JSON
-contract for workload-insights with the newest
-artifacts/assessment/workload-insights-*.json. ASM0034 is skipped. Exit 0 plus
-a written artifact is ok even when stdout reports a large/long parse or
-skipped-row warnings from a Teradata or Redshift extract. Never copy input
-files into the project.
-```
+See Parent CLI fan-out § Discovery. Do not dispatch a Task for it.
 
 ### 6.7 data-lineage-runner prompt
 
-Dispatch Data Lineage whenever `data_lineage.dispatch` is true, even with zero
-staged templates. **Resolve `catalog_helper_path` and `assessment_skill_dir`
-before you dispatch.** `catalog_helper_path` is
-`data-lineage/scripts/query_cur_catalog.py` under the directory the parent
-`SKILL.md` lives in, made absolute. `assessment_skill_dir` is that same
-directory, also absolute — the `--project` root `stage_powerbi_inputs.py`
-already uses. The child runs from `project_dir`, so a relative helper path is
-invalid.
+Dispatch this Task only when `data_lineage.dispatch` is true **and**
+`staged_pbits` is non-empty. With no templates the parent already ran
+`scai assessment data-lineage` in the CLI fan-out. **Resolve
+`catalog_helper_path` and `assessment_skill_dir` before you dispatch.**
+`catalog_helper_path` is `data-lineage/scripts/query_cur_catalog.py` under the
+directory the parent `SKILL.md` lives in, made absolute. `assessment_skill_dir`
+is that same directory, also absolute — the `--project` root
+`stage_powerbi_inputs.py` already uses. The child runs from `project_dir`, so a
+relative helper path is invalid.
 
 ```text
 Read and follow plugin/skills/migration/assessment/data-lineage/SKILL.md.
@@ -410,7 +462,8 @@ were safely omitted are successful output and must remain in the summary.
 
 ### Business use cases, after the fan-out
 
-The last part of the assessment, after every fan-out agent has returned. It
+The last part of the assessment, after the CLI fan-out and every LLM child
+has returned. It
 reads the exclusion findings and Power BI dependencies the earlier steps wrote.
 `waves plan` writes `wave-plan.json` for the dashboard and does not write
 `planning.wave` or `planning.waveRank`; size-based waves do. It is one
@@ -551,18 +604,17 @@ have returned:
 
 ### 6.8 Common rules for every dispatch
 
-1. **Enrichment before the fan-out.** When `data_lineage.dispatch` is true and
-   `staged_pbits` is non-empty, send `data-lineage` alone first and wait. Then
-   send all remaining in-scope dispatches in a single tool-use message. With no
-   templates, `data-lineage` may join that fan-out because it does not enrich
-   the registry.
+1. **Enrichment before the CLI fan-out.** When `data_lineage.dispatch` is true
+   and `staged_pbits` is non-empty, send the `data-lineage` Task alone first
+   and wait. Then run the parent CLI fan-out. With no templates, run
+   `scai assessment data-lineage` in that CLI fan-out.
 2. **Absolute paths only** in every context block, **except `staged_pbits`**.
    Those stay project-relative because that is the identity `extract` /
    `enrich` and the manifest match on.
-3. **Sub-agent calls `configure()` itself** — do not assume MCP state is
-   inherited.
-4. **Each sub-agent writes only its own output JSON** and does not hand-edit
-   the registry, source SQL, or other sub-agents' artifacts. CLI commands the
+3. **LLM children call `configure()` themselves** — do not assume MCP state is
+   inherited. CLI analyses do not call it.
+4. **Each analysis writes only its own output JSON** and does not hand-edit
+   the registry, source SQL, or other analyses' artifacts. CLI commands the
    skill tells it to run may write the registry (`scai assessment powerbi
    enrich`, `scai assessment object-exclusion` and `scai assessment waves`
    do). Those CLI-owned writes are allowed, and they are ordered:
@@ -570,10 +622,10 @@ have returned:
    before the parent runs `scai assessment waves`.
 5. **JSON return only** — free-form text in the report is harder to consume
    reliably.
-6. **Business use cases last.** After every other agent has returned, run
-   `scai assessment waves`, then dispatch the context pass in a message of
-   its own; then both searches
-   together; then merge and plan yourself. Nothing else runs beside them.
+6. **Business use cases last.** After the CLI fan-out and every other LLM
+   child has returned, run `scai assessment waves`, then dispatch the
+   context pass in a message of its own; then both searches together; then
+   merge and plan yourself. Nothing else runs beside them.
 
-After the dispatch message, call `hub(mode="wait", confirm=true, cursor=<last>)`.
+After a Task dispatch, call `hub(mode="wait", confirm=true, cursor=<last>)`.
 Do not call `agent_output(wait=true)`, and do not end the turn.

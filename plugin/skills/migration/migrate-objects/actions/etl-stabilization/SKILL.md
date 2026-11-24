@@ -120,8 +120,20 @@ On every invocation:
 
    Store the flavor in session. **dbt flavor** runs the standard path below unchanged. **Scripting flavor** replaces the data-flow half of stabilization with the mapping-procedure pair (proc-test-gen → proc-fixer) while keeping the orchestration half identical — see [Scripting Flavor Routing](#scripting-flavor-routing). In the guided flow, whether a scripting unit reaches this skill is controlled upstream by the migration state machine; when it does — or on direct invocation — proceed with the scripting path.
 1. Check if `{UNIT}/stabilization/tracking/STATE.md` exists
-2. **If no STATE.md** → new unit → run **Planning Workflow**
-3. **If STATE.md exists** → read it → run **Execution Workflow** for next pending phase. If status is "Ready to execute" (or next-action is Execute Phase N) and Phase N has no cortex task / `start-phase` has not run, that is the post-ROADMAP stall: **start Execution Step 2 in this turn**. Do not wait for a subagent.
+2. **If no STATE.md** (new unit): take the converter snapshot, then run the mandatory Stage-0 Stabilize Compiler prepass **before Planning or any agent wave**. Do **not** rerun Stage-0 when `STATE.md` already exists.
+   ```bash
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/backup_unit.py {UNIT}
+   uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/stabilize_prepass.py {UNIT}
+   ```
+   `stabilize_prepass.py` also snapshots `{UNIT}/stabilization/original/` when that folder is missing. `backup_unit.py` never refreshes an existing `original/` (converter snapshot stays intact for `sync_guard`).
+   - Writes `{UNIT}/stabilization/planning/prepass_receipt.json` and `phases/S0-prepass/timing.json`.
+   - **Do not** author a ROADMAP or spawn test-gen/fixer agents until this receipt exists.
+   - If `early_exit: true` (no `!!!RESOLVE EWI!!!` markers): still run Planning [Step 1b](#step-1b-detect-platform), [Step 2](#step-2-scan-unit) (`scan_unit.py` → `planning/scan.json`) and [Step 3](#step-3-initialize-tracking) (`track_status.py init`) — `batch-update` needs `session_status.json`, and the Final Validation report reads `scan.json`. Then run a baseline test, mark **only `pending`** elements `no-fix-needed` via `track_status.py batch-update` (never overwrite `test-failed` / `needs-user` / `fixed`), and proceed to Final Validation / close — skip the rest of Planning and agent TDD.
+   - If `agent_required: true`: continue Planning/Execution **only for residual markers** listed in the receipt. Prefer high-quality residual agents with mandatory retest — do **not** optimize by switching to cheaper/weaker models as the primary lever.
+3. **If no STATE.md** → new unit → run **Planning Workflow** (after Stage-0)
+4. **If STATE.md exists** → skip Stage-0 → read it → run **Execution Workflow** for next pending phase. If status is "Ready to execute" (or next-action is Execute Phase N) and Phase N has no cortex task / `start-phase` has not run, that is the post-ROADMAP stall: **start Execution Step 2 in this turn**. Do not wait for a subagent.
+
+> **Telemetry:** every stabilize stage should write `phases/<stage>/timing.json` via `scripts/timing.py` (markers_in/out, wall_ms, agent_count, sql_calls).
 
 ---
 
@@ -215,7 +227,7 @@ Ask the user for:
 
 ### Step 1b: Detect Platform
 
-1. **Auto-detect from file extension**: `.dtsx` → `ssis`, `.yxmd` → `alteryx`, `.item` → `talend`, `.xml` → ask user to confirm platform
+1. **Auto-detect from file extension**: `.dtsx` → `ssis`, `.yxmd` → `alteryx`, `.item` → `talend`, `.xml` → ask user to confirm platform. These slugs are internal routing data: when you ask or tell the user, never name an ETL platform other than SSIS, Informatica PowerCenter, Apache Hop and Pentaho, unless the user named it
 2. **If ambiguous**, ask the user which platform via `ask_user_question`
 3. **Fallback rule**: if no platform was named by the user or established from an original source file (omitted/ambiguous), or a named platform has no `{SKILL_DIR}/platforms/{PLATFORM_ID}/` directory, set `{PLATFORM_ID}` = `unsupported` instead of proceeding with a missing pack. A remediation brief's `platform` field describes where its findings originated; it is **not** source-platform evidence and must not override this fallback. Never pass that field to `scan_unit.py --platform`. Never carry a null or made-up platform into Step 2 — `scan_unit.py` re-derives and records this same fallback independently.
 4. **Read the platform profile** from `{SKILL_DIR}/platforms/{PLATFORM_ID}/platform-profile.md`
@@ -274,13 +286,11 @@ uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/track_status.py set-test
 
 ### Step 5: Backup and Strip Dead Code
 
-Snapshot the unit directory before stripping:
+Ensure `{UNIT}/stabilization/original/` holds the **converter** snapshot (not Stage-0 output). Entry Step 2 already created it before the prepass. Call backup only if that folder is missing — `backup_unit.py` refuses to refresh an existing snapshot:
 
 ```bash
 uv run --project {SKILL_DIR} python {SKILL_DIR}/scripts/backup_unit.py {UNIT}
 ```
-
-This creates `{UNIT}/stabilization/original/` with a copy of the unit excluding the `stabilization/` sub-tree.
 
 Never register the backup as a registry target. dbt-quality skips `**/stabilization/original/**` by default. See [registry-consolidation](../../../dbt-quality/references/registry-consolidation.md).
 

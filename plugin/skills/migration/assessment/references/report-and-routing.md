@@ -79,11 +79,11 @@ scai assessment report \
   [--informatica-json "<path>" when Informatica succeeded: the JSON path `scai assessment etl generate` printed]
 ```
 
-Leave `--output` unset so the CLI names the file
-`{customer}_migration_plan_{yyyyMMdd_HHmmss}.html` under `assessment/`. The
-command also writes a PDF of every tab beside the HTML (same stem, or the `-o`
-stem with a `.pdf` extension). It needs Google Chrome, Microsoft Edge, or
-Chromium on the machine.
+Leave `--output` unset so the CLI writes `assessment/report/index.html`, a zip
+at `assessment/assessment-report.zip`, and a snapshot at
+`assessment/reports/report_<yyyyMMdd_HHmmss>/`. The command also writes a PDF
+of the index beside it (or the `-o` stem with a `.pdf` extension). It needs
+Google Chrome, Microsoft Edge, or Chromium on the machine.
 
 `<plugin_version>` is the trimmed text of the plugin's `VERSION` file. It names
 the build on the report when `AIM_APP_VERSION` is unset.
@@ -115,7 +115,7 @@ scai assessment report \
   --snowconvert-reports-dir "<path>" \
   --ssis-json "<path>" \
   --informatica-json "<path>" \
-  --output "<path>/{customer}_migration_plan_{yyyyMMdd_HHmmss}.html"
+  --output "<path>/report/index.html"
 ```
 
 An explicitly supplied source overrides discovery. A partial assessment passes

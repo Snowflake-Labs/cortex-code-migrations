@@ -71,6 +71,15 @@ transition_status(status="advance", task="seedScript", outcome="completed", wher
 
 If this pass seeded the whole BTEQ corpus, advance each unit that now has a YAML (or re-run per unit as the state machine offers them — idempotent). If advance refuses, finish unresolved bindings/fixtures and retry.
 
+A unit listed under **Skipped Code Units** (`skippedCodeUnits` in `--json`) has no artifacts path in the CUR, so the seed wrote no YAML for it. Its `seedScript` can never complete and it can never reach capture, so do not advance it, re-seed it, or write a YAML for it by hand. Escalate it as a CUR defect, using the `<skipped_unit_id>` from its `name (id): reason` line, then carry on with the other units:
+
+```
+transition_status(status="escalate", task="seedScript",
+                  asks=["Add files.artifacts.path to this unit's CUR entry, then re-run seedScript", "Take the unit out of scope"],
+                  reason="CUR defect: no artifacts path, so test seed wrote no YAML for this unit",
+                  where="id = '<skipped_unit_id>'")
+```
+
 ## Notes
 
 - The `bteq` binary is only needed at **capture**, not here — don't preflight for it. If it's missing, `scai test capture` fails with a pointer to `scai test doctor` (TTU install guidance).

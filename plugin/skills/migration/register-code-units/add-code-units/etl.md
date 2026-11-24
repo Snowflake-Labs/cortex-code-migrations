@@ -1,6 +1,6 @@
 ---
 name: add-code-units-etl
-description: Import ETL into the project during register. SSIS and Informatica PowerCenter go under source/_etl via scai code add. Every other platform goes under source/_etl_aifirst and is registered as kind=etl. Triggers from add-code-units Step 4.
+description: Import ETL into the project during register. SSIS and Informatica PowerCenter go under source/_etl via scai code add. Every other platform goes under source/_etl_aifirst and is registered as kind=etl. The platform question is the fixed chooseEtlPlatform setup card. Triggers from add-code-units Step 4.
 parent_skill: add-code-units
 license: Proprietary. See License-Skills for complete terms
 ---
@@ -15,35 +15,53 @@ ETL question — a dbt workload has no SSIS or Informatica packages, and asking 
 straight to Step 5 without calling `ask_user_question`.
 
 ETL belongs in the project from register onward. SSIS and Informatica PowerCenter
-land in `source/_etl/` via `scai code add`. Every other ETL platform — Talend, Alteryx,
-Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory, or anything
-else the user names — lands in `source/_etl_aifirst/<platform>/`, and its units are registered
-in the Code Unit Registry with `kind: etl` and `source.objectType: workflow` via the
-MCP `create_registry_unit` tool. The two roots stay apart because the native
-`EtlFileClassifier` owns `source/_etl/` and only understands SSIS `.dtsx` and
-PowerCenter XML repo exports. Routing `.yxmd` / `.dsx` / `.ktr` through it would
+land in `source/_etl/` via `scai code add`. Every other ETL platform (Apache Hop, Pentaho,
+or any other platform the user names) lands in `source/_etl_aifirst/<platform>/`, and its
+units are registered in the Code Unit Registry with `kind: etl` and
+`source.objectType: workflow` via the MCP `create_registry_unit` tool. The two roots stay
+apart because the native `EtlFileClassifier` owns `source/_etl/` and only understands SSIS
+`.dtsx` and PowerCenter XML repo exports. Routing other platforms' files through it would
 mis-arrange them.
 
 This file is entered only when `has_etl_code` is `true`: the user already said yes on the extras
-card, so never ask a standalone ETL yes/no. Ask which platform via `ask_user_question`
-(`multiSelect = false`):
+card, so never ask a standalone ETL yes/no. The platform question is a fixed setup card
+(`chooseEtlPlatform`), not a question you write. Read `etl_platforms` from `configure()`:
 
-> "Which ETL platform is it?"
+- **Set:** it holds the comma-separated values the user picked (`ssis`, `informatica`,
+  `hop`, `pentaho`, `another`, or a name they typed). Do not ask the platform again.
+- **Not set:** call `progress_setup()` with no answers. When it returns the
+  `chooseEtlPlatform` prompt, handle it as setup/SKILL.md step 3 says: with
+  `shown_on_card: true` end the turn; otherwise ask it in one `ask_user_question` call
+  (`multiSelect = true`) with the question and every option's label and description
+  exactly as served, and submit with `progress_setup(answers={"etl_platforms": "..."})`.
+  Only if `progress_setup()` does not return that prompt, ask the card below in one
+  `ask_user_question` call, copying it word for word, then save the answer with
+  `configure(etl_platforms="<comma-separated values>")`.
+
+Never shorten, reword or drop an option's description: the "AI-First approach, not
+native support" sentence must reach the user on every AI-First option. Never name, as
+examples or suggestions, any ETL platform other than SSIS, Informatica PowerCenter,
+Apache Hop and Pentaho.
+
+<!-- platform-card:begin (must match chooseEtlPlatform in setup.json) -->
+> "Which ETL platform is your ETL code from? Select all that apply."
 >
-> 1. **SSIS** — `.dtsx` packages (converted natively)
-> 2. **Informatica Power Center** — XML repo export (converted natively)
-> 3. **Apache Hop or Pentaho**: Hop `.hpl` / `.hwf`, Pentaho `.ktr` / `.kjb` (AI-First
->    approach, not native support: converted end to end, then validated against the
->    original)
-> 4. **Another ETL platform**: Talend, Alteryx, Informatica Cloud / IICS, DataStage,
->    Azure Data Factory, or something else (AI-First approach, not native support)
+> - **SSIS**: SQL Server Integration Services .dtsx packages. Native support: converted directly, not through the AI-First approach.
+> - **Informatica PowerCenter**: PowerCenter XML repository exports. Native support: converted directly, not through the AI-First approach.
+> - **Apache Hop (AI-First, not native support)**: Hop pipelines and workflows (.hpl, .hwf). AI-First approach, not native support: a model-assisted conversion with narrower coverage than SSIS and Informatica PowerCenter; each converted job is trusted only after it passes validation against the original.
+> - **Pentaho (AI-First, not native support)**: Pentaho transformations and jobs (.ktr, .kjb). AI-First approach, not native support: a model-assisted conversion with narrower coverage than SSIS and Informatica PowerCenter; each converted job is trusted only after it passes validation against the original.
+> - **Another ETL platform (AI-First, not native support)**: Any other ETL tool; you name it next. AI-First approach, not native support: a model-assisted conversion with narrower coverage than SSIS and Informatica PowerCenter; each converted job is trusted only after it passes validation against the original.
+<!-- platform-card:end -->
 
-- **SSIS / Informatica Power Center:** ask for the folder path and
-  compare it to `<INPUT_PATH>`:
-  - If it is **the same as, or inside, `<INPUT_PATH>`**, Step 3 already imported it —
-    `code add` classifies and promotes ETL anywhere under the input path, not just at
-    its root. Proceed to Step 5 without running a second `code add`.
-  - Otherwise (a genuinely separate folder) run:
+Handle each picked platform in turn:
+
+- **SSIS / Informatica Power Center:** compare the ETL folder to `<INPUT_PATH>`
+  (the import root from Step 1, not a `sql/` child of it):
+  - If it is **the same as, or inside, `<INPUT_PATH>`** — including `etl/` next
+    to `sql/` under the folder the user named — Step 3 already imported it.
+    `code add` classifies and promotes ETL anywhere under the input path, not
+    just at its root. Proceed to Step 5 without running a second `code add`.
+  - Only if ETL lives **outside** that tree (a genuinely separate folder) run:
 
     ```bash
     scai code add -i <ETL_PATH> --json
@@ -61,12 +79,12 @@ card, so never ask a standalone ETL yes/no. Ask which platform via `ask_user_que
   `code add` arranges the packages into `source/_etl/`. Confirm they landed there
   before continuing.
 
-- **Apache Hop or Pentaho / Another ETL platform:**
-  1. For **Apache Hop or Pentaho**, take the platform from the files (`.hpl` / `.hwf`
-     are `hop`, `.ktr` / `.kjb` are `pentaho`) or ask which one; when the folder holds
-     both, register each set separately. Otherwise ask which platform. Accept a free-form
-     name if it is not in the list. Store the
-     lower-case slug (`talend`, `alteryx`, `iics`, `datastage`, `pentaho`, `hop`, `adf`, …).
+- **Apache Hop / Pentaho / Another ETL platform:**
+  1. For **Apache Hop** or **Pentaho**, the slug is `hop` or `pentaho`; check it against
+     the files (`.hpl` / `.hwf` are `hop`, `.ktr` / `.kjb` are `pentaho`), and when the
+     folder holds both, register each set separately. For **Another ETL platform**, ask
+     "Which ETL platform is it?" as a plain question with no examples, accept the name
+     the user gives, and store it as a lower-case slug.
      For Hop, `hop` and `apacheHop` are the same intake: the helper vendors under
      `source/_etl_aifirst/hop/` and enumerates `units[].platform` as `apacheHop`.
   2. Ask for the folder path containing the platform's source documents.

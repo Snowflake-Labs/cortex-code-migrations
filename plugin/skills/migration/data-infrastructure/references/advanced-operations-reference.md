@@ -199,25 +199,40 @@ Workflow fields: [DV workflow config reference](../../setup/data-validation/refe
 
 ## Custom L2 metrics / skip aggregations on a column (Data Validation)
 
-**When the customer asks:** skip `avg` (or all aggregations) on a VARCHAR/text primary key; L2 length-based metrics on IDs are noise; keep schema + row validation on that key; override a metric for one column only.
+**When the customer asks:** skip or replace L2 metrics for a set of columns (by role and/or type family), or for one named column; keep schema and row validation on those columns.
 
-**What it is:** `validationCustomMetrics` entries that target a **source-qualified column** (`{table.fullyQualifiedName}.{columnName}`) instead of a datatype. Omitting `metricQuery` **removes** that named metric for that column in L2 only. L1 and L3 still use the column (including as `indexColumnList`).
+**What it is:** `validationCustomMetrics` entries under **`source` only** for column and match selectors (mapped to the target column automatically). L1 and L3 still use the column (including as `indexColumnList`). Omitting `metricQuery` **removes** that named metric in L2 only; `name: "*"` removes every L2 metric for the selector.
 
 **Key rules:**
 
 1. Requires `metricsValidation: true` — otherwise there is nothing to override.
-2. Put column-scoped entries under **`validationCustomMetrics.source` only** (mapped to the target column automatically).
-3. Do **not** exclude a PK/index column via `columnSelectionList` + `useColumnSelectionAsExcludeList` — that is rejected and would break L3.
-4. Prefer column-scoped removals over turning off L2 for the whole workflow when other columns should still get metrics.
+2. For a **bulk** skip or override (the same rule on every matching column), emit **one `match` entry**, not a `column` entry per table.
+3. For **one named column**, use `column: {table.fullyQualifiedName}.{columnName}`.
+4. Do **not** exclude a PK/index column via `columnSelectionList` + `useColumnSelectionAsExcludeList` — that is rejected and would break L3.
+5. Prefer `match` (bulk) or `column` (one column) over turning off L2 for the whole workflow when other columns should still get metrics.
+6. Older workers reject unknown selectors. Do not write `match` until the running worker matches this scai pin (`out_of_date` → upgrade first, or fall back to `column`).
 
-Example — remove length-`avg` on a VARCHAR PK:
+Example — one `match` that removes every L2 metric on columns that satisfy the predicates (unmatched columns keep their metrics):
 
 ```yaml
 validationConfiguration:
   metricsValidation: true
 validationCustomMetrics:
   source:
-    - column: public.orders.order_id
+    - match:
+        role: index                    # optional; omit to ignore role
+        dataTypeFamily: [text]         # and/or notDataTypeFamily: […]
+      metrics:
+        - name: "*"                    # or named metrics with no metricQuery
+  target: []
+```
+
+Example — remove one named metric on one named column:
+
+```yaml
+validationCustomMetrics:
+  source:
+    - column: schema.table.column_name
       metrics:
         - name: avg
   target: []

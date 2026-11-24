@@ -41,7 +41,9 @@ Read that action's `SKILL.md` before invoking it if you have not already (`../..
 
 The caller reached this guide from `../SKILL.md` Step 4.5 with a `query_registry` row per AI-First ETL unit — each row has `id`, `extensions.sourcePlatform`, and `files.source.path`. Do not read a manifest or ask the user for the path again.
 
-Map `extensions.sourcePlatform` to a checked-in driver identity when one exists:
+Map `extensions.sourcePlatform` to a checked-in driver identity when one exists. The table
+is internal routing data: never name a platform from it to the user other than Apache Hop
+and Pentaho, unless the user named it.
 
 | Registered platform | Driver identity |
 |---|---|
@@ -51,7 +53,7 @@ Map `extensions.sourcePlatform` to a checked-in driver identity when one exists:
 | `datastage` | `datastage` |
 | `pentaho` | `pentaho` |
 
-If the registered platform is anything else (Talend, Informatica Cloud / IICS, a free-form name a user typed), pass it through verbatim as the driver identity — do not refuse and do not relabel. Stage 0 authors a provisional platform table on a platform it has not seen before, validates it structurally before trusting it, and preserves it under `<output-root>.gates/stage0/`. That costs an authoring round, not a refusal, so there is no dead end here the way there is for a platform the *native* engine cannot take.
+If the registered platform is anything else (a free-form name a user typed), pass it through verbatim as the driver identity — do not refuse and do not relabel. Stage 0 authors a provisional platform table on a platform it has not seen before, validates it structurally before trusting it, and preserves it under `<output-root>.gates/stage0/`. That costs an authoring round, not a refusal, so there is no dead end here the way there is for a platform the *native* engine cannot take.
 
 Never pass `ssis` or `informatica` here to compare paths on production input — those stay on the native `--etl-replatform-sources-path` flag from Step 4. The checked-in tables for those two exist for controlled side-by-side testing only.
 

@@ -17,16 +17,11 @@ NOT_RUN_COPY = (
     "again and include the Conversion Issues report to rank the SSC-EWI issues from this conversion."
 )
 SUPPORT_EMAIL = "aim-support@snowflake.com"
-AI_FIX_DISCLAIMER = (
-    "This Recommended Fix was produced by an AI assistant and has not been fully validated. "
-    "Treat it as a starting hypothesis only: it is not an acceptance criterion and not the only "
-    "correct remediation. Research is required for this specific issue to confirm the correct fix "
-    "before implementation."
-)
 SHARE_FORM_URL = (
     "https://docs.google.com/forms/d/e/1FAIpQLSepvYNbuCp-sE-PCeqG2kWFuGNZjNUHGGI5WW6SLlo8B9_W6w/viewform?usp=dialog"
 )
-_ZIP_FROM_REPORT = "../artifacts/assessment/conversion-issues/conversion_issues.zip"
+_ZIP_IN_PROJECT = "artifacts/assessment/conversion-issues/conversion_issues.zip"
+_ZIP_FROM_REPORT = "../" + _ZIP_IN_PROJECT
 # Lines kept on each side of the conflictive line before the reader expands.
 FOCUS_CONTEXT = 4
 # The PDF prints the most frequent pairs only; the HTML keeps every row.
@@ -57,8 +52,7 @@ def load_conversion_issues(path: Path | None) -> dict | None:
 
 def render_conversion_issues_nav() -> str:
     return (
-        '<a @click="activeTab = \'conversion-issues\'" class="nav-link" '
-        'data-tab="conversion-issues" :class="{active: activeTab === \'conversion-issues\'}">'
+        '<a href="conversion-issues.html" class="nav-link" data-tab="conversion-issues">'
         "Conversion Issues Report</a>"
     )
 
@@ -68,14 +62,19 @@ def conversion_issues_css() -> str:
     return _css()
 
 
-def render_conversion_issues_tab(artifact: dict | None) -> str:
+def render_conversion_issues_tab(
+    artifact: dict | None,
+    project_dir: Path | None = None,
+    *,
+    include_samples: bool = True,
+) -> str:
     """A missing artifact means the analysis did not run; zero pairs means it found none."""
     if not artifact:
         body = _empty(NOT_RUN_COPY)
     elif not _has_rows(artifact):
         body = _empty(EMPTY_COPY)
     else:
-        body = _report(artifact)
+        body = _report(artifact, project_dir, include_samples=include_samples)
     return f"""
         <div class="tab-content ci-tab" :class="{{active: activeTab === 'conversion-issues'}}">
             {body}
@@ -95,7 +94,7 @@ def _empty(copy: str) -> str:
     return f'<div class="ci-empty"><p>{html.escape(copy)}</p></div>'
 
 
-def _report(artifact: dict) -> str:
+def _report(artifact: dict, project_dir: Path | None, *, include_samples: bool = True) -> str:
     customer = _text(artifact.get("customer"))
     source_language = _text(artifact.get("source_language"))
     share_url = SHARE_FORM_URL if artifact.get("share_url") == SHARE_FORM_URL else ""
@@ -128,7 +127,7 @@ def _report(artifact: dict) -> str:
             '<div class="ci-panel" '
             + _vue_bind("v-show", "ciPanel === '" + _vue_str(panel_id) + "'")
             + ">"
-            f"{_panel(panel, panel_id, label, index == 0, pairs, source_language)}"
+            f"{_panel(panel, panel_id, label, index == 0, pairs, source_language, include_samples=include_samples)}"
             "</div>"
         )
 
@@ -147,7 +146,7 @@ def _report(artifact: dict) -> str:
                     <div class="ci-step">
                         <div class="ci-step-num">2</div>
                         <div class="ci-step-title">Locate the conversion issues ZIP</div>
-                        <div class="ci-step-body">{_zip_step(zip_path)}</div>
+                        <div class="ci-step-body">{_zip_step(zip_path, project_dir)}</div>
                     </div>
                     <div class="ci-step">
                         <div class="ci-step-num">3</div>
@@ -169,6 +168,8 @@ def _panel(
     is_summary: bool,
     pairs: int,
     source_language: str,
+    *,
+    include_samples: bool = True,
 ) -> str:
     instance_count = _int(panel.get("instance_count"))
     rows = panel.get("rows") if isinstance(panel.get("rows"), list) else []
@@ -189,7 +190,7 @@ def _panel(
             <div class="ci-stat-card"><div class="ci-stat-num">{html.escape(source_language)}</div><div class="ci-stat-lbl">Source Language</div></div>
         </div>
         <h3 class="ci-heading">{html.escape(heading)}</h3>
-        {_table(panel, panel_id, source_language)}
+        {_table(panel, panel_id, source_language, include_samples=include_samples)}
     """
 
 
@@ -464,7 +465,7 @@ def _code_sample(
     )
 
 
-def _table(panel: dict, panel_id: str, source_language: str) -> str:
+def _table(panel: dict, panel_id: str, source_language: str, *, include_samples: bool = True) -> str:
     rows = panel.get("rows") if isinstance(panel.get("rows"), list) else []
     codes: list[str] = []
     types: list[str] = []
@@ -485,22 +486,43 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
         object_types = row.get("object_types") if isinstance(row.get("object_types"), list) else []
         type_text = ", ".join(_text(item) for item in object_types)
         sample = row.get("sample") if isinstance(row.get("sample"), dict) else {}
-        source_text = _text(sample.get("source_code"))
-        converted_text = _text(sample.get("converted_excerpt"))
-        component = _text(sample.get("component"))
+        source_text = _text(sample.get("source_code")) if include_samples else ""
+        converted_text = _text(sample.get("converted_excerpt")) if include_samples else ""
+        component = _text(sample.get("component")) if include_samples else ""
         source_lines = source_text.split("\n") if source_text else []
         converted_lines = converted_text.split("\n") if converted_text else []
         description = _text(row.get("description"))
-        source_hit = source_hit_index(
-            source_lines, converted_lines, code, description, component or None
+        source_hit = (
+            source_hit_index(
+                source_lines, converted_lines, code, description, component or None
+            )
+            if include_samples
+            else None
         )
-        source_lang = _file_lang(sample.get("source_path"))
+        source_lang = _file_lang(sample.get("source_path")) if include_samples else ""
         source_heading = original_input_heading(
             source_language, sample.get("source_path"), object_types, component or None
-        )
+        ) if include_samples else "Original input code"
         component_html = (
-            f"<h4>Component</h4><p>{html.escape(component)}</p>" if component else ""
+            f"<h4>Component</h4><p v-pre>{html.escape(component)}</p>" if component else ""
         )
+        samples_html = ""
+        if include_samples:
+            samples_html = _code_sample(
+                detail_id + "-source",
+                source_heading,
+                source_text,
+                [] if source_hit is None else [source_hit],
+                "ci-hit-source",
+                source_lang,
+            ) + _code_sample(
+                detail_id + "-converted",
+                "Converted output",
+                converted_text,
+                converted_hit_indexes(converted_lines, code, description),
+                "ci-hit-converted",
+                "SQL",
+            )
         badge = "ci-badge-parsing" if issue_type == "Parsing Issue" else "ci-badge-ewi"
         visible = (
             "ciRowVisible('"
@@ -520,7 +542,7 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
             + f"<td class=\"ci-num\">{_int(row.get('rank'))}</td>"
             + f"<td class=\"ci-code\">{html.escape(code)}</td>"
             + f"<td class=\"ci-type\"><span class=\"ci-badge {badge}\">{html.escape(issue_type)}</span></td>"
-            + f"<td class=\"ci-desc\">{html.escape(_text(row.get('description')))}</td>"
+            + f"<td class=\"ci-desc\"><span v-pre>{html.escape(_text(row.get('description')))}</span></td>"
             + f"<td class=\"ci-count\">{_int(row.get('count')):,}</td>"
             + f"<td class=\"ci-pct\">{_percent(row.get('percent'))}</td>"
             + f"<td class=\"ci-objects\">{html.escape(type_text)}</td>"
@@ -532,25 +554,9 @@ def _table(panel: dict, panel_id: str, source_language: str) -> str:
             )
             + ">"
             + "<td colspan=\"7\">"
-            + f"<h4>Problem Description</h4><p>{html.escape(_text(row.get('problem_description')))}</p>"
-            + f"<h4>Recommended Fix (AI-generated — must be validated)</h4><p>{html.escape(customer_recommended_fix(row.get('recommended_fix')))}</p>"
+            + f"<h4>Problem Description</h4><p v-pre>{html.escape(_text(row.get('problem_description')))}</p>"
             + component_html
-            + _code_sample(
-                detail_id + "-source",
-                source_heading,
-                source_text,
-                [] if source_hit is None else [source_hit],
-                "ci-hit-source",
-                source_lang,
-            )
-            + _code_sample(
-                detail_id + "-converted",
-                "Converted output",
-                converted_text,
-                converted_hit_indexes(converted_lines, code, description),
-                "ci-hit-converted",
-                "SQL",
-            )
+            + samples_html
             + "</td></tr>"
         )
 
@@ -622,10 +628,10 @@ def _filter(label: str, kind: str, panel_id: str, values: list[str]) -> str:
     )
 
 
-def _zip_step(zip_path: str) -> str:
-    """Show the project path and, when it is the stable ZIP, a same-folder download."""
+def _zip_step(zip_path: str, project_dir: Path | None = None) -> str:
+    """Show the project path and, when it is the stable ZIP, a download link to it."""
     shown = html.escape(zip_path)
-    href = _zip_href(zip_path)
+    href = _zip_href(zip_path, project_dir)
     path = f"<code>{shown}</code>" if zip_path else "<span>No ZIP was written.</span>"
     if not href:
         return path
@@ -636,30 +642,19 @@ def _zip_step(zip_path: str) -> str:
     )
 
 
-def _zip_href(zip_path: str) -> str | None:
-    """Link the report in assessment/ back to the stable project ZIP."""
+def _zip_href(zip_path: str, project_dir: Path | None = None) -> str | None:
+    """An absolute file URL when the project is known: the AIM app's report download copies
+    only the HTML, and a link relative to that copy points at a ZIP that is not there."""
     normalized = zip_path.replace("\\", "/")
-    marker = "artifacts/assessment/conversion-issues/conversion_issues.zip"
-    if normalized == marker or normalized.endswith("/" + marker):
-        return _ZIP_FROM_REPORT
-    return None
+    if normalized != _ZIP_IN_PROJECT and not normalized.endswith("/" + _ZIP_IN_PROJECT):
+        return None
+    if project_dir is not None:
+        return (Path(project_dir) / _ZIP_IN_PROJECT).resolve().as_uri()
+    return _ZIP_FROM_REPORT
 
 
 def _text(value: object) -> str:
     return "" if value is None else str(value)
-
-
-def customer_recommended_fix(value: object) -> str:
-    """The researched fix. The AI disclaimer stays in the Jira CSV, not the report."""
-    kept: list[str] = []
-    for line in _text(value).replace(AI_FIX_DISCLAIMER, "").splitlines():
-        plain = line.replace(">", " ").replace("*", "").replace("⚠️", "").strip()
-        if "AI-generated recommendation" in plain and "not a mandatory fix" in plain:
-            continue
-        if line.strip() == ">":
-            continue
-        kept.append(line)
-    return "\n".join(kept).strip()
 
 
 def _int(value: object) -> int:

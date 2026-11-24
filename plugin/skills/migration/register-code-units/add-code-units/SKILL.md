@@ -25,9 +25,16 @@ Tell the user:
 
 If the session's `workload` is `dbt`, load `dbt.md` instead of Steps 1–4, then rejoin at Step 5.
 
-Otherwise, ask the user for the path to their source SQL files:
+Otherwise, `<INPUT_PATH>` is the import root the user named. One
+`scai code add -i <INPUT_PATH>` classifies SQL, SSIS `.dtsx`, Informatica
+PowerCenter XML, and `.pbit` **anywhere under that folder**, including in
+`sql/` and `etl/` children. If they already named that folder, do not ask
+again and do not `code add` each child.
 
-> "Where are your SQL source files located? Please provide the full path to the directory."
+If they have not named a path yet, ask for the import root — not a `sql/`
+subdirectory when ETL sits next to it:
+
+> "Where is the source you want to import? Give the folder that contains the SQL — and any ETL or Power BI files that live with it."
 
 ### Step 2: Annotate Multi-Object Files with sc-tags
 
@@ -119,6 +126,9 @@ Launch this call as the next section says: `run_in_background=true`, or set the 
 scai code add -i <INPUT_PATH> --json
 ```
 
+That single call is enough when SQL and ETL share a tree. Do not follow it
+with a second `code add` of an `etl/` child of `<INPUT_PATH>`.
+
 With Step 2b's assignment, add the same `--database <NAME>` or `--database-map <FILE>`.
 
 **dbt projects use this form instead** — always, with no exceptions:
@@ -202,6 +212,13 @@ file. Keep them. Rerun the same command with `--overwrite` added, which replaces
 run's output, and tell the user in one line that you are doing so. Never delete files from
 `source/` or `artifacts/` yourself to clear the way. When the project already has registered
 units, the files may be code the user added before: ask before you add `--overwrite`.
+
+**A successful add can register more units than `import/` holds.** `scai code add` registers every
+file in `source/`, so a leftover the failed run wrote that is not in the input (the add reports
+`codeUnitsAdded` greater than `filesCopied`) becomes a registered unit too. It is not yours to
+clean up: do not delete or move its file, edit the registry, or set `inScope` on your own, and do not
+recreate the project. Name the extra unit and its file in the summary, say it came from the failed
+run, and ask whether to keep it. The import is done; stop there.
 
 ### Duplicated objects
 
@@ -352,6 +369,11 @@ expected "lands in" `Other`. Most of its units are missing references — object
 code uses but no imported file defines, registered with `isMissing = true`. They count in
 `codeUnitsAdded`, which is why the total can exceed the objects in the source files.
 
+`codeUnitsAdded` and `byType` count only units this import added. Units the project already
+had that it wrote again (re-imported files, or tables an SSIS package reads) are
+`codeUnitsUpdated`, not added. Never add one import's counts to another's for the project's
+scope: query the registry for that.
+
 When `byType` has an `Other` row, look up what is in it before you report, never guess:
 
 ```
@@ -359,9 +381,10 @@ query_registry(where="source.objectType = 'other' AND isMissing = true", fields=
 query_registry(where="source.objectType = 'other' AND NOT isMissing = true", fields="id,source.name,files.source.path", limit=5)
 ```
 
-Each response's `total` is that group's count; its `results` give a few names to quote. If the
-two totals do not add up to the `Other` count, give the counts you have and say the rest are
-unexplained.
+Each response's `total` is that group's count, project-wide: it includes units earlier imports
+added, so it can be larger than this import's `Other` count. Never compare the totals with
+`byType`, or report them as this import's: quote them as what the project has. The `results`
+give a few names to quote.
 
 ### Report
 
@@ -370,7 +393,8 @@ Never report the import as complete, or as fine, without that envelope in hand: 
 report it as Step 3 says instead.
 
 > **Import complete.** `<filesCopied>` files imported as `<codeUnitsAdded>` code units, broken down by type (filled from `byType`). Files in `source/`.
-> *If `byType` has `Other`:* `<missing total>` are missing references: objects your code uses that the imported files do not define (e.g. `<names>`); add their DDL if they belong in the migration. *If the second total is not 0:* `<other total>` more are defined in your files with no type the registry knows (e.g. `<names>`).
+> *If `codeUnitsUpdated > 0`:* `<codeUnitsUpdated>` code units already in the project were updated.
+> *If `byType` has `Other`:* The project now has `<missing total>` missing references: objects your code uses that no imported file defines (e.g. `<names>`); add their DDL if they belong in the migration. *If the second total is not 0:* `<other total>` objects in the project are defined in your files with no type the registry knows (e.g. `<names>`).
 > *If `etlFilesAdded > 0`:* ETL: `<etlFilesAdded>` files added.
 > *If `etlFilesSkippedInvalidSchema > 0`:* `<etlFilesSkippedInvalidSchema>` ETL files skipped due to invalid schema.
 > *If Power BI files were added:* Power BI templates copied to `source/BI/PowerBI/` and `artifacts/BI/PowerBI/` (not converted).

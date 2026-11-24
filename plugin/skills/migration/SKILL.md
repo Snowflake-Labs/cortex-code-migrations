@@ -1,6 +1,6 @@
 ---
 name: migration
-description: End-to-end database migration and data validation to Snowflake. Orchestrates migrations from source connection through conversion (including ETL jobs from Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory, and other ETL platforms through the AI-First approach, alongside natively supported SSIS and Informatica PowerCenter), and project-based in-warehouse validation between Snowflake tables. Triggers: migrate, migration, migrate to snowflake, migrate ETL, migrate Talend, migrate Alteryx, migrate Informatica Cloud, migrate IICS, migrate DataStage, migrate Apache Hop, migrate Hop, migrate Pentaho, migrate ADF, migrate Azure Data Factory, migrate other ETL, convert ETL, Snowflake to Snowflake validation, validate Snowflake tables, compare Snowflake databases.
+description: End-to-end database migration and data validation to Snowflake. Orchestrates migrations from source connection through conversion (including ETL jobs: SSIS and Informatica PowerCenter natively, and Apache Hop, Pentaho and other ETL platforms through the AI-First approach, which is not native support), SAS to Snowflake (Preview: assess or convert .sas programs, load .sas7bdat), and project-based in-warehouse validation between Snowflake tables. Triggers: migrate, migration, migrate to snowflake, migrate ETL, migrate Apache Hop, migrate Hop, migrate Pentaho, migrate other ETL, convert ETL, SAS, convert SAS, migrate SAS, SAS to Snowflake, assess SAS, sas7bdat, Snowflake to Snowflake validation, validate Snowflake tables, compare Snowflake databases.
 license: Proprietary. See License-Skills for complete terms
 ---
 
@@ -11,7 +11,7 @@ Tell the user:
 >
 > Snowflake AIM for Data Warehouses is now available as an application with better user experience. We recommend using the application for your migration project: [docs.snowflake.com/en/migrations/aim-for-datawarehouses/quick-start](https://docs.snowflake.com/en/migrations/aim-for-datawarehouses/quick-start)
 
-On the first message of a session, the plugin injects whether a migration project exists in this directory. If the user's message already states what they want, act on it (Step 1); otherwise begin with Step 0. Either way, do **not** call `migration_status` — `configure` returns the status.
+On the first message of a session, the plugin injects whether a migration project exists in this directory. If the user's message already states a **specific** task (convert SAS, assess a portfolio, load `.sas7bdat`, convert ETL, work the wave unattended, …), go to **Skill Match** — do **not** skip ahead to Step 1 `configure`. Continue / resume / "start a new migration" still go to Step 1. If the message does not say what they want, begin with Step 0. Either way, do **not** call `migration_status` — `configure` returns the status.
 
 ## Working with the MCP state machine
 
@@ -23,7 +23,7 @@ Before the first tool call of this flow, run `scai doctor`. Exit 0: continue. An
 
 ## Step 0: Ask first (no tools)
 
-If the user's first message already states what they want (a specific task, or "continue"/"resume"), skip to Step 1. Otherwise greet and ask:
+If the user's first message is only "continue"/"resume"/"start", skip to Step 1. If it already names a **specific** task, go to **Skill Match** (no `configure` until that skill says so). Otherwise greet and ask:
 
 > "What would you like to do? You can:
 > 1. **Continue** — I'll pick up your migration where we left off
@@ -122,7 +122,7 @@ These answer common questions about project state without loading a sub-skill:
 
 - **"How do I extend / customize the migration plugin?"** / **"How do I override task X?"** — Load `./extensibility/TASKS.md` for the full reference: overridable task ids, per-task contracts, the project-local + `$AIM_SKILL_EXT_DIR` paths, and registering code units with `kind=custom` plus a free-form `customKind` discriminator. Optionally call `migration_status(mode='extensions')` to show which overrides are active.
 
-- **"My migration also has FiveTran / SSAS / dbt / Airflow / Oracle PACKAGE bodies / scripts the engine doesn't generate"** / **"How do I track <non-built-in asset> in the migration?"** — Load `./setup/discover-extras/SKILL.md`. Registers each asset as a code unit with `kind=custom` and a `customKind` discriminator, then writes a `.scai/skills/<customKind>.md` cookbook with the customer so every object of that kind runs the same playbook (see `./extensibility/TASKS.md` → "Custom code units"). **Do not** list ETL platforms this migration converts (SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, Azure Data Factory) here — those go through **setup → register local ETL → convert**, not `discover-extras`.
+- **"My migration also has FiveTran / SSAS / dbt / Airflow / Oracle PACKAGE bodies / scripts the engine doesn't generate"** / **"How do I track <non-built-in asset> in the migration?"** — Load `./setup/discover-extras/SKILL.md`. Registers each asset as a code unit with `kind=custom` and a `customKind` discriminator, then writes a `.scai/skills/<customKind>.md` cookbook with the customer so every object of that kind runs the same playbook (see `./extensibility/TASKS.md` → "Custom code units"). **Do not** list ETL platforms this migration converts (SSIS, Informatica PowerCenter, Apache Hop, Pentaho, or any other ETL platform) here — those go through **setup → register local ETL → convert**, not `discover-extras`.
 
 ---
 
@@ -136,10 +136,11 @@ Match the user's request to the most relevant skill and load it.
 - Indentation = parent/child. A child only applies when its parent's domain already fits.
 - If the request is ambiguous between siblings, ask one clarifying question.
 - If no skill matches, fall back to the section below.
+- **SAS (Preview, parallel track) — first, before Prescribed Path or `configure`:** convert / translate / migrate SAS **programs** (`.sas`), assess a SAS portfolio, load `.sas7bdat`, or "SAS conversion skill" → load `./sas/SKILL.md` now (the router picks the child). Do **not** call `configure`. Do **not** follow Prescribed Path. Do **not** say there is no SAS skill: it lives at `./sas/convert-sas-to-snowflake/SKILL.md`. This track is not SnowConvert and has no AIM registry.
+- **Unattended / autonomous wave — before Prescribed Path or the interactive migrate-objects loop:** "work the whole wave", "unattended", "auto-pilot", "just migrate everything", "run objects in parallel" → load `./migrate-objects/autonomous/SKILL.md` **now**. That skill finishes leftover setup itself and only then latches `subagent_mode=true`. Do **not** load `./migrate-objects/SKILL.md`. Do **not** run assessment, data-infrastructure, or deploy in this conversation. Do **not** wait until setup "looks done". If `configure` reports `autonomous_available: false`, say autonomous is not available here and only then use the interactive loop.
 
 **ETL routing (do not shortcut):** any request to convert or migrate ETL jobs — SSIS,
-Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop,
-Pentaho, Azure Data Factory, or "some other ETL platform" — flows through **setup → register local
+Informatica PowerCenter, Apache Hop, Pentaho, or "some other ETL platform" — flows through **setup → register local
 ETL → convert**, not `discover-extras`. `discover-extras` is for orchestration or engine-gap
 assets the user *doesn't* want converted (Airflow DAGs, Fivetran connectors, SSAS cubes,
 custom scripts). Never route a convert-my-ETL ask to `discover-extras` and never register
@@ -147,15 +148,15 @@ those ETL jobs as `customKind` cookbooks.
 
 - **Informatica PowerCenter** (on-prem repo XML export) → converted natively via the normal
   convert path.
-- **Informatica Cloud / IICS** → AI-First via convert Step 4.5. Do not confuse the two.
+- **Any other Informatica product** → AI-First via convert Step 4.5. Do not confuse the two.
 - **Supported ETL platforms come in two kinds.** *Natively supported:* SSIS and
   Informatica PowerCenter, converted by SnowConvert's own ETL converters. *AI-First
   approach (not native):* Apache Hop (`.hpl` / `.hwf`) and Pentaho (`.ktr` / `.kjb`),
   which go end to end through the plugin (register, convert, deploy, two-sided
-  `etl-validate`, DVF and repair), and Talend, Alteryx, Informatica Cloud / IICS,
-  DataStage, Azure Data Factory and any other ETL platform, through convert Step 4.5. When
-  you name an AI-First platform to the user, say it is an AI-First conversion, not native
-  support. AI-First is a model-assisted attempt at an end-to-end conversion, not native
+  `etl-validate`, DVF and repair), and any other ETL platform, through convert Step 4.5.
+  When you name an AI-First platform to the user, say it is an AI-First conversion, not
+  native support. Never name an ETL platform to the user other than SSIS, Informatica
+  PowerCenter, Apache Hop and Pentaho, unless it is the name the user gave. AI-First is a model-assisted attempt at an end-to-end conversion, not native
   support: coverage is narrower than SSIS and Informatica PowerCenter, steps with no
   SnowConvert equivalent are written by a model or flagged for review, and each converted
   job must pass validation before it is trusted.
@@ -203,6 +204,7 @@ those ETL jobs as `customKind` cookbooks.
 
 ### Migration & validation
 - **migrate-objects** — deploy tables, views, functions, procedures wave-by-wave → `./migrate-objects/SKILL.md`
+  - **autonomous** — unattended wave; one subagent per object → `./migrate-objects/autonomous/SKILL.md`
   - **sandbox** — private `AIMSBX_*` catalogs for procedure tests (`createIsolatedSandbox`) and shared source-catalog setup (`deployCommonSandbox`). Not common-catalog `deploy`. → `./migrate-objects/sandbox/SKILL.md`
   - **migrate-etl** — claim an ETL code unit, then stabilize it. Entry point for "fix ETL package", "fix SSIS/Informatica conversion", "proceed with stabilization", "resume ETL fixing" — it claims the unit (so it appears in `my_objects_summary` with the current user as owner) before delegating to the phase-based etl-stabilization engine. → `./migrate-objects/migrate-etl/SKILL.md`
     - **etl-seed** — seed test YAML for already-deployed ETL units; load before searching for tools or running CLI commands. Triggers: "seed ETL tests", "generate ETL test YAML", "create ETL test configuration" → `./migrate-objects/migrate-etl/etl-seed/SKILL.md`
@@ -210,7 +212,9 @@ those ETL jobs as `customKind` cookbooks.
   - **etl-file-ingestion** — hand over the landing contract (Openflow flow, direct-upload script, or mover table). Triggers: "land my files", "set up file ingestion", "set up Openflow", "upload files to the stage", "where do my CSVs go" → `./migrate-objects/migrate-etl/etl-file-ingestion/SKILL.md`
   - **etl-database-ingestion** — hand over database landing (generated JDBC Openflow JSON, their own loader, or a SQL Server Change Tracking / CDC connector). Triggers: "land my database tables", "database landing", "change tracking landing", "CDC landing", "JDBC Openflow" → `./migrate-objects/migrate-etl/etl-database-ingestion/SKILL.md`
   - **data-migration-setup** — choose approach, generate workflow YAML, create target database for `migrate_data` → `./migrate-objects/actions/data-migration/SKILL.md`
-  - **testbed-generator** — bootstrap coupling state (`generateTestbed`); generate one table's CSV (`INCREMENTAL.md`); or mine/validate/enrich/compile/generate the whole workload (`WHOLE-WORKLOAD.md`). Triggers: generate testbed, mine testbed, validate testbed, compile testbed, enrich testbed, testbed data source → `./migrate-objects/baseline-capture/testbed-generator/SKILL.md`
+  - **testbed-generator** — bootstrap coupling state (`generateTestbed`); generate one table's CSV (`INCREMENTAL.md`; a named object that is not a table follows `SKILL.md` § Named object with no table first); or mine/validate/enrich/compile/generate the whole workload (`WHOLE-WORKLOAD.md`). Triggers: generate synthetic data, generate testbed, mine testbed, validate testbed, compile testbed, enrich testbed, testbed data source → `./migrate-objects/baseline-capture/testbed-generator/SKILL.md`
+  - **generate-test-cases** — write a procedure's or function's test-case YAML from source data or a testbed catalog (`testing_data_source` `source_database` or `testbed`; task `generateTestCases`); load before running `scai test seed`. Triggers: "generate the test cases", "seed the tests", "create test YAML" → `./migrate-objects/baseline-capture/SWARM.md`
+  - **synthetic-seeder** — write synthetic test cases for a procedure or function (`testing_data_source: synthetic`; task `seedSynthetic`). Not testbed rows, and not "generate synthetic data" (that is testbed-generator). Triggers: "generate synthetic test cases", "synthetic tests" → `./migrate-objects/baseline-capture/synthetic-seeder/SKILL.md`
 - **validate-objects** — validate data between a source and Snowflake, including project-based Snowflake-to-Snowflake validation. Triggers: "validate Snowflake to Snowflake", "compare Snowflake tables/databases", "run SF-to-SF DV" → `./validate-objects/SKILL.md`
   - **l3-pushdown-setup** — configure L3 extract transport (object storage vs through the worker) before row validation runs → `./setup/data-validation/l3-pushdown/SKILL.md`
 
@@ -228,7 +232,7 @@ Use the dbt-quality workflow for an existing dbt project or estate with the migr
 
 ### Customization
 - **task-overrides** — replace the skill that runs for any built-in task with the user's own `SKILL.md`, scoped to the project or to a global directory via `$AIM_SKILL_EXT_DIR`. Triggers: "extend the plugin", "customize task X", "swap out the skill for Y", "override registerCode/convertCode/deploy/...". Reference: `./extensibility/TASKS.md`
-- **discover-extras** — register assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PACKAGE bodies, custom shell scripts) as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved `databaseObject` / `script` / `etl` / `custom` set) so they flow through orchestration alongside built-in units. Triggers: "I have FiveTran / SSAS / dbt / a script that touches the database", "register custom asset", "track <non-built-in> in the migration". **Not** for ETL the user wants converted: SSIS, Informatica PowerCenter, Talend, Alteryx, Informatica Cloud / IICS, DataStage, Apache Hop, Pentaho, and Azure Data Factory go through **setup → register → convert** (native for SSIS and Informatica PowerCenter, AI-First Step 4.5 for the rest). Skill: `./setup/discover-extras/SKILL.md`. Reference: `./extensibility/TASKS.md` (Custom code units).
+- **discover-extras** — register assets the conversion engine doesn't generate (FiveTran, dbt, Airflow, SSAS cubes, Oracle PACKAGE bodies, custom shell scripts) as code units with `kind=custom` and a free-form `customKind` discriminator (any string outside the reserved `databaseObject` / `script` / `etl` / `custom` set) so they flow through orchestration alongside built-in units. Triggers: "I have FiveTran / SSAS / dbt / a script that touches the database", "register custom asset", "track <non-built-in> in the migration". **Not** for ETL the user wants converted: SSIS, Informatica PowerCenter, Apache Hop, Pentaho, and any other ETL platform go through **setup → register → convert** (native for SSIS and Informatica PowerCenter, AI-First Step 4.5 for the rest). Skill: `./setup/discover-extras/SKILL.md`. Reference: `./extensibility/TASKS.md` (Custom code units).
 
 ## Fallback
 
